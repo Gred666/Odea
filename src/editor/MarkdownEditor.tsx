@@ -15,6 +15,7 @@ import {
   Facet,
   Prec,
   StateField,
+  type Transaction,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -73,7 +74,7 @@ import {
   selectionTouchesRange,
   widgetByNode,
 } from "./markdownStyleRegistry";
-import { parseDelimitedTable, parseMarkdownTable } from "./markdownTable";
+import { type MarkdownTableModel, parseDelimitedTable, parseMarkdownTable } from "./markdownTable";
 import { MathWidget } from "./math";
 import { registerEditorFlush } from "./saveBus";
 import { createSearchPanel, scrollToMatch } from "./searchPanel";
@@ -685,7 +686,11 @@ export function MarkdownEditor({
           ],
         });
 
-    const view = new EditorView({ state, parent: host });
+    // 先在游离的 DOM 里建好再挂上去：CodeMirror 建完正文才给 contentDOM 设 contenteditable /
+    // spellcheck 这些属性，挂在页面上时设一次要把整篇已经画出来的行过一遍（切一篇 4 倍降速下
+    // 约 50ms），游离时几乎不花时间
+    const view = new EditorView({ state });
+    host.appendChild(view.dom);
     viewRef.current = view;
     // 切走时开着查找面板：回来时不该还开着（和以前每次新建编辑器一样）
     if (searchPanelOpen(view.state)) closeSearchPanel(view);
@@ -1253,6 +1258,14 @@ export interface TyporaBlockState {
   abbreviationLines: Set<number>;
   /** `[^id]: …` 的正文（纯文本，截断），给引用端的悬停预览。 */
   footnotes: Map<string, string>;
+  /**
+   * 构建时问过的每一句「光标碰没碰到这一段」：三个一组，起点、终点、答案（1 / 0）。
+   * 块级层只通过这些问题依赖选区 —— 只动了光标时拿新选区再问一遍，答案全都一样，
+   * 重建出来也是同一份，直接沿用（见 typoraBlockDecorations）。
+   */
+  probes: number[];
+  /** 文档里有 `[TOC]`：标题的文字变了它也得跟着变（见 mapBlockState） */
+  toc: boolean;
 }
 
 /** 块级构造只可能藏在这些容器里，浅层遍历仅下探它们。 */
@@ -1309,6 +1322,29 @@ function collectHeadings(
 /** 围栏的语言名：info 串的第一个词，小写。 */
 const fenceLanguage = (info: string) => info.split(/\s+/)[0]?.toLowerCase() ?? "";
 
+/**
+ * 表格源码 → 解析结果。块级层每敲一个字都整篇重建一次，没改的表格不用每次再解析
+ * （解析结果只读：表格替身改结构时先复制，见 tableWidget.ts 的 columnChanges）
+ */
+const parsedTables = new Map<string, MarkdownTableModel | null>();
+
+function parsedTable(key: string, parse: () => MarkdownTableModel | null) {
+  if (parsedTables.has(key)) {
+    const table = parsedTables.get(key) ?? null;
+    // 挪到最后：Map 按插入顺序，满了从最久没用的删
+    parsedTables.delete(key);
+    parsedTables.set(key, table);
+    return table;
+  }
+  const table = parse();
+  parsedTables.set(key, table);
+  if (parsedTables.size > 200) parsedTables.delete(parsedTables.keys().next().value!);
+  return table;
+}
+
+/** 段落里有没有可能是脚注定义（`[^id]:`）或缩写定义（`*[缩写]:`）的行 */
+const DEFINITION_HINT_RE = /(?:^|\n)[^\S\n]{0,3}(?:\[\^|\*\[)/;
+
 function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): TyporaBlockState {
   const ranges: DecorationRange[] = [];
   const fresh = freshness(changes);
@@ -1320,6 +1356,14 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
   const frontMatter = frontMatterRange(state.doc);
   const tree = blockTree(state);
   let headings: TocEntry[] | null = null;
+  let toc = false;
+  const probes: number[] = [];
+  /** selectionTouches，顺便记下问了什么、答了什么（TyporaBlockState.probes） */
+  const touches = (from: number, to: number) => {
+    const hit = selectionTouches(state, from, to);
+    probes.push(from, to, hit ? 1 : 0);
+    return hit;
+  };
 
   const foldLine = (from: number, to: number, widget?: WidgetType) => {
     if (to <= from) return;
@@ -1354,7 +1398,10 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
   };
   /** 一个段落 / 引用定义里的脚注定义行和缩写定义行。 */
   const scanDefinitionLines = (from: number, to: number) => {
-    const first = state.doc.lineAt(from).number;
+    const start = state.doc.lineAt(from);
+    // 绝大多数段落里根本没有定义：整段先看一眼，没有就不逐行取出来跑正则
+    if (!DEFINITION_HINT_RE.test(state.sliceDoc(start.from, to))) return;
+    const first = start.number;
     const last = state.doc.lineAt(to).number;
     for (let number = first; number <= last; number += 1) {
       const line = state.doc.line(number);
@@ -1378,7 +1425,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
     const close = state.doc.line(frontMatter.closeLine);
     // 从 from + 1 起算：新挂载的编辑器光标停在 0，那不算「点进了属性块」，
     // 否则每篇带 front matter 的笔记一打开就是一坨展开的 YAML。
-    const active = selectionTouches(state, frontMatter.from + 1, frontMatter.to);
+    const active = touches(frontMatter.from + 1, frontMatter.to);
     for (let number = open.number + 1; number < close.number; number += 1) {
       lineClass(state.doc.line(number).from, "cm-otw-frontmatter");
     }
@@ -1404,7 +1451,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
         const opens = FENCE_LINE_RE.test(open.text);
         const closed = close.number > open.number && CLOSING_FENCE_RE.test(close.text);
         // 只有真的有代码内容时才折叠；空围栏折叠后就再也点不进去了。
-        if (!selectionTouches(state, node.from, node.to) && close.number - open.number >= 2) {
+        if (!touches(node.from, node.to) && close.number - open.number >= 2) {
           const info = open.text.replace(FENCE_LINE_RE, "").trim();
           const language = fenceLanguage(info);
           const code = state.sliceDoc(open.to + 1, Math.max(open.to + 1, close.from - 1));
@@ -1414,7 +1461,9 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
             return false;
           }
           if (closed && (language === "csv" || language === "tsv")) {
-            const table = parseDelimitedTable(code, language === "csv" ? "," : "\t");
+            const table = parsedTable(`${language}\u0000${code}`, () =>
+              parseDelimitedTable(code, language === "csv" ? "," : "\t"),
+            );
             if (table) {
               foldRange(
                 node.from,
@@ -1437,7 +1486,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       }
 
       if (name === "MathBlock") {
-        if (selectionTouches(state, node.from, node.to)) {
+        if (touches(node.from, node.to)) {
           lineClasses(node.from, node.to, "cm-otw-math-source");
         } else {
           const tex = state
@@ -1451,7 +1500,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       }
 
       if (name === "HTMLBlock") {
-        if (!selectionTouches(state, node.from, node.to)) {
+        if (!touches(node.from, node.to)) {
           const source = state.sliceDoc(node.from, node.to);
           foldRange(node.from, node.to, new HtmlBlockWidget(source));
         }
@@ -1459,7 +1508,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       }
 
       if (name === "CommentBlock") {
-        if (!selectionTouches(state, node.from, node.to)) {
+        if (!touches(node.from, node.to)) {
           foldRange(node.from, node.to, new CommentWidget(true));
         }
         return false;
@@ -1475,7 +1524,8 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       if (name === "Paragraph") {
         const line = state.doc.lineAt(node.from);
         if (line.to >= node.to && TOC_RE.test(line.text)) {
-          if (selectionTouches(state, line.from, line.to)) {
+          toc = true;
+          if (touches(line.from, line.to)) {
             lineClass(line.from, "cm-otw-toc-source");
           } else {
             headings ??= collectHeadings(state, tree, frontMatter);
@@ -1488,9 +1538,11 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       }
 
       if (widgetByNode.get(name) === "table") {
-        if (!selectionTouches(state, node.from, node.to)) {
+        if (!touches(node.from, node.to)) {
           const tableSource = state.sliceDoc(node.from, node.to);
-          const table = parseMarkdownTable(tableSource);
+          const table = parsedTable(`md\u0000${tableSource}`, () =>
+            parseMarkdownTable(tableSource),
+          );
           const indent = node.from - state.doc.lineAt(node.from).from;
           if (table)
             foldRange(node.from, node.to, new TableWidget(table, "markdown", tableSource, indent));
@@ -1502,7 +1554,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
         const line = state.doc.lineAt(node.from);
         // 分隔线独占一行时整行替换，别让源码行留成一条空行。
         if (line.from === node.from && line.to === node.to) {
-          if (!selectionTouches(state, node.from, node.to)) {
+          if (!touches(node.from, node.to)) {
             foldLine(line.from, line.to, new HorizontalRuleWidget());
           } else {
             // 露出来的 `---` 和分隔线一样高，光标进出时下面的正文不跳
@@ -1513,7 +1565,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       }
 
       if (/^SetextHeading[12]$/.test(name)) {
-        if (!selectionTouches(state, node.from, node.to)) {
+        if (!touches(node.from, node.to)) {
           const underline = state.doc.lineAt(node.to);
           // 只藏掉 `===` 三个字符等于留下一条空行，得整行折叠。
           if (SETEXT_UNDERLINE_RE.test(underline.text)) foldLine(underline.from, underline.to);
@@ -1526,11 +1578,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
         const line = state.doc.lineAt(node.from);
         const head = parseCalloutHead(line.text);
         const last = state.doc.lineAt(node.to);
-        if (
-          head?.fold === "-" &&
-          last.number > line.number &&
-          !selectionTouches(state, node.from, node.to)
-        ) {
+        if (head?.fold === "-" && last.number > line.number && !touches(node.from, node.to)) {
           const bodyFrom = state.doc.line(line.number + 1).from;
           foldRange(
             bodyFrom,
@@ -1556,6 +1604,126 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
     abbreviations,
     abbreviationLines,
     footnotes,
+    probes,
+    toc,
+  };
+}
+
+/** 换成新选区，构建时问过的那些「光标碰没碰到」是不是还是同样的答案 */
+function sameTouches(probes: readonly number[], state: EditorState): boolean {
+  const { ranges } = state.selection;
+  for (let index = 0; index < probes.length; index += 3) {
+    const hit = selectionTouchesRange(ranges, probes[index]!, probes[index + 1]!);
+    if (hit !== (probes[index + 2] === 1)) return false;
+  }
+  return true;
+}
+
+/** 一段里有没有哪一行是 `[TOC]`（块级层把单独一行的它换成目录） */
+const TOC_LINE_RE = /^\s*\[\[?toc\]?\]\s*$/im;
+
+/**
+ * 改动落在哪个普通段落里（标题也算，文档里没有 `[TOC]` 的时候）：从改动处最里层的节点往外找，
+ * 找到的那一块要把 [from, to] 整个包住，外面只隔着列表、引用。引用的第一行不算（那是 callout
+ * 的标签行，`-` 结尾时正文整块折叠）；代码块、表格这些块级层要管的东西里的改动也不算。
+ */
+function plainBlockAround(
+  state: EditorState,
+  tree: Tree,
+  from: number,
+  to: number,
+  headings: boolean,
+): SyntaxNode | null {
+  if (tree.length < to) return null;
+  for (const side of [1, -1] as const) {
+    let found: SyntaxNode | null = null;
+    for (let node: SyntaxNode | null = tree.resolveInner(from, side); node; node = node.parent) {
+      const { name } = node.type;
+      if (!found) {
+        if (name === "Paragraph" || (headings && /^ATXHeading[1-6]$/.test(name))) {
+          if (node.from > from || node.to < to) break;
+          found = node;
+        }
+        continue;
+      }
+      if (name === "Document") return found;
+      if (name === "Blockquote" && state.doc.lineAt(node.from).to < from) continue;
+      if (name !== "BulletList" && name !== "OrderedList" && name !== "ListItem") break;
+    }
+  }
+  return null;
+}
+
+/** 这一块里没有块级层要收集的东西：脚注 / 缩写定义、单独一行的 `[TOC]` */
+function plainText(state: EditorState, node: SyntaxNode): boolean {
+  const text = state.sliceDoc(state.doc.lineAt(node.from).from, node.to);
+  return !DEFINITION_HINT_RE.test(text) && !TOC_LINE_RE.test(text);
+}
+
+/**
+ * 打字时多半不用整篇重建块级层：改动全落在普通段落里，段落的头尾正好跟着平移（没有合并、
+ * 拆开，也没变成标题、表格、代码块），段落里外都没有块级层管的东西 —— 这时重建出来的
+ * 和旧的一模一样，只是改动后面的位置挪了，把旧的映射过去就行。70KB 的长文 4 倍降速下
+ * 每敲一个字省下约 10ms 的整篇遍历。不满足就返回 null，照旧整篇重建。
+ * `markdownSyntax.dom.test.ts` 拿各处随手改的结果和整篇重建的比对着。
+ */
+function mapBlockState(value: TyporaBlockState, transaction: Transaction): TyporaBlockState | null {
+  const { changes, startState, state } = transaction;
+  const before = syntaxTree(startState);
+  const after = syntaxTree(state);
+  const frontMatter = frontMatterRange(state.doc);
+  if (
+    (frontMatter === null) !== (value.frontMatter === null) ||
+    (frontMatter && value.frontMatter && frontMatter.to !== value.frontMatter.to)
+  ) {
+    return null;
+  }
+  let local = true;
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (!local) return;
+    if (value.frontMatter && fromA <= value.frontMatter.to) {
+      local = false;
+      return;
+    }
+    const was = plainBlockAround(startState, before, fromA, toA, !value.toc);
+    const now = plainBlockAround(state, after, fromB, toB, !value.toc);
+    local =
+      !!was &&
+      !!now &&
+      was.type === now.type &&
+      changes.mapPos(was.from, -1) === now.from &&
+      changes.mapPos(was.to, 1) === now.to &&
+      plainText(startState, was) &&
+      plainText(state, now);
+    // 旧的装饰碰到了改动（比如一段折叠正文的边上）：不冒这个险
+    if (local) {
+      value.decorations.between(fromA, toA, () => {
+        local = false;
+        return false;
+      });
+    }
+  });
+  if (!local) return null;
+
+  // 问过的那些块要么整个在改动前后（怎么映射都一样），要么就是包着这一段的列表、引用 ——
+  // 在它最后一段的末尾打字，它跟着变长，所以终点取插入的右边
+  const probes = value.probes.slice();
+  for (let index = 0; index < probes.length; index += 3) {
+    probes[index] = changes.mapPos(probes[index]!, -1);
+    probes[index + 1] = changes.mapPos(probes[index + 1]!, 1);
+  }
+  // 光标进出了哪个块（选中一大段再打字把它替换掉）：得按新选区重建
+  if (!sameTouches(probes, state)) return null;
+  const mapLines = (lines: Set<number>) =>
+    new Set([...lines].map((position) => changes.mapPos(position, 1)));
+  const decorations = value.decorations.map(changes);
+  return {
+    ...value,
+    decorations,
+    atomic: decorations,
+    foldedLines: mapLines(value.foldedLines),
+    abbreviationLines: mapLines(value.abbreviationLines),
+    probes,
   };
 }
 
@@ -1567,11 +1735,19 @@ export const typoraBlockDecorations = StateField.define<TyporaBlockState>({
     // 后台解析往前推进了（语法树换了一棵）也要重算，不然解析得晚的那一段里的
     // 表格、公式、[TOC] 的标题要等下一次点击才出来。
     // 三样都没变时旧值里的位置依然有效，直接沿用。
-    if (
-      transaction.docChanged ||
-      transaction.selection ||
-      syntaxTree(transaction.startState) !== syntaxTree(transaction.state)
-    ) {
+    if (transaction.docChanged) {
+      return (
+        mapBlockState(value, transaction) ??
+        buildBlockDecorations(transaction.state, transaction.changes)
+      );
+    }
+    if (syntaxTree(transaction.startState) !== syntaxTree(transaction.state)) {
+      return buildBlockDecorations(transaction.state, transaction.changes);
+    }
+    // 只动了光标：大多数时候光标还在原来那些块的里面 / 外面（在正文里上下走、
+    // 在一段里左右挪），重建出来和现在一模一样。长文里每按一下方向键以前都要把
+    // 整棵树走一遍（70KB 的文档 4 倍降速下约 10ms）
+    if (transaction.selection && !sameTouches(value.probes, transaction.state)) {
       return buildBlockDecorations(transaction.state, transaction.changes);
     }
     return value;

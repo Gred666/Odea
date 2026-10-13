@@ -88,6 +88,8 @@ export function DocumentView({
   editorEnabled?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** 正文区上一次滚到的 scrollTop（滚动事件里记，见下面切换文档时拨回顶部） */
+  const scrolledRef = useRef(0);
   const [editorOutline, setEditorOutline] = useState<EditorOutlineHandle | null>(null);
   const workspace = useApp((s) => s.workspace);
   const zen = useApp((s) => s.zen);
@@ -187,9 +189,12 @@ export function DocumentView({
   // 上次在这篇看到哪由编辑器挂上之后自己滚回去（lib/viewMemory.ts），在这之后跑。
   // layout effect：新一篇的第一帧就得在顶上。放在 useEffect 里的话，不是点击触发的
   // 切换（比如命令面板）可能先按旧的滚动位置画出一帧，再跳回顶部。
+  // 已经在顶上就不拨：scrollTo 要先把整页排一遍版才知道往哪滚，这时新的一篇刚换上、
+  // 编辑器还没挂（它在后面的 effect 里挂），挂上以后又得整页再排一次 —— 白排的那一次
+  // 切一篇 4 倍降速下约 30ms。滚动位置从滚动事件里记，读 scrollTop 本身也会强制排版
   // biome-ignore lint/correctness/useExhaustiveDependencies: 只应在 doc.key 变化时触发
   useLayoutEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
+    if (scrolledRef.current !== 0) scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
     setLiveMarkdown(null);
     outlineKeyRef.current = null;
   }, [doc.key]);
@@ -288,6 +293,9 @@ export function DocumentView({
             平时这一截压在 z-30 的 chrome 底下，看不见也摸不着。 */}
         <div
           ref={scrollRef}
+          onScroll={(event) => {
+            scrolledRef.current = event.currentTarget.scrollTop;
+          }}
           // 查找面板（editor/searchPanel.ts）按它的右边缘贴边
           data-doc-scroller
           // @container：正文区多宽（容器查询量的是内容盒，多铺到 chrome 底下的那截内边距不算），

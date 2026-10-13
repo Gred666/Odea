@@ -1,12 +1,15 @@
 // @vitest-environment happy-dom
 
 import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, type WidgetType } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveImage, typoraBlockDecorations, typoraDecorations } from "./MarkdownEditor";
 import { linkTargetAt, wikiTargetAt } from "./links";
 import { markdownSupport } from "./markdownParser";
 import { TableWidget } from "./tableWidget";
+
+/** 使用指南里的「语法全览」：每一种语法都在里面 */
+import guide from "@/content/guide/syntax.md?raw";
 
 const views: EditorView[] = [];
 
@@ -296,6 +299,186 @@ describe("块级构造", () => {
     view.dispatch({ selection: { anchor: 8 } });
     expect(parent.querySelector(".cm-otw-html-widget")).toBeNull();
     expect(parent.querySelectorAll(".cm-line.cm-otw-html-block")).toHaveLength(3);
+  });
+});
+
+describe("只动光标时的块级层", () => {
+  const source = [
+    "第一段，光标在这里左右走。",
+    "",
+    "```js",
+    "const a = 1;",
+    "```",
+    "",
+    "| a | b |",
+    "| - | - |",
+    "| 1 | 2 |",
+    "",
+    "最后一段。",
+  ].join("\n");
+  const at = (needle: string) => source.indexOf(needle);
+  const folded = (view: EditorView) => {
+    const kinds: string[] = [];
+    // 只看折叠掉的范围（行装饰的起点等于终点）
+    view.state.field(typoraBlockDecorations).decorations.between(0, source.length, (f, t) => {
+      if (t > f) kinds.push(view.state.sliceDoc(f, t).split("\n")[0]!);
+    });
+    return kinds;
+  };
+
+  it("keeps the same block state while the caret stays outside every block", () => {
+    const { view } = mount(source, 2);
+    const before = view.state.field(typoraBlockDecorations);
+    view.dispatch({ selection: { anchor: 6 } });
+    view.dispatch({ selection: { anchor: at("最后") + 2 } });
+    expect(view.state.field(typoraBlockDecorations)).toBe(before);
+  });
+
+  it("still unfolds a block the caret enters, and folds it again on the way out", () => {
+    const { view } = mount(source, 2);
+    expect(folded(view)).toEqual(["```js", "```", "| a | b |"]);
+    view.dispatch({ selection: { anchor: at("const") } });
+    expect(folded(view)).toEqual(["| a | b |"]);
+    view.dispatch({ selection: { anchor: at("| 1") + 1 } });
+    expect(folded(view)).toEqual(["```js", "```"]);
+    view.dispatch({ selection: { anchor: 2 } });
+    expect(folded(view)).toEqual(["```js", "```", "| a | b |"]);
+  });
+
+  it("rebuilds for a selection that only covers part of a block", () => {
+    const { view } = mount(source, 2);
+    view.dispatch({ selection: { anchor: 2, head: at("const") + 2 } });
+    expect(folded(view)).toEqual(["| a | b |"]);
+  });
+});
+
+describe("打字时的块级层", () => {
+  const extensions = [markdownSupport(), typoraDecorations];
+  const create = (doc: string, anchor: number) =>
+    EditorState.create({ doc, selection: { anchor }, extensions });
+  /** 打开指南、把光标挪到 at（和真的先点一下再打字一样；也省得每个位置都整篇解析一遍） */
+  let opened: EditorState | null = null;
+  const caretAt = (at: number) => {
+    opened ??= create(guide, 0);
+    return opened.update({ selection: { anchor: at } }).state;
+  };
+
+  /** 块级层的产物摊平，好和整篇重建的比；替身按 eq 比 */
+  function flatten(state: EditorState) {
+    const value = state.field(typoraBlockDecorations);
+    const ranges: { from: number; to: number; kind: string; widget: WidgetType | null }[] = [];
+    value.decorations.between(0, state.doc.length, (from, to, decoration) => {
+      const widget = (decoration.spec.widget as WidgetType | undefined) ?? null;
+      ranges.push({ from, to, kind: widget?.constructor.name ?? decoration.spec.class, widget });
+    });
+    return {
+      ranges,
+      rest: {
+        foldedLines: [...value.foldedLines].sort((a, b) => a - b),
+        abbreviationLines: [...value.abbreviationLines].sort((a, b) => a - b),
+        referenceLabels: [...value.referenceLabels].sort(),
+        abbreviations: [...value.abbreviations],
+        footnotes: [...value.footnotes],
+        frontMatter: value.frontMatter,
+        probes: value.probes,
+        toc: value.toc,
+      },
+    };
+  }
+
+  function expectSameAsRebuild(state: EditorState, what: string) {
+    const got = flatten(state);
+    const want = flatten(create(state.doc.toString(), state.selection.main.head));
+    expect(got.rest, what).toEqual(want.rest);
+    expect(
+      got.ranges.map(({ from, to, kind }) => `${from}-${to} ${kind}`),
+      what,
+    ).toEqual(want.ranges.map(({ from, to, kind }) => `${from}-${to} ${kind}`));
+    got.ranges.forEach((range, index) => {
+      const other = want.ranges[index]!.widget;
+      if (range.widget && other) expect(range.widget.eq(other), what).toBe(true);
+    });
+  }
+
+  it("matches a full rebuild after edits anywhere in the syntax guide", () => {
+    let checked = 0;
+    for (let at = 0; at < guide.length; at += 53) {
+      for (const [label, change] of [
+        ["insert", { from: at, insert: "字" }],
+        ["delete", { from: at, to: Math.min(guide.length, at + 1) }],
+        ["newline", { from: at, insert: "\n" }],
+      ] as const) {
+        const state = caretAt(at).update({ changes: change, selection: { anchor: at } }).state;
+        expectSameAsRebuild(
+          state,
+          `${label} at ${at}: ${JSON.stringify(guide.slice(at - 10, at + 10))}`,
+        );
+        checked += 1;
+      }
+    }
+    expect(checked).toBeGreaterThan(300);
+  });
+
+  it("matches a rebuild at every position of the list and quote sections", () => {
+    for (const [start, end] of [
+      ["## 列表", "## 带日期的待办"],
+      ["## 引用与提示块", "## 代码"],
+    ] as const) {
+      const from = guide.indexOf(start);
+      const to = guide.indexOf(end);
+      expect(from).toBeGreaterThan(0);
+      for (let at = from; at < to; at += 1) {
+        // 每个位置插一个字；删字隔一个位置删一次（整个跑一遍要好几秒，这样省一半）
+        const changes = [{ from: at, insert: "字" }, ...(at % 2 ? [] : [{ from: at, to: at + 1 }])];
+        for (const change of changes) {
+          const state = caretAt(at).update({ changes: change, selection: { anchor: at } }).state;
+          expectSameAsRebuild(
+            state,
+            `${JSON.stringify(change)} ${JSON.stringify(guide.slice(at - 10, at + 10))}`,
+          );
+        }
+      }
+    }
+  }, 30_000);
+
+  it("keeps typing in a paragraph matching a rebuild, keystroke after keystroke", () => {
+    const at = guide.indexOf("。") + 1;
+    let state = create(guide, at);
+    for (const ch of "边打字边看块级层") {
+      const head = state.selection.main.head;
+      state = state.update({
+        changes: { from: head, insert: ch },
+        selection: { anchor: head + 1 },
+      }).state;
+    }
+    expectSameAsRebuild(state, "typed");
+    for (let i = 0; i < 4; i++) {
+      const head = state.selection.main.head;
+      state = state.update({
+        changes: { from: head - 1, to: head },
+        selection: { anchor: head - 1 },
+      }).state;
+    }
+    expectSameAsRebuild(state, "deleted");
+  });
+
+  it("maps the old block state instead of rebuilding when typing in a plain paragraph", () => {
+    const source = "开头一段。\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n最后一段。";
+    const tableOf = (state: EditorState) => {
+      let table: WidgetType | null = null;
+      state.field(typoraBlockDecorations).decorations.between(0, state.doc.length, (_f, _t, d) => {
+        if (d.spec.widget instanceof TableWidget) table = d.spec.widget;
+      });
+      return table;
+    };
+    const start = create(source, 2);
+    const typed = start.update({
+      changes: { from: 2, insert: "字" },
+      selection: { anchor: 3 },
+    }).state;
+    // 整篇重建会新建一个替身（eq 一样、对象不同）；映射过去的还是原来那一个
+    expect(tableOf(typed)).toBe(tableOf(start));
+    expectSameAsRebuild(typed, "typed before the table");
   });
 });
 

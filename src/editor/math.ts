@@ -69,24 +69,74 @@ function naturalWidth(node: HTMLElement): number {
   return right > left ? right - left : 0;
 }
 
-/** 太宽的块级公式整体缩小字号塞进一行。返回尺寸有没有变。 */
-function fitToWidth(node: HTMLElement): boolean {
-  const before = node.style.fontSize;
-  node.style.fontSize = "";
-  node.classList.remove("is-overflowing");
-  const available = node.clientWidth;
-  const width = naturalWidth(node);
-  if (available > 0 && width > available) {
-    const scale = Math.max(MIN_SCALE, Math.floor((available / width) * 100) / 100);
-    node.style.fontSize = `${scale}em`;
-    if (scale === MIN_SCALE) node.classList.add("is-overflowing");
+/** 块级公式的外层 → 里面的公式节点和它所在的编辑器 */
+const fitting = new WeakMap<Element, { node: HTMLElement; view: EditorView }>();
+
+/**
+ * 太宽的块级公式整体缩小字号塞进一行，尺寸变了的让编辑器重新量高。
+ *
+ * 一批一起来：先把它们都恢复原来的字号，再一起量，最后一起写。一个一个来的话
+ * 「写字号 → 量宽度」每个公式都要整页强制排版一次 —— 冷启动打开语法全览，十几条
+ * 公式在 KaTeX 拉到、ResizeObserver 头一回报尺寸、字体拉到时各来一遍，
+ * 4 倍降速下两百多毫秒。
+ */
+function fitToWidth(blocks: Iterable<Element>) {
+  const due: { node: HTMLElement; view: EditorView; before: string }[] = [];
+  for (const block of blocks) {
+    const target = fitting.get(block);
+    if (!target?.node.isConnected) continue;
+    due.push({ ...target, before: target.node.style.fontSize });
+    target.node.style.fontSize = "";
+    target.node.classList.remove("is-overflowing");
   }
-  return node.style.fontSize !== before;
+  const sizes = due.map(({ node }) => ({ available: node.clientWidth, width: naturalWidth(node) }));
+  const changed = new Set<EditorView>();
+  due.forEach(({ node, view, before }, index) => {
+    const { available, width } = sizes[index]!;
+    if (available > 0 && width > available) {
+      const scale = Math.max(MIN_SCALE, Math.floor((available / width) * 100) / 100);
+      node.style.fontSize = `${scale}em`;
+      if (scale === MIN_SCALE) node.classList.add("is-overflowing");
+    }
+    if (node.style.fontSize !== before) changed.add(view);
+  });
+  for (const view of changed) view.requestMeasure();
 }
 
-const resizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
-/** 块级公式的外层 → 重新缩一次 */
-const refitters = new WeakMap<Element, () => void>();
+/** 攒到这一轮微任务结束再一起缩（KaTeX 拉到时，每个公式各自的回调排在同一轮里） */
+const pendingFits = new Set<Element>();
+function queueFit(block: Element) {
+  if (!pendingFits.size) {
+    queueMicrotask(() => {
+      const blocks = [...pendingFits];
+      pendingFits.clear();
+      fitToWidth(blocks);
+    });
+  }
+  pendingFits.add(block);
+}
+
+/**
+ * 正文列宽变了（窗口缩放、开关目录栏）重新缩一次。所有块级公式共用一个观察者，
+ * 一次回调里的一起缩。只看宽度：缩字号会改高度，高度变化再触发一轮就成了死循环。
+ */
+let resizeObserver: ResizeObserver | null = null;
+const observedWidths = new WeakMap<Element, number>();
+
+function observeWidth(block: Element) {
+  if (typeof ResizeObserver === "undefined") return;
+  resizeObserver ??= new ResizeObserver((entries) => {
+    const resized: Element[] = [];
+    for (const entry of entries) {
+      const width = entry.contentRect.width;
+      if (observedWidths.get(entry.target) === width) continue;
+      observedWidths.set(entry.target, width);
+      resized.push(entry.target);
+    }
+    fitToWidth(resized);
+  });
+  resizeObserver.observe(block);
+}
 
 /*
  * KaTeX 的字体用到哪款才拉哪款。第一次渲染时量的是后备字体，偏窄，以为放得下；
@@ -96,7 +146,7 @@ const refitters = new WeakMap<Element, () => void>();
  */
 if (typeof document !== "undefined" && "fonts" in document) {
   document.fonts.addEventListener("loadingdone", () => {
-    for (const block of document.querySelectorAll(".cm-otw-math-block")) refitters.get(block)?.();
+    fitToWidth(document.querySelectorAll(".cm-otw-math-block"));
   });
 }
 
@@ -136,10 +186,7 @@ export class MathWidget extends OtwWidget {
       view.focus();
     });
 
-    const fit = () => {
-      if (this.display && node.isConnected && fitToWidth(node)) view.requestMeasure();
-    };
-
+    const block = this.display ? document.createElement("div") : null;
     if (loaded) {
       render(loaded, node, this.tex, this.display);
     } else {
@@ -148,35 +195,21 @@ export class MathWidget extends OtwWidget {
       void loadKatex().then((engine) => {
         if (!node.isConnected) return;
         render(engine, node, this.tex, this.display);
-        fit();
+        if (block) queueFit(block);
         view.requestMeasure();
       });
     }
 
-    if (!this.display) return this.settle(node);
-    const block = document.createElement("div");
+    if (!block) return this.settle(node);
     block.className = "cm-otw-math-block";
     block.append(node);
-    refitters.set(block, fit);
-    // 正文列宽变了（窗口缩放、开关目录栏）重新算一次。只看宽度：缩字号会改高度，
-    // 高度变化再触发一轮就成了死循环。
-    if (typeof ResizeObserver !== "undefined") {
-      let width = -1;
-      const observer = new ResizeObserver((entries) => {
-        const next = entries[0]?.contentRect.width ?? 0;
-        if (next === width) return;
-        width = next;
-        fit();
-      });
-      observer.observe(block);
-      resizeObservers.set(block, observer);
-    }
+    fitting.set(block, { node, view });
+    observeWidth(block);
     return this.settle(block);
   }
 
   override destroy(dom: HTMLElement) {
     super.destroy(dom);
-    resizeObservers.get(dom)?.disconnect();
-    resizeObservers.delete(dom);
+    resizeObserver?.unobserve(dom);
   }
 }
