@@ -239,6 +239,12 @@ async function publish() {
       uploaded?.browser_download_url ??
       `https://gitee.com/${repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(file.name)}`;
   }
+  // 这一版里不该有的（发布前重打过包、以前的跑法多传的）删掉：留着的话是另一次打包的东西
+  const keep = new Set(upload.map((file) => file.name));
+  for (const stale of ((await gitee.attachments(release.id)) ?? []).filter((file) => !keep.has(file.name))) {
+    await gitee.deleteAttachment(release.id, stale.id);
+    console.log(`  删掉 ${stale.name}（不是这次打的）`);
+  }
 
   // latest.json 换成 Gitee 的地址，放进固定的 updater 发行版（每版都换，不看大小）
   const mirrored = mirrorLatest(latest, giteeUrls);

@@ -28,9 +28,10 @@ env:
   # Gitee 上的镜像仓库（tauri.conf.json 的第一个更新地址也指向它）
   GITEE_REPO: hyxzs111111/on-the-way
 
+# 同一个 tag 又推了一次（发布前修了东西、把 tag 挪到新的提交上）：旧的那次作废，直接停掉
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   prepare:
