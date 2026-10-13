@@ -14,6 +14,12 @@
       "port": 1431
     },
     {
+      "name": "ontheway-preview",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["exec", "vite", "preview", "--port", "1432", "--strictPort"],
+      "port": 1432
+    },
+    {
       "name": "ontheway-desktop",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [
