@@ -46,7 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVFQUM3QTA3MjFEM0E5QTYKUldTbXFkTWhCM3FzN3NzNzRrYjc1SmpBQ0xORW01Tm9QdXpRK2pZTkNMeHNnVTBLYTA5eTJETzQK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkyMTNBM0M4MDBBNTYwQTgKUldTb1lLVUF5S01Ua3RSZDkrSmg4N29wTEZoTDZyM2UyNm1aR2d6RjdEaEFzZkJvUC9rTXRmckcK",
       "endpoints": ["https://github.com/Gred666/OnTheWay/releases/latest/download/latest.json"],
       "windows": { "installMode": "passive" }
     }
