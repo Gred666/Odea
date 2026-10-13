@@ -276,7 +276,8 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - [x] 发版 CI（2026-10-13，写好了、还没在 GitHub 上跑过）：`.github/workflows/release.yml`，打 `v*` tag 触发。先 `scripts/release-notes.mjs` 对版本（tag = package.json = Cargo.toml = Cargo.lock）、取 `changelog.md` 最上面那一节（不是这一版就不发），跑类型检查和前端测试；再 Windows / macOS（Apple 芯片、Intel 各一个）/ Linux 并行打包、签名，建草稿 Release，附件里有安装包、`.sig`、`latest.json`。Publish 之后用户才查得到。手动 Run workflow = 试打包，安装包在 Artifacts 里，不建 Release。两个 Secret 已经加了。bundle 目标加了 `app`（macOS 的更新包从 .app 打）
   - [ ] 第一次在 GitHub 上跑：先试打包，看 macOS / Linux 能不能编过（这个项目还没在这两个平台上编过）
     - 第一次试打包（2026-10-13）四个都挂了：Windows / Linux / macOS Apple 芯片编完了，签名时「Wrong password for that key」—— Secret 里的密码和私钥对不上，要重填；macOS Intel 在 Apple 芯片机器上交叉编，找不到 OpenSSL（git2 带进来的 openssl-sys），改成 macOS 上 vendored，CI 加了 otool 检查。Actions 升到 Node 24 的版本（checkout / setup-node v7、pnpm/action-setup v6、tauri-action v1）
-  - [ ] Gitee 镜像：Gitee 上建同名仓库，CI 再传一份安装包和一份下载地址指向 Gitee 的 latest.json，`endpoints` 加上它。先验证 Gitee 的附件不登录能不能下、单个文件多大（不行就换对象存储）
+  - [x] Gitee 镜像（2026-10-13）：仓库 `hyxzs111111/on-the-way`（公开）。附件不登录能下、单个 ≤ 100 MB、仓库一共 ≤ 1 GB（实测 + 帮助文档）；没有 latest/download，latest.json 放在固定的 `updater` 发行版。`scripts/gitee-release.mjs` + CI 的「同步到 Gitee」，四个打包都成了才镜像、镜像成了才正式发布，只留最近两版。应用的 `endpoints` 改成 Gitee 在前、GitHub 兜底，`update.rs` 一个地址从查到下载验签整条不行就换下一个（本机走过）。下载页（deb / rpm）改成 Gitee 的发行版页。Mac 加了临时签名（`signingIdentity: "-"`）
+  - [ ] Secret `GITEE_TOKEN` 加上以后试打包一次（看 Mac 临时签名编不编得过、Gitee 令牌能不能推），再发 0.1.0
   - [ ] 代码签名（Windows Authenticode、macOS 公证），以后再说
 - [x] 清理旧代码：没用的依赖（`@dnd-kit/*`、`fractional-indexing`、`marked`、Radix dialog / popover / tooltip，Rust 的 `r2d2`、`rrule`、`chrono-tz`）；旧数据模型留下的字段（笔记的 `icon`、恒为空的 `actionGroup`、任务的 `priority` / `goalId` / `sortKey` / `completedAt`）、没人调的 `note_list`、用不上的 `NoteIcon` 组件；日历当日安排从 `ActionGroup` 简化成 `DayTasks`
 

@@ -1,16 +1,17 @@
-# 发版（技术方案 §14.4）
+# 发版（技术方案 §14.4）。发版的事归 Claude 做，更新说明也是它写
 #
 #   1. pnpm bump 0.2.0，在 src/content/changelog.md 最上面写「## 0.2.0 · 日期」那一节，提交
-#   2. git tag v0.2.0 && git push origin v0.2.0
-#   3. 这里检查版本和更新说明 → 三个平台打包、用 Secrets 里的私钥签名 → 建一个草稿 Release，
-#      附件里有安装包、.sig 和 latest.json（各平台的下载地址和签名，更新说明就是 changelog 那一节）
-#   4. 到 Releases 页面看一眼，点 Publish。发布之后 releases/latest/download/latest.json 才指向它，
-#      用户的应用才查得到（草稿查不到）
+#   2. git tag v0.2.0 && git push origin master v0.2.0
+#   3. 这里检查版本和更新说明 → 四个打包任务（Windows、macOS 两种芯片、Linux）、用 Secrets 里的私钥签名，
+#      传进一个草稿 Release（安装包、.sig、latest.json；更新说明就是 changelog 那一节）
+#   4. 四个都成了：镜像到 Gitee（代码和 tag、发行版和安装包，updater 发行版里换上 latest.json）
+#   5. Gitee 也成了：GitHub 的草稿转成正式发布。两边一起上线；哪一步挂了就都不上线，修好重跑
 #
 # 试打包：Actions 页面选「发版」→ Run workflow。只打包、签名，安装包作为 Artifacts 下载，不建 Release、
-# 不查 changelog —— 第一次发版前、改了打包配置以后先这样跑一遍，看三个平台都能编过
+# 不查 changelog，顺带看一眼 Gitee 的令牌能不能用 —— 改了打包配置以后先这样跑一遍
 #
-# 要两个 Secret：TAURI_SIGNING_PRIVATE_KEY（私钥文件的内容）、TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# 要三个 Secret：TAURI_SIGNING_PRIVATE_KEY（私钥文件的内容）、TAURI_SIGNING_PRIVATE_KEY_PASSWORD、
+# GITEE_TOKEN（Gitee 私人令牌，要 projects 权限）
 name: 发版
 
 on:
@@ -20,6 +21,10 @@ on:
 
 permissions:
   contents: write
+
+env:
+  # Gitee 上的镜像仓库（tauri.conf.json 的第一个更新地址也指向它）
+  GITEE_REPO: hyxzs111111/on-the-way
 
 concurrency:
   group: release-${{ github.ref }}
@@ -152,3 +157,71 @@ jobs:
             echo "::error::$bin 链到了 Homebrew 的库，没装 Homebrew 的 Mac 上打不开"
             exit 1
           fi
+
+  # 试打包时看一眼 Gitee 的令牌：真发版时才发现推不上去就晚了
+  gitee-check:
+    name: Gitee 令牌
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node scripts/gitee-release.mjs check
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+
+  # 国内的镜像：代码和 tag 推过去，发行版和安装包传过去，updater 发行版里换上指向 Gitee 的 latest.json
+  gitee:
+    name: 同步到 Gitee
+    needs: [prepare, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: 推代码和 tag
+        shell: bash
+        run: |
+          remote="https://${GITEE_REPO%%/*}:${GITEE_TOKEN}@gitee.com/${GITEE_REPO}.git"
+          git push --force "$remote" "HEAD:refs/heads/master"
+          git push --force "$remote" "refs/tags/${GITHUB_REF_NAME}"
+
+      # 草稿 Release 里的东西（gh 按 tag 找得到草稿）
+      - name: 下载这一版的安装包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir release-assets
+
+      # 更新说明经环境变量传：直接写进命令的话，里面的反引号、$ 会被 shell 当命令执行
+      - name: 传到 Gitee
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          ASSETS_DIR: release-assets
+          NOTES: ${{ needs.prepare.outputs.notes }}
+        run: |
+          printf '%s\n' "$NOTES" > notes.md
+          NOTES_FILE=notes.md node scripts/gitee-release.mjs publish
+
+  publish:
+    name: 正式发布
+    needs: [build, gitee]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 草稿转成正式发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

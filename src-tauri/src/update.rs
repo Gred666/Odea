@@ -35,8 +35,8 @@ use crate::error::{AppError, Result};
 use crate::state::AppState;
 use crate::sync::proxy;
 
-/// 在应用里装不了的（deb / rpm）点「去下载」打开这里
-const DOWNLOAD_PAGE: &str = "https://github.com/Gred666/OnTheWay/releases/latest";
+/// 在应用里装不了的（deb / rpm）点「去下载」打开这里：Gitee 的发行版页，国内外都打得开
+const DOWNLOAD_PAGE: &str = "https://gitee.com/hyxzs111111/on-the-way/releases";
 /// 窗口出来以后等多久查第一次：别和启动、第一轮同步抢网
 const FIRST_CHECK: Duration = Duration::from_secs(20);
 const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
