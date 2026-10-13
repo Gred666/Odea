@@ -11,7 +11,9 @@
 // - 单个附件不超过 100 MB，一个仓库所有附件加起来不超过 1 GB：每版一百多 MB，只留最近两版
 // - 没有 GitHub 那种 releases/latest/download/…：最新的 latest.json 放在一个固定的发行版 `updater` 里，
 //   应用查 https://gitee.com/<仓库>/releases/download/updater/latest.json（tauri.conf.json 的第一个地址）
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -53,6 +55,18 @@ export function mirrorLatest(latest, giteeUrls) {
     if (giteeUrls[name]) platform.url = giteeUrls[name];
   }
   return copy;
+}
+
+/**
+ * 一个附件怎么传：同名、同样大小的已经在了（上一次没跑完时传上去的）就不再传 —— 重跑是接着传，不是从头来；
+ * 大小不一样的（或者 force，比如每版都要换的 latest.json）先删旧的再传
+ */
+export function planAttachment(existing, file, { force = false } = {}) {
+  const same = existing.filter((attachment) => attachment.name === file.name);
+  if (!force && same.some((attachment) => attachment.size === file.size)) {
+    return { skip: true, remove: [] };
+  }
+  return { skip: false, remove: same.map((attachment) => attachment.id) };
 }
 
 /** 要删掉的旧发行版：updater 以外、最新的 keep 个以外的（按发布时间） */
@@ -102,12 +116,48 @@ function client(token, repo) {
     deleteRelease: (id) => call("DELETE", `/releases/${id}`),
     attachments: (id) => call("GET", `/releases/${id}/attach_files`, { query: { per_page: 100 } }),
     deleteAttachment: (id, fileId) => call("DELETE", `/releases/${id}/attach_files/${fileId}`),
-    upload: (id, name, bytes) => {
-      const form = new FormData();
-      form.set("file", new Blob([bytes]), name);
-      return call("POST", `/releases/${id}/attach_files`, { form });
-    },
+    upload: (id, file) => curlUpload(`${API}/repos/${repo}/releases/${id}/attach_files`, token, file),
   };
+}
+
+/**
+ * 上传用 curl，不用 fetch：从 GitHub 的机器传到 Gitee 很慢，11 MB 有时要五分钟以上，
+ * Node 自带的 fetch 等响应头最多 300 秒（UND_ERR_HEADERS_TIMEOUT，0.1.0 第二次就挂在这）还改不了。
+ * 令牌经 stdin 的配置传给 curl，不出现在命令行里（报错信息、进程列表都看不到）
+ */
+export function curlUpload(url, token, file) {
+  const out = path.join(os.tmpdir(), `gitee-upload-${process.pid}.json`);
+  let stats;
+  try {
+    stats = execFileSync(
+      "curl",
+      [
+        "-sS",
+        "-K",
+        "-",
+        "--max-time",
+        "1800",
+        "-o",
+        out,
+        "-w",
+        "%{http_code} %{speed_upload} %{time_total}",
+        "-F",
+        `file=@${file.path};filename=${file.name}`,
+        url,
+      ],
+      { input: `form-string = "access_token=${token}"\n`, encoding: "utf8" },
+    );
+  } catch (error) {
+    throw new Error(`上传 ${file.name}：curl 退出码 ${error.status}，${String(error.stderr ?? "").trim()}`);
+  }
+  const [code, speed, seconds] = stats.trim().split(" ");
+  const body = readFileSync(out, "utf8");
+  rmSync(out, { force: true });
+  if (!code.startsWith("2")) throw new Error(`上传 ${file.name} → ${code} ${body.slice(0, 300)}`);
+  console.log(
+    `  ↑ ${file.name}（${(file.size / 1024 / 1024).toFixed(1)} MB，${Math.round(Number(speed) / 1024)} KB/s，${Math.round(Number(seconds))} 秒）`,
+  );
+  return JSON.parse(body);
 }
 
 /** 这个 tag 的发行版，没有就建一个 */
@@ -115,14 +165,28 @@ async function ensureRelease(gitee, values) {
   return (await gitee.releaseByTag(values.tag_name)) ?? (await gitee.createRelease(values));
 }
 
-/** 传一个附件；同名的旧附件先删掉（重跑发版不会传出两份） */
-async function replaceAttachment(gitee, release, existing, name, bytes) {
-  for (const old of existing.filter((file) => file.name === name)) {
-    await gitee.deleteAttachment(release.id, old.id);
+/**
+ * 传一个附件（见 planAttachment）。上传失败了先看看它是不是其实已经上去了（响应丢了），
+ * 没上去就再来，最多三次
+ */
+async function ensureAttachment(gitee, release, file, options) {
+  const plan = planAttachment((await gitee.attachments(release.id)) ?? [], file, options);
+  if (plan.skip) {
+    console.log(`  = ${file.name}（已经在了）`);
+    return null;
   }
-  const uploaded = await gitee.upload(release.id, name, bytes);
-  console.log(`  ↑ ${name}（${(bytes.length / 1024 / 1024).toFixed(1)} MB）`);
-  return uploaded;
+  for (const id of plan.remove) await gitee.deleteAttachment(release.id, id);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await gitee.upload(release.id, file);
+    } catch (error) {
+      const now = (await gitee.attachments(release.id)) ?? [];
+      const landed = now.find((attachment) => attachment.name === file.name && attachment.size === file.size);
+      if (landed) return landed;
+      if (attempt >= 3) throw error;
+      console.warn(`  ${error.message}，再试一次`);
+    }
+  }
 }
 
 function env(name) {
@@ -160,18 +224,17 @@ async function publish() {
     target_commitish: sha,
     prerelease: false,
   });
-  const existing = (await gitee.attachments(release.id)) ?? [];
   const giteeUrls = {};
   for (const file of upload) {
-    const uploaded = await replaceAttachment(gitee, release, existing, file.name, readFileSync(path.join(dir, file.name)));
+    const uploaded = await ensureAttachment(gitee, release, { ...file, path: path.join(dir, file.name) });
     giteeUrls[file.name] =
       uploaded?.browser_download_url ??
       `https://gitee.com/${repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(file.name)}`;
   }
 
-  // latest.json 换成 Gitee 的地址，放进固定的 updater 发行版
+  // latest.json 换成 Gitee 的地址，放进固定的 updater 发行版（每版都换，不看大小）
   const mirrored = mirrorLatest(latest, giteeUrls);
-  const out = path.join(dir, "latest.gitee.json");
+  const out = path.join(os.tmpdir(), "latest.json");
   writeFileSync(out, `${JSON.stringify(mirrored, null, 2)}\n`);
   console.log(`发行版 ${UPDATER_TAG}（应用查更新的固定地址）`);
   const updater = await ensureRelease(gitee, {
@@ -181,7 +244,7 @@ async function publish() {
     target_commitish: sha,
     prerelease: true,
   });
-  await replaceAttachment(gitee, updater, (await gitee.attachments(updater.id)) ?? [], "latest.json", readFileSync(out));
+  await ensureAttachment(gitee, updater, { name: "latest.json", path: out, size: statSync(out).size }, { force: true });
 
   // 只留最近几版：一个仓库的附件总共 1 GB
   for (const old of releasesToPrune((await gitee.releases()) ?? [])) {

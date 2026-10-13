@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ATTACHMENT, mirrorLatest, pickUploads, releasesToPrune } from "./gitee-release.mjs";
+import {
+  MAX_ATTACHMENT,
+  mirrorLatest,
+  pickUploads,
+  planAttachment,
+  releasesToPrune,
+} from "./gitee-release.mjs";
 
 describe("镜像到 Gitee", () => {
   it("只传安装包和更新包：签名不传，AppImage 只放 GitHub，超过 100 MB 的跳过", () => {
@@ -46,6 +52,21 @@ describe("镜像到 Gitee", () => {
     expect(out.notes).toBe("- 第一版");
     // 原来那份没被改
     expect(latest.platforms["windows-x86_64"].url).toMatch("github.com");
+  });
+
+  it("重跑是接着传：同名同大小的不再传，大小不对的先删再传，latest.json 每次都换", () => {
+    const existing = [
+      { id: 1, name: "a.exe", size: 100 },
+      { id: 2, name: "b.dmg", size: 50 },
+      { id: 3, name: "latest.json", size: 900 },
+    ];
+    expect(planAttachment(existing, { name: "a.exe", size: 100 })).toEqual({ skip: true, remove: [] });
+    expect(planAttachment(existing, { name: "b.dmg", size: 60 })).toEqual({ skip: false, remove: [2] });
+    expect(planAttachment(existing, { name: "c.deb", size: 10 })).toEqual({ skip: false, remove: [] });
+    expect(planAttachment(existing, { name: "latest.json", size: 900 }, { force: true })).toEqual({
+      skip: false,
+      remove: [3],
+    });
   });
 
   it("只留最近两版和 updater", () => {
