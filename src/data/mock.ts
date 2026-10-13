@@ -979,6 +979,14 @@ export const mockBackend: Backend = {
     };
   },
 
+  // 浏览器里没有文件要读进索引
+  async indexProgress() {
+    return null;
+  },
+  async onIndexProgress() {
+    return () => {};
+  },
+
   // 浏览器里没有仓库文件夹，也就没有同步
   async syncStatus() {
     return SYNC_OFF;

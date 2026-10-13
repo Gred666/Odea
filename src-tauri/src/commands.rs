@@ -1,5 +1,6 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime, State};
@@ -17,7 +18,7 @@ use crate::sync::provider::{Http, Provider, RemoteRepo};
 use crate::sync::proxy;
 use crate::sync::repo::{Net, SyncError, SyncRepo, SyncResult};
 use crate::sync::setup;
-use crate::vault::{fsio, layout, watch, Announce, Vault};
+use crate::vault::{fsio, layout, watch, Announce, Backlog, Vault};
 
 /* ============================================================
 命令层：只做参数校验和调用，读写全在 vault/。
@@ -400,6 +401,107 @@ pub async fn vault_info(state: State<'_, AppState>) -> Result<VaultInfo> {
     with_vault(&state, |v| v.info()).await
 }
 
+/* ---------------- 后台读文件进索引（Vault::open_quick） ---------------- */
+
+/// 后台把文件读进索引的进度。读完的那一次 done == total，前端据此整个重新取一遍列表
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct IndexProgress {
+    pub done: u32,
+    pub total: u32,
+}
+
+/// 后台读到哪了。换仓库时代号加一：还在读旧仓库的那个线程自己停下，也不再报进度
+#[derive(Default)]
+pub struct Indexing {
+    generation: u64,
+    progress: Option<IndexProgress>,
+}
+
+impl Indexing {
+    /// 开始新的一轮（或者换了仓库、没有要读的）：旧的那一轮作废
+    fn restart(&mut self, progress: Option<IndexProgress>) -> u64 {
+        self.generation += 1;
+        self.progress = progress;
+        self.generation
+    }
+}
+
+/// 正在后台读文件的话，读到哪了；没在读是 null。前端启动时先订阅进度事件再来问这一次
+#[tauri::command]
+#[specta::specta]
+pub async fn index_progress(state: State<'_, AppState>) -> Result<Option<IndexProgress>> {
+    Ok(state
+        .indexing
+        .lock()
+        .map_err(|_| AppError::Internal("索引进度锁坏了".into()))?
+        .progress)
+}
+
+/// 在后台把 backlog 读完。每次拿着仓库的锁读 50ms 左右就放开、歇一下，前端的命令能插进来；
+/// 每读一批报一次进度。读完以后按读全了的索引把使用指南升到这一版（打开时它们可能还没读到），
+/// 最后报 done == total
+pub fn spawn_backlog<R: Runtime>(
+    app: AppHandle<R>,
+    vault: Arc<Mutex<Vault>>,
+    indexing: Arc<Mutex<Indexing>>,
+    mut backlog: Backlog,
+) {
+    let total = u32::try_from(backlog.total()).unwrap_or(u32::MAX);
+    let start = (!backlog.is_empty()).then_some(IndexProgress { done: 0, total });
+    let Ok(generation) = indexing.lock().map(|mut slot| slot.restart(start)) else {
+        return;
+    };
+    if backlog.is_empty() {
+        return;
+    }
+    let Ok(root) = vault.lock().map(|vault| vault.root().to_path_buf()) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        // 还是这一轮的话记下进度；换了仓库 / 开了新的一轮就停
+        let report = |progress: Option<IndexProgress>| {
+            indexing.lock().is_ok_and(|mut slot| {
+                let current = slot.generation == generation;
+                if current {
+                    slot.progress = progress;
+                }
+                current
+            })
+        };
+        while !backlog.is_empty() {
+            {
+                let Ok(mut vault) = vault.lock() else { return };
+                if vault.root() != root {
+                    return;
+                }
+                vault.index_backlog(&mut backlog, Some(Duration::from_millis(50)));
+            }
+            let done = u32::try_from(backlog.done()).unwrap_or(total);
+            if !report(Some(IndexProgress { done, total })) {
+                return;
+            }
+            if !backlog.is_empty() {
+                let _ = IndexProgress { done, total }.emit(&app);
+                // 让等着锁的命令先拿到（标准库的锁不保证先来先得）
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        if let Ok(mut vault) = vault.lock() {
+            if vault.root() != root {
+                return;
+            }
+            if let Err(error) = vault.guide_refresh() {
+                eprintln!("更新使用指南失败: {error}");
+            }
+        }
+        if report(None) {
+            if let Err(error) = (IndexProgress { done: total, total }).emit(&app) {
+                eprintln!("通知前端失败: {error}");
+            }
+        }
+    });
+}
+
 /// 在系统的文件管理器里定位这篇文档的文件（选中它）。还没写过的某一天 /
 /// 某个周期没有文件，打开它将来所在的文件夹。
 #[tauri::command]
@@ -547,13 +649,14 @@ async fn switch_vault<R: Runtime>(
 ) -> Result<VaultInfo> {
     let data_dir = state.data_dir.clone();
     let root = new_root.clone();
-    let vault = blocking(move || {
+    // 换到一个装满笔记的文件夹（比如 Obsidian 的）：文件多的话后台慢慢读，前端整页重载后看到进度
+    let (vault, backlog) = blocking(move || {
         let mut config = boot::Config::load(&data_dir);
         boot::prepare(&root, &data_dir, &mut config, false)?;
-        let vault = Vault::open(&root, &boot::index_path(&data_dir, &root))?;
+        let opened = Vault::open_quick(&root, &boot::index_path(&data_dir, &root))?;
         config.vault_root = Some(root);
         config.save(&data_dir)?;
-        Ok(vault)
+        Ok(opened)
     })
     .await?;
 
@@ -571,6 +674,7 @@ async fn switch_vault<R: Runtime>(
         *current = vault;
         current.set_announcer(announcer(app.clone()));
     }
+    spawn_backlog(app.clone(), state.vault.clone(), state.indexing.clone(), backlog);
     match watch::start(state.vault.clone(), Some(sync_poke(&state.sync))) {
         Ok(watcher) => {
             *state

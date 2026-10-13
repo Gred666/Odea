@@ -22,6 +22,7 @@ import {
   CloudAlert,
   CloudOff,
   KeyRound,
+  LoaderCircle,
   NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
@@ -124,6 +125,7 @@ export function Sidebar() {
 
         <div className="flex-1" />
 
+        <IndexRow collapsed={collapsed} reduce={reduce} />
         <UpdateRow collapsed={collapsed} reduce={reduce} />
         <SyncRow collapsed={collapsed} reduce={reduce} />
         <FootControls collapsed={collapsed} reduce={reduce} />
@@ -141,6 +143,52 @@ function RowLabel({ children, className }: { children: ReactNode; className?: st
     >
       {children}
     </motion.span>
+  );
+}
+
+/* ---------------- 后台读文件进索引（Rust 的 Vault::open_quick） ----------------
+   第一次打开一个大文件夹、应用升级后索引要重建时，窗口先出来，文件在后台读 —— 读完之前列表、
+   搜索、日历里暂时缺一部分。这一行说清楚还在读、读到哪了，读完就淡掉。和「新版本」那一行
+   一样只淡入淡出；不是按钮，没什么可点的。数字用等宽数字，跳的时候字不左右晃 */
+
+function IndexRow({ collapsed, reduce }: { collapsed: boolean; reduce: boolean }) {
+  const indexing = useData((s) => s.indexing);
+  const label = indexing ? `正在读取笔记 ${indexing.done} / ${indexing.total}` : "";
+  return (
+    <AnimatePresence initial={false}>
+      {indexing && (
+        <motion.div
+          key="indexing"
+          className="shrink-0 px-3"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={reduce ? INSTANT : tween.slow}
+        >
+          <div
+            role="status"
+            title={
+              collapsed
+                ? label
+                : "第一次打开这个文件夹（或者应用升级了）要把笔记都读一遍，读完之前列表和搜索里暂时缺一部分"
+            }
+            aria-label={label}
+            className={cn(ROW, "h-8 cursor-default text-muted")}
+          >
+            {/* 转的是图标（SVG），不是字 */}
+            <LoaderCircle
+              size={15}
+              strokeWidth={1.9}
+              className={cn(
+                "relative z-10 shrink-0 text-faint",
+                !reduce && "animate-spin [animation-duration:1.6s]",
+              )}
+            />
+            <RowLabel className="text-[12.5px] tabular-nums">{label}</RowLabel>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 

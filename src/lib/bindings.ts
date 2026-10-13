@@ -321,6 +321,17 @@ async vaultInfo() : Promise<Result<VaultInfo, AppError>> {
 }
 },
 /**
+ * 正在后台读文件的话，读到哪了；没在读是 null。前端启动时先订阅进度事件再来问这一次
+ */
+async indexProgress() : Promise<Result<IndexProgress | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("index_progress") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 在系统的文件管理器里定位这篇文档的文件（选中它）。还没写过的某一天 /
  * 某个周期没有文件，打开它将来所在的文件夹。
  */
@@ -658,11 +669,13 @@ async appUpgrade() : Promise<Result<AppUpgrade | null, AppError>> {
 
 
 export const events = __makeEvents__<{
+indexProgress: IndexProgress,
 syncNotice: SyncNotice,
 syncStatusChanged: SyncStatusChanged,
 updateReady: UpdateReady,
 vaultChanged: VaultChanged
 }>({
+indexProgress: "index-progress",
 syncNotice: "sync-notice",
 syncStatusChanged: "sync-status-changed",
 updateReady: "update-ready",
@@ -864,6 +877,10 @@ name: string;
  * 这个版本的应用带的正文
  */
 body: string }
+/**
+ * 后台把文件读进索引的进度。读完的那一次 done == total，前端据此整个重新取一遍列表
+ */
+export type IndexProgress = { done: number; total: number }
 /**
  * 某一天 / 某个周期的目标，连同正文：命令面板拿它搜日记和目标
  */

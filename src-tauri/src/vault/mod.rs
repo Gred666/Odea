@@ -28,9 +28,10 @@ pub mod seed;
 pub mod tasks;
 pub mod watch;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
@@ -47,6 +48,31 @@ use layout::Slot;
 
 /// 回收站里的文件放多久（天）
 const TRASH_KEEP_DAYS: i64 = 30;
+
+/// 启动时最多当场读这么多个文件（约 0.2 秒）。再多就交给后台分批读，窗口不等它（见 open_quick）
+const QUICK_SCAN_LIMIT: usize = 200;
+
+/// 启动时没读完、交给后台分批读的文件（Vault::open_quick 给出，index_backlog 一点点读掉）
+pub struct Backlog {
+    /// 属于哪个仓库：中途换了仓库，剩下的就不读了
+    root: PathBuf,
+    files: VecDeque<String>,
+    total: usize,
+}
+
+impl Backlog {
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    pub fn done(&self) -> usize {
+        self.total - self.files.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+}
 
 /// 把「别处引起的变化」通知给前端（桌面端是一个 Tauri 事件）
 pub type Announce = Arc<dyn Fn(VaultChange) + Send + Sync>;
@@ -132,10 +158,30 @@ fn title_meta(rel: &str, title: &str) -> Option<String> {
 }
 
 impl Vault {
-    /// 打开仓库并把索引和文件对齐（增量：只重读变过的文件）
+    /// 打开仓库并把索引和文件对齐（增量：只重读变过的文件）。应用里用 open_quick
+    #[cfg(test)]
     pub fn open(root: &Path, index_path: &Path) -> Result<Self> {
         let db = index::open(index_path)?;
         Self::with_index(root, db)
+    }
+
+    /// 启动时打开仓库。要读的文件不多（平时启动，外面改了几篇）照旧当场读完；很多的话
+    /// （第一次打开一个大文件夹、索引的结构升级了要整个重建）只做不读文件的那一半，
+    /// 要读的交回去，调用方在后台分批读（index_backlog）—— 两千篇要读两秒，窗口不用等它。
+    /// 读完之前列表、搜索、日历里暂时缺一部分；某一天 / 某个周期的文档取的时候会当场补读
+    pub fn open_quick(root: &Path, index_path: &Path) -> Result<(Self, Backlog)> {
+        let mut vault = Self::bare(root, index::open(index_path)?)?;
+        let (_, stale) = vault.plan_rescan()?;
+        let mut backlog = Backlog {
+            root: root.to_path_buf(),
+            total: stale.len(),
+            files: stale.into_iter().map(|file| file.rel).collect(),
+        };
+        if backlog.total <= QUICK_SCAN_LIMIT {
+            vault.index_backlog(&mut backlog, None);
+        }
+        vault.purge_trash(TRASH_KEEP_DAYS * 86_400_000);
+        Ok((vault, backlog))
     }
 
     #[cfg(test)]
@@ -143,18 +189,24 @@ impl Vault {
         Self::with_index(root, index::open_in_memory()).unwrap()
     }
 
+    #[cfg(test)]
     fn with_index(root: &Path, db: Connection) -> Result<Self> {
+        let mut vault = Self::bare(root, db)?;
+        vault.rescan()?;
+        vault.purge_trash(TRASH_KEEP_DAYS * 86_400_000);
+        Ok(vault)
+    }
+
+    /// 还没和磁盘对齐过的仓库
+    fn bare(root: &Path, db: Connection) -> Result<Self> {
         std::fs::create_dir_all(root)?;
-        let mut vault = Self {
+        Ok(Self {
             root: root.to_path_buf(),
             db,
             log: activity::Log::new(fsio::abs(root, layout::ACTIVITY_DIR)),
             announce: None,
             folders: Vec::new(),
-        };
-        vault.rescan()?;
-        vault.purge_trash(TRASH_KEEP_DAYS * 86_400_000);
-        Ok(vault)
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -178,6 +230,19 @@ impl Vault {
 
     /// 把索引和磁盘对齐，返回变了的文档。启动时和文件监听触发时调用。
     pub fn rescan(&mut self) -> Result<VaultChange> {
+        let (mut change, stale) = self.plan_rescan()?;
+        for file in &stale {
+            let Some(text) = self.read(&file.rel)? else {
+                continue;
+            };
+            self.index_text(&file.rel, &text, file.mtime, file.size, &mut change)?;
+        }
+        Ok(change)
+    }
+
+    /// 扫描里不读文件的那一半：只 stat。消失了的从索引里去掉、文件夹列表更新，
+    /// 返回修改时间或大小变了、要（重新）读进索引的文件，按该读的顺序
+    fn plan_rescan(&mut self) -> Result<(VaultChange, Vec<fsio::FileEntry>)> {
         let mut change = VaultChange::default();
         let mut files = fsio::walk_markdown(&self.root);
         // 名字像冲突副本的放到最后：网盘拷出来的副本带着原文属性块里的 id，谁先被索引
@@ -199,21 +264,64 @@ impl Vault {
                 }
             }
         }
-        for file in &files {
-            if known_state.get(file.rel.as_str()) == Some(&(file.mtime, file.size)) {
-                continue;
-            }
-            let Some(text) = self.read(&file.rel)? else {
-                continue;
-            };
-            self.index_text(&file.rel, &text, file.mtime, file.size, &mut change)?;
-        }
+        let stale = files
+            .into_iter()
+            .filter(|file| known_state.get(file.rel.as_str()) != Some(&(file.mtime, file.size)))
+            .collect();
         let folders = folders::list(&self.root);
         if folders != self.folders {
             self.folders = folders;
             change.folders = true;
         }
-        Ok(change)
+        Ok((change, stale))
+    }
+
+    /// 接着读后台那批文件，读到 budget 用完为止（None = 全部读完）。一个文件读不了就跳过
+    /// （以前整个仓库打不开），下次扫描还会再试。换了仓库的话剩下的直接丢掉
+    pub fn index_backlog(&mut self, backlog: &mut Backlog, budget: Option<Duration>) -> VaultChange {
+        let start = Instant::now();
+        let mut change = VaultChange::default();
+        if backlog.root != self.root {
+            backlog.files.clear();
+            return change;
+        }
+        while let Some(rel) = backlog.files.pop_front() {
+            if let Err(error) = self.index_file(&rel, &mut change) {
+                eprintln!("读 {rel} 进索引失败: {error}");
+            }
+            if budget.is_some_and(|budget| start.elapsed() >= budget) {
+                break;
+            }
+        }
+        change
+    }
+
+    /// 按磁盘上的现状把一个文件读进索引：没了的去掉，修改时间和大小都和索引里一样的不读
+    /// （后台那批是开头一起列的，轮到它时可能已经被保存、文件监听读过了，或者又改过、删了）
+    fn index_file(&mut self, rel: &str, change: &mut VaultChange) -> Result<()> {
+        let indexed = index::by_path(&self.db, rel)?;
+        let Some((mtime, size)) = fsio::stat(&fsio::abs(&self.root, rel)) else {
+            if let Some(row) = indexed {
+                self.forget(&row, change)?;
+            }
+            return Ok(());
+        };
+        if indexed.is_some_and(|row| row.mtime == mtime && row.size == size) {
+            return Ok(());
+        }
+        if let Some(text) = self.read(rel)? {
+            self.index_text(rel, &text, mtime, size, change)?;
+        }
+        Ok(())
+    }
+
+    /// 某一天 / 某个周期的文件在磁盘上，索引里还没有（后台还没读到它，见 open_quick）：
+    /// 当场读进来。不然前端拿到的是一篇空文档，一编辑就把磁盘上那一篇盖掉了
+    fn index_if_unseen(&mut self, rel: &str) -> Result<()> {
+        if index::by_path(&self.db, rel)?.is_none() && fsio::abs(&self.root, rel).is_file() {
+            self.index_file(rel, &mut VaultChange::default())?;
+        }
+        Ok(())
     }
 
     /// 文件监听用：扫描一遍，有变化就通知前端
@@ -935,7 +1043,10 @@ impl Vault {
 
     /// `carry` 只在请求「今天」时为 true：今天还没写过，就延续之前最近写过的一天
     /// （不落库，用户一编辑才以今天的身份写文件）。
-    pub fn day(&self, date: &str, carry: bool) -> Result<DayDoc> {
+    pub fn day(&mut self, date: &str, carry: bool) -> Result<DayDoc> {
+        if index::day(&self.db, date)?.is_none() {
+            self.index_if_unseen(&layout::day_path(date)?)?;
+        }
         let tasks = self.tasks_due(date)?;
         if let Some(row) = index::day(&self.db, date)? {
             return Ok(DayDoc {
@@ -976,6 +1087,9 @@ impl Vault {
 
     /// 写某一天。标题和正文都清空了就删掉这个文件 —— 空文件留在文件夹里只是杂物。
     pub fn save_day(&mut self, date: &str, title: &str, body: &str) -> Result<DayDoc> {
+        if index::day(&self.db, date)?.is_none() {
+            self.index_if_unseen(&layout::day_path(date)?)?;
+        }
         let existing = index::day(&self.db, date)?;
         let mut change = VaultChange::default();
         let rel = match &existing {
@@ -1036,8 +1150,11 @@ impl Vault {
 
     /* ---------------- 目标 ---------------- */
 
-    pub fn goal(&self, horizon: &str, period_start: &str) -> Result<Goal> {
+    pub fn goal(&mut self, horizon: &str, period_start: &str) -> Result<Goal> {
         layout::validate_period_start(horizon, period_start)?;
+        if index::goal(&self.db, horizon, period_start)?.is_none() {
+            self.index_if_unseen(&layout::goal_path(horizon, period_start)?)?;
+        }
         Ok(match index::goal(&self.db, horizon, period_start)? {
             Some(row) => Goal {
                 id: row.id,
@@ -1064,6 +1181,9 @@ impl Vault {
 
     pub fn save_goal(&mut self, horizon: &str, period_start: &str, body: &str) -> Result<Goal> {
         layout::validate_period_start(horizon, period_start)?;
+        if index::goal(&self.db, horizon, period_start)?.is_none() {
+            self.index_if_unseen(&layout::goal_path(horizon, period_start)?)?;
+        }
         let existing = index::goal(&self.db, horizon, period_start)?;
         let mut change = VaultChange::default();
         let rel = match &existing {

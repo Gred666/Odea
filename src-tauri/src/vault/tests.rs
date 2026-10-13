@@ -943,7 +943,7 @@ fn the_index_can_be_thrown_away_and_rebuilt_from_files() {
         f.vault.goal("month", "2026-09-01").unwrap(),
     );
 
-    let rebuilt = Vault::open_in_memory(&f.root);
+    let mut rebuilt = Vault::open_in_memory(&f.root);
     let note = rebuilt.note_get(&id).unwrap();
     assert_eq!(note.title, before.0.title);
     assert_eq!(note.is_pinned, before.0.is_pinned);
@@ -984,4 +984,247 @@ fn activity_is_logged_as_json_lines() {
     let actions: Vec<_> = entries.iter().map(|entry| entry.action.as_str()).collect();
     assert_eq!(actions, vec!["created", "completed", "archived"]);
     assert_eq!(entries[1].detail.as_deref(), Some("交稿"));
+}
+
+/* ---------------- 启动时文件很多：后台分批读（open_quick） ---------------- */
+
+fn write_notes(root: &Path, count: usize) {
+    for i in 0..count {
+        let rel = format!("笔记/第{i}篇.md");
+        fsio::write_atomic(&fsio::abs(root, &rel), &format!("第 {i} 篇的正文")).unwrap();
+    }
+}
+
+/// 把后台那批读完，返回读了几批
+fn drain(vault: &mut Vault, backlog: &mut Backlog) -> usize {
+    let mut batches = 0;
+    while !backlog.is_empty() {
+        vault.index_backlog(backlog, Some(std::time::Duration::from_millis(2)));
+        batches += 1;
+    }
+    batches
+}
+
+#[test]
+fn a_few_changed_files_are_read_right_away() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    write_notes(&root, 20);
+    let (vault, backlog) = Vault::open_quick(&root, &dir.path().join("index.db")).unwrap();
+    assert!(backlog.is_empty());
+    assert_eq!(vault.note_list_full(false).unwrap().len(), 20);
+}
+
+#[test]
+fn a_big_folder_is_read_in_the_background_in_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    let index = dir.path().join("index.db");
+    write_notes(&root, 260);
+    let (mut vault, mut backlog) = Vault::open_quick(&root, &index).unwrap();
+    assert_eq!(backlog.total(), 260);
+    assert!(vault.note_list_full(false).unwrap().is_empty(), "窗口出来之前一篇都不读");
+
+    assert!(drain(&mut vault, &mut backlog) > 1, "分好几批读，中间放开锁");
+    assert_eq!(backlog.done(), 260);
+    let notes = vault.note_list_full(false).unwrap();
+    assert_eq!(notes.len(), 260);
+    assert!(notes.iter().any(|note| note.title == "第7篇" && note.content_md == "第 7 篇的正文"));
+
+    // 下次启动都在索引里了
+    drop(vault);
+    let (_, backlog) = Vault::open_quick(&root, &index).unwrap();
+    assert_eq!(backlog.total(), 0);
+}
+
+#[test]
+fn files_changed_while_waiting_in_the_backlog_are_read_as_they_are_now() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    write_notes(&root, 260);
+    let (mut vault, mut backlog) = Vault::open_quick(&root, &dir.path().join("index.db")).unwrap();
+
+    // 轮到它们之前：一篇被别的程序改了，一篇删了，一篇应用自己存过（已经在索引里）
+    fsio::write_atomic(&fsio::abs(&root, "笔记/第0篇.md"), "后来改过").unwrap();
+    std::fs::remove_file(fsio::abs(&root, "笔记/第1篇.md")).unwrap();
+    let id = vault.note_create("新写的", "应用里写的").unwrap();
+
+    drain(&mut vault, &mut backlog);
+    let notes = vault.note_list_full(false).unwrap();
+    assert_eq!(notes.len(), 260, "259 篇原有的 + 1 篇新写的");
+    assert!(notes.iter().any(|note| note.title == "第0篇" && note.content_md == "后来改过"));
+    assert!(!notes.iter().any(|note| note.title == "第1篇"));
+    assert_eq!(vault.note_get(&id).unwrap().content_md, "应用里写的");
+}
+
+#[test]
+fn a_day_or_goal_not_read_yet_is_read_when_asked_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    write_notes(&root, 260);
+    let day = layout::day_path("2026-10-13").unwrap();
+    fsio::write_atomic(&fsio::abs(&root, &day), "今天的记录").unwrap();
+    let goal = layout::goal_path("week", "2026-10-12").unwrap();
+    fsio::write_atomic(&fsio::abs(&root, &goal), "本周重点").unwrap();
+    let (mut vault, backlog) = Vault::open_quick(&root, &dir.path().join("index.db")).unwrap();
+    assert!(!backlog.is_empty());
+
+    // 后台还没读到它们。以前拿到的是空文档，用户一编辑就把磁盘上的盖掉了
+    let today = vault.day("2026-10-13", true).unwrap();
+    assert_eq!(today.note_md, "今天的记录");
+    assert_eq!(today.carried_from, None);
+    assert_eq!(vault.goal("week", "2026-10-12").unwrap().content_md, "本周重点");
+
+    vault.save_day("2026-10-13", "", "今天的记录\n再加一行").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fsio::abs(&root, &day)).unwrap(),
+        "今天的记录\n再加一行"
+    );
+}
+
+#[test]
+fn a_backlog_from_another_vault_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = dir.path().join("第一个");
+    write_notes(&first, 260);
+    let (_, mut backlog) = Vault::open_quick(&first, &dir.path().join("a.db")).unwrap();
+    let (mut other, _) = Vault::open_quick(&dir.path().join("第二个"), &dir.path().join("b.db")).unwrap();
+    other.index_backlog(&mut backlog, None);
+    assert!(backlog.is_empty());
+    assert!(other.note_list_full(false).unwrap().is_empty());
+}
+
+/* ---------------- 大仓库的耗时（不进 CI，手动跑） ---------------- */
+
+/// 两千篇笔记 + 一年的日记：启动时的扫描、建索引、全量列表、搜索、反向链接各要多久。在 src-tauri 下：
+/// cargo test --release --no-default-features --lib large_vault_timings -- --ignored --nocapture
+#[test]
+#[ignore]
+fn large_vault_timings() {
+    use std::time::Instant;
+
+    const NOTES: usize = 2000;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    let words = [
+        "今天", "项目", "进度", "设计", "方案", "用户", "反馈", "读书", "笔记", "会议", "结论", "计划",
+        "目标", "习惯", "跑步", "复盘", "发布", "测试",
+    ];
+    let mut seed = 7u64;
+    let mut pick = |n: usize| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 33) as usize % n
+    };
+    let titles: Vec<String> = (0..NOTES)
+        .map(|i| format!("{}{} {i}", words[i % words.len()], words[(i * 7) % words.len()]))
+        .collect();
+    let folders = ["", "工作", "工作/周报", "读书", "生活", "项目/OnTheWay"];
+    let mut bytes = 0usize;
+    for (i, title) in titles.iter().enumerate() {
+        let mut body = String::new();
+        let paragraphs = if pick(10) == 0 { 40 } else { 6 + pick(10) };
+        for p in 0..paragraphs {
+            if p % 4 == 0 {
+                body.push_str(&format!("## 第{p}部分\n\n"));
+            }
+            for _ in 0..(20 + pick(40)) {
+                body.push_str(words[pick(words.len())]);
+            }
+            body.push_str("。\n\n");
+            if pick(5) == 0 {
+                body.push_str(&format!("相关：[[{}]]\n\n", titles[pick(NOTES)]));
+            }
+            if pick(6) == 0 {
+                let (word, month, day) = (words[pick(words.len())], 1 + pick(12), 1 + pick(28));
+                body.push_str(&format!("- [ ] {word} @2026-{month:02}-{day:02}\n\n"));
+            }
+        }
+        let folder = folders[i % folders.len()];
+        let rel = if folder.is_empty() {
+            format!("笔记/{title}.md")
+        } else {
+            format!("笔记/{folder}/{title}.md")
+        };
+        bytes += body.len();
+        fsio::write_atomic(&fsio::abs(&root, &rel), &body).unwrap();
+    }
+    for d in 0..365 {
+        let date = chrono::NaiveDate::from_ymd_opt(2025, 10, 1).unwrap() + chrono::Duration::days(d);
+        let date = date.format("%Y-%m-%d").to_string();
+        let word = words[pick(words.len())];
+        let body = format!("- [x] 跑步\n- [ ] {word} @{date}\n\n{}。\n", words.repeat(3).concat());
+        bytes += body.len();
+        let rel = format!("日记/{}/{date}.md", &date[..4]);
+        fsio::write_atomic(&fsio::abs(&root, &rel), &body).unwrap();
+    }
+    let index = dir.path().join("index.db");
+    let mb = bytes as f64 / 1048576.0;
+    eprintln!("仓库：{NOTES} 篇笔记 + 365 篇日记，正文共 {mb:.1} MB");
+
+    // 应用启动走的路：窗口只等 open_quick，剩下的后台每批 50ms 读
+    let quick = dir.path().join("quick.db");
+    let t = Instant::now();
+    let (mut vault, mut backlog) = Vault::open_quick(&root, &quick).unwrap();
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    let queued = backlog.total();
+    eprintln!("第一次打开 open_quick       {ms:>8.1} ms（窗口只等这么久，{queued} 个文件交给后台）");
+    let t = Instant::now();
+    let mut batches = 0;
+    while !backlog.is_empty() {
+        vault.index_backlog(&mut backlog, Some(std::time::Duration::from_millis(50)));
+        batches += 1;
+    }
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("后台读完                    {ms:>8.1} ms，{batches} 批");
+    drop(vault);
+
+    let t = Instant::now();
+    let vault = Vault::open(&root, &index).unwrap();
+    eprintln!("第一次打开（建索引）        {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+    drop(vault);
+
+    let t = Instant::now();
+    let mut vault = Vault::open(&root, &index).unwrap();
+    eprintln!("再次打开（只比对文件状态）  {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+
+    let t = Instant::now();
+    let notes = vault.note_list_full(false).unwrap();
+    let list_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let t = Instant::now();
+    let json = serde_json::to_string(&notes).unwrap();
+    eprintln!(
+        "note_list_full {} 篇          {:>8.1} ms，序列化 {:.1} ms，{:.1} MB JSON",
+        notes.len(),
+        list_ms,
+        t.elapsed().as_secs_f64() * 1000.0,
+        json.len() as f64 / 1048576.0
+    );
+
+    let t = Instant::now();
+    let journal = vault.journal_list().unwrap();
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("journal_list {} 篇            {ms:>8.1} ms", journal.len());
+    let t = Instant::now();
+    vault.calendar_marks("2025-01-01", "2027-12-31").unwrap();
+    eprintln!("calendar_marks 三年         {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+    let t = Instant::now();
+    let hits = vault.search("项目 计划", 50).unwrap();
+    eprintln!("search「项目 计划」         {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+    drop(hits);
+    let id = notes[NOTES / 2].id.clone();
+    let t = Instant::now();
+    let links = vault.backlinks(&id).unwrap();
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("backlinks（{} 条）           {ms:>8.1} ms", links.len());
+    let t = Instant::now();
+    vault.day("2026-03-01", true).unwrap();
+    eprintln!("day（某一天 + 带日期的任务） {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+
+    let text = format!("{}\n\n再写一段。", notes[10].content_md);
+    let t = Instant::now();
+    vault.note_update(&notes[10].id, &notes[10].title, &text).unwrap();
+    eprintln!("note_update（自动保存一次）  {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+    let t = Instant::now();
+    vault.rescan().unwrap();
+    eprintln!("rescan（没有变化）           {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
 }

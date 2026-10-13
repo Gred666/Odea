@@ -384,6 +384,15 @@ export interface Attachment {
   isImage: boolean;
 }
 
+/**
+ * 后台把文件读进索引的进度（第一次打开一个大文件夹、索引结构升级要重建时，Rust 的
+ * Vault::open_quick）。读完的那一次 done === total
+ */
+export interface IndexProgress {
+  done: number;
+  total: number;
+}
+
 export interface VaultInfo {
   /** 仓库文件夹的绝对路径 */
   root: string;

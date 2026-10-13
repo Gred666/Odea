@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::commands::Indexing;
 use crate::sync::account::LoginSlot;
 use crate::sync::engine::SyncHub;
 use crate::update::UpdateHub;
@@ -20,4 +21,6 @@ pub struct AppState {
     pub sync_login: Mutex<LoginSlot>,
     /// 下好了等着装的新版本、这一次是不是升级上来的（update.rs）
     pub update: Arc<UpdateHub>,
+    /// 后台读文件进索引读到哪了（第一次打开大文件夹、索引升级重建时，见 Vault::open_quick）
+    pub indexing: Arc<Mutex<Indexing>>,
 }

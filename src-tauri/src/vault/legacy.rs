@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(mtime, 1_788_000_000_000);
 
         // 仓库打开后，笔记、某一天、目标、任务都在，id 不变
-        let vault = Vault::open_in_memory(&root);
+        let mut vault = Vault::open_in_memory(&root);
         let notes = vault.note_list_full(false).unwrap();
         assert_eq!(notes[0].id, "n1", "置顶的排在最前");
         assert!(notes[0].is_pinned);

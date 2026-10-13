@@ -13,6 +13,7 @@ import type {
   GoalHorizon,
   GuideName,
   GuideUpdate,
+  IndexProgress,
   JournalDoc,
   LinkRewrite,
   Note,
@@ -112,6 +113,10 @@ export interface Backend {
   vaultAttachPath(target: DocumentSaveTarget, path: string): Promise<Attachment>;
   /** 订阅仓库里别处发生的变化，返回取消订阅的函数 */
   onVaultChanged(listener: (change: VaultChange) => void): Promise<() => void>;
+  /** 正在后台读文件进索引的话读到哪了，没在读是 null（先订阅 onIndexProgress 再问） */
+  indexProgress(): Promise<IndexProgress | null>;
+  /** 订阅后台读文件的进度；读完的那一次 done === total */
+  onIndexProgress(listener: (progress: IndexProgress) => void): Promise<() => void>;
   /** 同步现在怎么样了（没开同步时 state 是 off） */
   syncStatus(): Promise<SyncStatus>;
   /** 立即同步一轮；没开同步返回 false */
@@ -235,6 +240,8 @@ const tauriBackend: Backend = {
   vaultAttachPath: (target, path) => unwrap(commands.vaultAttachPath(target, path)),
   onVaultChanged: (listener) =>
     events.vaultChanged.listen((event) => listener(event.payload as VaultChange)),
+  indexProgress: () => unwrap(commands.indexProgress()),
+  onIndexProgress: (listener) => events.indexProgress.listen((event) => listener(event.payload)),
   syncStatus: () => unwrap(commands.syncStatus()) as Promise<SyncStatus>,
   syncNow: () => unwrap(commands.syncNow()),
   onSyncStatus: (listener) =>

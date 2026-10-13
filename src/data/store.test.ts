@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backend } from "./backend";
-import type { DayDoc, Note, VaultChange } from "./types";
+import type { DayDoc, IndexProgress, Note, VaultChange } from "./types";
 
 const api = {
   calendarDay: vi.fn(),
@@ -37,6 +37,8 @@ const api = {
   onUpdateReady: vi.fn(),
   updateStatus: vi.fn(),
   appUpgrade: vi.fn(),
+  indexProgress: vi.fn(),
+  onIndexProgress: vi.fn(),
 };
 
 vi.mock("./backend", () => ({
@@ -74,8 +76,15 @@ const note = (contentMd: string): Note => ({
 
 const initial = useData.getState();
 
+/** store 订阅的后台读文件进度（只订阅一次，哪个测试先 initialize 就在那时记下） */
+let progress: ((progress: IndexProgress) => void) | null = null;
+
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
+  api.onIndexProgress.mockImplementation(async (listener: (progress: IndexProgress) => void) => {
+    progress = listener;
+    return () => {};
+  });
   useData.setState({
     ...initial,
     notes: [],
@@ -375,6 +384,60 @@ describe("initialize", () => {
       "正文2",
       "正文3",
     ]);
+  });
+});
+
+describe("后台读文件进索引", () => {
+  const listed = (...ids: string[]) => ids.map((id) => ({ ...note(`正文${id}`), id }));
+
+  it("shows how far it got and reloads the lists once everything is read", async () => {
+    api.noteListFull.mockImplementation(async (archived: boolean) => (archived ? [] : listed("a")));
+    api.calendarMarks.mockResolvedValue({ written: new Set(), open: new Set() });
+    api.indexProgress.mockResolvedValue({ done: 40, total: 300 });
+    await useData.getState().initialize();
+    expect(useData.getState().indexing).toEqual({ done: 40, total: 300 });
+
+    progress?.({ done: 120, total: 300 });
+    expect(useData.getState().indexing).toEqual({ done: 120, total: 300 });
+
+    api.noteListFull.mockImplementation(async (archived: boolean) =>
+      archived ? [] : listed("a", "b"),
+    );
+    api.folderList.mockResolvedValue(["工作"]);
+    api.guidePending.mockResolvedValue([]);
+    progress?.({ done: 300, total: 300 });
+    expect(useData.getState().indexing).toBeNull();
+    await vi.waitFor(() => expect(useData.getState().notes).toHaveLength(2));
+    await vi.waitFor(() => expect(useData.getState().folders).toEqual(["工作"]));
+  });
+
+  it("does not let the half-read list from initialize overwrite the full one", async () => {
+    let release = () => {};
+    const slow = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    api.noteListFull.mockImplementation(async (archived: boolean) => {
+      if (archived) return [];
+      calls += 1;
+      if (calls === 1) {
+        await slow;
+        return listed("a");
+      }
+      return listed("a", "b", "c");
+    });
+    api.calendarMarks.mockResolvedValue({ written: new Set(), open: new Set() });
+    api.indexProgress.mockResolvedValue(null);
+    api.folderList.mockResolvedValue([]);
+    api.guidePending.mockResolvedValue([]);
+
+    const starting = useData.getState().initialize();
+    // 列表还在路上，后台就读完了
+    await vi.waitFor(() => expect(calls).toBe(1));
+    progress?.({ done: 300, total: 300 });
+    release();
+    await starting;
+    await vi.waitFor(() => expect(useData.getState().notes).toHaveLength(3));
   });
 });
 

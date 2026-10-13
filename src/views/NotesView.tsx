@@ -131,6 +131,8 @@ export function NotesList({ notes }: { notes: Note[] }) {
   const expanded = useApp((s) => s.expandedFolders);
   const setFolderExpanded = useApp((s) => s.setFolderExpanded);
   const followFolderRename = useApp((s) => s.followFolderRename);
+  // 后台还在把文件读进索引：列表空着不是「还没有笔记」
+  const indexing = useData((s) => s.indexing !== null);
   const forgetFolder = useApp((s) => s.forgetFolder);
   const folders = useData((s) => s.folders);
   const createNote = useData((s) => s.createNote);
@@ -591,9 +593,15 @@ export function NotesList({ notes }: { notes: Note[] }) {
               {groups.length === 0 ? (
                 <EmptyResult
                   query={query}
-                  emptyTitle={folder ? "这个文件夹还是空的" : "还没有笔记"}
+                  emptyTitle={
+                    indexing ? "正在读取笔记文件夹…" : folder ? "这个文件夹还是空的" : "还没有笔记"
+                  }
                   emptyHint={
-                    folder ? "点右上角的 + 新建一篇，或者把笔记拖进来" : "点右上角的 + 新建一篇"
+                    indexing
+                      ? "读完了笔记就会出现在这里"
+                      : folder
+                        ? "点右上角的 + 新建一篇，或者把笔记拖进来"
+                        : "点右上角的 + 新建一篇"
                   }
                 />
               ) : (

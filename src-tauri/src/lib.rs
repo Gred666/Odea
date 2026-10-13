@@ -195,6 +195,7 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::guide_settle,
         commands::guide_open,
         commands::vault_info,
+        commands::index_progress,
         commands::vault_reveal,
         commands::vault_open_folder,
         commands::vault_keep_conflict_copy,
@@ -227,6 +228,7 @@ fn command_builder() -> Builder<tauri::Wry> {
         update::app_upgrade,
     ])
     .events(collect_events![
+        commands::IndexProgress,
         commands::VaultChanged,
         commands::SyncStatusChanged,
         commands::SyncNotice,
@@ -270,6 +272,7 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::guide_settle,
         commands::guide_open,
         commands::vault_info,
+        commands::index_progress,
         commands::vault_reveal,
         commands::vault_open_folder,
         commands::vault_keep_conflict_copy,
@@ -302,6 +305,7 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         update::app_upgrade,
     ])
     .events(collect_events![
+        commands::IndexProgress,
         commands::VaultChanged,
         commands::SyncStatusChanged,
         commands::SyncNotice,
@@ -385,7 +389,8 @@ pub fn run() {
                 eprintln!("保存配置失败: {error}");
             }
 
-            let mut vault = vault::Vault::open(&root, &boot::index_path(&data_dir, &root))
+            // 文件很多（第一次打开一个大文件夹、索引的结构升级了）的话剩下的在后台读，窗口不等它
+            let (mut vault, backlog) = vault::Vault::open_quick(&root, &boot::index_path(&data_dir, &root))
                 .expect("打开笔记文件夹失败");
             // 应用升级了：用户没改过的使用指南换成这一版带的（vault/guide.rs）。前端还没起来，不用通知
             if let Err(error) = vault.guide_refresh() {
@@ -407,6 +412,8 @@ pub fn run() {
             if let Err(error) = sync.start(vault.clone(), hooks) {
                 eprintln!("同步没能启动: {error}");
             }
+            let indexing = Arc::new(Mutex::new(commands::Indexing::default()));
+            commands::spawn_backlog(app.handle().clone(), vault.clone(), indexing.clone(), backlog);
             app.manage(AppState {
                 vault,
                 watcher: Mutex::new(watcher),
@@ -414,6 +421,7 @@ pub fn run() {
                 sync,
                 sync_login: Mutex::new(sync::account::LoginSlot::default()),
                 update: Arc::new(update::UpdateHub::new(upgrade)),
+                indexing,
             });
 
             // jieba 首次初始化约 50ms。仓库是空的时候打开仓库不会用到它，放后台预热

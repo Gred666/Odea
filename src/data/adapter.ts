@@ -51,6 +51,8 @@ export function useCurrentDocument(): DocumentModel {
   const archived = useData((s) => s.archived);
   const goals = useData((s) => s.goals);
   const dayDocs = useData((s) => s.dayDocs);
+  // 后台还在把文件读进索引（第一次打开一个大文件夹）：一篇都没有不等于「还没有笔记」
+  const indexing = useData((s) => s.indexing !== null);
   // 保存失败、还没落盘的正文优先于库里的版本：切走再切回来，用户写的东西还在
   const drafts = useData((s) => s.drafts);
   const draftOr = (target: DocumentSaveTarget, stored: string) =>
@@ -61,12 +63,20 @@ export function useCurrentDocument(): DocumentModel {
     case "notes": {
       const note = notes.find((n) => n.id === selectedNoteId) ?? notes[0];
       if (!note) {
-        return emptyDoc({
-          art: "notes",
-          title: "还没有笔记",
-          hint: "想到什么就记下来，标题可以晚点再起。",
-          action: "createNote",
-        });
+        return emptyDoc(
+          indexing
+            ? {
+                art: "notes",
+                title: "正在读取笔记文件夹…",
+                hint: "第一次打开这个文件夹要把笔记都读一遍，读完就会出现在左边的列表里。",
+              }
+            : {
+                art: "notes",
+                title: "还没有笔记",
+                hint: "想到什么就记下来，标题可以晚点再起。",
+                action: "createNote",
+              },
+        );
       }
 
       return {

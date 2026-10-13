@@ -26,6 +26,7 @@ import {
   type GoalHorizon,
   type GuideName,
   type GuideUpdate,
+  type IndexProgress,
   type JournalDoc,
   type Note,
   SYNC_OFF,
@@ -84,6 +85,13 @@ interface DataState {
   markConflict: (target: DocumentSaveTarget) => void;
   /** 仓库里别处发生的变化（文件监听、勾任务改了别的文档）：刷新受影响的缓存 */
   applyVaultChange: (change: VaultChange) => Promise<void>;
+  /**
+   * 后台正在把文件读进索引（第一次打开一个大文件夹、索引结构升级要重建，Rust 的
+   * Vault::open_quick）：读到哪了。没在读是 null。读完之前列表、搜索、日历里暂时缺一部分
+   */
+  indexing: IndexProgress | null;
+  /** 后台读完了：列表、文件夹、日历记号整个重新取一遍 */
+  reloadIndexed: () => Promise<void>;
   /** 多设备同步的状态（技术方案 §5.9）；没开同步时 state 是 off */
   syncStatus: SyncStatus;
   /** 下好了、等着装的新版本（src-tauri/src/update.rs）；没有是 null */
@@ -299,6 +307,7 @@ let initializePromise: Promise<void> | null = null;
 let vaultSubscription: Promise<() => void> | null = null;
 let syncSubscriptions: Promise<(() => void)[]> | null = null;
 let updateSubscription: Promise<() => void> | null = null;
+let indexSubscription: Promise<() => void> | null = null;
 
 const isNotFound = (error: unknown) =>
   !!error && typeof error === "object" && (error as { kind?: unknown }).kind === "NotFound";
@@ -340,6 +349,39 @@ export const useData = create<DataState>((set, get) => ({
       set({ marks });
     } catch (error) {
       set({ error: messageOf(error) });
+    }
+  },
+  indexing: null,
+  reloadIndexed: async () => {
+    // 正在初始化的话等它取完：不然它晚到的那份读了一半的列表会把这里取的全的盖掉
+    if (initializePromise) await initializePromise;
+    const api = await backend();
+    try {
+      const [notes, archived] = await Promise.all([
+        api.noteListFull(false),
+        api.noteListFull(true),
+      ]);
+      set({ notes: notes.sort(noteOrder), archived });
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+    // 文件夹、日历记号和当日安排；延续来的「今天」是按读了一半的索引找的「之前最近一天」，也重取
+    await get().applyVaultChange({
+      notes: [],
+      days: get()
+        .dayDocs.filter((day) => day.carriedFrom)
+        .map((day) => day.date),
+      goals: [],
+      tasks: true,
+      conflicts: [],
+      foundCopies: [],
+      folders: true,
+    });
+    if (get().journal.length) await get().loadJournal();
+    try {
+      set({ guideUpdates: await api.guidePending() });
+    } catch {
+      // 取不到就不问：指南还是用户自己那一版，什么也没丢
     }
   },
   journal: [],
@@ -545,9 +587,24 @@ export const useData = create<DataState>((set, get) => ({
     initializePromise = (async () => {
       try {
         const api = await backend();
+        // 后台可能正在把一个大文件夹读进索引（Rust 的 Vault::open_quick）。先订阅进度、再问
+        // 读到哪、再取列表：读完的那一下不管落在哪一步之前，都不会错过 —— 落在订阅之前，
+        // 问到的是「没在读」，取到的列表就是全的；落在之后，事件到了会整个重新取一遍
+        // （订阅不上也照常启动：最多是读完了列表不自己刷新）
+        indexSubscription ??= Promise.resolve().then(() =>
+          api.onIndexProgress((progress) => {
+            if (progress.done < progress.total) {
+              set({ indexing: progress });
+              return;
+            }
+            set({ indexing: null });
+            void get().reloadIndexed();
+          }),
+        );
+        await indexSubscription.catch(() => undefined);
         // 两个列表各一次往返拿回全文。以前是先取摘要列表、再逐篇 noteGet，
         // N 篇笔记就是 N 次 IPC，笔记一多启动就慢。
-        const [notes, archived, folders, marks, info] = await Promise.all([
+        const [notes, archived, folders, marks, info, indexing] = await Promise.all([
           api.noteListFull(false),
           api.noteListFull(true),
           // 文件夹列表取不到也不耽误启动：笔记都在，只是先全摊在「全部笔记」里
@@ -559,7 +616,12 @@ export const useData = create<DataState>((set, get) => ({
           Promise.resolve()
             .then(() => api.vaultInfo())
             .catch(() => null),
+          Promise.resolve()
+            .then(() => api.indexProgress())
+            .catch(() => null),
         ]);
+        // 进度事件比这一问先到的话，用事件里那个新的
+        set((state) => ({ indexing: state.indexing ?? indexing }));
 
         // 别的程序改了仓库里的文件、或者一次操作连带改了别的文档：刷新受影响的缓存
         vaultSubscription ??= api.onVaultChanged((change) => {
