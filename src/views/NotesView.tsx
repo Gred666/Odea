@@ -1,7 +1,14 @@
 import { selectNeighbor } from "@/app/navigate";
 import { type NoteSort, useApp } from "@/app/store";
 import { EmptyState } from "@/components/EmptyArt";
-import { ColumnButton, GroupLabel, ListColumn } from "@/components/ListColumn";
+import {
+  ColumnButton,
+  GroupLabel,
+  ListColumn,
+  MoreRows,
+  ROW_BATCH,
+  useRowBatch,
+} from "@/components/ListColumn";
 import { ActionMenu, RowMenu } from "@/components/RowMenu";
 import { SearchInput } from "@/components/SearchInput";
 import { conflictOriginalTitle, conflictTarget } from "@/data/conflicts";
@@ -49,6 +56,7 @@ import {
   Fragment,
   type ReactNode,
   createContext,
+  memo,
   useCallback,
   useContext,
   useEffect,
@@ -75,6 +83,8 @@ const SORT_ICON: Record<SortMode, LucideIcon> = {
 
 /** 树里每深一层缩进多少 */
 const INDENT = 16;
+/** 笔记卡片的高度（两行字 + 上下留白）：分批画时给还没画的那一截占位（ListColumn 的 MoreRows） */
+const CARD_HEIGHT = 63.25;
 /** 行的左内边距（图标位从这里开始） */
 const ROW_PAD = 9;
 
@@ -230,6 +240,13 @@ export function NotesList({ notes }: { notes: Note[] }) {
     };
   }, [q, folders, folder, notes, notesByFolder, sortNotes]);
 
+  // 「笔记」那一组分批画（ListColumn 的 useRowBatch）。换了文件夹、换了搜索词从头算
+  const { shown, more } = useRowBatch(
+    q ? `search:${q}` : `folder:${folder}`,
+    view.notes.length,
+    view.notes.findIndex((note) => note.id === selectedId),
+  );
+
   /** 让那一行闪一下：东西去了哪、刚从哪出来 */
   const flashRow = (path: string | null, delay = 0) => {
     if (path === null) return;
@@ -334,16 +351,10 @@ export function NotesList({ notes }: { notes: Note[] }) {
     setPicker(next);
   };
 
-  const tree: TreeContextValue = {
-    folder,
-    notesByFolder,
-    folders,
-    notes,
-    expanded,
-    selectedId,
-    editing,
-    flash,
-    settle,
+  // 这一次渲染的操作（闭包里是这一次的状态）。行拿到的是下面那份身份不变的转发，
+  // 调用时才取最新的这一份
+  const latest = useRef<TreeActions | null>(null);
+  latest.current = {
     open: navigate,
     toggle: (path, all) => {
       const open = !expanded.has(path);
@@ -360,6 +371,45 @@ export function NotesList({ notes }: { notes: Note[] }) {
     cancelName: () => setEditing(null),
     moveTo: (id) => openPicker({ mode: "move", noteId: id }),
   };
+  const actions = useMemo<TreeActions>(() => {
+    const now = () => latest.current as TreeActions;
+    return {
+      open: (path) => now().open(path),
+      toggle: (path, all) => now().toggle(path, all),
+      select: (id) => now().select(id),
+      move: (id, to) => now().move(id, to),
+      springOpen: (path) => now().springOpen(path),
+      startNewFolder: (parent) => now().startNewFolder(parent),
+      startRename: (path) => now().startRename(path),
+      remove: (path) => now().remove(path),
+      submitName: (name) => now().submitName(name),
+      cancelName: () => now().cancelName(),
+      moveTo: (id) => now().moveTo(id),
+    };
+  }, []);
+  const tree = useMemo<TreeContextValue>(
+    () => ({ ...actions, folder, notesByFolder, folders, notes, expanded, editing, flash, settle }),
+    [actions, folder, notesByFolder, folders, notes, expanded, editing, flash, settle],
+  );
+
+  // 卡片是 memo 的：切换选中只重渲染新旧两张，自动保存只重渲染存的那一张（几百张卡片
+  // 每张都带着 Motion 和菜单，以前每次都整列重渲染，4 倍降速下切一篇要两三百毫秒）。
+  // 可卡片的 layout 动画要靠重渲染那一刻量位置 —— 卡片上面的东西变了（多了 / 少了 / 换了
+  // 顺序的卡片、文件夹展开收起、就地起名的输入框），这个数就加一，所有卡片照旧一起重渲染、
+  // 一起量位置（Motion 的 layoutDependency）
+  const shapeKey = [
+    view.search,
+    view.pinned.map((note) => note.id).join(","),
+    view.folders.join(","),
+    view.notes.map((note) => note.id).join(","),
+    [...expanded].map((path) => `${path}:${notesByFolder.get(path)?.length ?? 0}`).join(","),
+    editing ? `${editing.kind}:${editing.kind === "new" ? editing.parent : editing.path}` : "",
+    settle ? `${settle.path}:${settle.at}` : "",
+  ].join("\n");
+  const shape = useRef({ key: shapeKey, tick: 0 });
+  if (shape.current.key !== shapeKey)
+    shape.current = { key: shapeKey, tick: shape.current.tick + 1 };
+  const shapeTick = shape.current.tick;
 
   const groups: { key: string; label: ReactNode; body: ReactNode }[] = [];
   if (view.pinned.length) {
@@ -367,7 +417,15 @@ export function NotesList({ notes }: { notes: Note[] }) {
       key: "pinned",
       label: <GroupLabel icon={<Pin size={10} strokeWidth={2} />} text="置顶" />,
       body: view.pinned.map((n, i) => (
-        <NoteCard key={n.id} note={n} index={i} selected={n.id === selectedId} boxed />
+        <NoteCard
+          key={n.id}
+          note={n}
+          index={i}
+          selected={n.id === selectedId}
+          folder={folder}
+          shapeTick={shapeTick}
+          boxed
+        />
       )),
     });
   }
@@ -389,20 +447,25 @@ export function NotesList({ notes }: { notes: Note[] }) {
     });
   }
   if (view.notes.length) {
+    const rest = view.notes.length - shown;
     groups.push({
       key: "notes",
       label: <GroupLabel text="笔记" />,
       body: (
         <div className="flex flex-col">
-          {view.notes.map((n, i) => (
+          {view.notes.slice(0, shown).map((n, i) => (
             <NoteCard
               key={n.id}
               note={n}
               index={view.pinned.length + i}
               selected={n.id === selectedId}
+              folder={folder}
+              shapeTick={shapeTick}
               divided={i > 0}
+              appear={i < ROW_BATCH}
             />
           ))}
+          {rest > 0 && <MoreRows height={rest * CARD_HEIGHT} onNear={more} />}
         </div>
       ),
     });
@@ -412,142 +475,144 @@ export function NotesList({ notes }: { notes: Note[] }) {
     picker?.mode === "move" ? notes.find((note) => note.id === picker.noteId) : undefined;
 
   return (
-    <TreeContext.Provider value={tree}>
-      <ListColumn
-        title={folder ? nameOf(folder) : ROOT_LABEL}
-        titleSlot={
-          <h2 className="flex min-w-0">
-            <button
-              ref={titleButton}
-              type="button"
-              data-folder-picker-trigger
-              aria-expanded={picker?.mode === "jump"}
-              title="跳到文件夹"
-              onClick={() =>
-                picker?.mode === "jump" ? setPicker(null) : openPicker({ mode: "jump" })
-              }
-              // -my-px：悬停底色上下多出的那 1px 不占排版，标题和日历 / 归档的标题同一个高度，
-              // 下面的搜索框、列表也不会比那两栏低 2px（切过去时整栏跳一下）
-              className="group -my-px -ml-[7px] flex min-w-0 items-center gap-[3px] rounded-lg py-px pl-[7px] pr-[5px]
-                         transition-colors duration-[140ms] hover:bg-raised/55 aria-expanded:bg-raised/55"
-            >
-              <AnimatePresence mode="wait" initial={false}>
-                <motion.span
-                  key={folder}
-                  // 只淡入淡出：标题是大字，位移 / 缩放都会让它先糊再跳清楚
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={tween.fast}
-                  className="truncate text-[25px] font-bold leading-tight tracking-[-0.02em] text-ink"
-                >
-                  {folder ? nameOf(folder) : ROOT_LABEL}
-                </motion.span>
-              </AnimatePresence>
-              <ChevronDown
-                size={15}
-                strokeWidth={2}
-                className={cn(
-                  "mt-1 shrink-0 text-faint transition-[rotate,color] duration-[220ms] group-hover:text-muted",
-                  picker?.mode === "jump" && "rotate-180 text-muted",
-                )}
-              />
-            </button>
-          </h2>
-        }
-        action={
-          <div className="flex items-center gap-1.5">
-            {/* 排序：点开一个单选菜单，而不是盲点循环 —— 循环切换看不到还有哪些
-                选项、也不知道现在是哪一种，得点三下才能确认转了一圈。 */}
-            <ActionMenu
-              trigger={
-                <ColumnButton label={`排序：${SORT_LABEL[sort]}`}>
-                  <ArrowUpDown size={13} strokeWidth={1.9} />
-                </ColumnButton>
-              }
-              actions={SORT_MODES.map((mode) => ({
-                id: mode,
-                label: SORT_LABEL[mode],
-                icon: SORT_ICON[mode],
-                checked: sort === mode,
-                onSelect: () => setSort(mode),
-              }))}
-            />
-            <ColumnButton label="新建文件夹" onClick={() => startNewFolder(folder)}>
-              <FolderPlus size={14} strokeWidth={1.9} />
-            </ColumnButton>
-            <ColumnButton label="新建笔记" onClick={() => void handleCreate()}>
-              <Plus size={15} strokeWidth={2.1} />
-            </ColumnButton>
-          </div>
-        }
-        belowTitle={
-          <>
-            <SearchInput value={query} onChange={setQuery} placeholder="搜索标题" />
-            {folder && !q && <Crumbs folder={folder} onNavigate={navigate} />}
-          </>
-        }
-        overlay={
-          <AnimatePresence>
-            {picker && (
-              <FolderPicker
-                key={picker.mode === "move" ? `move:${picker.noteId}` : "jump"}
-                mode={picker.mode}
-                current={picker.mode === "jump" ? folder : pickerNote ? folderOf(pickerNote) : ""}
-                noteTitle={pickerNote?.title}
-                top={pickerTop}
-                onClose={() => setPicker(null)}
-                onPick={(path) => {
-                  setPicker(null);
-                  if (picker.mode === "jump") navigate(path);
-                  else void move(picker.noteId, path);
-                }}
-              />
-            )}
-          </AnimatePresence>
-        }
-      >
-        <AnimatePresence mode="wait" initial={false} custom={navDir}>
-          <motion.div
-            key={q ? "search" : `folder:${folder}`}
-            custom={navDir}
-            // 换文件夹：整列朝进出的方向挪一小段。动的是 left（主线程排版），不是 transform ——
-            // 合成层上位移的字在动画里是灰阶抗锯齿，停下那一帧才变回清晰的，看着像抖一下
-            variants={{
-              enter: (dir: number) => ({ opacity: 0, left: 16 * dir }),
-              shown: { opacity: 1, left: 0 },
-              leave: (dir: number) => ({ opacity: 0, left: -12 * dir }),
-            }}
-            initial="enter"
-            animate="shown"
-            exit="leave"
-            transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="relative"
-          >
-            {groups.length === 0 ? (
-              <EmptyResult
-                query={query}
-                emptyTitle={folder ? "这个文件夹还是空的" : "还没有笔记"}
-                emptyHint={
-                  folder ? "点右上角的 + 新建一篇，或者把笔记拖进来" : "点右上角的 + 新建一篇"
+    <TreeActionsContext.Provider value={actions}>
+      <TreeContext.Provider value={tree}>
+        <ListColumn
+          title={folder ? nameOf(folder) : ROOT_LABEL}
+          titleSlot={
+            <h2 className="flex min-w-0">
+              <button
+                ref={titleButton}
+                type="button"
+                data-folder-picker-trigger
+                aria-expanded={picker?.mode === "jump"}
+                title="跳到文件夹"
+                onClick={() =>
+                  picker?.mode === "jump" ? setPicker(null) : openPicker({ mode: "jump" })
                 }
+                // -my-px：悬停底色上下多出的那 1px 不占排版，标题和日历 / 归档的标题同一个高度，
+                // 下面的搜索框、列表也不会比那两栏低 2px（切过去时整栏跳一下）
+                className="group -my-px -ml-[7px] flex min-w-0 items-center gap-[3px] rounded-lg py-px pl-[7px] pr-[5px]
+                         transition-colors duration-[140ms] hover:bg-raised/55 aria-expanded:bg-raised/55"
+              >
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.span
+                    key={folder}
+                    // 只淡入淡出：标题是大字，位移 / 缩放都会让它先糊再跳清楚
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={tween.fast}
+                    className="truncate text-[25px] font-bold leading-tight tracking-[-0.02em] text-ink"
+                  >
+                    {folder ? nameOf(folder) : ROOT_LABEL}
+                  </motion.span>
+                </AnimatePresence>
+                <ChevronDown
+                  size={15}
+                  strokeWidth={2}
+                  className={cn(
+                    "mt-1 shrink-0 text-faint transition-[rotate,color] duration-[220ms] group-hover:text-muted",
+                    picker?.mode === "jump" && "rotate-180 text-muted",
+                  )}
+                />
+              </button>
+            </h2>
+          }
+          action={
+            <div className="flex items-center gap-1.5">
+              {/* 排序：点开一个单选菜单，而不是盲点循环 —— 循环切换看不到还有哪些
+                选项、也不知道现在是哪一种，得点三下才能确认转了一圈。 */}
+              <ActionMenu
+                trigger={
+                  <ColumnButton label={`排序：${SORT_LABEL[sort]}`}>
+                    <ArrowUpDown size={13} strokeWidth={1.9} />
+                  </ColumnButton>
+                }
+                actions={SORT_MODES.map((mode) => ({
+                  id: mode,
+                  label: SORT_LABEL[mode],
+                  icon: SORT_ICON[mode],
+                  checked: sort === mode,
+                  onSelect: () => setSort(mode),
+                }))}
               />
-            ) : (
-              groups.map((group, i) => (
-                <Fragment key={group.key}>
-                  {/* 两组之间原本只有 6px 空隙、下面一组还没有标题，翻起来根本看不出
+              <ColumnButton label="新建文件夹" onClick={() => startNewFolder(folder)}>
+                <FolderPlus size={14} strokeWidth={1.9} />
+              </ColumnButton>
+              <ColumnButton label="新建笔记" onClick={() => void handleCreate()}>
+                <Plus size={15} strokeWidth={2.1} />
+              </ColumnButton>
+            </div>
+          }
+          belowTitle={
+            <>
+              <SearchInput value={query} onChange={setQuery} placeholder="搜索标题" />
+              {folder && !q && <Crumbs folder={folder} onNavigate={navigate} />}
+            </>
+          }
+          overlay={
+            <AnimatePresence>
+              {picker && (
+                <FolderPicker
+                  key={picker.mode === "move" ? `move:${picker.noteId}` : "jump"}
+                  mode={picker.mode}
+                  current={picker.mode === "jump" ? folder : pickerNote ? folderOf(pickerNote) : ""}
+                  noteTitle={pickerNote?.title}
+                  top={pickerTop}
+                  onClose={() => setPicker(null)}
+                  onPick={(path) => {
+                    setPicker(null);
+                    if (picker.mode === "jump") navigate(path);
+                    else void move(picker.noteId, path);
+                  }}
+                />
+              )}
+            </AnimatePresence>
+          }
+        >
+          <AnimatePresence mode="wait" initial={false} custom={navDir}>
+            <motion.div
+              key={q ? "search" : `folder:${folder}`}
+              custom={navDir}
+              // 换文件夹：整列朝进出的方向挪一小段。动的是 left（主线程排版），不是 transform ——
+              // 合成层上位移的字在动画里是灰阶抗锯齿，停下那一帧才变回清晰的，看着像抖一下
+              variants={{
+                enter: (dir: number) => ({ opacity: 0, left: 16 * dir }),
+                shown: { opacity: 1, left: 0 },
+                leave: (dir: number) => ({ opacity: 0, left: -12 * dir }),
+              }}
+              initial="enter"
+              animate="shown"
+              exit="leave"
+              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+              className="relative"
+            >
+              {groups.length === 0 ? (
+                <EmptyResult
+                  query={query}
+                  emptyTitle={folder ? "这个文件夹还是空的" : "还没有笔记"}
+                  emptyHint={
+                    folder ? "点右上角的 + 新建一篇，或者把笔记拖进来" : "点右上角的 + 新建一篇"
+                  }
+                />
+              ) : (
+                groups.map((group, i) => (
+                  <Fragment key={group.key}>
+                    {/* 两组之间原本只有 6px 空隙、下面一组还没有标题，翻起来根本看不出
                       哪里是分界。补一条分隔线和一个对称的组标题。 */}
-                  {i > 0 && <div className="mx-3 mt-3 mb-1 border-t border-line-strong/70" />}
-                  {labelled && group.label}
-                  {group.body}
-                </Fragment>
-              ))
-            )}
-          </motion.div>
-        </AnimatePresence>
-      </ListColumn>
-      <NoteDragGhost />
-    </TreeContext.Provider>
+                    {i > 0 && <div className="mx-3 mt-3 mb-1 border-t border-line-strong/70" />}
+                    {labelled && group.label}
+                    {group.body}
+                  </Fragment>
+                ))
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </ListColumn>
+        <NoteDragGhost />
+      </TreeContext.Provider>
+    </TreeActionsContext.Provider>
   );
 }
 
@@ -589,16 +654,8 @@ function nearestVisible(path: string, base: string, expanded: Set<string>): stri
 
 /* ---------------- 树：文件夹行、展开出来的子树、标题行 ---------------- */
 
-interface TreeContextValue {
-  folder: string;
-  notesByFolder: Map<string, Note[]>;
-  folders: string[];
-  notes: Note[];
-  expanded: Set<string>;
-  selectedId: string;
-  editing: Editing;
-  flash: { path: string; at: number } | null;
-  settle: Settle;
+/** 树上的行要调的操作。身份不变（见 NotesList），memo 的行拿着它不会跟着列表重渲染 */
+interface TreeActions {
   open: (path: string) => void;
   toggle: (path: string, all: boolean) => void;
   select: (id: string) => void;
@@ -612,12 +669,31 @@ interface TreeContextValue {
   moveTo: (id: string) => void;
 }
 
+/** 文件夹那几行要的东西：数据 + 操作。笔记、展开、起名……一变就换一份 */
+interface TreeContextValue extends TreeActions {
+  folder: string;
+  notesByFolder: Map<string, Note[]>;
+  folders: string[];
+  notes: Note[];
+  expanded: Set<string>;
+  editing: Editing;
+  flash: { path: string; at: number } | null;
+  settle: Settle;
+}
+
 const TreeContext = createContext<TreeContextValue | null>(null);
+const TreeActionsContext = createContext<TreeActions | null>(null);
 
 function useTree(): TreeContextValue {
   const tree = useContext(TreeContext);
   if (!tree) throw new Error("useTree 只能在 NotesList 里用");
   return tree;
+}
+
+function useTreeActions(): TreeActions {
+  const actions = useContext(TreeActionsContext);
+  if (!actions) throw new Error("useTreeActions 只能在 NotesList 里用");
+  return actions;
 }
 
 /** 展开一个文件夹看得到什么：子文件夹，或者直接放在里面的笔记 */
@@ -883,10 +959,10 @@ function FolderGlyph({
   );
 }
 
-/** 展开的文件夹里一篇笔记：只有标题，一行 */
-function TreeNoteRow({ note, depth }: { note: Note; depth: number }) {
-  const tree = useTree();
-  const selected = note.id === tree.selectedId;
+/** 展开的文件夹里一篇笔记：只有标题，一行。选中与否自己订阅：换一篇只重渲染新旧两行 */
+const TreeNoteRow = memo(function TreeNoteRow({ note, depth }: { note: Note; depth: number }) {
+  const tree = useTreeActions();
+  const selected = useApp((s) => s.selectedNoteId === note.id);
   const dragging = useNoteDrag((s) => s.noteId === note.id);
   const title = useListTitle(note);
   return (
@@ -942,7 +1018,7 @@ function TreeNoteRow({ note, depth }: { note: Note; depth: number }) {
       )}
     </div>
   );
-}
+});
 
 /** 就地起名：新建文件夹、改名。回车确定，Esc 取消，点别处也算确定 */
 function FolderNameInput({
@@ -1075,22 +1151,31 @@ function NoteDragGhost() {
 
 /* ---------------- 笔记卡片 ---------------- */
 
-function NoteCard({
+const NoteCard = memo(function NoteCard({
   note,
   index,
   selected,
+  folder,
+  shapeTick,
   boxed,
   divided,
+  appear = true,
 }: {
   note: Note;
   index: number;
   selected: boolean;
+  /** 列表栏现在在哪个文件夹 */
+  folder: string;
+  /** 列表的样子变了就加一（见 NotesList）：这时才量位置、播 layout 动画 */
+  shapeTick: number;
   /** 置顶卡片带独立圆角底 */
   boxed?: boolean;
   /** 普通卡片之间画分隔线 */
   divided?: boolean;
+  /** 挂上时淡入。往下滚才画出来的那几批不播：滚得快时会看到它们晚一拍浮上来 */
+  appear?: boolean;
 }) {
-  const tree = useTree();
+  const tree = useTreeActions();
   const togglePin = useData((s) => s.togglePin);
   const archiveNote = useData((s) => s.archiveNote);
   const deleteNote = useData((s) => s.deleteNote);
@@ -1101,12 +1186,13 @@ function NoteCard({
   const [menuOpen, setMenuOpen] = useState(false);
   // 不在当前这一层的（「全部笔记」里别的文件夹的置顶、搜索结果）：摘要前面带上文件夹
   const where = folderOf(note);
-  const showFolder = where !== "" && where !== tree.folder;
+  const showFolder = where !== "" && where !== folder;
   const title = useListTitle(note);
 
   return (
     <motion.div
       layout="position"
+      layoutDependency={shapeTick}
       role="button"
       tabIndex={0}
       aria-current={selected ? "true" : undefined}
@@ -1126,7 +1212,7 @@ function NoteCard({
           tree.select(note.id);
         }
       }}
-      initial={{ opacity: 0, y: 7 }}
+      initial={appear ? { opacity: 0, y: 7 } : false}
       animate={{ opacity: dragging ? 0.4 : 1, y: 0 }}
       transition={{ ...tween.base, delay: Math.min(index, 9) * 0.028 }}
       className={cn(
@@ -1256,7 +1342,7 @@ function NoteCard({
       </div>
     </motion.div>
   );
-}
+});
 
 function FolderChip({ path }: { path: string }) {
   return (

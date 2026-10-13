@@ -1,6 +1,6 @@
 import { selectNeighbor } from "@/app/navigate";
 import { useApp } from "@/app/store";
-import { ListColumn } from "@/components/ListColumn";
+import { ListColumn, MoreRows, ROW_BATCH, useRowBatch } from "@/components/ListColumn";
 import { SearchInput } from "@/components/SearchInput";
 import { useData } from "@/data/store";
 import type { Note } from "@/data/types";
@@ -8,10 +8,21 @@ import { cn } from "@/lib/cn";
 import { formatSmartCN, toISODate } from "@/lib/date";
 import { animatedEmojiText } from "@/lib/emojiText";
 import { spring, tween } from "@/lib/motion";
+import { lowerContent } from "@/lib/paletteSearch";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { ConflictTag, EmptyResult, useListTitle } from "./NotesView";
+
+/** 归档卡片的高度（三行字 + 上下留白）：分批画时给还没画的那一截占位（ListColumn 的 MoreRows） */
+const CARD_HEIGHT = 86.08;
+
+/** 卡片上的操作。身份不变：卡片是 memo 的，不能每次渲染都拿到一份新的回调 */
+interface ArchiveActions {
+  select: (id: string) => void;
+  restore: (id: string) => void;
+  remove: (id: string) => void;
+}
 
 export function ArchiveList({
   items,
@@ -33,16 +44,41 @@ export function ArchiveList({
     selectArchive(items[0]!.id);
   }, [items, selectedId, selectArchive]);
 
+  const q = query.trim().toLowerCase();
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
     if (!q) return items;
     return items.filter(
       (n) =>
         n.title.toLowerCase().includes(q) ||
         n.excerpt.toLowerCase().includes(q) ||
-        n.contentMd.toLowerCase().includes(q),
+        lowerContent(n).includes(q),
     );
-  }, [items, query]);
+  }, [items, q]);
+
+  // 分批画（同笔记列表）：几百篇归档整列画出来，切进归档要多花好几百毫秒
+  const { shown, more } = useRowBatch(
+    q ? `search:${q}` : "all",
+    filtered.length,
+    filtered.findIndex((n) => n.id === selectedId),
+  );
+
+  const latest = useRef({ selectArchive, onRestore, deleteNote });
+  latest.current = { selectArchive, onRestore, deleteNote };
+  const actions = useMemo<ArchiveActions>(
+    () => ({
+      select: (id) => latest.current.selectArchive(id),
+      // 正在看的这篇走了：选中先挪到下一篇（app/navigate 的 selectNeighbor）
+      restore: (id) => {
+        selectNeighbor(id);
+        latest.current.onRestore(id);
+      },
+      remove: (id) => {
+        selectNeighbor(id);
+        void latest.current.deleteNote(id);
+      },
+    }),
+    [],
+  );
 
   return (
     <ListColumn
@@ -57,47 +93,45 @@ export function ArchiveList({
         />
       ) : (
         <div className="flex flex-col">
-          {filtered.map((n, i) => (
+          {filtered.slice(0, shown).map((n, i) => (
             <ArchiveCard
               key={n.id}
               note={n}
               index={i}
               divided={i > 0}
               selected={n.id === selectedId}
-              onSelect={() => selectArchive(n.id)}
-              // 正在看的这篇走了：选中先挪到下一篇（app/navigate 的 selectNeighbor）
-              onRestore={() => {
-                selectNeighbor(n.id);
-                onRestore(n.id);
-              }}
-              onDelete={() => {
-                selectNeighbor(n.id);
-                void deleteNote(n.id);
-              }}
+              appear={i < ROW_BATCH}
+              actions={actions}
             />
           ))}
+          {shown < filtered.length && (
+            <MoreRows height={(filtered.length - shown) * CARD_HEIGHT} onNear={more} />
+          )}
         </div>
       )}
     </ListColumn>
   );
 }
 
-function ArchiveCard({
+/**
+ * 一条归档。memo：换选中只重渲染新旧两张。位置只会因为上面多了 / 少了卡片而变 —— 那时
+ * index 跟着变，这张也就重渲染、量位置播 layout 动画（layoutDependency）
+ */
+const ArchiveCard = memo(function ArchiveCard({
   note,
   index,
   divided,
   selected,
-  onSelect,
-  onRestore,
-  onDelete,
+  appear,
+  actions,
 }: {
   note: Note;
   index: number;
   divided: boolean;
   selected: boolean;
-  onSelect: () => void;
-  onRestore: () => void;
-  onDelete: () => void;
+  /** 挂上时淡入；往下滚才画出来的那几批不播 */
+  appear: boolean;
+  actions: ArchiveActions;
 }) {
   const dateLabel = note.archivedAt ? formatSmartCN(toISODate(new Date(note.archivedAt))) : "";
   const title = useListTitle(note);
@@ -105,7 +139,8 @@ function ArchiveCard({
   return (
     <motion.div
       layout="position"
-      initial={{ opacity: 0, y: 7 }}
+      layoutDependency={index}
+      initial={appear ? { opacity: 0, y: 7 } : false}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -12, transition: tween.fast }}
       transition={{ ...tween.base, delay: Math.min(index, 9) * 0.028 }}
@@ -117,7 +152,7 @@ function ArchiveCard({
     >
       <button
         type="button"
-        onClick={onSelect}
+        onClick={() => actions.select(note.id)}
         className="relative w-full rounded-lg px-3 py-3 pr-14 text-left"
       >
         {selected && (
@@ -161,7 +196,7 @@ function ArchiveCard({
           type="button"
           aria-label={`删除「${title}」`}
           title="删除（可以撤销）"
-          onClick={onDelete}
+          onClick={() => actions.remove(note.id)}
           className="grid h-5 w-5 place-items-center rounded text-faint opacity-0 transition-[opacity,color]
                      duration-[150ms] hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
         >
@@ -172,7 +207,7 @@ function ArchiveCard({
           type="button"
           aria-label={`恢复「${title}」`}
           title="恢复到笔记"
-          onClick={onRestore}
+          onClick={() => actions.restore(note.id)}
           whileHover={{ rotate: -150 }}
           whileTap={{ scale: 0.85, rotate: -300 }}
           transition={spring.smooth}
@@ -187,4 +222,4 @@ function ArchiveCard({
       </div>
     </motion.div>
   );
-}
+});

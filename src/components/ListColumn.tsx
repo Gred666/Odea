@@ -1,7 +1,7 @@
 import { cn } from "@/lib/cn";
 import { tween } from "@/lib/motion";
 import { motion } from "motion/react";
-import type { ComponentProps, ReactNode } from "react";
+import { type ComponentProps, type ReactNode, useEffect, useRef, useState } from "react";
 
 /**
  * 中列表栏的统一外壳。
@@ -112,6 +112,47 @@ export function ColumnButton({
       {children}
     </button>
   );
+}
+
+/**
+ * 长列表一次画多少行。几百行整列画出来，启动、切进这个区都要多花好几百毫秒，而且每一行都是
+ * Motion 投影树上的节点 —— 任何一个 layout 动画（选中高亮滑过去、导航指示块）每一帧都要把
+ * 它们全部过一遍。先画这么多，后面按行高占位，往下滚快到底时再画下一批（只增不减）
+ */
+export const ROW_BATCH = 40;
+
+/**
+ * 分批画一个列表：返回画到第几行，和「再画一批」。listKey 换了（换文件夹、换搜索词）从头算；
+ * 选中的那一行连同后面几行总画着 —— 删掉、归档它时要落到下一行（app/navigate 的
+ * selectNeighbor 看的是画出来的行）
+ */
+export function useRowBatch(listKey: string, total: number, selectedAt: number) {
+  const [batch, setBatch] = useState({ key: listKey, count: ROW_BATCH });
+  const budget = batch.key === listKey ? batch.count : ROW_BATCH;
+  const shown = Math.min(total, Math.max(budget, selectedAt + 6));
+  return { shown, more: () => setBatch({ key: listKey, count: shown + ROW_BATCH }) };
+}
+
+/** 还没画的那些行：按大概的高度占着（对不上只是滚动条长度差一点），快滚到（600px 以内）时再要下一批 */
+export function MoreRows({ height, onNear }: { height: number; onNear: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const near = useRef(onNear);
+  near.current = onNear;
+  // height 变了（刚画了一批）重新观察一次：还在范围里就接着要下一批
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 见上
+  useEffect(() => {
+    const spacer = ref.current;
+    if (!spacer) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) near.current();
+      },
+      { root: spacer.closest("[data-list-scroller]"), rootMargin: "600px 0px" },
+    );
+    observer.observe(spacer);
+    return () => observer.disconnect();
+  }, [height]);
+  return <div ref={ref} aria-hidden="true" style={{ height }} />;
 }
 
 /** 分组标签，如「置顶」 */

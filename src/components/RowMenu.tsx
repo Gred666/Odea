@@ -2,7 +2,7 @@ import { cn } from "@/lib/cn";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, MoreHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { type ReactElement, useState } from "react";
+import { type ReactElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export interface MenuAction {
   id: string;
@@ -33,15 +33,22 @@ export function ActionMenu({
   trigger,
   actions,
   align = "end",
+  defaultOpen = false,
   onOpenChange,
 }: {
   /** 触发元素。会以 asChild 方式接管，必须能接受 ref 和事件 props */
   trigger: ReactElement;
   actions: MenuAction[];
   align?: "start" | "center" | "end";
+  /** 一挂上就是开着的（RowMenu 在挂上菜单之前就被点了） */
+  defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 只在挂上时告诉一次
+  useEffect(() => {
+    if (defaultOpen) onOpenChange?.(true);
+  }, []);
   const radio = actions.some((a) => a.checked !== undefined);
 
   const handleOpenChange = (next: boolean) => {
@@ -116,6 +123,10 @@ export function ActionMenu({
 
 /**
  * 列表行右上角的「…」菜单。
+ *
+ * 笔记列表里几百行，每行挂一整套 Radix 下拉菜单（Root、Trigger、Popper 锚点、集合……）
+ * 在启动和整列重渲染时都不便宜。所以先画一个长得一模一样的普通按钮，指针移上来、
+ * 键盘焦点进来（或者没移上来就点了）才换成真的菜单。
  */
 export function RowMenu({
   actions,
@@ -128,25 +139,51 @@ export function RowMenu({
   /** 打开期间行本身要保持悬停态（指针在菜单上时行已经失去 hover） */
   onOpenChange?: (open: boolean) => void;
 }) {
+  const [armed, setArmed] = useState<"no" | "yes" | "open">("no");
+  const button = useRef<HTMLButtonElement>(null);
+  /** 焦点在占位按钮上时换成了真的：焦点要跟到新按钮上 */
+  const refocus = useRef(false);
+  useLayoutEffect(() => {
+    if (armed === "no" || !refocus.current) return;
+    refocus.current = false;
+    button.current?.focus();
+  }, [armed]);
+
+  const trigger = (
+    <button
+      ref={button}
+      type="button"
+      aria-label="更多操作"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (armed === "no") setArmed("open");
+      }}
+      onPointerEnter={armed === "no" ? () => setArmed("yes") : undefined}
+      onFocus={
+        armed === "no"
+          ? () => {
+              refocus.current = true;
+              setArmed("yes");
+            }
+          : undefined
+      }
+      className={cn(
+        "grid h-5 w-5 place-items-center rounded text-faint",
+        "transition-[background-color,color,opacity] duration-[150ms] hover:bg-raised hover:text-ink",
+        "data-[state=open]:bg-raised data-[state=open]:text-ink data-[state=open]:opacity-100",
+        alwaysVisible ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+      )}
+    >
+      <MoreHorizontal size={13} strokeWidth={2} />
+    </button>
+  );
+  if (armed === "no") return trigger;
   return (
     <ActionMenu
       actions={actions}
+      defaultOpen={armed === "open"}
       onOpenChange={onOpenChange}
-      trigger={
-        <button
-          type="button"
-          aria-label="更多操作"
-          onClick={(e) => e.stopPropagation()}
-          className={cn(
-            "grid h-5 w-5 place-items-center rounded text-faint",
-            "transition-[background-color,color,opacity] duration-[150ms] hover:bg-raised hover:text-ink",
-            "data-[state=open]:bg-raised data-[state=open]:text-ink data-[state=open]:opacity-100",
-            alwaysVisible ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-          )}
-        >
-          <MoreHorizontal size={13} strokeWidth={2} />
-        </button>
-      }
+      trigger={trigger}
     />
   );
 }

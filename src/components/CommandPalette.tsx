@@ -8,7 +8,13 @@ import type { DocumentSaveTarget, JournalDoc, Note, WorkspaceId } from "@/data/t
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
 import { popoverCard, spring, tween } from "@/lib/motion";
-import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/paletteSearch";
+import {
+  type Range,
+  lowerContent,
+  matchKeywords,
+  matchText,
+  snippetAround,
+} from "@/lib/paletteSearch";
 import {
   Archive,
   ArrowDown,
@@ -408,7 +414,7 @@ export function CommandPalette({
         });
         continue;
       }
-      const snippet = snippetAround(note.contentMd, q);
+      const snippet = snippetAround(note.contentMd, q, undefined, lowerContent(note));
       if (snippet)
         found.push({ item: noteItem(note, "笔记", { hint: where, snippet }), score: 30 });
     }
@@ -424,7 +430,7 @@ export function CommandPalette({
         days.push({ item: journalItem(entry, { hint, ranges: title.ranges }), score: title.score });
         continue;
       }
-      const snippet = snippetAround(entry.contentMd, q);
+      const snippet = snippetAround(entry.contentMd, q, undefined, lowerContent(entry));
       if (snippet) days.push({ item: journalItem(entry, { hint, snippet }), score: 28 });
     }
     days.sort((a, b) => b.score - a.score);

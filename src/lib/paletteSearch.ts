@@ -76,21 +76,39 @@ function merge(ranges: Range[]): Range[] {
   return out;
 }
 
+/**
+ * 正文的小写，按那一篇（对象）记着。命令面板、归档的搜索框每打一个字都要在所有正文里找一遍，
+ * 以前每次都把全部正文重新转一遍小写（几百篇就是每个字复制一两 MB）；
+ * 一篇改过之后 store 里换成新对象，自然重新算
+ */
+const loweredContent = new WeakMap<object, string>();
+
+export function lowerContent(doc: { contentMd: string }): string {
+  let lower = loweredContent.get(doc);
+  if (lower === undefined) {
+    lower = doc.contentMd.toLowerCase();
+    loweredContent.set(doc, lower);
+  }
+  return lower;
+}
+
 /** 行首的 Markdown 记号：标题井号、引用、列表、任务框、编号 */
 const LINE_MARKERS = /^\s*(?:(?:#{1,6}|>+)\s*|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)*/;
 
 /**
  * 正文里第一次出现 query 的那一行，截成一小段：命中处前面留 before 个字，总长不超过 max。
  * 行首的 Markdown 记号去掉；截掉的地方补省略号。没出现返回 null。
+ * lower 是调用方缓存着的 content.toLowerCase()：面板每打一个字要搜遍所有正文，不用每次都转
  */
 export function snippetAround(
   content: string,
   query: string,
   { before = 14, max = 48 }: { before?: number; max?: number } = {},
+  lower = content.toLowerCase(),
 ): { text: string; range: Range } | null {
   const q = query.trim().toLowerCase();
   if (!q) return null;
-  const at = content.toLowerCase().indexOf(q);
+  const at = lower.indexOf(q);
   if (at < 0) return null;
 
   const lineStart = content.lastIndexOf("\n", at - 1) + 1;
