@@ -1,7 +1,7 @@
 /* ============================================================
 自动更新（技术方案 §14.4）。
 
-发版时 CI 把安装包、它的签名和 latest.json 放到 GitHub Releases。这里：
+发版时 CI 把安装包和 latest.json 放到 GitHub Releases，再传一份到 Gitee（国内）。这里：
 - 窗口出来以后等一会儿查一次，之后每 6 小时查一次。查到新版就在后台下载、验签，
   下好了才告诉前端（导航栏里出现「新版本」那一行），用户点了只等重启，不等下载。
   连不上就算了，半小时后再试 —— 本地优先的应用，离线是常态，不报错
@@ -10,12 +10,13 @@
   macOS / Linux 换掉程序文件以后自己重启
 - Linux 的 deb / rpm 要 root 才能装，不在应用里装：只提示，「去下载」打开下载页
 - 请求走同步的那个代理（sync/proxy.rs）：开着 Clash 时同步连得上，检查更新也连得上
+- 两个地址：Gitee 在前、GitHub 兜底，一个地址从查到下载、验签哪一步不行就整条换下一个（check）
 
 安装包用发版人的私钥签过名，公钥写在 tauri.conf.json 的 plugins.updater.pubkey，
 下载完先验签，对不上的不装。公钥没填（还没生成密钥）就不查。
 
 开发时（debug 构建）默认不查。两个环境变量用来在本机把整条路走一遍：
-    ONTHEWAY_UPDATER_ENDPOINT  换一个 latest.json 的地址（可以是 http://127.0.0.1）
+    ONTHEWAY_UPDATER_ENDPOINT  换成这几个 latest.json 的地址（逗号隔开，按顺序试；可以是 http://127.0.0.1）
     ONTHEWAY_UPDATER_PUBKEY    换一个公钥（配合自己生成的测试密钥）
 ============================================================ */
 
@@ -145,12 +146,35 @@ fn auto_check() -> bool {
     !cfg!(debug_assertions) || std::env::var_os("ONTHEWAY_UPDATER_ENDPOINT").is_some()
 }
 
-/// 查一次。有新版：能装的下载、验签，都好了记下来并通知前端
+/// 查一次。latest.json 的地址一个一个试（tauri.conf.json 里的顺序：Gitee 在前，国内连得快；GitHub 兜底）。
+/// 一个地址查到了新版、安装包却下不下来或者签名对不上，就换下一个地址整条再走一遍 ——
+/// latest.json 拿得到不代表安装包也下得动（国内能打开 GitHub 的页面，下载却常常卡住）。
+/// 插件自己的多地址只管「latest.json 取不到就换」，管不到这一层。
+/// 有一个地址回答「已经是最新的」就算查过了，不再问后面的
 async fn check<R: Runtime>(app: &AppHandle<R>, hub: &UpdateHub, data_dir: &Path) -> Result<Checked> {
     let _one_at_a_time = hub.checking.lock().await;
-    let Some(updater) = updater(app, data_dir)? else {
+    let Some(source) = source(app)? else {
         return Ok(Checked::Unconfigured);
     };
+    let mut failure = None;
+    for endpoint in &source.endpoints {
+        let attempt = async {
+            let updater = updater(app, data_dir, &source, endpoint.clone())?;
+            check_at(app, hub, updater).await
+        };
+        match attempt.await {
+            Ok(checked) => return Ok(checked),
+            Err(error) => {
+                eprintln!("检查更新失败（{endpoint}）: {error}");
+                failure = Some(error);
+            }
+        }
+    }
+    Err(failure.unwrap_or_else(|| AppError::Invalid("没有检查更新的地址".into())))
+}
+
+/// 从一个地址查：有新版的话，能装的下载、验签，都好了记下来并通知前端
+async fn check_at<R: Runtime>(app: &AppHandle<R>, hub: &UpdateHub, updater: Updater) -> Result<Checked> {
     let Some(mut update) = updater.check().await.map_err(update_error)? else {
         // 没有更新的了：之前下好的那一版还等着装
         return Ok(hub.pending_info().map_or(Checked::Latest, Checked::Ready));
@@ -181,44 +205,64 @@ async fn check<R: Runtime>(app: &AppHandle<R>, hub: &UpdateHub, data_dir: &Path)
     Ok(Checked::Ready(info))
 }
 
-/// 公钥没填 = 这一版没接自动更新，返回 None
-fn updater<R: Runtime>(app: &AppHandle<R>, data_dir: &Path) -> Result<Option<Updater>> {
-    let mut builder = app.updater_builder().timeout(CHECK_TIMEOUT);
+/// 去哪查、用哪个公钥验签（tauri.conf.json 的 plugins.updater）
+struct Source {
+    endpoints: Vec<tauri::Url>,
+    pubkey: String,
+}
+
+/// 公钥或地址没填 = 这一版没接自动更新，返回 None
+fn source<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Source>> {
+    let config = app.config().plugins.0.get("updater");
     #[cfg_attr(not(debug_assertions), allow(unused_mut))]
-    let mut pubkey = configured_pubkey(app);
+    let mut pubkey = config
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(|key| key.as_str())
+        .unwrap_or_default()
+        .to_string();
+    #[cfg_attr(not(debug_assertions), allow(unused_mut))]
+    let mut endpoints: Vec<tauri::Url> = config
+        .and_then(|updater| updater.get("endpoints"))
+        .and_then(|list| list.as_array())
+        .map(|list| list.iter().filter_map(|url| url.as_str()?.parse().ok()).collect())
+        .unwrap_or_default();
     #[cfg(debug_assertions)]
     {
-        if let Ok(endpoint) = std::env::var("ONTHEWAY_UPDATER_ENDPOINT") {
-            let endpoint = endpoint
-                .parse()
+        if let Ok(list) = std::env::var("ONTHEWAY_UPDATER_ENDPOINT") {
+            endpoints = list
+                .split(',')
+                .map(|url| url.trim().parse())
+                .collect::<std::result::Result<_, _>>()
                 .map_err(|e| AppError::Invalid(format!("ONTHEWAY_UPDATER_ENDPOINT: {e}")))?;
-            builder = builder.endpoints(vec![endpoint]).map_err(update_error)?;
         }
         if let Ok(key) = std::env::var("ONTHEWAY_UPDATER_PUBKEY") {
-            builder = builder.pubkey(key.clone());
             pubkey = key;
         }
     }
-    if pubkey.trim().is_empty() {
+    if pubkey.trim().is_empty() || endpoints.is_empty() {
         return Ok(None);
     }
+    Ok(Some(Source { endpoints, pubkey }))
+}
+
+/// 只问这一个地址的 updater，请求走同步的代理
+fn updater<R: Runtime>(
+    app: &AppHandle<R>,
+    data_dir: &Path,
+    source: &Source,
+    endpoint: tauri::Url,
+) -> Result<Updater> {
+    let mut builder = app
+        .updater_builder()
+        .timeout(CHECK_TIMEOUT)
+        .pubkey(source.pubkey.clone())
+        .endpoints(vec![endpoint])
+        .map_err(update_error)?;
     let proxy = proxy::resolve(boot::Config::load(data_dir).sync_proxy.as_deref());
     if let Some(proxy) = proxy.and_then(|p| p.parse::<tauri::Url>().ok()) {
         builder = builder.proxy(proxy);
     }
-    builder.build().map(Some).map_err(update_error)
-}
-
-/// tauri.conf.json 里的 plugins.updater.pubkey
-fn configured_pubkey<R: Runtime>(app: &AppHandle<R>) -> String {
-    app.config()
-        .plugins
-        .0
-        .get("updater")
-        .and_then(|updater| updater.get("pubkey"))
-        .and_then(|key| key.as_str())
-        .unwrap_or_default()
-        .to_string()
+    builder.build().map_err(update_error)
 }
 
 /// Linux 上只有 AppImage 能自己换掉自己；deb / rpm 要 root

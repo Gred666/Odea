@@ -74,7 +74,8 @@
       "webviewInstallMode": { "type": "downloadBootstrapper" }
     },
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-"
     },
     "linux": {
       "deb": { "depends": [] }
