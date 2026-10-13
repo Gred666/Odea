@@ -25,24 +25,32 @@ export const UPDATER_TAG = "updater";
 /** Gitee 上留几版的安装包（不算 updater） */
 export const KEEP_RELEASES = 2;
 
-const INSTALLER = /\.(exe|msi|dmg|app\.tar\.gz|deb)$/;
-/** 不传的：AppImage 八十多 MB，贴着 100 MB 的上限，从 GitHub 的机器传到 Gitee 也慢（0.1.0 就是传它时挂的）。
-    Linux 的 AppImage 安装和更新走 GitHub，latest.json 里它照旧指向 GitHub */
-const GITHUB_ONLY = /\.(AppImage|rpm)$/;
+/** 只放 GitHub 的：AppImage 八十多 MB，从 GitHub 的机器传到 Gitee 太慢；deb / rpm 应用不自己装，不算更新包 */
+const GITHUB_ONLY = /\.(AppImage|deb|rpm)$/;
 
-/** 要传到 Gitee 的：安装包和更新包；签名（.sig）不传（签名写在 latest.json 里），超过上限的跳过 */
-export function pickUploads(files) {
+/** latest.json 里各平台更新包的文件名 */
+function updatePackages(latest) {
+  return new Set(
+    Object.values(latest.platforms ?? {}).map((platform) =>
+      decodeURIComponent(new URL(platform.url).pathname.split("/").pop() ?? ""),
+    ),
+  );
+}
+
+/**
+ * 要传到 Gitee 的：只有自动更新要下的那几个包（latest.json 里指着的）—— 从 GitHub 的机器往 Gitee 传，
+ * 11 MB 要好几分钟，全传一遍要半小时。Windows 的安装包就是它的更新包，所以国内的 Windows 用户第一次装
+ * 也能从 Gitee 下；Mac 的 dmg、Linux 的 deb / AppImage 第一次装从 GitHub 下。签名不传（写在 latest.json 里）
+ */
+export function pickUploads(files, latest) {
+  const wanted = updatePackages(latest);
   const upload = [];
   const skipped = [];
   for (const file of files) {
-    if (GITHUB_ONLY.test(file.name)) {
-      skipped.push({ ...file, reason: "太大，只放 GitHub" });
-      continue;
-    }
-    if (!INSTALLER.test(file.name)) continue;
-    if (file.size > MAX_ATTACHMENT) {
-      skipped.push({ ...file, reason: `超过 Gitee 单个附件 100 MB 的上限` });
-    } else upload.push(file);
+    if (!wanted.has(file.name)) continue;
+    if (GITHUB_ONLY.test(file.name)) skipped.push({ ...file, reason: "只放 GitHub" });
+    else if (file.size > MAX_ATTACHMENT) skipped.push({ ...file, reason: "超过 Gitee 单个附件 100 MB 的上限" });
+    else upload.push(file);
   }
   return { upload, skipped };
 }
@@ -213,7 +221,7 @@ async function publish() {
 
   const files = readdirSync(dir).map((name) => ({ name, size: statSync(path.join(dir, name)).size }));
   const latest = JSON.parse(readFileSync(path.join(dir, "latest.json"), "utf8"));
-  const { upload, skipped } = pickUploads(files);
+  const { upload, skipped } = pickUploads(files, latest);
   for (const file of skipped) console.warn(`  跳过 ${file.name}：${file.reason}，latest.json 里它还指向 GitHub`);
 
   console.log(`发行版 ${tag}`);

@@ -4,8 +4,10 @@
 #   2. git tag v0.2.0 && git push origin master v0.2.0
 #   3. 这里检查版本和更新说明 → 四个打包任务（Windows、macOS 两种芯片、Linux）、用 Secrets 里的私钥签名，
 #      传进一个草稿 Release（安装包、.sig、latest.json；更新说明就是 changelog 那一节）
-#   4. 四个都成了：镜像到 Gitee（代码和 tag、发行版和安装包，updater 发行版里换上 latest.json）
-#   5. Gitee 也成了：GitHub 的草稿转成正式发布。两边一起上线；哪一步挂了就都不上线，修好重跑
+#   4. 四个都成了：GitHub 的草稿转成正式发布（打 tag 后十几分钟上线）
+#   5. 同时镜像到 Gitee：代码和 tag、发行版，只传自动更新要的包（从 GitHub 的机器传 Gitee 很慢，
+#      11 MB 要好几分钟），都传完最后才把 updater 发行版里的 latest.json 换成新版 —— 国内用户晚一点收到更新。
+#      应用一个地址说「已经最新」也会接着问 GitHub（update.rs），所以 Gitee 慢不耽误别人；挂了就重跑这一个任务
 #
 # 试打包：Actions 页面选「发版」→ Run workflow。只打包、签名，安装包作为 Artifacts 下载，不建 Release、
 # 不查 changelog，顺带看一眼 Gitee 的令牌能不能用 —— 改了打包配置以后先这样跑一遍
@@ -215,9 +217,10 @@ jobs:
           printf '%s\n' "$NOTES" > notes.md
           NOTES_FILE=notes.md node scripts/gitee-release.mjs publish
 
+  # 不等 Gitee：它慢，而且只影响国内用户晚一点收到更新
   publish:
     name: 正式发布
-    needs: [build, gitee]
+    needs: [build]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
