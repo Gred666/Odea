@@ -109,6 +109,12 @@ windows = { version = "0.61", features = ["Win32_System_LibraryLoader", "Win32_U
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
+# git2 的 https 在所有 unix 上都带着 openssl-sys（libgit2-sys 里一个 openssl_init 引用它），可 macOS 上
+# libgit2 走的是系统的 SecureTransport，HTTP 客户端走 Security.framework，谁都不调 OpenSSL。
+# 不 vendored 的话它要去找 Homebrew 的 OpenSSL：在 Apple 芯片的机器上交叉编 Intel 版找不到，直接编不过；
+# Apple 芯片版找得到，但会动态链上 /opt/homebrew 里的 libssl，没装 Homebrew 的 Mac 上应用打不开。
+# 编一份进去（静态库，没人用就不会链进来），发版 CI 里还用 otool 查了一遍
+openssl-sys = { version = "0.9", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = "3"
