@@ -28,22 +28,45 @@ export const KEEP_RELEASES = 2;
 /** 只放 GitHub 的：AppImage 八十多 MB，从 GitHub 的机器传到 Gitee 太慢；deb / rpm 应用不自己装，不算更新包 */
 const GITHUB_ONLY = /\.(AppImage|deb|rpm)$/;
 
-/** latest.json 里各平台更新包的文件名 */
-function updatePackages(latest) {
-  return new Set(
-    Object.values(latest.platforms ?? {}).map((platform) =>
-      decodeURIComponent(new URL(platform.url).pathname.split("/").pop() ?? ""),
-    ),
-  );
+/**
+ * latest.json 里的下载地址是哪个文件。tauri-action v1 写的是接口地址
+ * `https://api.github.com/repos/<仓库>/releases/assets/<id>`，路径里没有文件名（0.1.0 就栽在这：
+ * 按文件名一个都对不上，什么都没传，任务还是绿的）—— 这种返回 { assetId }，得去问 GitHub；
+ * `…/releases/download/<tag>/<文件名>` 这种直接返回 { name }
+ */
+export function assetOf(url) {
+  const { hostname, pathname } = new URL(url);
+  const api = /^\/repos\/[^/]+\/[^/]+\/releases\/assets\/(\d+)$/.exec(pathname);
+  if (hostname === "api.github.com" && api) return { assetId: api[1] };
+  return { name: decodeURIComponent(pathname.split("/").pop() ?? "") };
+}
+
+/** latest.json 里每个下载地址 → 文件名（接口地址去问 GitHub，带上 GH_TOKEN 免得被限流） */
+export async function resolveNames(latest) {
+  const names = new Map();
+  for (const { url } of Object.values(latest.platforms ?? {})) {
+    if (names.has(url)) continue;
+    const asset = assetOf(url);
+    if (asset.name) {
+      names.set(url, asset.name);
+      continue;
+    }
+    const headers = { Accept: "application/vnd.github+json", "User-Agent": "ontheway-release" };
+    if (process.env.GH_TOKEN) headers.Authorization = `Bearer ${process.env.GH_TOKEN}`;
+    const response = await fetch(url, { headers });
+    if (!response.ok) throw new Error(`问 GitHub ${url} 是哪个文件 → ${response.status}`);
+    names.set(url, (await response.json()).name);
+  }
+  return names;
 }
 
 /**
- * 要传到 Gitee 的：只有自动更新要下的那几个包（latest.json 里指着的）—— 从 GitHub 的机器往 Gitee 传，
- * 11 MB 要好几分钟，全传一遍要半小时。Windows 的安装包就是它的更新包，所以国内的 Windows 用户第一次装
- * 也能从 Gitee 下；Mac 的 dmg、Linux 的 deb / AppImage 第一次装从 GitHub 下。签名不传（写在 latest.json 里）
+ * 要传到 Gitee 的：只有自动更新要下的那几个包（latest.json 里指着的，wanted 是它们的文件名）——
+ * 从 GitHub 的机器往 Gitee 传，11 MB 要好几分钟，全传一遍要半小时。Windows 的安装包就是它的更新包，
+ * 所以国内的 Windows 用户第一次装也能从 Gitee 下；Mac 的 dmg、Linux 的 deb / AppImage 第一次装从 GitHub 下。
+ * 签名不传（写在 latest.json 里）
  */
-export function pickUploads(files, latest) {
-  const wanted = updatePackages(latest);
+export function pickUploads(files, wanted) {
   const upload = [];
   const skipped = [];
   for (const file of files) {
@@ -55,15 +78,27 @@ export function pickUploads(files, latest) {
   return { upload, skipped };
 }
 
-/** latest.json 里的下载地址换成 Gitee 上的（传上去了的那些）；没传上去的照旧指向 GitHub */
-export function mirrorLatest(latest, giteeUrls) {
+/**
+ * latest.json 里的下载地址换掉：传到 Gitee 的换成 Gitee 上的；其余的换成 GitHub 的普通下载地址
+ * `https://github.com/<仓库>/releases/download/<tag>/<文件名>`。
+ *
+ * 不留 tauri-action 写的 api.github.com 接口地址：不登录的话每个 IP 每小时只能调 60 次，
+ * 国内很多人共用一个出口 IP（运营商的大 NAT、公司、学校），一起查更新就 403（2026-10-13 实测：
+ * 额度用完以后接口地址 403，普通下载地址照样 302 到文件）。
+ * names：原来的地址 → 文件名（resolveNames），giteeUrls：文件名 → Gitee 上的地址，githubBase：GitHub 的下载目录
+ */
+export function mirrorLatest(latest, names, giteeUrls, githubBase) {
   const copy = structuredClone(latest);
   for (const platform of Object.values(copy.platforms ?? {})) {
-    const name = decodeURIComponent(new URL(platform.url).pathname.split("/").pop() ?? "");
-    if (giteeUrls[name]) platform.url = giteeUrls[name];
+    const name = names.get(platform.url);
+    if (!name) continue;
+    platform.url = giteeUrls[name] ?? `${githubBase}/${encodeURIComponent(name)}`;
   }
   return copy;
 }
+
+/** GitHub 上这一版的下载目录 */
+export const githubDownloads = (repo, tag) => `https://github.com/${repo}/releases/download/${encodeURIComponent(tag)}`;
 
 /**
  * 一个附件怎么传：同名、同样大小的已经在了（上一次没跑完时传上去的）就不再传 —— 重跑是接着传，不是从头来；
@@ -221,7 +256,12 @@ async function publish() {
 
   const files = readdirSync(dir).map((name) => ({ name, size: statSync(path.join(dir, name)).size }));
   const latest = JSON.parse(readFileSync(path.join(dir, "latest.json"), "utf8"));
-  const { upload, skipped } = pickUploads(files, latest);
+  const names = await resolveNames(latest);
+  // latest.json 指着的每个包都得在下下来的文件里：对不上就是认文件名的办法又错了，别静悄悄地什么都不传
+  const missing = [...new Set(names.values())].filter((name) => !files.some((file) => file.name === name));
+  if (missing.length) throw new Error(`latest.json 里的更新包在这一版的文件里找不到：${missing.join("、")}`);
+  const { upload, skipped } = pickUploads(files, new Set(names.values()));
+  if (!upload.length) throw new Error("没有一个更新包要传到 Gitee：认文件名的办法可能又错了");
   for (const file of skipped) console.warn(`  跳过 ${file.name}：${file.reason}，latest.json 里它还指向 GitHub`);
 
   console.log(`发行版 ${tag}`);
@@ -247,7 +287,7 @@ async function publish() {
   }
 
   // latest.json 换成 Gitee 的地址，放进固定的 updater 发行版（每版都换，不看大小）
-  const mirrored = mirrorLatest(latest, giteeUrls);
+  const mirrored = mirrorLatest(latest, names, giteeUrls, githubDownloads(process.env.GITHUB_REPOSITORY ?? "Gred666/OnTheWay", tag));
   const out = path.join(os.tmpdir(), "latest.json");
   writeFileSync(out, `${JSON.stringify(mirrored, null, 2)}\n`);
   console.log(`发行版 ${UPDATER_TAG}（应用查更新的固定地址）`);
