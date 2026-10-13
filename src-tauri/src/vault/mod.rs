@@ -19,6 +19,7 @@ pub mod activity;
 pub mod folders;
 pub mod frontmatter;
 pub mod fsio;
+pub mod guide;
 pub mod index;
 pub mod layout;
 pub mod legacy;

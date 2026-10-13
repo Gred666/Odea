@@ -1,5 +1,6 @@
 import { openDocument } from "@/app/navigate";
 import { useApp } from "@/app/store";
+import { releaseOf } from "@/content/changelog";
 import { backend } from "@/data/backend";
 import { folderLabel, folderOf } from "@/data/folders";
 import { useData } from "@/data/store";
@@ -12,7 +13,9 @@ import {
   Archive,
   ArrowDown,
   ArrowUp,
+  BookOpen,
   CalendarDays,
+  CircleFadingArrowUp,
   Cloud,
   CornerDownLeft,
   FileText,
@@ -20,6 +23,7 @@ import {
   FolderOpen,
   FolderSearch,
   History,
+  Keyboard,
   Monitor,
   Moon,
   NotebookPen,
@@ -27,6 +31,7 @@ import {
   PanelLeftOpen,
   Plus,
   RefreshCw,
+  ScrollText,
   Search,
   Sparkles,
   SquareCheckBig,
@@ -36,8 +41,19 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { version as APP_VERSION } from "../../package.json";
 
-type Group = "最近" | "笔记" | "日记与目标" | "操作" | "跳转" | "外观" | "文件" | "同步" | "新建";
+type Group =
+  | "最近"
+  | "笔记"
+  | "日记与目标"
+  | "操作"
+  | "跳转"
+  | "外观"
+  | "文件"
+  | "同步"
+  | "帮助"
+  | "新建";
 
 interface Item {
   id: string;
@@ -101,9 +117,13 @@ export function CommandPalette({
   const revealDocument = useData((s) => s.revealDocument);
   const openVaultFolder = useData((s) => s.openVaultFolder);
   const changeVaultRoot = useData((s) => s.changeVaultRoot);
+  const openGuide = useData((s) => s.openGuide);
   const syncState = useData((s) => s.syncStatus.state);
   const setSyncOpen = useApp((s) => s.setSyncOpen);
   const setHistoryFor = useApp((s) => s.setHistoryFor);
+  const update = useData((s) => s.update);
+  const checkUpdate = useData((s) => s.checkUpdate);
+  const setUpdateDialog = useApp((s) => s.setUpdateDialog);
 
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -262,8 +282,72 @@ export function CommandPalette({
               run: () => void backend().then((api) => api.syncNow()),
             } satisfies Item,
           ]),
+
+      // 内置的使用指南（src/content/guide/）：删掉了的话照这个版本重新放一篇
+      {
+        id: "guide-welcome",
+        group: "帮助",
+        icon: BookOpen,
+        label: "使用指南",
+        hint: "五个区、常用操作、笔记存在哪",
+        keywords: "help guide 帮助 说明 说明书 教程 上手 入门 新手 欢迎",
+        run: () => void openGuide("welcome").then((id) => id && openDocument({ kind: "note", id })),
+      },
+      {
+        id: "guide-syntax",
+        group: "帮助",
+        icon: Keyboard,
+        label: "语法全览",
+        hint: "所有 Markdown 语法和快捷键",
+        keywords: "markdown syntax shortcut 语法 快捷键 格式 公式 表格 帮助",
+        run: () => void openGuide("syntax").then((id) => id && openDocument({ kind: "note", id })),
+      },
+      // 新版本（技术方案 §14.4）：后台下好了的直接打开卡片；没有的话现在查一次
+      update
+        ? ({
+            id: "update",
+            group: "帮助",
+            icon: CircleFadingArrowUp,
+            label: `更新到 ${update.version}…`,
+            hint: update.manual ? "到下载页下载" : "已经下好了，重启就是新版",
+            keywords: "update upgrade version 更新 升级 新版 版本 重启",
+            run: () => setUpdateDialog("update"),
+          } satisfies Item)
+        : ({
+            id: "update-check",
+            group: "帮助",
+            icon: CircleFadingArrowUp,
+            label: "检查更新",
+            hint: `现在是 ${APP_VERSION}`,
+            keywords: "update upgrade version 更新 升级 新版 版本",
+            run: () => {
+              useData.setState({ notice: "正在检查更新…" });
+              void checkUpdate().then((found) => {
+                if (!found) return;
+                useData.getState().clearNotice();
+                setUpdateDialog("update");
+              });
+            },
+          } satisfies Item),
+      ...(releaseOf(APP_VERSION)
+        ? [
+            {
+              id: "release-notes",
+              group: "帮助",
+              icon: ScrollText,
+              label: "这一版的更新说明",
+              hint: APP_VERSION,
+              keywords: "changelog release notes what's new 更新 说明 新功能 版本 日志",
+              run: () => setUpdateDialog("notes"),
+            } satisfies Item,
+          ]
+        : []),
     ];
   }, [
+    update,
+    checkUpdate,
+    setUpdateDialog,
+    openGuide,
     noteFolder,
     workspace,
     setWorkspace,

@@ -13,7 +13,8 @@ export const commands = {
  * tauri.conf.json 里 `visible: false`，等前端首帧渲染完再 show() ——
  * 否则用户会先看到一个空窗口闪一下，这是桌面应用最常见的廉价感来源。
  * 
- * 这时前端也订阅好了事件：开着同步的话，第一轮从这里开始（技术方案 §5.9.6）。
+ * 这时前端也订阅好了事件：开着同步的话，第一轮从这里开始（技术方案 §5.9.6）；
+ * 检查更新也从这里开始计时（update.rs，过一会儿才查第一次）。
  */
 async ready() : Promise<void> {
     await TAURI_INVOKE("ready");
@@ -273,6 +274,39 @@ async calendarMarks(from: string, to: string) : Promise<Result<CalendarMarks, Ap
 async journalList() : Promise<Result<JournalDoc[], AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("journal_list") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 用户改过、而这个版本带着新版的使用指南：前端在那一篇上问换不换
+ */
+async guidePending() : Promise<Result<GuideUpdate[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("guide_pending") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 用户看过新版了（换上了，或者留着自己的）：到下一次升级前不再问
+ */
+async guideSettle(id: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("guide_settle", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 命令面板「使用指南」：那一篇的 id，删掉了就重新放一篇
+ */
+async guideOpen(name: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("guide_open", { name }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -572,6 +606,51 @@ async syncDisable() : Promise<Result<SyncStatus, AppError>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * 下好了、等着装的新版本（前端启动时取一次，之后跟着 UpdateReady 事件走）
+ */
+async updateStatus() : Promise<Result<UpdateInfo | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 命令面板「检查更新」：现在就查，有新版的话下好再返回。已经是最新的返回 None
+ */
+async updateCheck() : Promise<Result<UpdateInfo | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_check") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 重启并更新。前端调之前已经把编辑器里的内容写盘了。
+ * Windows 上安装包接手后这个进程就结束了，这个命令不会返回；装不上时窗口回来、同步重新开起来
+ */
+async updateInstall() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_install") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 这一次启动是升级上来的话，从哪一版升到哪一版（只给一次：换仓库整页重载以后不再给）
+ */
+async appUpgrade() : Promise<Result<AppUpgrade | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("app_upgrade") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -581,10 +660,12 @@ async syncDisable() : Promise<Result<SyncStatus, AppError>> {
 export const events = __makeEvents__<{
 syncNotice: SyncNotice,
 syncStatusChanged: SyncStatusChanged,
+updateReady: UpdateReady,
 vaultChanged: VaultChanged
 }>({
 syncNotice: "sync-notice",
 syncStatusChanged: "sync-status-changed",
+updateReady: "update-ready",
 vaultChanged: "vault-changed"
 })
 
@@ -601,6 +682,18 @@ vaultChanged: "vault-changed"
  * 而不是去解析错误字符串。
  */
 export type AppError = { kind: "Db"; message: string } | { kind: "NotFound"; message: string } | { kind: "Invalid"; message: string } | { kind: "DbTooNew"; message: { found: number; supported: number } } | { kind: "Io"; message: string } | { kind: "Internal"; message: string }
+/**
+ * 升级后第一次打开：从哪一版升上来的。前端照着它把这之间的更新说明给用户看一次
+ */
+export type AppUpgrade = { 
+/**
+ * 升级前的版本；空 = 记版本号之前的老版本（0.1.0），不知道具体是哪一版
+ */
+from: string | null; 
+/**
+ * 现在这一版
+ */
+to: string }
 /**
  * 存进「附件」文件夹的一个文件
  */
@@ -755,6 +848,22 @@ periodStart: string; contentMd: string; createdAt: number; updatedAt: number;
  * 在仓库里的相对路径；还没写过的周期是它将来的位置
  */
 relPath: string }
+/**
+ * 用户改过、而这个版本的应用带着新版的使用指南（vault/guide.rs）：前端在那一篇上问换不换
+ */
+export type GuideUpdate = { 
+/**
+ * 那一篇笔记的 id
+ */
+id: string; 
+/**
+ * 哪一份指南：welcome / syntax
+ */
+name: string; 
+/**
+ * 这个版本的应用带的正文
+ */
+body: string }
 /**
  * 某一天 / 某个周期的目标，连同正文：命令面板拿它搜日记和目标
  */
@@ -940,6 +1049,30 @@ source: DocTarget | null;
  * 在那篇正文里的行号（从 0 开始）
  */
 line: number | null }
+/**
+ * 一个等着装的新版本
+ */
+export type UpdateInfo = { version: string; 
+/**
+ * 现在这一版
+ */
+current: string; 
+/**
+ * 更新说明（Markdown，发版时写的）
+ */
+notes: string | null; 
+/**
+ * 发布日期 YYYY-MM-DD
+ */
+date: string | null; 
+/**
+ * 在应用里装不了（Linux 的 deb / rpm）时是下载页的地址；能装的是空
+ */
+manual: string | null }
+/**
+ * 新版本下好了、验过签（只能手动装的：查到了）
+ */
+export type UpdateReady = UpdateInfo
 /**
  * 仓库里别处发生的变化：文件被外部程序改了，或者一次操作连带改了别的文档
  * （在日历里勾任务，改的是任务所在的那篇）。前端据此刷新缓存。

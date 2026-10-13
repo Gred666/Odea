@@ -433,6 +433,24 @@ body {
   margin: 2.2em 0;
 }
 
+/* 更新说明（components/UpdateDialog.tsx）：卡片里的小一号正文，段距收紧 */
+.prose-notes {
+  font-size: 14px;
+  line-height: 1.75;
+}
+.prose-notes > * + * {
+  margin-top: 0.7em;
+}
+.prose-notes h2,
+.prose-notes h3 {
+  font-size: 14.5px;
+  margin-top: 1.3em;
+  margin-bottom: 0.2em;
+}
+.prose-notes li + li {
+  margin-top: 0.25em;
+}
+
 /* 双链 [[...]]：不做成链接色，而是一层极淡的底 + 虚线下划线，
    避免正文里一堆蓝字破坏阅读节奏 */
 .prose-doc .otw-wikilink {
@@ -2070,7 +2088,10 @@ body.otw-dragging .otw-row-actions {
   border-radius: 4px;
   color: var(--color-accent-ink);
   line-height: 1;
-  vertical-align: -2px;
+  /* 框的中线对上汉字的中线（基线往上约 0.46em，量出来的）：框高 16，所以底边落在
+     基线往上 0.46em - 8px。以前的 -2px 对的是西文大写字母，挨着中文整个框低了 2–3px；
+     现在西文 E、k 这些也还在框里居中，差不到 1px。按 em 算，callout 里字小一号也跟得上 */
+  vertical-align: calc(0.46em - 8px);
   cursor: pointer;
   transition: border-color var(--duration-fast) var(--ease-out-quint), background-color
     var(--duration-fast) var(--ease-out-quint), box-shadow var(--duration-fast)

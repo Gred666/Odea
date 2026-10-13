@@ -369,6 +369,29 @@ pub async fn journal_list(state: State<'_, AppState>) -> Result<Vec<JournalDoc>>
     with_vault(&state, |v| v.journal_list()).await
 }
 
+/* ---------------- 使用指南（vault/guide.rs） ---------------- */
+
+/// 用户改过、而这个版本带着新版的使用指南：前端在那一篇上问换不换
+#[tauri::command]
+#[specta::specta]
+pub async fn guide_pending(state: State<'_, AppState>) -> Result<Vec<GuideUpdate>> {
+    with_vault(&state, |v| v.guide_pending()).await
+}
+
+/// 用户看过新版了（换上了，或者留着自己的）：到下一次升级前不再问
+#[tauri::command]
+#[specta::specta]
+pub async fn guide_settle(state: State<'_, AppState>, id: String) -> Result<()> {
+    with_vault(&state, move |v| v.guide_settle(&id)).await
+}
+
+/// 命令面板「使用指南」：那一篇的 id，删掉了就重新放一篇
+#[tauri::command]
+#[specta::specta]
+pub async fn guide_open(state: State<'_, AppState>, name: String) -> Result<String> {
+    with_vault(&state, move |v| v.guide_open(&name)).await
+}
+
 /* ---------------- 仓库文件夹 ---------------- */
 
 #[tauri::command]

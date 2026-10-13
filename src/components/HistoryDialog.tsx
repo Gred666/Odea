@@ -24,17 +24,85 @@ import { Segmented } from "./Segmented";
 
    没开同步时没有历史，说明一下、给开启同步的入口。
    外壳和同步对话框一样：模糊遮罩 + 从标题栏往下展开的实心卡片（popoverCard）。
+
+   先取历史、再打开：popoverCard 按第一帧的内容量好高度往下展开，以前第一帧是一行「正在翻历史…」，
+   历史晚一步从 IPC 回来，展开到头那一下卡片猛地变高（没开同步 +50px，有历史 +260px）。
+   现在点了先取（没开同步是瞬间的事，有历史一般也就几十毫秒），取到了再打开，第一帧就是最终的样子；
+   超过 OPEN_ANYWAY 还没取到（历史很长）就先打开，这时卡片一开始就是完整版式的高度，
+   转圈、提示、版本列表都在这个高度里，打开以后不再变。
    ============================================================ */
 
 const HEADER = 52;
+/** 历史取得慢，最多等这么久就先打开 */
+const OPEN_ANYWAY = 250;
+/** 有历史时的版式高度；先打开再等历史时，什么内容都占这么高 */
+const BODY_HEIGHT = "h-[min(560px,66vh)]";
+
+/** 打开时要的东西都在这：历史、已经读出来的几版正文、先选中哪一版 */
+type Loaded = { history: DocHistory; texts: Record<string, string>; selected: number };
+type Result = { loaded: Loaded } | { error: string };
+
+/** 取历史；第一版（最近一次同步）一般就是现在的正文，那就先选中上一版 —— 打开是想看以前的。选中那一版的正文也先读好 */
+async function loadHistory(target: DocumentSaveTarget): Promise<Result> {
+  try {
+    const api = await backend();
+    const history = await api.docHistory(target);
+    const texts: Record<string, string> = {};
+    let selected = 0;
+    const first = history.versions[0];
+    if (first && history.versions.length > 1) {
+      texts[first.blob] = await api.docVersionText(first.blob);
+      if (texts[first.blob] === conflictOriginalContent(target, useData.getState())) selected = 1;
+    }
+    const pick = history.versions[selected];
+    if (pick && texts[pick.blob] === undefined) {
+      texts[pick.blob] = await api.docVersionText(pick.blob);
+    }
+    return { loaded: { history, texts, selected } };
+  } catch (cause) {
+    return { error: messageOf(cause) };
+  }
+}
+
+/** 卡片上那一篇：取好了的话 ready 有值；先打开的话是 null，正文自己等 pending */
+interface Opening {
+  target: DocumentSaveTarget;
+  pending: Promise<Result>;
+  ready: Result | null;
+}
+
+const keyOf = (target: DocumentSaveTarget) => JSON.stringify(target);
 
 export function HistoryDialog() {
-  const target = useApp((s) => s.historyFor);
+  const requested = useApp((s) => s.historyFor);
   const setTarget = useApp((s) => s.setHistoryFor);
   const close = () => setTarget(null);
+  const [opening, setOpening] = useState<Opening | null>(null);
 
   useEffect(() => {
-    if (!target) return;
+    if (!requested) {
+      setOpening(null);
+      return;
+    }
+    let alive = true;
+    const pending = loadHistory(requested);
+    const timer = setTimeout(() => {
+      if (alive) setOpening({ target: requested, pending, ready: null });
+    }, OPEN_ANYWAY);
+    void pending.then((ready) => {
+      if (!alive) return;
+      clearTimeout(timer);
+      // 已经先打开了的，正文自己在等 pending，这里不动它
+      setOpening((now) => now ?? { target: requested, pending, ready });
+    });
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [requested]);
+
+  useEffect(() => {
+    if (!requested) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.isComposing) {
         e.preventDefault();
@@ -43,13 +111,15 @@ export function HistoryDialog() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [target, setTarget]);
+  }, [requested, setTarget]);
 
+  const shown = requested && opening && keyOf(opening.target) === keyOf(requested) ? opening : null;
+  const target = shown?.target;
   const title = useData((s) => (target ? conflictOriginalTitle(target, s) : undefined));
 
   return (
     <AnimatePresence>
-      {target && (
+      {shown && target && (
         <>
           {/* 遮罩和面板分开：见 CommandPalette 里的说明（backdrop-filter 和 opacity 的坑） */}
           <motion.button
@@ -100,7 +170,7 @@ export function HistoryDialog() {
                   <X size={14} strokeWidth={2} />
                 </button>
               </div>
-              <HistoryBody key={JSON.stringify(target)} target={target} onDone={close} />
+              <HistoryBody key={keyOf(target)} opening={shown} onDone={close} />
             </motion.div>
           </div>
         </>
@@ -109,45 +179,41 @@ export function HistoryDialog() {
   );
 }
 
-function HistoryBody({ target, onDone }: { target: DocumentSaveTarget; onDone: () => void }) {
+function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void }) {
+  const { target, pending, ready } = opening;
   const current = useData((s) => conflictOriginalContent(target, s));
   const currentTitle = useData((s) => conflictOriginalTitle(target, s));
   const restoreVersion = useData((s) => s.restoreVersion);
   const setSyncOpen = useApp((s) => s.setSyncOpen);
 
-  const [history, setHistory] = useState<DocHistory | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState(0);
-  const [texts, setTexts] = useState<Record<string, string>>({});
+  const first = ready && "loaded" in ready ? ready.loaded : null;
+  const [history, setHistory] = useState<DocHistory | null>(first?.history ?? null);
+  const [error, setError] = useState<string | null>(ready && "error" in ready ? ready.error : null);
+  const [selected, setSelected] = useState(first?.selected ?? 0);
+  const [texts, setTexts] = useState<Record<string, string>>(first?.texts ?? {});
   const [view, setView] = useState<"diff" | "full">("diff");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  // 没等到历史就打开了：卡片一开始就是完整版式的高度，之后什么内容都在这个高度里
+  const [tall] = useState(ready === null);
 
-  // 取历史；第一版（最近一次同步）一般就是现在的正文，那就先选中上一版 —— 打开是想看以前的
   useEffect(() => {
+    if (ready) return;
     let alive = true;
-    void (async () => {
-      try {
-        const api = await backend();
-        const found = await api.docHistory(target);
-        if (!alive) return;
-        const first = found.versions[0];
-        if (first && found.versions.length > 1) {
-          const text = await api.docVersionText(first.blob);
-          if (!alive) return;
-          setTexts((known) => ({ ...known, [first.blob]: text }));
-          const now = conflictOriginalContent(target, useData.getState());
-          if (text === now) setSelected(1);
-        }
-        setHistory(found);
-      } catch (cause) {
-        if (alive) setError(messageOf(cause));
+    void pending.then((result) => {
+      if (!alive) return;
+      if ("error" in result) {
+        setError(result.error);
+        return;
       }
-    })();
+      setTexts((known) => ({ ...result.loaded.texts, ...known }));
+      setSelected(result.loaded.selected);
+      setHistory(result.loaded.history);
+    });
     return () => {
       alive = false;
     };
-  }, [target]);
+  }, [pending, ready]);
 
   const versions = history?.versions ?? [];
   const version: DocVersion | undefined = versions[selected];
@@ -205,11 +271,11 @@ function HistoryBody({ target, onDone }: { target: DocumentSaveTarget; onDone: (
   };
 
   if (error) {
-    return <Message>{error}</Message>;
+    return <Message tall={tall}>{error}</Message>;
   }
   if (!history) {
     return (
-      <Message>
+      <Message tall={tall}>
         <LoaderCircle size={14} strokeWidth={2} className="mr-2 inline animate-spin align-[-2px]" />
         正在翻历史…
       </Message>
@@ -217,7 +283,7 @@ function HistoryBody({ target, onDone }: { target: DocumentSaveTarget; onDone: (
   }
   if (history.unavailable) {
     return (
-      <Message>
+      <Message tall={tall}>
         <span className="block">{history.unavailable}</span>
         {isTauri && (
           <button
@@ -236,11 +302,15 @@ function HistoryBody({ target, onDone }: { target: DocumentSaveTarget; onDone: (
     );
   }
   if (!versions.length) {
-    return <Message>这一篇还没有同步过。停笔一分钟会自动同步一次，之后这里就有第一版了。</Message>;
+    return (
+      <Message tall={tall}>
+        这一篇还没有同步过。停笔一分钟会自动同步一次，之后这里就有第一版了。
+      </Message>
+    );
   }
 
   return (
-    <div className="flex h-[min(560px,66vh)] min-h-0">
+    <div className={cn("flex min-h-0", BODY_HEIGHT)}>
       {/* ---------- 版本列表 ---------- */}
       <div
         ref={listRef}
@@ -380,8 +450,16 @@ function HistoryBody({ target, onDone }: { target: DocumentSaveTarget; onDone: (
   );
 }
 
-function Message({ children }: { children: React.ReactNode }) {
+/** tall：先打开、再等历史的时候，提示也占完整版式的高度（居中），打开以后卡片不再变高变矮 */
+function Message({ tall, children }: { tall: boolean; children: React.ReactNode }) {
   return (
-    <div className="px-8 py-14 text-center text-[13px] leading-[1.75] text-muted">{children}</div>
+    <div
+      className={cn(
+        "px-8 py-14 text-center text-[13px] leading-[1.75] text-muted",
+        tall && cn("flex flex-col items-center justify-center", BODY_HEIGHT),
+      )}
+    >
+      {children}
+    </div>
   );
 }

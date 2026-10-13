@@ -150,7 +150,7 @@ export function ConflictBanner({
   );
 }
 
-function BannerButton({
+export function BannerButton({
   children,
   onClick,
   disabled,

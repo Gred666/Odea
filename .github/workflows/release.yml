@@ -1,0 +1,150 @@
+# 发版（技术方案 §14.4）
+#
+#   1. pnpm bump 0.2.0，在 src/content/changelog.md 最上面写「## 0.2.0 · 日期」那一节，提交
+#   2. git tag v0.2.0 && git push origin v0.2.0
+#   3. 这里检查版本和更新说明 → 三个平台打包、用 Secrets 里的私钥签名 → 建一个草稿 Release，
+#      附件里有安装包、.sig 和 latest.json（各平台的下载地址和签名，更新说明就是 changelog 那一节）
+#   4. 到 Releases 页面看一眼，点 Publish。发布之后 releases/latest/download/latest.json 才指向它，
+#      用户的应用才查得到（草稿查不到）
+#
+# 试打包：Actions 页面选「发版」→ Run workflow。只打包、签名，安装包作为 Artifacts 下载，不建 Release、
+# 不查 changelog —— 第一次发版前、改了打包配置以后先这样跑一遍，看三个平台都能编过
+#
+# 要两个 Secret：TAURI_SIGNING_PRIVATE_KEY（私钥文件的内容）、TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+name: 发版
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: 检查版本和更新说明
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.notes.outputs.version }}
+      notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # tag、package.json、Cargo.toml 的版本一致，changelog 最上面是这一版：不对就不发。试打包不查
+      - name: 版本号和更新说明
+        id: notes
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            node scripts/release-notes.mjs "$version" > notes.md
+          else
+            version="$(node -p "require('./package.json').version")"
+            echo "试打包（$GITHUB_REF_NAME），不发布" > notes.md
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            cat notes.md
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 类型检查和前端测试
+        run: |
+          pnpm exec tsc --noEmit
+          pnpm test
+
+  build:
+    name: 打包 ${{ matrix.name }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            args: ""
+          - name: macOS (Apple 芯片)
+            os: macos-latest
+            args: --target aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin
+          - name: macOS (Intel)
+            os: macos-latest
+            args: --target x86_64-apple-darwin
+            rust-targets: x86_64-apple-darwin
+          # 22.04：AppImage 里带的 glibc 越老，能跑的发行版越多
+          - name: Linux
+            os: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux 的系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev pkg-config
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: ${{ matrix.args }}
+
+      - run: pnpm install --frozen-lockfile
+
+      # 打包、签名、建草稿 Release、往里传安装包和 latest.json（几个平台各传各的，latest.json 合成一份）。
+      # 试打包时 tagName 是空的：只打包，不建 Release
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: OnTheWay ${{ needs.prepare.outputs.version }}
+          releaseBody: ${{ needs.prepare.outputs.notes }}
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true
+
+      - name: 试打包的安装包
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OnTheWay-${{ needs.prepare.outputs.version }}-${{ matrix.os }}-${{ matrix.rust-targets || 'native' }}
+          path: |
+            src-tauri/target/release/bundle/
+            src-tauri/target/*/release/bundle/
+          if-no-files-found: error

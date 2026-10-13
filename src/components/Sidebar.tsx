@@ -17,6 +17,7 @@ import { describeSync } from "@/lib/syncText";
 import {
   Archive,
   CalendarDays,
+  CircleFadingArrowUp,
   Cloud,
   CloudAlert,
   CloudOff,
@@ -123,6 +124,7 @@ export function Sidebar() {
 
         <div className="flex-1" />
 
+        <UpdateRow collapsed={collapsed} reduce={reduce} />
         <SyncRow collapsed={collapsed} reduce={reduce} />
         <FootControls collapsed={collapsed} reduce={reduce} />
       </motion.div>
@@ -139,6 +141,59 @@ function RowLabel({ children, className }: { children: ReactNode; className?: st
     >
       {children}
     </motion.span>
+  );
+}
+
+/* ---------------- 新版本（技术方案 §14.4） ----------------
+   新版本在后台下好、验过签以后，同步那一行上面多出这一行：强调色的「待更新」图标 + 「新版本 0.2.0」。
+   点它打开新版本卡片（components/UpdateDialog.tsx），「稍后」就是关掉卡片，这一行留着，
+   直到装上为止。不弹窗、不标红、不挨着 Logo：红色在这里是出错，Logo 那块收起时只剩一个「O」。
+   它占的是上面那段空白（flex-1），同步那一行和左下角那排不挪。
+   出现时只淡入（带字的不缩放、不位移），图标里的箭头往上探两下；减少动效时什么都不动 */
+
+/** 箭头往上探两下：图标是 SVG，可以动 transform */
+const UPDATE_NUDGE = {
+  y: [0, -2.5, 0, -2.5, 0],
+  transition: { duration: 1.1, delay: 0.35, ease: "easeInOut" as const },
+};
+
+function UpdateRow({ collapsed, reduce }: { collapsed: boolean; reduce: boolean }) {
+  const update = useData((s) => s.update);
+  const setUpdateDialog = useApp((s) => s.setUpdateDialog);
+  const label = update ? `新版本 ${update.version}` : "";
+  return (
+    <AnimatePresence initial={false}>
+      {update && (
+        <motion.div
+          key="update"
+          className="shrink-0 px-3"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={reduce ? INSTANT : tween.slow}
+        >
+          <button
+            type="button"
+            onClick={() => setUpdateDialog("update")}
+            title={collapsed ? `${label}：点开看看` : "点开看看这一版有什么"}
+            aria-label={`${label}，点开看看`}
+            className={cn(ROW, "h-8 text-body hover:text-ink")}
+          >
+            <span
+              className="absolute inset-0 rounded-lg bg-accent-wash opacity-0 transition-opacity
+                         duration-[140ms] group-hover:opacity-100"
+            />
+            <motion.span
+              className="relative z-10 flex shrink-0 text-accent"
+              animate={reduce ? undefined : UPDATE_NUDGE}
+            >
+              <CircleFadingArrowUp size={15} strokeWidth={1.9} />
+            </motion.span>
+            <RowLabel className="text-[12.5px]">{label}</RowLabel>
+          </button>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -235,9 +290,16 @@ const COLUMN_X = 32 - KNOB / 2;
 
 const FOOT_LAYOUT = {
   expanded: {
-    theme: { x: 12, y: ROW_Y },
+    // 主题和收起后一样在 COLUMN_X：图标的中线（32）和上面导航项、同步那一行的图标（31.5）
+    // 对成一列。以前在 12，图标往左错出去 5.5px，一眼看过去最底下那颗不在列上；
+    // 现在收起 / 展开时它也不横着挪，真的是整行折起来的那根轴
+    theme: { x: COLUMN_X, y: ROW_Y },
     // 主题后面空 4，一直铺到收起按钮前面 4
-    palette: { x: 12 + KNOB + 4, y: ROW_Y, width: 240 - 12 - KNOB - 4 - (12 + KNOB + 4) },
+    palette: {
+      x: COLUMN_X + KNOB + 4,
+      y: ROW_Y,
+      width: 240 - 12 - KNOB - 4 - (COLUMN_X + KNOB + 4),
+    },
     toggle: { x: 240 - 12 - KNOB, y: ROW_Y },
   },
   collapsed: {

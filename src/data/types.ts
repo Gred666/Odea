@@ -259,6 +259,27 @@ export const SYNC_OFF: SyncStatus = {
   oversized: [],
 };
 
+/* ---------------- 新版本（src-tauri/src/update.rs，技术方案 §14.4） ---------------- */
+
+/** 下好了、验过签，等着装的新版本 */
+export interface UpdateInfo {
+  version: string;
+  /** 现在这一版 */
+  current: string;
+  /** 更新说明（Markdown，发版时写的） */
+  notes: string | null;
+  /** 发布日期 YYYY-MM-DD */
+  date: string | null;
+  /** 在应用里装不了（Linux 的 deb / rpm）时是下载页的地址；能装的是 null */
+  manual: string | null;
+}
+
+/** 这一次启动是升级上来的：从哪一版到哪一版。from 为 null = 记版本号之前的老版本 */
+export interface AppUpgrade {
+  from: string | null;
+  to: string;
+}
+
 /* ---------------- 文件夹 ----------------
    笔记的文件夹就是仓库里「笔记」下面的子目录（src-tauri/src/vault/folders.rs）。
    路径相对「笔记」、正斜杠分隔：`工作/周报`；空串是「笔记」本身（全部笔记）。
@@ -308,6 +329,23 @@ export interface LinkRewrite {
   relPath: string;
   before: string;
   after: string;
+}
+
+/* ---------------- 使用指南 ----------------
+   新仓库里放的「欢迎使用 OnTheWay」「语法全览」，之后由应用管着新旧（src-tauri/src/vault/guide.rs）。
+   用户没改过的，升级时直接换成新版；改过的不动，在那一篇上问换不换。
+*/
+
+/** 内置的几份指南 */
+export type GuideName = "welcome" | "syntax";
+
+/** 用户改过、而这个版本带着新版的指南 */
+export interface GuideUpdate {
+  /** 那一篇笔记的 id */
+  id: string;
+  name: string;
+  /** 这个版本带的正文 */
+  body: string;
 }
 
 /* ---------------- 历史版本 ----------------

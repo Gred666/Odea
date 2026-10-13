@@ -1,3 +1,13 @@
+import {
+  APP_VERSION,
+  GUIDES,
+  type Guide,
+  carryChecks,
+  guideFingerprint,
+  guideIdPrefix,
+  guideOf,
+  newerThan,
+} from "@/content/guide";
 import { formatMonthDayCN, goalTitle, periodStartOf } from "@/lib/date";
 import { countWords, makeExcerpt } from "@/lib/plainText";
 import {
@@ -10,6 +20,7 @@ import {
 import type { Backend } from "./backend";
 import {
   cleanFolderName,
+  fileStemFor,
   folderOf,
   parentOf,
   relPathIn,
@@ -18,8 +29,8 @@ import {
   uniqueChild,
   within,
 } from "./folders";
-import { seedArchivedRaw, seedDayNotes, seedGoalsRaw, seedNotesRaw, seedTasksRaw } from "./seed";
 import {
+  type AppUpgrade,
   type Backlink,
   type DayDoc,
   type DocHistory,
@@ -27,6 +38,8 @@ import {
   type FolderDeletion,
   type Goal,
   type GoalHorizon,
+  type GuideName,
+  type GuideUpdate,
   type JournalDoc,
   type LinkRewrite,
   type Note,
@@ -35,6 +48,7 @@ import {
   SYNC_OFF,
   type SearchResult,
   type Task,
+  type UpdateInfo,
   type VaultChange,
   type VaultInfo,
   goalKey,
@@ -47,23 +61,31 @@ import {
    语义尽量贴近 Rust 实现（删除可撤销、归档清置顶、置顶排前），
    这样在浏览器里看到的行为和真机一致。跟文件打交道的操作（在文件夹中显示…）只在桌面版里有。
    带日期的任务在这里是一份独立的列表，不从正文里解析。
+   新仓库里只有使用指南（src/content/guide/），和桌面版一样；升级时的新旧也按同一套规矩管。
 
    状态存在 localStorage，改了 seed 想清空就升版本号。
    ============================================================ */
 
 // v3：「今日TODO」从笔记 n-today 变成带标题的 day_doc，GOAL 改成一个周期一篇
 // v4：笔记带上 relPath / conflictOf，多一篇冲突副本的演示
-const LS_KEY = "otw.mock.v4";
+// v5：原型的示例笔记、日记、目标都去掉了，新仓库里只有使用指南
+const LS_KEY = "otw.mock.v5";
+
+/**
+ * 使用指南那几篇多一个记号（桌面版写在文件的属性块里）：上一次给它的是哪个版本带的指南、
+ * 那一版正文的指纹
+ */
+type MockNote = Note & { guide?: { name: GuideName; version: string; hash: string } };
 
 interface MockState {
-  notes: Note[];
+  notes: MockNote[];
   tasks: Record<string, Task>;
   /** 按日期索引的某天文档（不含任务） */
   days: Record<string, { title: string; noteMd: string; updatedAt: number }>;
   /** 按 `horizon:periodStart` 索引的目标 */
   goals: Record<string, Goal>;
   /** 删掉的笔记。和 Rust 侧的软删除一样可以撤销；旧版存档里没有这一项 */
-  trash?: Note[];
+  trash?: MockNote[];
   /** 「笔记」下面的文件夹（相对「笔记」的路径）；旧版存档里没有这一项 */
   folders?: string[];
 }
@@ -76,39 +98,62 @@ function load(): MockState {
       if (Array.isArray(p.notes) && p.tasks && p.days && p.goals) return p;
     }
   } catch {
-    /* 隐私模式 / 数据损坏：回到种子 */
+    /* 隐私模式 / 数据损坏：从一个新仓库开始 */
   }
+  const fresh: MockState = {
+    notes: GUIDES.map((guide) => newGuideNote(guide, Date.now())),
+    tasks: {},
+    days: {},
+    goals: {},
+  };
+  // 马上存下：指南的 id 是随机的，不存的话每次刷新都换一批，记住的「上次停在哪一篇」就对不上了
+  save(fresh);
+  return fresh;
+}
+
+/** 新放进去的一篇指南（和 Rust 侧 guide::new_file 一样） */
+function newGuideNote(guide: Guide, now: number): MockNote {
   return {
-    notes: [...seedNotesRaw, ...seedArchivedRaw, demoConflictCopy()].map((n) => ({ ...n })),
-    tasks: Object.fromEntries(seedTasksRaw.map((t) => [t.id, { ...t }])),
-    days: Object.fromEntries(Object.entries(seedDayNotes).map(([d, v]) => [d, { ...v }])),
-    goals: Object.fromEntries(
-      seedGoalsRaw.map((g) => [goalKey(g.horizon, g.periodStart), { ...g }]),
-    ),
+    id: `${guideIdPrefix(guide.name)}${crypto.randomUUID()}`,
+    title: guide.title,
+    contentMd: guide.body,
+    excerpt: makeExcerpt(guide.body, 60),
+    wordCount: countWords(guide.body),
+    isPinned: guide.pinned,
+    isArchived: false,
+    archiveCategory: null,
+    archivedAt: null,
+    createdAt: now,
+    updatedAt: now,
+    relPath: `笔记/${fileStemFor(guide.title)}.md`,
+    conflictOf: null,
+    guide: { name: guide.name, version: APP_VERSION, hash: guideFingerprint(guide.body) },
   };
 }
 
-/**
- * 浏览器预览里演示「网盘的冲突副本」：另一台机器上也改了「8月阅读摘录」，同步时
- * 撞车，网盘把那一版另存成了这一篇。（桌面版里由 Rust 按文件名和属性块 id 认出来）
- */
-function demoConflictCopy(): Note {
-  const original = seedNotesRaw.find((note) => note.id === "n-reading")!;
-  const contentMd = original.contentMd.replace(
-    "## 待读",
-    "## 另一台电脑上补的\n\n地铁上读完了城市步行那本：好的街道让人愿意多走一个路口。\n\n## 待读",
+/** 记下的那一版和这个应用带的不一样，而且不是更新的应用写的 */
+function guideOutdated(note: MockNote, guide: Guide): boolean {
+  const mark = note.guide;
+  return (
+    !!mark && mark.hash !== guideFingerprint(guide.body) && !newerThan(mark.version, APP_VERSION)
   );
-  return {
-    ...original,
-    id: "n-reading-conflict",
-    title: "8月阅读摘录 (冲突 2026-08-28 2210)",
-    contentMd,
-    excerpt: makeExcerpt(contentMd, 60),
-    wordCount: countWords(contentMd),
-    relPath: "笔记/8月阅读摘录 (冲突 2026-08-28 2210).md",
-    updatedAt: original.updatedAt - 60_000,
-    conflictOf: null,
-  };
+}
+
+/** 启动时：没改过的指南换成这一版带的（勾过的框照勾），和 Rust 侧 guide_refresh 一样 */
+function refreshGuides(s: MockState) {
+  let changed = false;
+  for (const note of s.notes) {
+    const guide = guideOf(note.id);
+    if (!guide || note.guide?.name !== guide.name || !guideOutdated(note, guide)) continue;
+    if (guideFingerprint(note.contentMd) !== note.guide.hash) continue;
+    note.contentMd = carryChecks(note.contentMd, guide.body);
+    note.excerpt = makeExcerpt(note.contentMd, 60);
+    note.wordCount = countWords(note.contentMd);
+    note.updatedAt = Date.now();
+    note.guide = { name: guide.name, version: APP_VERSION, hash: guideFingerprint(guide.body) };
+    changed = true;
+  }
+  return changed;
 }
 
 /** 冲突副本的名字（和 Rust 侧 layout::conflict_originals 的常见几种一样），原文的标题 */
@@ -126,14 +171,14 @@ function conflictOriginalTitle(title: string): string | null {
 }
 
 /** 给前端的那一份：算上它是不是谁的冲突副本 */
-function present(note: Note): Note {
+function present({ guide: _mark, ...note }: MockNote): Note {
   const originalTitle = conflictOriginalTitle(note.title);
   const original = originalTitle
     ? state.notes.find((other) => other.id !== note.id && other.title === originalTitle)
     : undefined;
   return {
     ...note,
-    relPath: note.relPath ?? `${note.isArchived ? "归档" : "笔记"}/${note.title}.md`,
+    relPath: note.relPath ?? `${note.isArchived ? "归档" : "笔记"}/${fileStemFor(note.title)}.md`,
     conflictOf: original?.id ?? null,
   };
 }
@@ -150,6 +195,7 @@ function save(s: MockState) {
 }
 
 const state: MockState = load();
+if (refreshGuides(state)) save(state);
 
 /** 文件夹在不在（空串是「笔记」本身，总在） */
 const hasFolder = (folder: string) => folder === "" || (state.folders ?? []).includes(folder);
@@ -376,8 +422,9 @@ export const mockBackend: Backend = {
 
     if (current) {
       if (current.title !== input.title) {
+        // 和后端一样按标题起文件名：标题里的 `/` 不能变成一层文件夹（那篇会从列表里消失）
         const dir = current.relPath.slice(0, current.relPath.lastIndexOf("/"));
-        current.relPath = `${dir}/${input.title}.md`;
+        current.relPath = `${dir}/${fileStemFor(input.title)}.md`;
       }
       current.title = input.title;
       current.contentMd = contentMd;
@@ -398,7 +445,7 @@ export const mockBackend: Backend = {
         archivedAt: null,
         createdAt: now,
         updatedAt: now,
-        relPath: `笔记/${input.title}.md`,
+        relPath: `笔记/${fileStemFor(input.title)}.md`,
         conflictOf: null,
       });
     }
@@ -833,6 +880,40 @@ export const mockBackend: Backend = {
     return [...days, ...goals].sort((a, b) => b.updatedAt - a.updatedAt);
   },
 
+  async guidePending(): Promise<GuideUpdate[]> {
+    await tick();
+    return state.notes.flatMap((note) => {
+      const guide = guideOf(note.id);
+      if (!guide || !note.guide || !guideOutdated(note, guide)) return [];
+      if (guideFingerprint(note.contentMd) === note.guide.hash) return [];
+      return [{ id: note.id, name: guide.name, body: guide.body }];
+    });
+  },
+
+  async guideSettle(id) {
+    await tick();
+    const note = state.notes.find((x) => x.id === id);
+    const guide = guideOf(id);
+    if (!note || !guide) notFound(`guide ${id}`);
+    note.guide = { name: guide.name, version: APP_VERSION, hash: guideFingerprint(guide.body) };
+    save(state);
+  },
+
+  async guideOpen(name) {
+    await tick();
+    const prefix = guideIdPrefix(name);
+    const found =
+      state.notes.find((note) => note.id.startsWith(prefix) && !note.isArchived) ??
+      state.notes.find((note) => note.id.startsWith(prefix));
+    if (found) return found.id;
+    const guide = GUIDES.find((item) => item.name === name);
+    if (!guide) throw { kind: "Invalid", message: `没有叫 ${name} 的使用指南` };
+    const note = newGuideNote(guide, Date.now());
+    state.notes.unshift(note);
+    save(state);
+    return note.id;
+  },
+
   async vaultInfo(): Promise<VaultInfo> {
     await tick();
     return {
@@ -946,4 +1027,61 @@ export const mockBackend: Backend = {
   async syncDisable() {
     return SYNC_OFF;
   },
+
+  // 浏览器里没有安装包，也就没有更新。调界面时用 localStorage 假装一下（见 mockUpdate）
+  async updateStatus() {
+    return mockUpdate();
+  },
+  async updateCheck() {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    return mockUpdate();
+  },
+  async updateInstall() {
+    await tick();
+    throw { kind: "Invalid", message: "浏览器预览里没有安装包，桌面版里才能更新" };
+  },
+  async onUpdateReady() {
+    return () => {};
+  },
+  async appUpgrade() {
+    const from = readMock(MOCK_UPGRADE_KEY);
+    if (from === null) return null;
+    // 只给一次，和桌面版一样
+    try {
+      localStorage.removeItem(MOCK_UPGRADE_KEY);
+    } catch {}
+    return { from: from || null, to: APP_VERSION } satisfies AppUpgrade;
+  },
 };
+
+/* ---------------- 新版本 ----------------
+   调界面用：
+     localStorage["otw.mock.update"] = "0.2.0"       有一个下好了的新版本（写 "0.2.0 manual" 是只能手动装的）
+     localStorage["otw.mock.upgradeFrom"] = "0.0.9"  这一次是从 0.0.9 升上来的（空串 = 不知道从哪一版），取一次就清掉 */
+
+const MOCK_UPDATE_KEY = "otw.mock.update";
+const MOCK_UPGRADE_KEY = "otw.mock.upgradeFrom";
+
+function readMock(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function mockUpdate(): UpdateInfo | null {
+  const [version, manual] = (readMock(MOCK_UPDATE_KEY) ?? "").trim().split(/\s+/);
+  if (!version) return null;
+  return {
+    version,
+    current: APP_VERSION,
+    notes: [
+      "- 笔记可以拖进文件夹，停在收起的文件夹上会自动展开",
+      "- 命令面板也搜日记和目标的正文",
+      "- 修了暗色模式下没勾的任务圈看不见的问题",
+    ].join("\n"),
+    date: "2026-10-20",
+    manual: manual ? "https://github.com/Gred666/OnTheWay/releases/latest" : null,
+  };
+}

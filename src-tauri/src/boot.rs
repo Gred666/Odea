@@ -2,7 +2,8 @@
 启动时的准备：数据放哪、仓库在哪、第一次怎么建。
 
 应用数据目录（每台机器一份，不同步）：
-    config.json      仓库在哪、旧库搬过没有、同步的代理和登录过的账号（令牌在系统钥匙串里）
+    config.json      仓库在哪、旧库搬过没有、同步的代理和登录过的账号（令牌在系统钥匙串里）、
+                     上一次启动的是哪一版
     index/<指纹>.db   每个仓库一份索引，删了能重建
     ontheway.db      旧版的数据库。搬完留在原地当备份，不再读写
 
@@ -18,7 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::vault::{fsio, layout, legacy, seed};
+use crate::vault::{fsio, guide, layout, legacy, seed};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +36,9 @@ pub struct Config {
     /// 登录过的同步账号：托管方（github / gitee）→ login。令牌在钥匙串里，这里不放
     #[serde(default)]
     pub sync_accounts: std::collections::BTreeMap<String, String>,
+    /// 上一次启动的是哪一版。升级后第一次打开时据此提示一次更新说明（note_version）
+    #[serde(default)]
+    pub last_version: Option<String>,
 }
 
 impl Config {
@@ -51,6 +55,32 @@ impl Config {
             &serde_json::to_string_pretty(self)?,
         )
     }
+}
+
+/// 升级后第一次打开：从哪一版升上来的。前端照着它把这之间的更新说明给用户看一次
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct AppUpgrade {
+    /// 升级前的版本；空 = 记版本号之前的老版本（0.1.0），不知道具体是哪一版
+    pub from: Option<String>,
+    /// 现在这一版
+    pub to: String,
+}
+
+/// 记下这一次启动的版本，返回是不是刚升级上来。`fresh` = 这台机器上第一次打开（之前没有
+/// 配置文件）：新装的不算升级。同一版、降级回去的也不算。调用方负责存配置
+pub fn note_version(config: &mut Config, fresh: bool, current: &str) -> Option<AppUpgrade> {
+    let last = config.last_version.replace(current.to_string());
+    if fresh {
+        return None;
+    }
+    let newer = match &last {
+        None => true,
+        Some(last) => matches!(
+            (guide::parse_version(current), guide::parse_version(last)),
+            (Some(now), Some(before)) if now > before
+        ),
+    };
+    newer.then(|| AppUpgrade { from: last, to: current.to_string() })
 }
 
 pub fn data_dir(default: PathBuf) -> PathBuf {
@@ -206,6 +236,42 @@ mod tests {
 
         std::fs::write(dir.path().join("config.json"), "{坏了").unwrap();
         assert!(Config::load(dir.path()).vault_root.is_none());
+    }
+
+    #[test]
+    fn remembers_the_version_and_reports_upgrades_once() {
+        // 新装的：记下版本，不算升级
+        let mut config = Config::default();
+        assert_eq!(note_version(&mut config, true, "0.2.0"), None);
+        assert_eq!(config.last_version.as_deref(), Some("0.2.0"));
+        // 同一版再打开
+        assert_eq!(note_version(&mut config, false, "0.2.0"), None);
+        // 升级：只有升上来之后的第一次
+        assert_eq!(
+            note_version(&mut config, false, "0.3.1"),
+            Some(AppUpgrade { from: Some("0.2.0".into()), to: "0.3.1".into() })
+        );
+        assert_eq!(note_version(&mut config, false, "0.3.1"), None);
+        // 降级回去不算，再升回来又算
+        assert_eq!(note_version(&mut config, false, "0.3.0"), None);
+        assert!(note_version(&mut config, false, "0.3.1").is_some());
+        // 比较的是数，不是字符串
+        let mut config = Config { last_version: Some("0.9.0".into()), ..Config::default() };
+        assert!(note_version(&mut config, false, "0.10.0").is_some());
+    }
+
+    #[test]
+    fn an_old_config_without_a_version_counts_as_an_upgrade() {
+        // 0.1.0 的配置文件里没有 lastVersion
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.json"), r#"{"legacyImported":true}"#).unwrap();
+        let mut config = Config::load(dir.path());
+        assert_eq!(
+            note_version(&mut config, false, "0.2.0"),
+            Some(AppUpgrade { from: None, to: "0.2.0".into() })
+        );
+        config.save(dir.path()).unwrap();
+        assert_eq!(Config::load(dir.path()).last_version.as_deref(), Some("0.2.0"));
     }
 
     #[test]

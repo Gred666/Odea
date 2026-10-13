@@ -15,6 +15,7 @@ desktop-runtime = [
   "dep:tauri-plugin-dialog",
   "dep:tauri-plugin-window-state",
   "dep:tauri-plugin-single-instance",
+  "dep:tauri-plugin-updater",
   "tauri/wry",
   "tauri/compression",
   "tauri/common-controls-v6",
@@ -31,6 +32,7 @@ typegen = [
   "dep:tauri-plugin-opener",
   "dep:tauri-plugin-dialog",
   "dep:tauri-plugin-window-state",
+  "dep:tauri-plugin-updater",
 ]
 
 [lib]
@@ -50,6 +52,9 @@ tauri-plugin-opener = { version = "2", optional = true }
 # 「更换笔记文件夹」的选择文件夹对话框和确认框（只在 Rust 里调，前端不需要权限）
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-window-state = { version = "2", optional = true }
+# 自动更新（技术方案 §14.4）：检查、下载、安装都在 Rust 里调，前端不需要权限。
+# TLS 用系统的，和 ureq 一样不带 rustls / ring。2.13 起要 tauri 2.12，这里还是 2.11，先停在 2.12
+tauri-plugin-updater = { version = "~2.12", default-features = false, features = ["native-tls"], optional = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -98,6 +103,9 @@ tauri-plugin-single-instance = { version = "2", optional = true }
 # 同步：令牌放 Windows 凭据管理器；系统代理从注册表读（winreg 依赖树里本来就有）
 windows-native-keyring-store = "1.1"
 winreg = "0.55"
+# 窗口图标从 exe 里嵌的多尺寸图标资源加载（lib.rs 的 use_app_icon_resource）。
+# 和 tauri / tao 用的是同一个版本，依赖树里本来就有
+windows = { version = "0.61", features = ["Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }

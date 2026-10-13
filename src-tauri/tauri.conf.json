@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OnTheWay",
-  "version": "0.1.0",
   "identifier": "dev.ontheway.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -45,9 +44,17 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVFQUM3QTA3MjFEM0E5QTYKUldTbXFkTWhCM3FzN3NzNzRrYjc1SmpBQ0xORW01Tm9QdXpRK2pZTkNMeHNnVTBLYTA5eTJETzQK",
+      "endpoints": ["https://github.com/Gred666/OnTheWay/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "dmg", "appimage", "deb"],
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis", "app", "dmg", "appimage", "deb"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -15,6 +16,11 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: { ignored: ["**/src-tauri/**"] },
+  },
+
+  test: {
+    // happy-dom 和浏览器不一样的地方在这里补齐（见文件里的说明）
+    setupFiles: ["./src/test/setup.ts"],
   },
 
   build: {

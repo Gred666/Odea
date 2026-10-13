@@ -10,7 +10,8 @@
     "test": "vitest run",
     "lint": "biome check src",
     "format": "biome format --write src",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bump": "node scripts/bump.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

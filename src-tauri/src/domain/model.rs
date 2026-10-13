@@ -205,6 +205,18 @@ pub struct Backlink {
     pub count: i64,
 }
 
+/// 用户改过、而这个版本的应用带着新版的使用指南（vault/guide.rs）：前端在那一篇上问换不换
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideUpdate {
+    /// 那一篇笔记的 id
+    pub id: String,
+    /// 哪一份指南：welcome / syntax
+    pub name: String,
+    /// 这个版本的应用带的正文
+    pub body: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct BacklinkLine {

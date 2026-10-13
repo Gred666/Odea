@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::sync::account::LoginSlot;
 use crate::sync::engine::SyncHub;
+use crate::update::UpdateHub;
 use crate::vault::watch::VaultWatcher;
 use crate::vault::Vault;
 
@@ -17,4 +18,6 @@ pub struct AppState {
     pub sync: Arc<SyncHub>,
     /// 正在进行的 GitHub 设备码登录（开始、等待、取消是三个命令）
     pub sync_login: Mutex<LoginSlot>,
+    /// 下好了等着装的新版本、这一次是不是升级上来的（update.rs）
+    pub update: Arc<UpdateHub>,
 }

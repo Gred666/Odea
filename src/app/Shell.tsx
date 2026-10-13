@@ -5,10 +5,12 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { DocumentView } from "@/components/DocumentView";
 import { ErrorToast, NoticeToast } from "@/components/ErrorToast";
 import { HistoryDialog } from "@/components/HistoryDialog";
+import { Intro } from "@/components/Intro";
 import { Sidebar } from "@/components/Sidebar";
 import { SyncDialog } from "@/components/SyncDialog";
 import { TitleBar } from "@/components/TitleBar";
 import { UndoToast } from "@/components/UndoToast";
+import { UpdateDialog } from "@/components/UpdateDialog";
 import { labelToHorizon, labelToScope, useCurrentDocument } from "@/data/adapter";
 import { useData } from "@/data/store";
 import { cn } from "@/lib/cn";
@@ -265,6 +267,9 @@ export function Shell() {
         <CommandPalette docTarget={doc.editor?.target} />
         <SyncDialog />
         <HistoryDialog />
+        <UpdateDialog />
+        {/* 开场：冷启动时盖在最上面，写一个「O」再把它送回侧栏（components/Intro.tsx） */}
+        <Intro />
       </div>
     </MotionConfig>
   );

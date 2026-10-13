@@ -304,6 +304,26 @@ def tauri(*args):
     subprocess.run([exe, "icon", *args], check=True, capture_output=True, cwd=ROOT)
 
 
+def write_ico(path, frames):
+    """按给的顺序写 ICO（每张都是 PNG 编码）。PIL 自己写会按尺寸从小到大排。"""
+    import io
+    import struct
+
+    blobs = []
+    for im in frames:
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        blobs.append(buf.getvalue())
+    header = [struct.pack("<HHH", 0, 1, len(frames))]
+    offset = 6 + 16 * len(frames)
+    for im, blob in zip(frames, blobs):
+        w, h = im.size
+        header.append(struct.pack("<BBBBHHII", w % 256, h % 256, 0, 0, 1, 32, len(blob), offset))
+        offset += len(blob)
+    with open(path, "wb") as f:
+        f.write(b"".join(header + blobs))
+
+
 def apply_icons():
     from PIL import Image
 
@@ -320,13 +340,10 @@ def apply_icons():
         tauri(os.path.join(HERE, "icon.svg"), "-o", os.path.join(tmp, "r"), "-p", "48,64,256,1024")
         png = lambda d, n: Image.open(os.path.join(tmp, d, f"{n}x{n}.png")).convert("RGBA")  # noqa: E731
 
-        frames = [png("s", 16), png("s", 24), png("m", 32), png("r", 48), png("r", 64), png("r", 256)]
-        frames[-1].save(
-            os.path.join(icons, "icon.ico"),
-            format="ICO",
-            sizes=[f.size for f in frames],
-            append_images=frames[:-1],
-        )
+        # 32 放第一张（和 `tauri icon` 一样）：Tauri 2.11 拿第一张当窗口图标的兜底，
+        # 以前 16 在最前面，任务栏把它拉到 48px，糊成一团。真正用的窗口图标见 src-tauri/src/lib.rs
+        frames = [png("m", 32), png("s", 16), png("s", 24), png("r", 48), png("r", 64), png("r", 256)]
+        write_ico(os.path.join(icons, "icon.ico"), frames)
         png("m", 32).save(os.path.join(icons, "32x32.png"))
         png("m", 30).save(os.path.join(icons, "Square30x30Logo.png"))
         png("m", 44).save(os.path.join(icons, "Square44x44Logo.png"))

@@ -14,6 +14,8 @@ mod error;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod state;
 mod sync;
+#[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
+mod update;
 mod vault;
 
 #[cfg(feature = "desktop-runtime")]
@@ -31,15 +33,60 @@ use state::AppState;
 /// tauri.conf.json 里 `visible: false`，等前端首帧渲染完再 show() ——
 /// 否则用户会先看到一个空窗口闪一下，这是桌面应用最常见的廉价感来源。
 ///
-/// 这时前端也订阅好了事件：开着同步的话，第一轮从这里开始（技术方案 §5.9.6）。
+/// 这时前端也订阅好了事件：开着同步的话，第一轮从这里开始（技术方案 §5.9.6）；
+/// 检查更新也从这里开始计时（update.rs，过一会儿才查第一次）。
 #[cfg(feature = "desktop-runtime")]
 #[tauri::command]
 #[specta::specta]
 fn ready(window: WebviewWindow) {
+    #[cfg(windows)]
+    use_app_icon_resource(&window);
     let _ = window.show();
     let _ = window.set_focus();
     if let Some(state) = window.try_state::<AppState>() {
         state.sync.sync_now();
+    }
+    update::start(window.app_handle());
+}
+
+/// Windows：窗口图标改用 exe 里嵌的那份多尺寸图标，按系统的图标尺寸挑一张。
+///
+/// Tauri 2.11 把 icons/icon.ico 的第一张解成一张位图当窗口图标，任务栏拿它按系统「大图标」的尺寸画
+/// （96 DPI 时 32px，150% 缩放时 48px），尺寸对不上就硬拉 —— 第一张是 16px 的时候糊成一团。
+/// tauri-build 把整个 icon.ico 以资源 32512 嵌进了 exe，LoadImageW 从里面挑正好的一张
+/// （没有正好的就从大一档缩下来）。Tauri 2.12 起默认就这么做（`default_window_icon_from_app_icon_resource`），
+/// 升级以后这段可以删掉。
+#[cfg(all(windows, feature = "desktop-runtime"))]
+fn use_app_icon_resource(window: &WebviewWindow) {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, LoadImageW, SendMessageW, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR,
+        SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, WM_SETICON,
+    };
+    /// tauri-build 嵌图标用的资源号（tauri_utils::platform::WINDOWS_APP_ICON_RESOURCE_ID）
+    const APP_ICON: u16 = 32512;
+
+    let Ok(hwnd) = window.hwnd() else { return };
+    let Ok(module) = (unsafe { GetModuleHandleW(PCWSTR::null()) }) else { return };
+    for (kind, cx, cy) in [(ICON_BIG, SM_CXICON, SM_CYICON), (ICON_SMALL, SM_CXSMICON, SM_CYSMICON)] {
+        let loaded = unsafe {
+            LoadImageW(
+                Some(module.into()),
+                PCWSTR(APP_ICON as usize as *const u16),
+                IMAGE_ICON,
+                GetSystemMetrics(cx),
+                GetSystemMetrics(cy),
+                LR_DEFAULTCOLOR,
+            )
+        };
+        // 拿不到就留着 Tauri 设的那张（.ico 第一张是 32px，不会太糊）
+        if let Ok(icon) = loaded {
+            unsafe {
+                SendMessageW(hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon.0 as isize)));
+            }
+        }
     }
 }
 
@@ -144,6 +191,9 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::calendar_day_save,
         commands::calendar_marks,
         commands::journal_list,
+        commands::guide_pending,
+        commands::guide_settle,
+        commands::guide_open,
         commands::vault_info,
         commands::vault_reveal,
         commands::vault_open_folder,
@@ -171,11 +221,16 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::sync_inspect,
         commands::sync_enable::<tauri::Wry>,
         commands::sync_disable,
+        update::update_status,
+        update::update_check::<tauri::Wry>,
+        update::update_install::<tauri::Wry>,
+        update::app_upgrade,
     ])
     .events(collect_events![
         commands::VaultChanged,
         commands::SyncStatusChanged,
-        commands::SyncNotice
+        commands::SyncNotice,
+        update::UpdateReady
     ])
 }
 
@@ -211,6 +266,9 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::calendar_day_save,
         commands::calendar_marks,
         commands::journal_list,
+        commands::guide_pending,
+        commands::guide_settle,
+        commands::guide_open,
         commands::vault_info,
         commands::vault_reveal,
         commands::vault_open_folder,
@@ -238,11 +296,16 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::sync_inspect,
         commands::sync_enable::<tauri::test::MockRuntime>,
         commands::sync_disable,
+        update::update_status,
+        update::update_check::<tauri::test::MockRuntime>,
+        update::update_install::<tauri::test::MockRuntime>,
+        update::app_upgrade,
     ])
     .events(collect_events![
         commands::VaultChanged,
         commands::SyncStatusChanged,
-        commands::SyncNotice
+        commands::SyncNotice,
+        update::UpdateReady
     ]);
 
     builder
@@ -286,6 +349,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        // 只在 Rust 里用（update.rs），前端没有它的权限
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(specta_builder.invoke_handler())
         // 窗口获得焦点：可能刚在别的设备上写过，拉一次（距上一轮不到 1 分钟的不拉）
         .on_window_event(|window, event| {
@@ -299,7 +364,11 @@ pub fn run() {
             specta_builder.mount_events(app);
 
             let data_dir = boot::data_dir(app.path().app_data_dir().expect("拿不到应用数据目录"));
+            // 之前没有配置文件 = 这台机器上第一次打开：新装的不算升级
+            let fresh = !data_dir.join("config.json").exists();
             let mut config = boot::Config::load(&data_dir);
+            // 升级后第一次打开：前端拿去提示一次更新说明（update.rs 的 app_upgrade）。下面存配置时一起记下这一版
+            let upgrade = boot::note_version(&mut config, fresh, &app.package_info().version.to_string());
             let root = boot::vault_root(&config, app.path().document_dir().ok(), &data_dir);
 
             // 第一次启动：旧库有东西就搬进文件夹，否则放示例内容。搬家失败时不能带着
@@ -318,6 +387,10 @@ pub fn run() {
 
             let mut vault = vault::Vault::open(&root, &boot::index_path(&data_dir, &root))
                 .expect("打开笔记文件夹失败");
+            // 应用升级了：用户没改过的使用指南换成这一版带的（vault/guide.rs）。前端还没起来，不用通知
+            if let Err(error) = vault.guide_refresh() {
+                eprintln!("更新使用指南失败: {error}");
+            }
             vault.set_announcer(commands::announcer(app.handle().clone()));
             let vault = Arc::new(Mutex::new(vault));
             let sync = Arc::new(sync::engine::SyncHub::default());
@@ -340,6 +413,7 @@ pub fn run() {
                 data_dir,
                 sync,
                 sync_login: Mutex::new(sync::account::LoginSlot::default()),
+                update: Arc::new(update::UpdateHub::new(upgrade)),
             });
 
             // jieba 首次初始化约 50ms。仓库是空的时候打开仓库不会用到它，放后台预热

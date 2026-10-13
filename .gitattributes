@@ -1,0 +1,3 @@
+# 仓库里的文本文件一律 LF：Biome 按 LF 查格式，core.autocrlf=true 的机器上检出的 CRLF
+# 文件会被它整篇判成格式错误（pnpm lint 挂掉）。eol=lf 让检出也保持 LF，不再随机器设置变
+* text=auto eol=lf

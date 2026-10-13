@@ -426,7 +426,9 @@ export function NotesList({ notes }: { notes: Note[] }) {
               onClick={() =>
                 picker?.mode === "jump" ? setPicker(null) : openPicker({ mode: "jump" })
               }
-              className="group -ml-[7px] flex min-w-0 items-center gap-[3px] rounded-lg py-px pl-[7px] pr-[5px]
+              // -my-px：悬停底色上下多出的那 1px 不占排版，标题和日历 / 归档的标题同一个高度，
+              // 下面的搜索框、列表也不会比那两栏低 2px（切过去时整栏跳一下）
+              className="group -my-px -ml-[7px] flex min-w-0 items-center gap-[3px] rounded-lg py-px pl-[7px] pr-[5px]
                          transition-colors duration-[140ms] hover:bg-raised/55 aria-expanded:bg-raised/55"
             >
               <AnimatePresence mode="wait" initial={false}>
@@ -1177,30 +1179,37 @@ function NoteCard({
         </span>
 
         {/* 占位：给右上角的图钉/菜单留出固定宽度，避免标题在悬停时抖动 */}
-        <span className="mt-[2px] block h-[13px] w-[13px] shrink-0" aria-hidden="true">
-          {note.isPinned && (
-            <motion.span
-              className={cn(
-                "block text-accent transition-opacity duration-[150ms] group-hover:opacity-0",
-                menuOpen && "opacity-0",
-              )}
-              initial={{ scale: 0, rotate: -90 }}
-              animate={{ scale: 1, rotate: 45 }}
-              transition={spring.bouncy}
-            >
-              <Pin size={11.5} strokeWidth={2} />
-            </motion.span>
-          )}
-        </span>
+        <span className="block w-[13px] shrink-0" aria-hidden="true" />
       </span>
 
-      {/* 操作菜单叠在图钉的位置：静止时看到图钉，悬停时换成「…」 */}
+      {/* 操作菜单叠在图钉的位置：静止时看到图钉，悬停时换成「…」。
+          图钉和「…」在同一个 20×20 的格子里居中：以前图钉画在上面那个占位里、靠左上排，
+          比「…」高 2px、偏右 2px，一悬停换过来就跳一下。top 13：格子的中线对上标题那行字的中线 */}
       <div
-        className="absolute right-[11px] top-[11px] z-20"
+        className="absolute right-[11px] top-[13px] z-20"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
       >
+        {note.isPinned && (
+          <span
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-0 grid place-items-center text-accent",
+              "transition-opacity duration-[150ms] group-hover:opacity-0",
+              menuOpen && "opacity-0",
+            )}
+          >
+            <motion.span
+              className="block"
+              initial={{ scale: 0, rotate: -90 }}
+              animate={{ scale: 1, rotate: 45 }}
+              transition={spring.bouncy}
+            >
+              <Pin size={11.5} strokeWidth={2} className="block" />
+            </motion.span>
+          </span>
+        )}
         <RowMenu
           onOpenChange={setMenuOpen}
           actions={[

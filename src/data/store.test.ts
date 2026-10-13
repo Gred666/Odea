@@ -31,6 +31,12 @@ const api = {
   syncStatus: vi.fn(),
   vaultKeepConflictCopy: vi.fn(),
   vaultReveal: vi.fn(),
+  guidePending: vi.fn(),
+  guideSettle: vi.fn(),
+  guideOpen: vi.fn(),
+  onUpdateReady: vi.fn(),
+  updateStatus: vi.fn(),
+  appUpgrade: vi.fn(),
 };
 
 vi.mock("./backend", () => ({
@@ -84,6 +90,8 @@ beforeEach(() => {
     externalRevisions: {},
     conflicts: new Set(),
     marks: { written: new Set(), open: new Set() },
+    guideUpdates: [],
+    undoable: null,
   });
 });
 
@@ -729,7 +737,11 @@ describe("folders", () => {
   it("shows a new folder before the backend answers, then follows what it says", async () => {
     useData.setState({ folders: ["工作"] });
     let answer: (path: string) => void = () => {};
-    api.folderCreate.mockReturnValueOnce(new Promise<string>((resolve) => (answer = resolve)));
+    api.folderCreate.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        answer = resolve;
+      }),
+    );
 
     // 名字按后端的规矩先算好：非法字符换成全角、重名加序号
     const created = useData.getState().createFolder("", "工作");
@@ -788,5 +800,67 @@ describe("resolveConflict（冲突副本的原文是某一天 / 目标）", () =
     expect(api.goalGet).not.toHaveBeenCalled();
     expect(api.goalSave).not.toHaveBeenCalled();
     expect(api.noteDelete).toHaveBeenCalledWith("copy");
+  });
+});
+
+describe("使用指南有新版、用户改过那一篇", () => {
+  const guide = (contentMd: string): Note => ({
+    ...note(contentMd),
+    id: "guide-welcome-1",
+    title: "欢迎使用 OnTheWay",
+  });
+  const update = { id: "guide-welcome-1", name: "welcome", body: "新版的指南" };
+
+  it("taking the new version saves it, settles, and can be undone", async () => {
+    useData.setState({ notes: [guide("我改过的指南")], guideUpdates: [update] });
+    api.noteUpsert.mockResolvedValue("guide-welcome-1");
+    api.noteGet.mockImplementation(async () => guide(api.noteUpsert.mock.lastCall![0].contentMd));
+    api.guideSettle.mockResolvedValue(undefined);
+
+    await useData.getState().adoptGuideUpdate("guide-welcome-1");
+
+    expect(api.noteUpsert).toHaveBeenLastCalledWith({
+      id: "guide-welcome-1",
+      title: "欢迎使用 OnTheWay",
+      contentMd: "新版的指南",
+    });
+    // 正文存好了才记下这一版：记下的指纹和正文对得上
+    expect(api.guideSettle.mock.invocationCallOrder[0]).toBeGreaterThan(
+      api.noteUpsert.mock.invocationCallOrder[0]!,
+    );
+    expect(useData.getState().guideUpdates).toEqual([]);
+    expect(useData.getState().externalRevisions["note:guide-welcome-1"]).toBe(1);
+    expect(useData.getState().undoable?.message).toBe("已换成新版的使用指南");
+
+    await useData.getState().undoable?.undo();
+    expect(api.noteUpsert).toHaveBeenLastCalledWith({
+      id: "guide-welcome-1",
+      title: "欢迎使用 OnTheWay",
+      contentMd: "我改过的指南",
+    });
+  });
+
+  it("keeping mine only settles", async () => {
+    useData.setState({ notes: [guide("我改过的指南")], guideUpdates: [update] });
+    api.guideSettle.mockResolvedValue(undefined);
+
+    await useData.getState().keepGuide("guide-welcome-1");
+
+    expect(api.guideSettle).toHaveBeenCalledWith("guide-welcome-1");
+    expect(api.noteUpsert).not.toHaveBeenCalled();
+    expect(useData.getState().guideUpdates).toEqual([]);
+  });
+
+  it("opening a deleted guide puts the recreated one into the list", async () => {
+    api.guideOpen.mockResolvedValue("guide-welcome-2");
+    api.noteGet.mockResolvedValue({ ...guide("新放的一篇"), id: "guide-welcome-2" });
+
+    expect(await useData.getState().openGuide("welcome")).toBe("guide-welcome-2");
+    expect(useData.getState().notes.map((item) => item.id)).toEqual(["guide-welcome-2"]);
+
+    // 已经在列表里的不再取一遍
+    api.noteGet.mockClear();
+    expect(await useData.getState().openGuide("welcome")).toBe("guide-welcome-2");
+    expect(api.noteGet).not.toHaveBeenCalled();
   });
 });

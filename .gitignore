@@ -7,6 +7,9 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/backups/
 
+# 更新签名的私钥（tauri signer generate）：放错了地方也别进仓库
+*.key
+
 .DS_Store
 Thumbs.db
 *.log

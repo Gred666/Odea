@@ -96,6 +96,9 @@ interface AppState {
   /** 同步对话框（开启同步 / 同步状态，技术方案 §5.9.9） */
   syncOpen: boolean;
   setSyncOpen: (v: boolean) => void;
+  /** 新版本卡片（components/UpdateDialog.tsx）：等着装的新版本 / 升级后的更新说明；null = 关着 */
+  updateDialog: "update" | "notes" | null;
+  setUpdateDialog: (v: "update" | "notes" | null) => void;
   /** 历史版本对话框开着的那一篇（技术方案 §5.9.11）；null = 关着 */
   historyFor: DocumentSaveTarget | null;
   setHistoryFor: (target: DocumentSaveTarget | null) => void;
@@ -313,6 +316,8 @@ export const useApp = create<AppState>((set, get) => ({
   setPaletteOpen: (v) => set({ paletteOpen: v }),
   syncOpen: false,
   setSyncOpen: (v) => set({ syncOpen: v }),
+  updateDialog: null,
+  setUpdateDialog: (v) => set({ updateDialog: v }),
   historyFor: null,
   setHistoryFor: (target) => set({ historyFor: target }),
   navCollapsed: initialPrefs.navCollapsed,

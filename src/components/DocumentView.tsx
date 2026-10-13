@@ -27,6 +27,7 @@ import { DayTasks } from "./ActionItem";
 import { Backlinks } from "./Backlinks";
 import { ConflictBanner } from "./ConflictBanner";
 import { EmptyState } from "./EmptyArt";
+import { GuideUpdateBanner } from "./GuideUpdateBanner";
 import { NotePath } from "./NotePath";
 import { Outline } from "./Outline";
 import { OverlayScrollbar } from "./OverlayScrollbar";
@@ -231,6 +232,10 @@ export function DocumentView({
   );
   const noteId = target?.kind === "note" ? target.id : null;
   noteIdRef.current = noteId;
+  // 这篇是用户改过的使用指南、这个版本带着新版：标题上方问换不换
+  const guideUpdate = useData((s) =>
+    noteId ? s.guideUpdates.find((update) => update.id === noteId) : undefined,
+  );
 
   // 新建完光标该去哪（app/store 的 FocusRequest）。标题的那种由标题框自己接（见下面）；
   // 正文开头的要等这一篇的编辑器挂上
@@ -303,6 +308,9 @@ export function DocumentView({
                     <ConflictBanner key={doc.conflict.copyId} conflict={doc.conflict} />
                   )}
 
+                  {/* ---------- 使用指南有新版（用户改过这一篇） ---------- */}
+                  {guideUpdate && <GuideUpdateBanner key={guideUpdate.id} update={guideUpdate} />}
+
                   {/* ---------- 归档横幅 ----------
                   key 固定：在两篇归档笔记之间切换时横幅本身不动，文字跟着整块一起淡换。
                   原来按文字做 key，日期不同的两篇一切，旧条往上退、新条从上落，
@@ -347,8 +355,11 @@ export function DocumentView({
                         {doc.folder !== undefined && (
                           <NotePath folder={doc.folder} relPath={doc.relPath} />
                         )}
+                        {/* 盒子钉成小号控件的高（30），-10 之后正好是这一行的 20：大号的（34，/GOAL 那组）
+                            多出来的 4px 往下垂进 mb-2 的空里，不再把这一行撑成 24 —— 以前 /GOAL 的标题、
+                            分隔线、正文都比别的页低 4px，切过去就跳一下 */}
                         {doc.segments && onSegmentChange && (
-                          <div className="-mt-2.5 ml-auto shrink-0">
+                          <div className="-mt-2.5 ml-auto h-[30px] shrink-0">
                             <Segmented
                               group={doc.segments.group}
                               options={doc.segments.options.map((o, i) => {
@@ -644,7 +655,7 @@ function useFitHeight(ref: React.RefObject<HTMLTextAreaElement | null>, value: s
  * 标题本身仍然是一行文字 —— 回车是「写完了」，接着进正文开头；粘贴进来的换行直接去掉。
  * ↓ 也进正文：标题只有一行、或者光标已经在末尾时（折了好几行的话先在标题里往下走）。
  */
-function EditableDocumentTitle({
+export function EditableDocumentTitle({
   title,
   placeholder,
   autoFocus,
@@ -668,6 +679,9 @@ function EditableDocumentTitle({
   const [saving, setSaving] = useState(false);
   const localRef = useRef<HTMLTextAreaElement>(null);
   const fieldRef = outerRef ?? localRef;
+  // Esc 是「不改了」：它调的 blur() 同步触发 onBlur，那时候这一次渲染里的 value 还是改过的那一版，
+  // 不拦的话改动照样被存进去（还会顺手改写别处的 [[旧标题]]）
+  const discarding = useRef(false);
   useFitHeight(fieldRef, value);
 
   useEffect(() => {
@@ -682,6 +696,7 @@ function EditableDocumentTitle({
   };
 
   const commit = async () => {
+    if (discarding.current) return;
     const clean = value.trim();
     if (!clean) {
       setValue(shown);
@@ -728,8 +743,10 @@ function EditableDocumentTitle({
           }
         }
         if (event.key === "Escape") {
+          discarding.current = true;
           setValue(shown);
           field.blur();
+          discarding.current = false;
         }
       }}
       className={cn(

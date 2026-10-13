@@ -19,9 +19,9 @@ async function call<T>(cmd: string, fallback: T): Promise<T> {
   }
 }
 
-/** 前端首帧渲染完成，通知 Rust 把窗口显示出来 */
-export function signalReady() {
-  void call("ready", undefined);
+/** 前端首帧渲染完成，通知 Rust 把窗口显示出来。返回时窗口已经 show() 了（开场动画从这一刻开始） */
+export function signalReady(): Promise<void> {
+  return call("ready", undefined);
 }
 
 export const win = {

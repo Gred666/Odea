@@ -293,7 +293,9 @@ function ProviderStep({
                 )}
                 {PROVIDERS[key].label}
               </span>
-              <span className="text-[11.5px] leading-[1.6] text-muted">
+              {/* 固定两行高：账号是异步读的，读到后「已登录 xxx」只有一行，卡片不能跟着变矮
+                  （展开动画已经按读到之前的高度量好了，见下面 ProxyLine 的说明） */}
+              <span className="min-h-[3.2em] text-[11.5px] leading-[1.6] text-muted">
                 {account ? `已登录 ${account.login}` : PROVIDERS[key].note}
               </span>
             </button>
@@ -762,10 +764,17 @@ function StatusView({ status }: { status: SyncStatus }) {
   );
 }
 
-/* ---------------- 网络（代理） ---------------- */
+/* ---------------- 网络（代理） ----------------
+   对话框是按第一帧的内容量好高度、再往下展开的（popoverCard）。这一行在桌面端要等 IPC 回来才有，
+   以前读到之前是 null：展开量的是没有它的高度，展开一结束卡片被它撑高 52px，看着就是跳一下
+   （浏览器里 mock 同步返回，赶在量之前，所以只有桌面端跳）。现在读到之前先把这一行的位置占住，
+   读到过一次就记下来，再打开第一帧就是对的。 */
+
+/** 上次读到的代理设置 */
+let lastProxy: SyncProxy | null = null;
 
 function ProxyLine() {
-  const [proxy, setProxy] = useState<SyncProxy | null>(null);
+  const [proxy, setProxy] = useState<SyncProxy | null>(lastProxy);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -773,16 +782,27 @@ function ProxyLine() {
   useEffect(() => {
     void backend()
       .then((api) => api.syncProxy())
-      .then(setProxy)
+      .then((next) => {
+        lastProxy = next;
+        setProxy(next);
+      })
       .catch(() => {});
   }, []);
 
   const save = async (value: string | null) => {
-    setProxy(await (await backend()).syncSetProxy(value));
+    const next = await (await backend()).syncSetProxy(value);
+    lastProxy = next;
+    setProxy(next);
     setEditing(false);
   };
 
-  if (!proxy) return null;
+  if (!proxy) {
+    return (
+      <div aria-hidden="true" className="mt-5 border-t border-line pt-3 text-[11.5px]">
+        <p className="invisible">网络：</p>
+      </div>
+    );
+  }
   const how = proxy.configured
     ? `用你填的代理 ${proxy.configured}`
     : proxy.effective

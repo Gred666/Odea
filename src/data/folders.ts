@@ -67,6 +67,14 @@ export function cleanFolderName(raw: string): string | null {
   return name.trim();
 }
 
+/**
+ * 笔记标题 → 磁盘上的文件名（不带 .md），和后端 layout::file_stem_for_title 同一套规矩：
+ * 规矩和文件夹名一样，空的是「无标题笔记」。标题里的 `/` 换成全角的 `／`，不会变成一层文件夹
+ */
+export function fileStemFor(title: string): string {
+  return cleanFolderName(title) ?? "无标题笔记";
+}
+
 /** parent 下给文件夹名找一个没被占用的：`工作`、`工作 2`…（不分大小写；keep 是改名时它自己） */
 export function uniqueChild(
   folders: string[],
@@ -124,6 +132,6 @@ export function renamedRelPath(relPath: string, from: string, to: string): strin
 export function relPathIn(note: Pick<Note, "relPath" | "title">, folder: string): string {
   const name = note.relPath
     ? note.relPath.slice(note.relPath.lastIndexOf("/") + 1)
-    : `${note.title}.md`;
+    : `${fileStemFor(note.title)}.md`;
   return folder ? `${NOTES_DIR}/${folder}/${name}` : `${NOTES_DIR}/${name}`;
 }

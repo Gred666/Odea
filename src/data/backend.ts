@@ -1,6 +1,7 @@
 import { events, type Result as IpcResult, commands } from "@/lib/bindings";
 import { isTauri } from "@/lib/tauri";
 import type {
+  AppUpgrade,
   Attachment,
   Backlink,
   CalendarMarks,
@@ -10,6 +11,8 @@ import type {
   FolderDeletion,
   Goal,
   GoalHorizon,
+  GuideName,
+  GuideUpdate,
   JournalDoc,
   LinkRewrite,
   Note,
@@ -24,6 +27,7 @@ import type {
   SyncRemoteRepo,
   SyncStatus,
   Task,
+  UpdateInfo,
   VaultChange,
   VaultInfo,
 } from "./types";
@@ -87,6 +91,12 @@ export interface Backend {
   calendarMarks(from: string, to: string): Promise<CalendarMarks>;
   /** 所有写过的某一天、某个周期的目标，连同正文（命令面板搜它们），最近改过的在前 */
   journalList(): Promise<JournalDoc[]>;
+  /** 用户改过、而这个版本带着新版的使用指南（在那一篇上问换不换） */
+  guidePending(): Promise<GuideUpdate[]>;
+  /** 用户看过新版了（换上了，或者留着自己的）：到下一次升级前不再问 */
+  guideSettle(id: string): Promise<void>;
+  /** 命令面板「使用指南」：那一篇的 id，删掉了就照这个版本重新放一篇 */
+  guideOpen(name: GuideName): Promise<string>;
   vaultInfo(): Promise<VaultInfo>;
   /** 在系统的文件管理器里定位这篇文档的文件 */
   vaultReveal(target: DocumentSaveTarget): Promise<void>;
@@ -132,6 +142,19 @@ export interface Backend {
   syncEnable(provider: SyncProviderKey, cloneUrl: string, bringLocal: boolean): Promise<boolean>;
   /** 断开同步（.git 留着，账号不退出） */
   syncDisable(): Promise<SyncStatus>;
+  /** 下好了、等着装的新版本；没有为 null */
+  updateStatus(): Promise<UpdateInfo | null>;
+  /** 现在就查一次；有新版的话下好再返回，已经是最新的返回 null */
+  updateCheck(): Promise<UpdateInfo | null>;
+  /**
+   * 重启并更新。调之前先把编辑器里的内容存掉（store 的 installUpdate）。
+   * 装上了就不会返回：Windows 上安装包接手后进程结束，macOS / Linux 换好文件后重启
+   */
+  updateInstall(): Promise<void>;
+  /** 订阅「新版本下好了」 */
+  onUpdateReady(listener: (update: UpdateInfo) => void): Promise<() => void>;
+  /** 这一次启动是升级上来的话，从哪一版到哪一版（只给一次） */
+  appUpgrade(): Promise<AppUpgrade | null>;
 }
 
 /* ---------------- Tauri IPC ---------------- */
@@ -194,6 +217,11 @@ const tauriBackend: Backend = {
     return { written: new Set(marks.written), open: new Set(marks.open) };
   },
   journalList: () => unwrap(commands.journalList()) as Promise<JournalDoc[]>,
+  guidePending: () => unwrap(commands.guidePending()),
+  guideSettle: async (id) => {
+    await unwrap(commands.guideSettle(id));
+  },
+  guideOpen: (name) => unwrap(commands.guideOpen(name)),
   vaultInfo: () => unwrap(commands.vaultInfo()),
   vaultReveal: async (target) => {
     await unwrap(commands.vaultReveal(target));
@@ -230,6 +258,13 @@ const tauriBackend: Backend = {
   syncEnable: (provider, cloneUrl, bringLocal) =>
     unwrap(commands.syncEnable(provider, cloneUrl, bringLocal)),
   syncDisable: () => unwrap(commands.syncDisable()) as Promise<SyncStatus>,
+  updateStatus: () => unwrap(commands.updateStatus()),
+  updateCheck: () => unwrap(commands.updateCheck()),
+  updateInstall: async () => {
+    await unwrap(commands.updateInstall());
+  },
+  onUpdateReady: (listener) => events.updateReady.listen((event) => listener(event.payload)),
+  appUpgrade: () => unwrap(commands.appUpgrade()),
 };
 
 /* ---------------- 浏览器 mock ---------------- */

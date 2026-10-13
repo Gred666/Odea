@@ -268,8 +268,15 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - 标题栏：Win+↑、拖到顶上吸附之后最大化图标也跟着对；关闭按钮能点到窗口右上角
   - 状态栏：折行后行首不再挂一个「·」；新笔记不再「创建时间」「上次更新」各写一遍；「保存中…」超过 600ms 才显示；删除按钮有提示
   - 提示条在正文区居中；命令面板也搜日记和目标的正文（Rust `journal_list`）；导航图标：笔记换成本子、今日TODO 换成勾选框；当日安排的勾选动画改用 `usePrefersReducedMotion`
+- [x] 新用户的使用指南（2026-10-13）：新仓库里只放「欢迎使用 OnTheWay」（置顶，一张能勾的上手清单）和「语法全览」两篇，原型那套示例笔记 / 归档 / 日记 / 目标去掉了。正文在 `src/content/guide/`，Rust 编进程序（`vault/guide.rs`），浏览器 mock 读同一份。升级时：没改过的直接换成新版（勾过的照勾），改过的在那一篇上出横幅（看差异 / 换成新版，可撤销 / 留着我的），删了不再放回；命令面板「帮助」组的「使用指南」「语法全览」随时打开（删了就重新放一篇）。`guide.test.ts` 把指南里写到的快捷键、命令面板项、`/` 菜单项、双链和代码对一遍，改了代码忘了改指南会挂
 - [ ] 性能回归脚本
-- [ ] 打包与签名、自动更新
+- [ ] 打包与签名、自动更新：Tauri updater，安装包和 latest.json 放 GitHub Releases + Gitee Releases（国内）；更新说明随安装包带、升级后第一次打开提示一次，不写进仓库。更新签名的私钥要先生成、自己保管（技术方案 §14.4）
+  - [x] 应用这一侧（2026-10-13）：`update.rs` 后台查、下载、验签，下好了导航栏同步那一行上面出现「新版本 0.2.0」，点开是新版本卡片（「稍后」/「重启并更新」，没有跳过这个版本）；装之前先存编辑器、推同步、记窗口位置；deb / rpm 只提示、打开下载页；请求走同步的代理。命令面板「检查更新」「这一版的更新说明」。升级后第一次打开弹一次更新说明（`config.json` 的 `lastVersion`，正文是 `src/content/changelog.md`）。版本号只剩 `package.json` 和 `Cargo.toml` 两处，`pnpm bump` 一起改，测试对两处一样。本机用测试密钥 + 本地 latest.json 在真实应用里走过：签名不对的不装、对的下好后卡片弹出、点「重启并更新」交给安装包、进程退出
+  - [x] 生成正式的更新签名密钥（2026-10-13）：私钥在 `%USERPROFILE%\.tauri\ontheway.key`（带密码，公钥 ID EEAC7A0721D3A9A6），公钥已填进 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥和密码另外备份（密码管理器）；`.gitignore` 挡了 `*.key`。PowerShell 里 `-w ~/…` 不展开 `~`，会生成在当前目录下一个叫 `~` 的文件夹里。本机打包要设 `TAURI_SIGNING_PRIVATE_KEY`（私钥内容或文件路径；这一版 CLI 不认 `_PATH`）和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。密钥要设密码：PowerShell 里把环境变量设成空串等于删掉，CLI 会卡在问密码
+  - [x] 发版 CI（2026-10-13，写好了、还没在 GitHub 上跑过）：`.github/workflows/release.yml`，打 `v*` tag 触发。先 `scripts/release-notes.mjs` 对版本（tag = package.json = Cargo.toml = Cargo.lock）、取 `changelog.md` 最上面那一节（不是这一版就不发），跑类型检查和前端测试；再 Windows / macOS（Apple 芯片、Intel 各一个）/ Linux 并行打包、签名，建草稿 Release，附件里有安装包、`.sig`、`latest.json`。Publish 之后用户才查得到。手动 Run workflow = 试打包，安装包在 Artifacts 里，不建 Release。两个 Secret 已经加了。bundle 目标加了 `app`（macOS 的更新包从 .app 打）
+  - [ ] 第一次在 GitHub 上跑：先试打包，看 macOS / Linux 能不能编过（这个项目还没在这两个平台上编过）
+  - [ ] Gitee 镜像：Gitee 上建同名仓库，CI 再传一份安装包和一份下载地址指向 Gitee 的 latest.json，`endpoints` 加上它。先验证 Gitee 的附件不登录能不能下、单个文件多大（不行就换对象存储）
+  - [ ] 代码签名（Windows Authenticode、macOS 公证），以后再说
 - [x] 清理旧代码：没用的依赖（`@dnd-kit/*`、`fractional-indexing`、`marked`、Radix dialog / popover / tooltip，Rust 的 `r2d2`、`rrule`、`chrono-tz`）；旧数据模型留下的字段（笔记的 `icon`、恒为空的 `actionGroup`、任务的 `priority` / `goalId` / `sortKey` / `completedAt`）、没人调的 `note_list`、用不上的 `NoteIcon` 组件；日历当日安排从 `ActionGroup` 简化成 `DayTasks`
 
 ---
@@ -334,6 +341,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - **没有「只读预览模式」**：`renderMarkdown` 只在数据还没到 / 空状态时当占位。技术方案 v1 里「大文档降级为只读」没有做，CodeMirror 按视口渲染，1800 行文档挂载 5ms，不需要。
 - **行动项就是 Markdown 的 `- [ ]`**：原来的独立 task 实体 + link 表方案让文档有两个编辑面，已迁回正文。`task` 表现在只服务日历「当日安排」（按 `due_date`）。
 - **今日TODO = 今天的 `day_doc`**，未写过时延续最近一天。原来是一篇藏起来的特殊笔记，和日历里的今天是两份数据。
+- **内置指南是普通笔记，但由应用管新旧**（2026-10-13）：id 以 `guide-<名字>-` 开头（启动时只读这几篇的文件），属性块里一行 `ontheway-guide: <名字> <应用版本> <指纹>`。指纹按勾选框都没勾算，所以勾清单不算改过；新旧按写它的应用版本认，只升不降；两台设备各自升级写出的字节一样，同步不撞车。改了正文不用改版本号。
 - **GOAL 一个周期一篇**，键是 `(horizon, period_start)`，由前端算周期起点、后端校验。「本周目标」是今天所在那一周，不是最新一条。
 - **笔记列表只按标题筛**：全文匹配的结果和标题栏对不上，异步回填还会闪一次。全文搜索留给专门的入口。
 - **自动保存不重排列表**：每 400ms 刷新 `updatedAt`，按它排序会让正在编辑的笔记当着用户的面往上跳。「按更新时间」排序直接用 store 的顺序，不在 `NotesView` 里再按 `updatedAt` 排。

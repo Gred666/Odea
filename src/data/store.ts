@@ -1,6 +1,7 @@
 import { type ISODate, today } from "@/lib/date";
 import { isTauri } from "@/lib/tauri";
 import { create } from "zustand";
+import { version as APP_VERSION } from "../../package.json";
 import { backend } from "./backend";
 import { conflictOriginalContent, conflictOriginalTitle, conflictTarget } from "./conflicts";
 import {
@@ -16,18 +17,22 @@ import {
   within,
 } from "./folders";
 import {
+  type AppUpgrade,
   type CalendarMarks,
   type DayDoc,
   type DocumentSaveTarget,
   type FolderDeletion,
   type Goal,
   type GoalHorizon,
+  type GuideName,
+  type GuideUpdate,
   type JournalDoc,
   type Note,
   SYNC_OFF,
   type SearchResult,
   type SyncStatus,
   type Task,
+  type UpdateInfo,
   type VaultChange,
   goalKey,
 } from "./types";
@@ -81,6 +86,18 @@ interface DataState {
   applyVaultChange: (change: VaultChange) => Promise<void>;
   /** 多设备同步的状态（技术方案 §5.9）；没开同步时 state 是 off */
   syncStatus: SyncStatus;
+  /** 下好了、等着装的新版本（src-tauri/src/update.rs）；没有是 null */
+  update: UpdateInfo | null;
+  /** 这一次启动是升级上来的（启动时取一次）：给用户看这之间的更新说明，看过就清掉 */
+  upgrade: AppUpgrade | null;
+  clearUpgrade: () => void;
+  /** 命令面板「检查更新」：现在就查。查到了返回新版本；最新的、查不了的在提示条里说 */
+  checkUpdate: () => Promise<UpdateInfo | null>;
+  /**
+   * 重启并更新：先把编辑器里的、没存上的草稿都存掉，存不上就不装。
+   * 装上了就不会返回（进程结束 / 重启）；装不上返回原因
+   */
+  installUpdate: () => Promise<string>;
   /** 在系统的文件管理器里定位这篇文档的文件 */
   revealDocument: (target: DocumentSaveTarget) => Promise<void>;
   openVaultFolder: () => Promise<void>;
@@ -198,6 +215,16 @@ interface DataState {
     copyId: string,
     keep: "copy" | "original",
   ) => Promise<DocumentSaveTarget | null>;
+
+  /* ---- 使用指南（src-tauri/src/vault/guide.rs）：没改过的升级时自动换新，改过的在那一篇上问 ---- */
+  /** 用户改过、而这个版本带着新版的指南。启动时取一次 */
+  guideUpdates: GuideUpdate[];
+  /** 把那一篇换成新版（底部提示条可以撤销）；记下之后，以后的升级又能自动换上来 */
+  adoptGuideUpdate: (id: string) => Promise<void>;
+  /** 留着自己改过的那一版，到下一次升级前不再问 */
+  keepGuide: (id: string) => Promise<void>;
+  /** 命令面板「使用指南」：返回那一篇的 id（删掉了会照这个版本重新放一篇）；失败返回 null */
+  openGuide: (name: GuideName) => Promise<string | null>;
 }
 
 /**
@@ -271,6 +298,7 @@ let initializePromise: Promise<void> | null = null;
 /** 仓库变化的订阅只装一次（initialize 失败重试时不重复装） */
 let vaultSubscription: Promise<() => void> | null = null;
 let syncSubscriptions: Promise<(() => void)[]> | null = null;
+let updateSubscription: Promise<() => void> | null = null;
 
 const isNotFound = (error: unknown) =>
   !!error && typeof error === "object" && (error as { kind?: unknown }).kind === "NotFound";
@@ -332,6 +360,39 @@ export const useData = create<DataState>((set, get) => ({
   clearNotice: () => set({ notice: null }),
   externalRevisions: {},
   syncStatus: SYNC_OFF,
+  update: null,
+  upgrade: null,
+  clearUpgrade: () => set({ upgrade: null }),
+  checkUpdate: async () => {
+    try {
+      const update = await (await backend()).updateCheck();
+      if (update) set({ update });
+      else set({ notice: `已经是最新版（${APP_VERSION}）` });
+      return update;
+    } catch (error) {
+      set({ notice: `没能检查更新：${messageOf(error)}` });
+      return null;
+    }
+  },
+  installUpdate: async () => {
+    try {
+      // 和关窗口一样（editor/saveBus 的 installCloseGuard）：看到哪、编辑器里的、
+      // 存失败留下的草稿都先落盘。动态引入：saveBus 自己引用了这个 store，静态引入会成环
+      const { flushAllEditors } = await import("@/editor/saveBus");
+      const { flushViewMemory } = await import("@/lib/viewMemory");
+      flushViewMemory();
+      await flushAllEditors();
+      await get().flushDrafts();
+    } catch (error) {
+      return `有内容没存上，先不更新：${messageOf(error)}`;
+    }
+    try {
+      await (await backend()).updateInstall();
+      return "";
+    } catch (error) {
+      return messageOf(error);
+    }
+  },
   conflicts: new Set(),
   markConflict: (target) =>
     set((state) => ({ conflicts: new Set(state.conflicts).add(saveKeyOf(target)) })),
@@ -509,6 +570,21 @@ export const useData = create<DataState>((set, get) => ({
           api.onSyncStatus((syncStatus) => set({ syncStatus })),
           api.onSyncNotice((notice) => set({ notice })),
         ]);
+        // 新版本在后台下好了：导航栏里出现那一行（components/UpdateDialog.tsx）
+        // 订阅、取状态都不该耽误启动：更新和更新说明都不是非看不可的
+        updateSubscription ??= Promise.resolve()
+          .then(() => api.onUpdateReady((update) => set({ update })))
+          .catch(() => () => {});
+        void Promise.resolve()
+          .then(() => Promise.all([api.updateStatus(), api.appUpgrade()]))
+          .then(([update, upgrade]) => set({ update, upgrade }))
+          .catch(() => {});
+        void Promise.resolve()
+          .then(() => api.guidePending())
+          .then((guideUpdates) => set({ guideUpdates }))
+          .catch(() => {
+            // 取不到就不问：指南还是用户自己那一版，什么也没丢
+          });
         void Promise.resolve()
           .then(() => api.syncStatus())
           .then((syncStatus) => set({ syncStatus: syncStatus ?? SYNC_OFF }))
@@ -1183,6 +1259,72 @@ export const useData = create<DataState>((set, get) => ({
         await get().deleteNote(copy.id);
       }
       return target;
+    } catch (error) {
+      set({ error: messageOf(error) });
+      return null;
+    }
+  },
+
+  guideUpdates: [],
+
+  adoptGuideUpdate: async (id) => {
+    const update = get().guideUpdates.find((item) => item.id === id);
+    if (!update) return;
+    const target: DocumentSaveTarget = { kind: "note", id };
+    try {
+      // 编辑器里没存的先存掉：撤销时换回来的要是最新的那一版
+      const { flushAllEditors } = await import("@/editor/saveBus");
+      await flushAllEditors();
+      const before = conflictOriginalContent(target, get());
+      if (before === undefined) return;
+      const replace = async (content: string) => {
+        await get().saveDocument(target, content);
+        // 编辑器开着这一篇：当成一次外部改动，换上新正文
+        set((state) => ({
+          externalRevisions: bumped(state.externalRevisions, saveKeyOf(target)),
+        }));
+      };
+      await replace(update.body);
+      // 正文存好了再记：记下的指纹和正文对得上，以后就又是「没改过」了
+      await (await backend()).guideSettle(id);
+      set((state) => ({
+        guideUpdates: state.guideUpdates.filter((item) => item.id !== id),
+        lastDeleted: null,
+        undoable: {
+          key: `guide:${id}:${Date.now()}`,
+          kind: "history",
+          message: "已换成新版的使用指南",
+          undo: async () => {
+            await (await import("@/editor/saveBus")).flushAllEditors();
+            await replace(before);
+          },
+        },
+      }));
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+
+  keepGuide: async (id) => {
+    try {
+      await (await backend()).guideSettle(id);
+      set((state) => ({ guideUpdates: state.guideUpdates.filter((item) => item.id !== id) }));
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+
+  openGuide: async (name) => {
+    try {
+      const api = await backend();
+      const id = await api.guideOpen(name);
+      const known = [...get().notes, ...get().archived].some((note) => note.id === id);
+      if (!known) {
+        // 删掉了、刚照这个版本重新放了一篇：放进列表
+        const created = await api.noteGet(id);
+        set((state) => ({ notes: [created, ...state.notes].sort(noteOrder) }));
+      }
+      return id;
     } catch (error) {
       set({ error: messageOf(error) });
       return null;
