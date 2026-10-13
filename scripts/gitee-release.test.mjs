@@ -2,23 +2,25 @@ import { describe, expect, it } from "vitest";
 import { MAX_ATTACHMENT, mirrorLatest, pickUploads, releasesToPrune } from "./gitee-release.mjs";
 
 describe("镜像到 Gitee", () => {
-  it("只传安装包和更新包，签名不传，超过 100 MB 的跳过", () => {
+  it("只传安装包和更新包：签名不传，AppImage 只放 GitHub，超过 100 MB 的跳过", () => {
     const { upload, skipped } = pickUploads([
       { name: "OnTheWay_0.1.0_x64-setup.exe", size: 8e6 },
       { name: "OnTheWay_0.1.0_x64-setup.exe.sig", size: 420 },
       { name: "OnTheWay_0.1.0_aarch64.app.tar.gz", size: 11e6 },
-      { name: "OnTheWay_0.1.0_aarch64.dmg", size: 11e6 },
-      { name: "OnTheWay_0.1.0_amd64.AppImage", size: MAX_ATTACHMENT + 1 },
+      { name: "OnTheWay_0.1.0_aarch64.dmg", size: MAX_ATTACHMENT + 1 },
+      { name: "OnTheWay_0.1.0_amd64.AppImage", size: 86e6 },
       { name: "OnTheWay_0.1.0_amd64.deb", size: 10e6 },
       { name: "latest.json", size: 2000 },
     ]);
     expect(upload.map((file) => file.name)).toEqual([
       "OnTheWay_0.1.0_x64-setup.exe",
       "OnTheWay_0.1.0_aarch64.app.tar.gz",
-      "OnTheWay_0.1.0_aarch64.dmg",
       "OnTheWay_0.1.0_amd64.deb",
     ]);
-    expect(skipped.map((file) => file.name)).toEqual(["OnTheWay_0.1.0_amd64.AppImage"]);
+    expect(skipped.map((file) => file.name)).toEqual([
+      "OnTheWay_0.1.0_aarch64.dmg",
+      "OnTheWay_0.1.0_amd64.AppImage",
+    ]);
   });
 
   it("latest.json 只换传上去了的那些地址，签名和别的字段不动", () => {

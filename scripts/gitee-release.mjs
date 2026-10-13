@@ -23,13 +23,20 @@ export const UPDATER_TAG = "updater";
 /** Gitee 上留几版的安装包（不算 updater） */
 export const KEEP_RELEASES = 2;
 
-const INSTALLER = /\.(exe|msi|dmg|app\.tar\.gz|AppImage|deb|rpm)$/;
+const INSTALLER = /\.(exe|msi|dmg|app\.tar\.gz|deb)$/;
+/** 不传的：AppImage 八十多 MB，贴着 100 MB 的上限，从 GitHub 的机器传到 Gitee 也慢（0.1.0 就是传它时挂的）。
+    Linux 的 AppImage 安装和更新走 GitHub，latest.json 里它照旧指向 GitHub */
+const GITHUB_ONLY = /\.(AppImage|rpm)$/;
 
 /** 要传到 Gitee 的：安装包和更新包；签名（.sig）不传（签名写在 latest.json 里），超过上限的跳过 */
 export function pickUploads(files) {
   const upload = [];
   const skipped = [];
   for (const file of files) {
+    if (GITHUB_ONLY.test(file.name)) {
+      skipped.push({ ...file, reason: "太大，只放 GitHub" });
+      continue;
+    }
     if (!INSTALLER.test(file.name)) continue;
     if (file.size > MAX_ATTACHMENT) {
       skipped.push({ ...file, reason: `超过 Gitee 单个附件 100 MB 的上限` });
@@ -63,16 +70,23 @@ function client(token, repo) {
     const url = new URL(`${API}/repos/${repo}${route}`);
     url.searchParams.set("access_token", token);
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
+    // 上传偶尔断（连接被掐、超时、Gitee 回 5xx）：最多来三次，每次最多等 10 分钟
     for (let attempt = 1; ; attempt++) {
-      const response = await fetch(url, { method, body: form });
-      const text = await response.text();
-      if (response.ok) return text ? JSON.parse(text) : null;
-      // 上传大文件偶尔断：再来两次
-      if (attempt < 3 && (response.status >= 500 || response.status === 429)) {
-        await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
-        continue;
+      let failure;
+      let retry;
+      try {
+        const response = await fetch(url, { method, body: form, signal: AbortSignal.timeout(10 * 60_000) });
+        const text = await response.text();
+        if (response.ok) return text ? JSON.parse(text) : null;
+        failure = new Error(`${method} ${route} → ${response.status} ${text.slice(0, 300)}`);
+        retry = response.status >= 500 || response.status === 429;
+      } catch (error) {
+        failure = new Error(`${method} ${route} → ${error.cause?.code ?? error.name}: ${error.message}`);
+        retry = true;
       }
-      throw new Error(`${method} ${route} → ${response.status} ${text.slice(0, 300)}`);
+      if (!retry || attempt >= 3) throw failure;
+      console.warn(`  ${failure.message}，${5 * attempt} 秒后再试`);
+      await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
     }
   };
   const fields = (values) => {
@@ -187,6 +201,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
   run().catch((error) => {
     console.error(`✗ ${error.message}`);
+    // 在 Actions 里变成 annotation：不登录也能从公开接口读到（check-runs/<id>/annotations）
+    if (process.env.GITHUB_ACTIONS) console.log(`::error title=Gitee::${error.message.replace(/\r?\n/g, " ")}`);
     process.exit(1);
   });
 }
