@@ -443,13 +443,13 @@ export function EmojiPicker({
           className="scroll-thin max-h-[322px] overflow-y-auto overscroll-contain px-2 pb-1.5 pt-1"
         >
           {sections.length === 0 ? (
-            <p className="px-2 py-8 text-center text-[12.5px] text-muted">
+            <p className="px-2 py-8 text-center text-[13px] text-muted">
               没有找到「{query.trim()}」
             </p>
           ) : (
             sections.map((section) => (
               <div key={section.id} role="group" aria-label={section.label}>
-                <p className="px-1.5 pb-0.5 pt-1.5 text-[10.5px] font-medium tracking-[0.05em] text-faint">
+                <p className="px-1.5 pb-0.5 pt-1.5 text-[12px] font-medium tracking-[0.05em] text-faint">
                   {section.label}
                 </p>
                 <div className="grid grid-cols-6">
@@ -501,11 +501,11 @@ export function EmojiPicker({
           )}
         </div>
 
-        <div className="flex h-[34px] items-center gap-2 border-t border-line px-3 text-[11px] text-faint">
+        <div className="flex h-[34px] items-center gap-2 border-t border-line px-3 text-[12px] text-faint">
           {current ? (
             <>
               <span className="truncate font-medium text-body">{current.name}</span>
-              <span className="truncate font-mono text-[10.5px]">{current.shortcode}</span>
+              <span className="truncate font-mono text-[11px]">{current.shortcode}</span>
             </>
           ) : null}
           {/* 回车画成图标，不用 ↵：正文字体里没有这个字，第一次画它浏览器要把系统字体

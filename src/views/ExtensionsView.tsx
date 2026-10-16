@@ -75,7 +75,7 @@ export function ExtensionsView() {
             <button
               type="button"
               onClick={() => inputRef.current?.click()}
-              className="flex h-9 items-center gap-2 rounded-lg bg-ink px-3.5 text-[12.5px]
+              className="flex h-9 items-center gap-2 rounded-lg bg-ink px-3.5 text-[13px]
                        font-medium text-canvas transition-opacity hover:opacity-85"
             >
               <Upload size={14} />
@@ -107,7 +107,7 @@ export function ExtensionsView() {
                   type="button"
                   onClick={() => setCategory(value)}
                   className={cn(
-                    "rounded-md px-2.5 py-1.5 text-[11.5px] transition-colors",
+                    "rounded-md px-2.5 py-1.5 text-[12px] transition-colors",
                     category === value
                       ? "bg-canvas font-medium text-ink shadow-card"
                       : "text-muted",
@@ -182,16 +182,14 @@ function ExtensionCard({
             <h2 className="truncate text-[16px] font-semibold text-ink">{extension.name}</h2>
             {extension.verified && <ShieldCheck size={14} className="shrink-0 text-success" />}
           </div>
-          <p className="mt-0.5 text-[10.5px] text-faint">
+          <p className="mt-0.5 text-[12px] text-faint">
             {extension.author} · v{extension.version}
           </p>
         </div>
       </div>
-      <p className="mt-4 line-clamp-2 text-[12.5px] leading-[1.7] text-muted">
-        {extension.summary}
-      </p>
+      <p className="mt-4 line-clamp-2 text-[13px] leading-[1.7] text-muted">{extension.summary}</p>
       <div className="mt-auto flex items-end justify-between gap-3 pt-4">
-        <span className="rounded bg-raised/60 px-2 py-1 text-[10px] text-muted">
+        <span className="rounded bg-raised/60 px-2 py-1 text-[12px] text-muted">
           {CATEGORY_LABEL[extension.category]}
         </span>
         <div className="flex items-center gap-1.5">
@@ -208,7 +206,7 @@ function ExtensionCard({
           <button
             type="button"
             onClick={onDownload}
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-raised px-3 text-[11.5px]
+            className="flex h-8 items-center gap-1.5 rounded-lg bg-raised px-3 text-[12px]
                        font-medium text-ink hover:bg-line-strong"
           >
             <Download size={13} />

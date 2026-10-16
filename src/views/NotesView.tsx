@@ -505,7 +505,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={tween.fast}
-                    className="truncate text-[25px] font-bold leading-tight tracking-[-0.02em] text-ink"
+                    className="truncate font-display text-[25px] font-bold leading-tight text-ink"
                   >
                     {folder ? nameOf(folder) : ROOT_LABEL}
                   </motion.span>
@@ -892,14 +892,14 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
       >
         {nameOf(path)}
         {hint && parentOf(path) && (
-          <span className="ml-1.5 text-[11.5px] font-normal text-faint">
+          <span className="ml-1.5 text-[12px] font-normal text-faint">
             {folderLabel(parentOf(path))}
           </span>
         )}
       </span>
       <span
         className={cn(
-          "relative z-10 min-w-5 text-right text-[11.5px] tabular-nums text-faint transition-opacity duration-[150ms]",
+          "relative z-10 min-w-5 text-right text-[12px] tabular-nums text-faint transition-opacity duration-[150ms]",
           menuOpen ? "opacity-0" : "group-hover:opacity-0",
         )}
       >
@@ -1015,14 +1015,14 @@ const TreeNoteRow = memo(function TreeNoteRow({
       </span>
       <span
         className={cn(
-          "relative z-10 min-w-0 flex-1 truncate text-[12.5px]",
+          "relative z-10 min-w-0 flex-1 truncate text-[13px]",
           selected ? "font-medium text-ink" : "text-body",
         )}
       >
         {title}
       </span>
       {note.conflictOf && (
-        <span className="relative z-10 shrink-0 text-[10.5px] font-medium text-warning">副本</span>
+        <span className="relative z-10 shrink-0 text-[12px] font-medium text-warning">副本</span>
       )}
       {note.isPinned && (
         <Pin size={10.5} strokeWidth={2} className="relative z-10 rotate-45 text-accent" />
@@ -1149,9 +1149,9 @@ function NoteDragGhost() {
       className="otw-drag-ghost pointer-events-none fixed z-[60] max-w-[230px] rounded-lg bg-canvas px-[11px] pt-[7px] pb-2
                  shadow-float ring-1 ring-line-strong"
     >
-      <span className="block truncate text-[12.5px] font-semibold text-ink">{title}</span>
+      <span className="block truncate text-[13px] font-semibold text-ink">{title}</span>
       <span
-        className={cn("block truncate text-[11px]", target !== null ? "text-accent" : "text-faint")}
+        className={cn("block truncate text-[12px]", target !== null ? "text-accent" : "text-faint")}
       >
         {target !== null ? `移到「${folderLabel(target)}」` : "拖到文件夹上"}
       </span>
@@ -1260,13 +1260,13 @@ const NoteCard = memo(function NoteCard({
               冲突副本显示原文的标题，副本的身份和时间放在摘要前面的标签里 */}
           <span
             className={cn(
-              "block truncate text-[13.5px] font-semibold leading-[1.45]",
+              "block truncate text-[14px] font-semibold leading-[1.45]",
               selected ? "text-ink" : "text-ink/90",
             )}
           >
             {title}
           </span>
-          <span className="mt-[3px] flex min-w-0 items-center text-[11.5px] leading-[1.45] text-muted">
+          <span className="mt-[3px] flex min-w-0 items-center text-[12px] leading-[1.45] text-muted">
             {showFolder && <FolderChip path={where} />}
             <span className="min-w-0 truncate">
               {note.conflictOf && <ConflictTag title={note.title} />}
@@ -1360,7 +1360,7 @@ function FolderChip({ path }: { path: string }) {
     <span
       title={folderLabel(path)}
       className="mr-1.5 inline-flex max-w-[60%] shrink-0 items-center gap-[3px] rounded-[4px] bg-raised/70 py-px pr-[5px] pl-1
-                 text-[10.5px] font-medium text-muted"
+                 text-[12px] font-medium text-muted"
     >
       <Folder size={10} strokeWidth={2} className="shrink-0" />
       <span className="truncate">{nameOf(path)}</span>
@@ -1387,7 +1387,7 @@ const CONFLICT_TIME_RE = /冲突\s*(\d{4})-(\d{2})-(\d{2})\s*(\d{2})(\d{2})/;
 export function ConflictTag({ title }: { title: string }) {
   const time = CONFLICT_TIME_RE.exec(title);
   return (
-    <span className="mr-1.5 inline-block rounded-[4px] bg-warning/15 px-1 text-[10.5px] font-medium text-warning">
+    <span className="mr-1.5 inline-block rounded-[4px] bg-warning/15 px-1 text-[12px] font-medium text-warning">
       冲突副本
       {time && ` · ${Number(time[2])}月${Number(time[3])}日 ${time[4]}:${time[5]}`}
     </span>
@@ -1424,8 +1424,8 @@ export function EmptyResult({
           <EmptyState size="sm" art="search" title="没有匹配的内容" hint="试试更短的关键词" />
         ) : (
           <div className="text-center">
-            <p className="text-[12.5px] text-muted">{emptyTitle}</p>
-            <p className="mt-1 text-[11.5px] text-faint">{emptyHint}</p>
+            <p className="text-[13px] text-muted">{emptyTitle}</p>
+            <p className="mt-1 text-[12px] text-faint">{emptyHint}</p>
           </div>
         )}
       </motion.div>

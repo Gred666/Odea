@@ -144,12 +144,12 @@ export function FolderPicker({
           }}
           placeholder={mode === "jump" ? "跳到文件夹…" : "移到哪个文件夹…"}
           aria-label={mode === "jump" ? "跳到文件夹" : "移到哪个文件夹"}
-          className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-faint"
+          className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-faint"
         />
       </div>
 
       {mode === "move" && noteTitle && (
-        <div className="truncate px-3 pb-0.5 pt-2 text-[11px] text-faint">
+        <div className="truncate px-3 pb-0.5 pt-2 text-[12px] text-faint">
           移动「{noteTitle}」到
         </div>
       )}
@@ -182,7 +182,7 @@ export function FolderPicker({
               onClick={() => pick(entry)}
               style={{ paddingLeft: 8 + entry.depth * 14 }}
               className={cn(
-                "flex h-[30px] w-full items-center gap-2 rounded-md pr-2 text-left text-[12.5px]",
+                "flex h-[30px] w-full items-center gap-2 rounded-md pr-2 text-left text-[13px]",
                 off ? "cursor-default text-faint" : "text-body",
                 index === active && !off && "bg-raised/70 text-ink",
                 isCurrent && mode === "jump" && "text-accent",
@@ -200,9 +200,9 @@ export function FolderPicker({
                 {entry.path ? nameOf(entry.path) : ROOT_LABEL}
               </span>
               {entry.hint && (
-                <span className="min-w-0 truncate text-[11px] text-faint">{entry.hint}</span>
+                <span className="min-w-0 truncate text-[12px] text-faint">{entry.hint}</span>
               )}
-              <span className="ml-auto shrink-0 pl-2 text-[11px] tabular-nums text-faint">
+              <span className="ml-auto shrink-0 pl-2 text-[12px] tabular-nums text-faint">
                 {off ? (
                   "当前位置"
                 ) : isCurrent && mode === "jump" ? (
@@ -216,7 +216,7 @@ export function FolderPicker({
         })}
       </div>
 
-      <div className="flex shrink-0 gap-3 border-t border-line px-3 pb-2 pt-[7px] text-[11px] text-faint">
+      <div className="flex shrink-0 gap-3 border-t border-line px-3 pb-2 pt-[7px] text-[12px] text-faint">
         <span>
           <Kbd>↑↓</Kbd>选择
         </span>
@@ -253,7 +253,7 @@ function entriesFor(folders: string[], query: string): Entry[] {
 
 function Kbd({ children }: { children: string }) {
   return (
-    <kbd className="mr-1 rounded border border-line-strong px-1 font-mono text-[10px]">
+    <kbd className="mr-1 rounded border border-line-strong px-1 font-mono text-[11px]">
       {children}
     </kbd>
   );

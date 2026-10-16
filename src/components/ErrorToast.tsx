@@ -49,7 +49,7 @@ export function ErrorToast() {
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           className="pointer-events-auto flex max-w-[520px] items-center gap-3 rounded-xl
-                     bg-ink py-2 pl-3.5 pr-2 text-[12.5px] text-canvas shadow-float"
+                     bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
         >
           <AlertTriangle size={13} strokeWidth={2} className="shrink-0 text-danger" />
           <span className="min-w-0 truncate" title={error}>
@@ -113,7 +113,7 @@ export function NoticeToast() {
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           className="pointer-events-auto flex max-w-[560px] items-center gap-3 rounded-xl
-                     bg-ink py-2 pl-3.5 pr-2 text-[12.5px] text-canvas shadow-float"
+                     bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
         >
           <Info size={13} strokeWidth={2} className="shrink-0 text-accent" />
           <span className="min-w-0 truncate" title={notice}>

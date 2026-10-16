@@ -187,7 +187,7 @@ function RailOutline({
       )}
     >
       <motion.p
-        className="mb-3 shrink-0 pl-3 text-[10.5px] tracking-[0.08em] text-faint"
+        className="mb-3 shrink-0 pl-3 text-[12px] tracking-[0.08em] text-faint"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={tween.base}

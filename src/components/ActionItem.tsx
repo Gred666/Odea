@@ -53,7 +53,7 @@ export function ActionItem({
         <span className="min-w-0 flex-1 pt-[1px]">
           <motion.span
             className={cn(
-              "block truncate text-[14.5px] leading-[1.5]",
+              "block truncate text-[15px] leading-[1.5]",
               done ? "text-faint" : "text-ink",
             )}
             animate={{ x: done ? 1.5 : 0 }}
@@ -65,7 +65,7 @@ export function ActionItem({
           {task.meta && (
             <span
               className={cn(
-                "mt-[3px] block truncate text-[11.5px] leading-[1.4] transition-colors duration-200",
+                "mt-[3px] block truncate text-[12px] leading-[1.4] transition-colors duration-200",
                 done ? "text-faint/70" : "text-muted",
               )}
             >

@@ -35,7 +35,7 @@ export function ListColumn({
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={tween.base}
-              className="truncate text-[25px] font-bold leading-tight tracking-[-0.02em] text-ink"
+              className="truncate font-display text-[25px] font-bold leading-tight text-ink"
             >
               {title}
             </motion.h2>
@@ -104,7 +104,7 @@ export function ColumnButton({
         "bg-canvas text-muted transition-colors duration-[140ms] hover:border-faint/40",
         "hover:text-ink active:bg-raised/60",
         "data-[state=open]:border-faint/40 data-[state=open]:bg-raised/60 data-[state=open]:text-ink",
-        wide ? "px-2.5 text-[11.5px]" : "w-[30px]",
+        wide ? "px-2.5 text-[12px]" : "w-[30px]",
         className,
       )}
       {...rest}
@@ -160,7 +160,7 @@ export function GroupLabel({ icon, text }: { icon?: ReactNode; text: string }) {
   return (
     <div className="flex items-center gap-1.5 px-3 pb-1.5 pt-2">
       {icon && <span className="text-faint">{icon}</span>}
-      <span className="text-[11px] font-medium tracking-[0.04em] text-faint">{text}</span>
+      <span className="text-[12px] font-medium tracking-[0.04em] text-faint">{text}</span>
     </div>
   );
 }

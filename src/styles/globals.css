@@ -7,11 +7,13 @@
    ============================================================ */
 
 @theme {
-  /* ---------- 中性色（暖调，带一点黄绿，不是纯灰） ---------- */
+  /* ---------- 中性色（暖调，带一点黄绿，不是纯灰） ----------
+     对比度目标（WCAG / APCA）和每一档能用在哪，见 docs/排版规范.md §6。
+     需要读的小字至少用 muted；faint 只给占位符、禁用态和刻意做淡的标记 */
   --color-ink: #1a1a18; /* 标题、最强文字 */
   --color-body: #353532; /* 正文 */
   --color-muted: #74746e; /* 次级文字、元信息 */
-  --color-faint: #a3a39b; /* 占位符、最弱文字 */
+  --color-faint: #91918a; /* 占位符、最弱文字（原 #a3a39b：2.5:1，小字看不清） */
 
   --color-canvas: #ffffff; /* 主内容区 */
   --color-panel: #fafaf8; /* 中列表栏 */
@@ -56,11 +58,18 @@
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out-sub: cubic-bezier(0.65, 0, 0.35, 1);
 
-  /* ---------- 字体 ---------- */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI",
+  /* ---------- 字体（取值和依据见 docs/排版规范.md §1） ----------
+     只写系统自带的字体：以前栈首的 Inter 没打包，Windows 上实际落到 Segoe UI Variable Display。
+     Segoe UI Variable 分光学尺寸：正文用 Text，Display 只给 ≥ 20px 的标题（--font-display）。
+     等宽栈末尾必须有中文字体 —— 否则中文落到通用的 monospace，中文 Windows 上是新宋体。 */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC",
     system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Mono", Consolas, "Liberation Mono",
+  --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC",
+    system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, "SFMono-Regular", Consolas,
+    "Liberation Mono", "Microsoft YaHei UI", "PingFang SC", "Noto Sans Mono CJK SC", "Noto Sans SC",
     monospace;
 
   /* ---------- 阴影：极克制，只用于浮层 ---------- */
@@ -82,9 +91,9 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --color-ink: #eeeee9;
-    --color-body: #d2d2cb;
-    --color-muted: #8d8d85;
-    --color-faint: #61615b;
+    --color-body: #d8d8d1;
+    --color-muted: #a8a8a0;
+    --color-faint: #7f7f78;
 
     --color-canvas: #1e1e1c;
     --color-panel: #1a1a18;
@@ -94,8 +103,8 @@
     --color-line-strong: #35352f;
     --color-control-edge: #4c4c45;
 
-    --color-accent: #6b93f0;
-    --color-accent-hover: #82a4f4;
+    --color-accent: #82a4f4;
+    --color-accent-hover: #9ab6f7;
     --color-accent-ink: #10182b;
     --color-accent-wash: #1c2437;
     --color-accent-wash-2: #1a2133;
@@ -116,9 +125,9 @@
 
 :root[data-theme="dark"] {
   --color-ink: #eeeee9;
-  --color-body: #d2d2cb;
-  --color-muted: #8d8d85;
-  --color-faint: #61615b;
+  --color-body: #d8d8d1;
+  --color-muted: #a8a8a0;
+  --color-faint: #7f7f78;
 
   --color-canvas: #1e1e1c;
   --color-panel: #1a1a18;
@@ -128,8 +137,8 @@
   --color-line-strong: #35352f;
   --color-control-edge: #4c4c45;
 
-  --color-accent: #6b93f0;
-  --color-accent-hover: #82a4f4;
+  --color-accent: #82a4f4;
+  --color-accent-hover: #9ab6f7;
   --color-accent-ink: #10182b;
   --color-accent-wash: #1c2437;
   --color-accent-wash-2: #1a2133;
@@ -176,7 +185,6 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  font-feature-settings: "cv02", "cv03", "cv04", "cv11"; /* Inter 的字形优化 */
   /* 桌面应用：全局禁止误选中，正文区域再单独开启 */
   user-select: none;
   -webkit-user-select: none;
@@ -292,42 +300,51 @@ body {
 }
 
 /* ============================================================
-   排版：文档正文
-   中文需要比英文更大的行高和更松的字距
+   排版：只读正文
+   主要是编辑器分包加载时的占位（DocumentView 的 DocumentPreview），也给模板预览用。
+   字号、行高、标题比例和编辑器一致（docs/排版规范.md §2、§3）：不一致的话，
+   编辑器挂上的那一刻整篇会跳一下。段距 = 编辑器里空的那一行。
    ============================================================ */
 
 .prose-doc {
   color: var(--color-body);
-  font-size: 15.5px;
-  line-height: 1.85;
+  font-size: 17px;
+  line-height: 1.7;
   letter-spacing: 0.012em;
+  text-align: justify;
+  text-autospace: normal;
 }
 .prose-doc > * + * {
-  margin-top: 1.15em;
+  margin-top: 1.7em;
 }
-.prose-doc h2 {
+.prose-doc :is(h1, h2, h3, h4, h5, h6) {
   color: var(--color-ink);
-  font-size: 21px;
-  font-weight: 650;
-  line-height: 1.45;
-  letter-spacing: -0.005em;
-  margin-top: 2em;
-  margin-bottom: 0.35em;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-align: start;
+}
+.prose-doc :is(h1, h2, h3) {
+  font-family: var(--font-display);
 }
 .prose-doc h1 {
-  color: var(--color-ink);
-  font-size: 26px;
-  font-weight: 680;
-  line-height: 1.35;
-  letter-spacing: -0.015em;
+  font-size: 1.75em;
+  line-height: 1.3;
 }
-.prose-doc h4,
+.prose-doc h2 {
+  font-size: 1.45em;
+  line-height: 1.35;
+}
+.prose-doc h4 {
+  font-size: 1.1em;
+  line-height: 1.55;
+}
 .prose-doc h5,
 .prose-doc h6 {
-  color: var(--color-ink);
-  font-size: 15.5px;
-  font-weight: 620;
-  line-height: 1.6;
+  font-size: 1em;
+  line-height: 1.7;
+}
+.prose-doc h6 {
+  color: var(--color-muted);
 }
 .prose-doc .prose-table-wrap {
   overflow-x: auto;
@@ -337,7 +354,8 @@ body {
   border-collapse: collapse;
   border: 1px solid var(--color-line-strong);
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 15px;
+  text-align: start;
 }
 .prose-doc th,
 .prose-doc td {
@@ -348,7 +366,7 @@ body {
 .prose-doc th {
   background: var(--color-panel);
   color: var(--color-ink);
-  font-weight: 650;
+  font-weight: 600;
 }
 .prose-doc ul.prose-tasks {
   padding-left: 0.1em;
@@ -367,16 +385,12 @@ body {
   translate: 0 2px;
 }
 .prose-doc h3 {
-  color: var(--color-ink);
-  font-size: 17px;
-  font-weight: 620;
-  line-height: 1.5;
-  margin-top: 1.7em;
-  margin-bottom: 0.3em;
+  font-size: 1.22em;
+  line-height: 1.45;
 }
 .prose-doc strong {
   color: var(--color-ink);
-  font-weight: 620;
+  font-weight: 700;
 }
 .prose-doc em {
   font-style: italic;
@@ -392,11 +406,16 @@ body {
 }
 .prose-doc code {
   font-family: var(--font-mono);
-  font-size: 0.88em;
+  font-size: 0.9em;
   background: var(--color-rail);
-  padding: 0.15em 0.4em;
+  padding: 0.1em 0.3em;
   border-radius: var(--radius-xs);
   color: var(--color-ink);
+}
+/* 代码逐字准确：不两端对齐、不自动加中西间距 */
+.prose-doc :is(code, pre, kbd) {
+  text-align: start;
+  text-autospace: no-autospace;
 }
 .prose-doc pre {
   background: var(--color-rail);
@@ -404,8 +423,8 @@ body {
   border-radius: var(--radius-lg);
   padding: 14px 16px;
   overflow-x: auto;
-  font-size: 13.5px;
-  line-height: 1.65;
+  font-size: 0.9em;
+  line-height: 1.5;
 }
 .prose-doc pre code {
   background: none;
@@ -422,11 +441,8 @@ body {
 .prose-doc ol {
   list-style: decimal;
 }
-.prose-doc li + li {
-  margin-top: 0.35em;
-}
 .prose-doc li::marker {
-  color: var(--color-faint);
+  color: var(--color-muted);
 }
 .prose-doc hr {
   border: none;
@@ -444,7 +460,7 @@ body {
 }
 .prose-notes h2,
 .prose-notes h3 {
-  font-size: 14.5px;
+  font-size: 15px;
   margin-top: 1.3em;
   margin-bottom: 0.2em;
 }
@@ -479,7 +495,7 @@ body {
 }
 .prose-doc .callout-label {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.06em;
   color: var(--color-accent);
@@ -488,7 +504,7 @@ body {
 .prose-doc .callout-body {
   font-size: 18px;
   line-height: 1.65;
-  font-weight: 550;
+  font-weight: 600;
   color: var(--color-ink);
   letter-spacing: 0.005em;
 }
@@ -771,7 +787,7 @@ body.otw-dragging .otw-row-actions {
   color: var(--color-body);
   font-family: var(--font-sans);
   font-size: var(--otw-body-size);
-  line-height: 1.4;
+  line-height: 1.7;
   letter-spacing: 0.012em;
 }
 
@@ -779,14 +795,15 @@ body.otw-dragging .otw-row-actions {
   outline: none;
 }
 
-/* 正文行高 1.4（17px 字一行 23.8px）。以前 .cm-editor 上写的是 1.82，但 CodeMirror 自带
-   主题给 .cm-scroller 写了 1.4，正文其实一直按 1.4 排；习惯了这个密度，就定成 1.4
-   （2026-10-06）。写在这里，免得再有人照着 1.82 去算留白（自带主题插在 <head> 最前面，
-   同样特异度时这里的规则说了算）。行内带底色的样式上下不能加 padding，见 .cm-otw-wikilink */
+/* 正文行高 1.7（17px 字一行 28.9px），依据见 docs/排版规范.md §2。CodeMirror 自带主题给
+   .cm-scroller 写了 1.4，真正起作用的是这里（自带主题插在 <head> 最前面，同样特异度时
+   这里的规则说了算），所以 .cm-editor 和这里要一起改。
+   2026-10-06 到 10-16 用过 1.4（一行 23.8px）：中文是满格的方块字，没有西文的上下伸部
+   留白，1.4 偏挤；脚注徽章也被逼小到 10.5px 才塞得进一行。 */
 .otw-editor .cm-scroller {
   overflow: visible;
   font-family: inherit;
-  line-height: 1.4;
+  line-height: 1.7;
 }
 
 .otw-editor .cm-content {
@@ -794,6 +811,29 @@ body.otw-dragging .otw-row-actions {
   padding: 0 0 72px;
   /* 系统光标藏掉，由 editor/smoothCaret.ts 画（见下面「光标」） */
   caret-color: transparent;
+  /* 正文两端对齐（段落最后一行照样左对齐），汉字和西文、数字之间自动留约 1/8 字宽
+     （已经手打了空格的地方不会再加）。依据见 docs/排版规范.md §2 */
+  text-align: justify;
+  text-autospace: normal;
+}
+/* 不跟着两端对齐、不自动加间距的：标题（一般就一行，折行时左齐更像标题）、
+   代码（要逐字准确）、替身（表格、目录、图表……各管各的对齐） */
+.otw-editor :is(.cm-otw-h1, .cm-otw-h2, .cm-otw-h3, .cm-otw-h4, .cm-otw-h5, .cm-otw-h6),
+.otw-editor .cm-content :where([contenteditable="false"]) {
+  text-align: start;
+}
+.otw-editor
+  :is(
+    .cm-otw-code,
+    .cm-otw-code-block,
+    .cm-otw-fence-source,
+    .cm-otw-kbd,
+    .cm-otw-frontmatter,
+    .cm-otw-html,
+    .cm-otw-html-block
+  ) {
+  text-align: start;
+  text-autospace: no-autospace;
 }
 
 /* 后面还跟着别的内容（日历当日安排）：不撑高、不留大段底部空白，
@@ -1039,7 +1079,7 @@ body.otw-dragging .otw-row-actions {
    1em 高、text-top 对齐）会顶出标题偏紧的行高（1.225），把这一行撑高 5–7px；
    光标一放上去 `##` 露出来、占位图片消失，这一行缩回去，下面整篇跟着往上跳。
    贴着行顶对齐就撑不出去了。正文里 1em 高的占位图片矮于字体框（17px 字的字体框约 22px，
-   编辑器实际行高 1.4 = 23.8px，见 .cm-otw-wikilink 的注释），撑不动，不用管。 */
+   正文行高 1.7 = 28.9px），撑不动，不用管。 */
 .otw-editor
   :is(.cm-otw-h1, .cm-otw-h2, .cm-otw-h3, .cm-otw-h4, .cm-otw-h5, .cm-otw-h6)
   .cm-widgetBuffer {
@@ -1082,10 +1122,15 @@ body.otw-dragging .otw-row-actions {
 
 /* ---------- 标题 ---------- */
 
+/* 比例和依据见 docs/排版规范.md §3。字距 0：负字距是给西文大标题的，中文粗体会挤在一起
+   （clreq：紧排只用于杂志标题和广告）。字重 600：雅黑没有中间字重，中文落在粗体上 */
 .otw-editor :is(.cm-otw-h1, .cm-otw-h2, .cm-otw-h3, .cm-otw-h4, .cm-otw-h5, .cm-otw-h6) {
   color: var(--color-ink);
-  font-weight: 650;
-  letter-spacing: -0.015em;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.otw-editor :is(.cm-otw-h1, .cm-otw-h2, .cm-otw-h3) {
+  font-family: var(--font-display);
 }
 
 /* 悬停时在左侧浮出层级提示（H2），平时不占位、不可见 */
@@ -1136,40 +1181,37 @@ body.otw-dragging .otw-row-actions {
   transform: none;
 }
 
+/* 以前是 2.25 / 1.75 / 1.5 / 1.25 / 1 / 1（Typora 的 GitHub 主题）：上面已经压着 38px 的
+   文档标题，中文标题又一律是粗体，这么大显得很重 */
 .otw-editor .cm-otw-h1 {
   border-bottom: 1px solid var(--color-line);
   padding-bottom: 0.18em;
-  font-size: 2.25em;
-  line-height: 1.2;
+  font-size: 1.75em;
+  line-height: 1.3;
 }
 .otw-editor .cm-otw-h2 {
   border-bottom: 1px solid var(--color-line);
   padding-bottom: 0.16em;
-  font-size: 1.75em;
-  line-height: 1.225;
+  font-size: 1.45em;
+  line-height: 1.35;
 }
 .otw-editor .cm-otw-h3 {
-  font-size: 1.5em;
-  line-height: 1.43;
+  font-size: 1.22em;
+  line-height: 1.45;
 }
 .otw-editor .cm-otw-h4 {
-  font-size: 1.25em;
+  font-size: 1.1em;
   line-height: 1.55;
-  font-weight: 650;
 }
 .otw-editor .cm-otw-h5 {
   color: var(--color-body);
   font-size: 1em;
   line-height: 1.7;
-  font-weight: 650;
-  letter-spacing: 0;
 }
 .otw-editor .cm-otw-h6 {
   color: var(--color-muted);
   font-size: 1em;
   line-height: 1.7;
-  font-weight: 600;
-  letter-spacing: 0.01em;
 }
 
 /* ---------- 行内样式 ---------- */
@@ -1212,11 +1254,15 @@ body.otw-dragging .otw-row-actions {
 .otw-editor .cm-otw-sup {
   vertical-align: 0.55em;
 }
+/* 行内代码：中性底色 + 正文最深的字色，小一号（GitHub 0.85em、Typora 0.9em）。
+   以前是 1em 的红字（danger），满屏的 `/`、`[[` 读起来像报错。
+   不加左右 padding：这是 mark 装饰，反引号藏起来的地方会被拆成几段 span，每段都会多出一截 */
 .otw-editor .cm-otw-code {
   border-radius: 4px;
   background: var(--color-rail);
-  color: var(--color-danger);
+  color: var(--color-ink);
   font-family: var(--font-mono);
+  font-size: 0.9em;
 }
 .otw-editor .cm-otw-code-text {
   font-family: var(--font-mono);
@@ -1239,9 +1285,9 @@ body.otw-dragging .otw-row-actions {
 }
 
 /* [[双链]]：和只读排版里的 .otw-wikilink 同一副样子。
-   上下不留 padding：编辑器里一行只有 23.8px 高（正文行高 1.4，见 .cm-scroller），
-   字体框已经占了 22px，再加上下 0.08em，底色就冒出这一行 1.36px，
-   盖住上一行链接的下划线（后面的行画在前面的行上面）。 */
+   上下不留 padding：底色只盖字体框（17px 字约 22px 高），一行 28.9px 里上下各剩 3px 多，
+   折行时上下两行的底色不会连成一片。（行高 1.4 那阵子一行只有 23.8px，加了 padding
+   底色会冒出行框，盖住上一行链接的下划线。） */
 .otw-editor .cm-otw-wikilink {
   color: var(--color-ink);
   background: var(--color-accent-wash);
@@ -1311,8 +1357,8 @@ body.otw-dragging .otw-row-actions {
    GIF 那样带一圈白边。五官（i / ik）是色相混进墨色：亮色下偏深、暗色下偏亮。
 
    排版上它只占一个汉字的位置：外框 1em 高、和汉字一样落在基线下 0.12em，
-   行盒子永远不会被它撑高（正文行高只有 1.4，1.3em 的框加上下沉就会多出
-   半个像素，标题里多出 4px —— CodeMirror 的高度图就歪了）。图本身画成
+   行盒子永远不会被它撑高（1.3em 的框加上下沉，在行高偏紧的标题里会多出
+   4px —— CodeMirror 的高度图就歪了）。图本身画成
    1.3em，绝对定位压在这个框上，多出来的部分只是视觉溢出。动画只在 SVG
    里面动 transform / opacity / stroke-dashoffset，不改任何尺寸。
 
@@ -1418,17 +1464,17 @@ body.otw-dragging .otw-row-actions {
    每一行带脚注的正文都被撑高约 1.7px；光标一放上去徽章换回 `[^1]` 源码，这一行就
    缩回去，下面的正文跟着一抖。相对定位只挪画的位置、不参与行高。
 
-   但也不能抬出这一行自己的行框：正文行高只有 1.4（CodeMirror 的 .cm-scroller 定的），
-   上下各只有两三像素的余量。以前抬了 1.06em（徽章 16px 高），顶出行框 7.6px，
-   正好压在上一行字的下半截上。现在徽章缩到 10.5px 字、13px 高，底边落在汉字
-   中线附近，顶边收在行框里（量过：正文 17px 时离行框顶还有 1–2px）。 */
+   但也不能抬出这一行自己的行框，否则压在上一行字的下半截上（以前抬了 1.06em、
+   徽章 16px 高，顶出行框 7.6px）。行高 1.4 那阵子只能把徽章缩到 10.5px 字才塞得下；
+   行高 1.7 之后放回 12px 字（0.7em，最小字号见 docs/排版规范.md §7），
+   顶边仍收在行框里。 */
 .otw-editor .cm-otw-footnote.is-ref {
   position: relative;
-  top: -0.58em;
+  top: -0.55em;
   min-width: 1.3em;
   margin: 0 0.12em 0 0.06em;
   padding: 0 0.36em;
-  font-size: 0.62em;
+  font-size: 0.7em;
   line-height: 1.25;
   letter-spacing: 0;
 }
@@ -1473,7 +1519,7 @@ body.otw-dragging .otw-row-actions {
 }
 .otw-hovercard-label {
   color: var(--color-faint);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.06em;
   line-height: 1.5;
@@ -1487,7 +1533,7 @@ body.otw-dragging .otw-row-actions {
 .otw-hovercard-hint {
   margin-top: 5px;
   color: var(--color-faint);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.4;
 }
 @keyframes otw-hovercard-in {
@@ -1545,7 +1591,7 @@ body.otw-dragging .otw-row-actions {
   padding-right: 0.8em;
   color: var(--color-ink);
   font-size: 1.04em;
-  font-weight: 550;
+  font-weight: 600;
   line-height: 1.7;
   letter-spacing: 0.005em;
 }
@@ -1557,7 +1603,7 @@ body.otw-dragging .otw-row-actions {
   --callout-fill: color-mix(in srgb, var(--callout) 7%, transparent);
   color: var(--color-body);
   font-size: 1em;
-  font-weight: 450;
+  font-weight: 400;
 }
 .otw-editor .cm-otw-callout.is-tip {
   --callout: var(--color-success);
@@ -1585,8 +1631,8 @@ body.otw-dragging .otw-row-actions {
   gap: 5px;
   color: var(--callout);
   font-family: var(--font-sans);
-  font-size: 11.5px;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 600;
   letter-spacing: 0.07em;
   line-height: 1.6;
   text-transform: uppercase;
@@ -1609,15 +1655,17 @@ body.otw-dragging .otw-row-actions {
   padding-left: 14px;
   font-family: var(--font-mono);
   font-size: 0.9em;
+  /* 代码比正文排得紧（GitHub 1.45）：不跟正文的 1.7 走 */
+  line-height: 1.5;
 }
 .otw-editor .cm-otw-code-info {
   position: absolute;
   /* 和封口里的语言名同一个位置：封口框里上下居中 */
-  top: calc(var(--fence-gap) + (var(--fence-open) - 11px) / 2);
+  top: calc(var(--fence-gap) + (var(--fence-open) - 12px) / 2);
   right: 12px;
   color: var(--color-faint);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   line-height: 1;
 }
@@ -1761,7 +1809,7 @@ body.otw-dragging .otw-row-actions {
 .otw-editor .cm-otw-code-lang {
   color: var(--color-faint);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   line-height: 1;
   letter-spacing: 0.02em;
@@ -1776,7 +1824,7 @@ body.otw-dragging .otw-row-actions {
   padding: 3px 6px;
   color: var(--color-faint);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   line-height: 1;
   cursor: pointer;
@@ -1813,7 +1861,7 @@ body.otw-dragging .otw-row-actions {
 .otw-editor {
   --code-keyword: #8b3fc9;
   --code-string: #2f7d4f;
-  --code-comment: #9a9a92;
+  --code-comment: #8c8c85;
   --code-number: #b45d1f;
   --code-function: #2f63d8;
   --code-definition: #1f5fb8;
@@ -1829,7 +1877,7 @@ body.otw-dragging .otw-row-actions {
   :root:not([data-theme="light"]) .otw-editor {
     --code-keyword: #c792ea;
     --code-string: #98c379;
-    --code-comment: #6f6f68;
+    --code-comment: #8d8d85;
     --code-number: #e5a06b;
     --code-function: #82a4f4;
     --code-definition: #9cbcff;
@@ -1845,7 +1893,7 @@ body.otw-dragging .otw-row-actions {
 :root[data-theme="dark"] .otw-editor {
   --code-keyword: #c792ea;
   --code-string: #98c379;
-  --code-comment: #6f6f68;
+  --code-comment: #8d8d85;
   --code-number: #e5a06b;
   --code-function: #82a4f4;
   --code-definition: #9cbcff;
@@ -1911,8 +1959,8 @@ body.otw-dragging .otw-row-actions {
    CodeMirror 用 getBoundingClientRect()（边框盒）测量 widget 高度，
    margin 不在边框盒里，会让高度图比真实布局短，进而导致点击定位到错误的行。 */
 .otw-editor .cm-otw-table-block {
-  /* font-size 跟表格保持一致，0.9em 才能解析出和以前相同的 12.6px 留白。 */
-  font-size: 14px;
+  /* 和表格同一个字号：上下留白 0.9em 按它算（13.5px）。表格比正文小 2px，见 docs/排版规范.md §5 */
+  font-size: 15px;
   padding: 0.9em 0;
 }
 /* 表格的样子：一张圆角卡片，里面只有细细的横向分隔、极淡的竖向分隔；
@@ -1941,7 +1989,7 @@ body.otw-dragging .otw-row-actions {
   margin: 0;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
 }
 .otw-editor .cm-otw-table-widget th,
@@ -1962,7 +2010,7 @@ body.otw-dragging .otw-row-actions {
   padding-top: 8px;
   padding-bottom: 8px;
   color: var(--color-muted);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.03em;
   line-height: 1.5;
@@ -1983,7 +2031,6 @@ body.otw-dragging .otw-row-actions {
 }
 .otw-editor .cm-otw-table-widget .cm-otw-code {
   padding: 0 4px;
-  font-size: 0.92em;
 }
 /* CSV / TSV 顶上的标签栏：和代码块封口一个做法 —— 格式名、行列数、复制 */
 .otw-editor .cm-otw-table-bar {
@@ -1995,12 +2042,12 @@ body.otw-dragging .otw-row-actions {
   background: var(--color-panel);
   padding: 0 6px 0 14px;
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1;
 }
 .otw-editor .cm-otw-table-format {
   color: var(--color-muted);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.08em;
 }
 .otw-editor .cm-otw-table-meta {
@@ -2026,7 +2073,7 @@ body.otw-dragging .otw-row-actions {
   overflow-wrap: anywhere;
 }
 .otw-editor .cm-otw-table-widget th.is-editing {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   letter-spacing: 0;
 }
@@ -2313,7 +2360,7 @@ body.otw-dragging .otw-row-actions {
   padding: 0 8px;
   color: var(--color-faint);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
   line-height: 1.4;
@@ -2445,7 +2492,7 @@ body.otw-dragging .otw-row-actions {
 .otw-editor .cm-otw-frontmatter-label {
   color: var(--color-faint);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
   line-height: 1;
@@ -2514,8 +2561,8 @@ body.otw-dragging .otw-row-actions {
    不加留白、字号跟源码行走，光标进出时下面不跳。小标记本身的大小不变。 */
 .otw-editor .cm-otw-comment-block {
   display: flex;
-  /* 正文行高 1.4（CodeMirror 的 .cm-scroller 定的）；小标记在这一行里上下居中 */
-  height: 1.4em;
+  /* 和正文一行一样高（行高 1.7，见 .cm-scroller）；小标记在这一行里上下居中 */
+  height: calc(var(--otw-body-size) * 1.7);
   align-items: center;
   padding: 0;
   font-size: 0.9em;
@@ -2538,7 +2585,7 @@ body.otw-dragging .otw-row-actions {
 .otw-editor .cm-otw-html-widget :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.5em 0 0.25em;
   color: var(--color-ink);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.015em;
   line-height: 1.3;
 }
@@ -2564,7 +2611,7 @@ body.otw-dragging .otw-row-actions {
 /* 和 Markdown 的定义列表（.cm-otw-dt / .cm-otw-dd）一个样子 */
 .otw-editor .cm-otw-html-widget dt {
   color: var(--color-ink);
-  font-weight: 650;
+  font-weight: 600;
 }
 .otw-editor .cm-otw-html-widget dd {
   padding-left: 1.6em;
@@ -2581,7 +2628,7 @@ body.otw-dragging .otw-row-actions {
   border-collapse: collapse;
   border: 1px solid var(--color-line-strong);
   background: var(--color-canvas);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
 }
 .otw-editor .cm-otw-html-widget :is(th, td) {
@@ -2594,14 +2641,14 @@ body.otw-dragging .otw-row-actions {
   border-bottom-color: var(--color-line-strong);
   background: color-mix(in srgb, var(--color-panel) 55%, var(--color-rail));
   color: var(--color-muted);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.03em;
 }
 .otw-editor .cm-otw-html-widget caption {
   padding-bottom: 6px;
   color: var(--color-muted);
-  font-size: 12.5px;
+  font-size: 13px;
   text-align: left;
 }
 .otw-editor .cm-otw-html-widget blockquote {
@@ -2751,7 +2798,7 @@ body.otw-dragging .otw-row-actions {
 
 .otw-editor .cm-otw-dt {
   color: var(--color-ink);
-  font-weight: 650;
+  font-weight: 600;
 }
 .otw-editor .cm-otw-dd {
   padding-left: 1.6em;
@@ -2768,7 +2815,7 @@ body.otw-dragging .otw-row-actions {
 .otw-editor .cm-otw-callout-title {
   margin-left: 0.4em;
   color: var(--color-ink);
-  font-weight: 650;
+  font-weight: 600;
 }
 .otw-editor .cm-otw-callout-badge.is-collapsed,
 .otw-editor .cm-otw-callout-badge.is-expanded {
@@ -2815,7 +2862,7 @@ body.otw-dragging .otw-row-actions {
   padding: 0;
   color: var(--color-muted);
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: 13px;
   cursor: pointer;
   transition: color var(--duration-fast) var(--ease-out-quint);
 }
@@ -2875,7 +2922,7 @@ body.otw-dragging .otw-row-actions {
   padding: 6px;
   box-shadow: var(--shadow-float);
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.4;
   letter-spacing: 0.01em;
   cursor: default;
@@ -2960,7 +3007,7 @@ body.otw-dragging .otw-row-actions {
   flex: none;
   padding: 0 4px;
   color: var(--color-faint);
-  font-size: 11.5px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -3068,7 +3115,7 @@ body.otw-dragging .otw-row-actions {
   padding: 6px 34px 6px 12px;
   box-shadow: var(--shadow-float);
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.4;
   animation: otw-search-in var(--duration-fast) var(--ease-out-quint) both;
 }

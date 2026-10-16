@@ -292,7 +292,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
               onDone();
               setSyncOpen(true);
             }}
-            className="mt-4 rounded-lg bg-ink px-3.5 py-1.5 text-[12.5px] font-medium text-canvas
+            className="mt-4 rounded-lg bg-ink px-3.5 py-1.5 text-[13px] font-medium text-canvas
                        transition-opacity duration-[140ms] hover:opacity-90"
           >
             开启同步…
@@ -345,12 +345,12 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
               >
                 {formatRelativeTime(item.time)}
                 {texts[item.blob] !== undefined && texts[item.blob] === current && (
-                  <span className="rounded bg-ink/[0.06] px-1 text-[10.5px] font-normal text-muted">
+                  <span className="rounded bg-ink/[0.06] px-1 text-[12px] font-normal text-muted">
                     和现在一样
                   </span>
                 )}
               </span>
-              <span className="mt-0.5 block truncate text-[11.5px] text-faint">
+              <span className="mt-0.5 block truncate text-[12px] text-faint">
                 {item.mine ? "这台电脑" : item.device}
                 {renamed && ` · 当时叫「${item.title}」`}
               </span>
@@ -358,7 +358,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
           );
         })}
         {history.more && (
-          <p className="px-2.5 py-2 text-[11px] leading-[1.6] text-faint">更早的版本没有列出来</p>
+          <p className="px-2.5 py-2 text-[12px] leading-[1.6] text-faint">更早的版本没有列出来</p>
         )}
       </div>
 
@@ -366,11 +366,11 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-4 py-2.5">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[12.5px] text-body">
+            <p className="truncate text-[13px] text-body">
               {version && formatTimestampFull(version.time)}
               <span className="text-faint"> · {version?.mine ? "这台电脑" : version?.device}</span>
             </p>
-            <p className="mt-0.5 font-mono text-[10.5px] text-faint">
+            <p className="mt-0.5 font-mono text-[12px] text-faint">
               {text === undefined ? (
                 "正在读这一版…"
               ) : same ? (
@@ -397,7 +397,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
           />
           {confirming ? (
             <span className="flex items-center gap-1.5 rounded-lg bg-warning/10 py-1 pl-2.5 pr-1">
-              <span className="text-[11.5px] text-body">现在的正文会换成这一版，可以撤销</span>
+              <span className="text-[12px] text-body">现在的正文会换成这一版，可以撤销</span>
               <button
                 type="button"
                 disabled={busy}
@@ -421,7 +421,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
               type="button"
               disabled={text === undefined || same}
               onClick={() => setConfirming(true)}
-              className="rounded-lg bg-ink px-3 py-1.5 text-[12.5px] font-medium text-canvas
+              className="rounded-lg bg-ink px-3 py-1.5 text-[13px] font-medium text-canvas
                          transition-opacity duration-[140ms] hover:opacity-90 disabled:opacity-35"
             >
               恢复这一版

@@ -184,7 +184,7 @@ function IndexRow({ collapsed, reduce }: { collapsed: boolean; reduce: boolean }
                 !reduce && "animate-spin [animation-duration:1.6s]",
               )}
             />
-            <RowLabel className="text-[12.5px] tabular-nums">{label}</RowLabel>
+            <RowLabel className="text-[13px] tabular-nums">{label}</RowLabel>
           </div>
         </motion.div>
       )}
@@ -237,7 +237,7 @@ function UpdateRow({ collapsed, reduce }: { collapsed: boolean; reduce: boolean 
             >
               <CircleFadingArrowUp size={15} strokeWidth={1.9} />
             </motion.span>
-            <RowLabel className="text-[12.5px]">{label}</RowLabel>
+            <RowLabel className="text-[13px]">{label}</RowLabel>
           </button>
         </motion.div>
       )}
@@ -305,7 +305,7 @@ function SyncRow({ collapsed, reduce }: { collapsed: boolean; reduce: boolean })
             status.state === "syncing" && !reduce && "animate-spin [animation-duration:1.6s]",
           )}
         />
-        <RowLabel className="text-[12.5px]">{label}</RowLabel>
+        <RowLabel className="text-[13px]">{label}</RowLabel>
       </button>
     </div>
   );
@@ -442,7 +442,7 @@ function FootControls({ collapsed, reduce }: { collapsed: boolean; reduce: boole
               只有 2 出头，正是「看不清这是啥」的一半原因 */}
           <kbd
             className="ml-auto shrink-0 rounded border border-line-strong px-1 py-0.5 font-mono
-                       text-[10px] leading-none"
+                       text-[11px] leading-none"
           >
             {combo}
           </kbd>
@@ -620,7 +620,7 @@ function NavRow({
             中文走系统字体回退（YaHei 没有可变轴），每个新字重都要重新做一次
             字体匹配 —— 实测一个标签一帧 11ms，切换时新旧两个标签一起变就是
             22ms 一帧，整整 140ms 都在掉帧；纯拉丁文字只要 0.5ms。 */}
-        <RowLabel className={cn("text-[13.5px]", active ? "font-semibold" : "font-normal")}>
+        <RowLabel className={cn("text-[14px]", active ? "font-semibold" : "font-normal")}>
           {item.label}
         </RowLabel>
       </motion.button>

@@ -181,14 +181,14 @@ const ArchiveCard = memo(function ArchiveCard({
         <span className="relative z-10 flex items-start gap-2">
           <span className="min-w-0 flex-1">
             {/* 同 NotesView：标题单行，超出用省略号 */}
-            <span className="block truncate text-[13.5px] font-semibold leading-[1.45] text-ink/90">
+            <span className="block truncate text-[14px] font-semibold leading-[1.45] text-ink/90">
               {title}
             </span>
-            <span className="mt-[3px] block truncate text-[11.5px] leading-[1.45] text-muted">
+            <span className="mt-[3px] block truncate text-[12px] leading-[1.45] text-muted">
               {note.conflictOf && <ConflictTag title={note.title} />}
               {animatedEmojiText(note.excerpt)}
             </span>
-            <span className="mt-[5px] flex items-center gap-1.5 text-[10.5px] text-faint">
+            <span className="mt-[5px] flex items-center gap-1.5 text-[12px] text-faint">
               <span>{note.archiveCategory}</span>
               <span className="opacity-50">·</span>
               <span className="font-mono tabular-nums">{dateLabel}</span>

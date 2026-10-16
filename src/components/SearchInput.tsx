@@ -47,7 +47,7 @@ export function SearchInput({
           }
         }}
         placeholder={placeholder}
-        className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none
+        className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none
                    placeholder:text-faint selection:bg-accent/20"
       />
 

@@ -14,6 +14,12 @@
       "port": 1431
     },
     {
+      "name": "ontheway-browser-v4",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["exec", "vite", "--host", "127.0.0.1", "--port", "1434", "--strictPort"],
+      "port": 1434
+    },
+    {
       "name": "ontheway-preview",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["exec", "vite", "preview", "--port", "1432", "--strictPort"],

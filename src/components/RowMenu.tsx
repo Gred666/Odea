@@ -59,7 +59,7 @@ export function ActionMenu({
   const itemClass = (a: MenuAction) =>
     cn(
       "flex cursor-default select-none items-center gap-2 rounded-md px-2 py-[6px]",
-      "text-[12.5px] outline-none transition-colors duration-[110ms]",
+      "text-[13px] outline-none transition-colors duration-[110ms]",
       a.danger
         ? "text-danger data-[highlighted]:bg-danger/10"
         : "text-body data-[highlighted]:bg-raised data-[highlighted]:text-ink",

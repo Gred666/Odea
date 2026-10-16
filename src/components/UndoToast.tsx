@@ -108,7 +108,7 @@ export function UndoToast() {
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           className="pointer-events-auto flex max-w-[420px] items-center gap-3 rounded-xl
-                       bg-ink py-2 pl-3.5 pr-2 text-[12.5px] text-canvas shadow-float"
+                       bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
         >
           <Icon size={13} strokeWidth={1.9} className="shrink-0 opacity-70" />
           <span className="min-w-0 truncate">{item.message}</span>

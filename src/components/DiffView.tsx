@@ -30,11 +30,11 @@ export function DiffView({
   return (
     <div
       className={cn(
-        "scroll-thin overflow-y-auto rounded-lg border border-line bg-canvas py-1.5 font-mono text-[11.5px] leading-[1.7]",
+        "scroll-thin overflow-y-auto rounded-lg border border-line bg-canvas py-1.5 font-mono text-[12px] leading-[1.7]",
         className,
       )}
     >
-      <div className="flex gap-3 px-3 pb-1.5 text-[10.5px] text-faint">
+      <div className="flex gap-3 px-3 pb-1.5 text-[12px] text-faint">
         <span>
           <span className="text-danger">−</span> {removedLabel}
         </span>

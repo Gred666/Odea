@@ -28,7 +28,9 @@ export const diagramEngine = {
         // JS 堆多 6–7 MB（2026-10-14 量的）。dagre 只有 46 KB，连线是曲线（ELK 是直角折线）。
         // 图里自己写了 layout: elk 的照样用 ELK
         layout: "dagre",
-        fontFamily: "Inter, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', sans-serif",
+        // 和正文同一套字体（globals.css 的 --font-sans）
+        fontFamily:
+          "-apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', sans-serif",
       });
       return mermaid;
     });

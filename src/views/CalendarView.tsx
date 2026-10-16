@@ -105,7 +105,7 @@ export function CalendarPanel({ marks }: { marks: CalendarMarks }) {
                 // 同下面的日期网格：收尾不留半像素的跳
                 transition={{ ...spring.smooth, restDelta: 0.01, opacity: tween.fast }}
                 className="absolute inset-0 flex items-center text-[15px] font-semibold
-                           tracking-[-0.01em] text-ink tabular-nums"
+                           text-ink tabular-nums"
               >
                 {year}年{month}月
               </motion.span>
@@ -125,9 +125,9 @@ export function CalendarPanel({ marks }: { marks: CalendarMarks }) {
     >
       {/* 表头：「周」+ 七天，同一排字号，周数列不再是一块空白 */}
       <div className="mt-1 grid grid-cols-[24px_repeat(7,1fr)] px-1 pb-1">
-        <span className="text-center text-[10.5px] font-medium text-faint/75">周</span>
+        <span className="text-center text-[12px] font-medium text-faint/75">周</span>
         {WEEKDAYS.map((w) => (
-          <span key={w} className="text-center text-[10.5px] font-medium text-faint">
+          <span key={w} className="text-center text-[12px] font-medium text-faint">
             {w}
           </span>
         ))}
@@ -205,7 +205,7 @@ function WeekRow({
       <div className="relative grid h-[40px] place-items-center">
         <span
           className={cn(
-            "text-[10px] tabular-nums transition-colors duration-200",
+            "text-[11px] tabular-nums transition-colors duration-200",
             highlighted ? "text-muted" : "text-faint/65",
           )}
         >
@@ -281,7 +281,7 @@ function DayCell({
 
         <span
           className={cn(
-            "relative z-10 text-[12.5px] leading-none tabular-nums transition-colors duration-[160ms]",
+            "relative z-10 text-[13px] leading-none tabular-nums transition-colors duration-[160ms]",
             tone,
             accentTone ? "font-semibold" : marked ? "font-medium" : "font-normal",
           )}

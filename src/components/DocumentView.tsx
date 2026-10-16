@@ -414,8 +414,8 @@ export function DocumentView({
                     ) : (
                       <h1
                         key={doc.key}
-                        className="selectable break-words text-[30px] font-bold leading-[1.25]
-                               tracking-[-0.02em] text-ink @min-[480px]:text-[38px]"
+                        className="selectable break-words font-display text-[30px] font-bold leading-[1.25]
+                               text-ink @min-[480px]:text-[38px]"
                       >
                         {doc.title}
                       </h1>
@@ -760,7 +760,7 @@ export function EditableDocumentTitle({
       }}
       className={cn(
         "block w-full min-w-0 resize-none overflow-hidden border-0 bg-transparent p-0",
-        "text-[30px] font-bold leading-[1.25] tracking-[-0.02em] text-ink outline-none @min-[480px]:text-[38px]",
+        "font-display text-[30px] font-bold leading-[1.25] text-ink outline-none @min-[480px]:text-[38px]",
         "transition-opacity duration-[160ms] [field-sizing:content] placeholder:text-faint",
         saving && "opacity-65",
       )}
@@ -822,7 +822,7 @@ function StatusBar({
           {parts.map((p) => (
             <span key={p} className="flex items-center">
               <Dot />
-              <span className="font-mono text-[10.5px] leading-none text-faint">{p}</span>
+              <span className="font-mono text-[12px] leading-[1.4] text-faint">{p}</span>
             </span>
           ))}
           {/* 保存状态。以前 store 里记了 error 却没人渲染，
@@ -831,7 +831,7 @@ function StatusBar({
             <span className="flex min-w-0 items-center" role="status">
               <Dot />
               <AlertTriangle size={11} strokeWidth={2} className="mr-1.5 shrink-0 text-danger" />
-              <span className="truncate font-mono text-[10.5px] leading-none text-danger">
+              <span className="truncate font-mono text-[12px] leading-none text-danger">
                 保存失败：{saveError}
               </span>
             </span>
@@ -839,7 +839,7 @@ function StatusBar({
             slowSave && (
               <span className="flex items-center" role="status">
                 <Dot />
-                <span className="font-mono text-[10.5px] leading-none text-muted">保存中…</span>
+                <span className="font-mono text-[12px] leading-none text-muted">保存中…</span>
               </span>
             )
           )}

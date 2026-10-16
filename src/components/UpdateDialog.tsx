@@ -198,7 +198,7 @@ function UpdateBody({
         <p className="text-[19px] font-semibold leading-[1.4] text-ink">
           OnTheWay {update.version}
         </p>
-        <p className="mt-0.5 text-[12.5px] text-muted">
+        <p className="mt-0.5 text-[13px] text-muted">
           {released}现在用的是 {update.current}
         </p>
         {update.notes && <Notes markdown={update.notes} ns="update" />}
@@ -251,12 +251,12 @@ function NotesBody({ releases, onDone }: { releases: Release[]; onDone: () => vo
               {latest.version === APP_VERSION ? "已更新到" : "OnTheWay"} {latest.version}
             </p>
             {latest.date && (
-              <p className="mt-0.5 text-[12.5px] text-muted">{dateLabel(latest.date)}发布</p>
+              <p className="mt-0.5 text-[13px] text-muted">{dateLabel(latest.date)}发布</p>
             )}
             <Notes markdown={latest.body} ns={`notes-${latest.version}`} />
             {earlier.map((release) => (
               <section key={release.version} className="mt-6 border-t border-line pt-4">
-                <p className="text-[13.5px] font-semibold text-ink">
+                <p className="text-[14px] font-semibold text-ink">
                   {release.version}
                   {release.date && (
                     <span className="ml-2 font-normal text-muted">{dateLabel(release.date)}</span>
@@ -325,8 +325,8 @@ function FooterButton({
       disabled={disabled}
       className={
         primary
-          ? "flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-[12.5px] font-medium text-accent-ink transition-colors duration-[140ms] hover:bg-accent-hover disabled:opacity-60"
-          : "flex h-8 shrink-0 items-center rounded-lg px-3 text-[12.5px] text-body transition-colors duration-[140ms] hover:bg-raised disabled:opacity-50"
+          ? "flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-[13px] font-medium text-accent-ink transition-colors duration-[140ms] hover:bg-accent-hover disabled:opacity-60"
+          : "flex h-8 shrink-0 items-center rounded-lg px-3 text-[13px] text-body transition-colors duration-[140ms] hover:bg-raised disabled:opacity-50"
       }
     >
       {children}

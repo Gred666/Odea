@@ -61,8 +61,8 @@ export function GuideUpdateBanner({ update }: { update: GuideUpdate }) {
               看看改了什么
               {stats && (
                 <>
-                  <span className="font-mono text-[10.5px] text-success">+{stats.added}</span>
-                  <span className="font-mono text-[10.5px] text-danger">−{stats.removed}</span>
+                  <span className="font-mono text-[11px] text-success">+{stats.added}</span>
+                  <span className="font-mono text-[11px] text-danger">−{stats.removed}</span>
                 </>
               )}
             </BannerButton>

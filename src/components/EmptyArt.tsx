@@ -165,10 +165,7 @@ export function EmptyState({
     >
       <EmptyArt kind={art} className={large ? "w-[176px]" : "w-[118px]"} />
       <p
-        className={cn(
-          "font-semibold text-ink/90",
-          large ? "mt-5 text-[17px] tracking-[-0.01em]" : "mt-3 text-[12.5px]",
-        )}
+        className={cn("font-semibold text-ink/90", large ? "mt-5 text-[17px]" : "mt-3 text-[13px]")}
       >
         {title}
       </p>
@@ -178,7 +175,7 @@ export function EmptyState({
             "max-w-[300px] text-muted",
             large
               ? "mt-1.5 text-[13px] leading-[1.6]"
-              : "mt-1 text-[11.5px] leading-[1.55] text-faint",
+              : "mt-1 text-[12px] leading-[1.55] text-faint",
           )}
         >
           {hint}
@@ -188,7 +185,7 @@ export function EmptyState({
         <button
           type="button"
           onClick={action.onClick}
-          className="mt-5 rounded-lg bg-accent px-3.5 py-[7px] text-[12.5px] font-medium text-accent-ink
+          className="mt-5 rounded-lg bg-accent px-3.5 py-[7px] text-[13px] font-medium text-accent-ink
                      transition-colors duration-[140ms] hover:bg-accent-hover"
         >
           {action.label}

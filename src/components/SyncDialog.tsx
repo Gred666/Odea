@@ -285,7 +285,7 @@ function ProviderStep({
                          text-left transition-colors duration-[140ms] hover:border-accent-line
                          hover:bg-accent-wash disabled:opacity-60"
             >
-              <span className="flex items-center gap-1.5 text-[13.5px] font-medium text-ink">
+              <span className="flex items-center gap-1.5 text-[14px] font-medium text-ink">
                 {key === "github" ? (
                   <Github size={14} strokeWidth={2} />
                 ) : (
@@ -295,7 +295,7 @@ function ProviderStep({
               </span>
               {/* 固定两行高：账号是异步读的，读到后「已登录 xxx」只有一行，卡片不能跟着变矮
                   （展开动画已经按读到之前的高度量好了，见下面 ProxyLine 的说明） */}
-              <span className="min-h-[3.2em] text-[11.5px] leading-[1.6] text-muted">
+              <span className="min-h-[3.2em] text-[12px] leading-[1.6] text-muted">
                 {account ? `已登录 ${account.login}` : PROVIDERS[key].note}
               </span>
             </button>
@@ -429,7 +429,7 @@ function RepoStep({
 
   return (
     <div>
-      <div className="flex items-center gap-2 text-[12.5px] text-muted">
+      <div className="flex items-center gap-2 text-[13px] text-muted">
         <span>
           已登录 {label} · <span className="text-body">{account.login}</span>
         </span>
@@ -464,7 +464,7 @@ function RepoStep({
           aria-label="新仓库的名字"
           spellCheck={false}
           className="h-9 min-w-0 flex-1 rounded-lg border border-line-strong bg-canvas px-3 font-mono
-                     text-[12.5px] text-ink outline-none focus:border-accent"
+                     text-[13px] text-ink outline-none focus:border-accent"
         />
         <PrimaryButton type="submit" disabled={!name.trim() || !!busy}>
           <Plus size={13} strokeWidth={2.2} />
@@ -475,9 +475,9 @@ function RepoStep({
       <p className="mt-5 text-[12px] font-medium text-muted">或者选一个已有的</p>
       <div className="mt-1.5 overflow-hidden rounded-xl border border-line-strong">
         {repos === null ? (
-          <p className="px-3.5 py-3 text-[12.5px] text-faint">读取中…</p>
+          <p className="px-3.5 py-3 text-[13px] text-faint">读取中…</p>
         ) : repos.length === 0 ? (
-          <p className="px-3.5 py-3 text-[12.5px] text-faint">这个账号下还没有仓库</p>
+          <p className="px-3.5 py-3 text-[13px] text-faint">这个账号下还没有仓库</p>
         ) : (
           <div className="scroll-thin max-h-[208px] overflow-y-auto">
             {repos.map((repo) => (
@@ -495,10 +495,10 @@ function RepoStep({
                 ) : (
                   <Globe size={12} strokeWidth={2} className="shrink-0 text-warning" />
                 )}
-                <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink">
+                <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink">
                   {repo.fullName}
                 </span>
-                {!repo.private && <span className="text-[11px] text-warning">公开</span>}
+                {!repo.private && <span className="text-[12px] text-warning">公开</span>}
               </button>
             ))}
           </div>
@@ -549,11 +549,11 @@ function ConfirmStep({
           <p className="mt-2 text-[13px] leading-[1.7] text-body">
             这个仓库里已经有笔记了。会把它们下载到一个新文件夹，再切换过去；现在的笔记文件夹原样留着。
           </p>
-          <p className="mt-1.5 break-all rounded-lg bg-raised/50 px-3 py-2 font-mono text-[11.5px] text-muted">
+          <p className="mt-1.5 break-all rounded-lg bg-raised/50 px-3 py-2 font-mono text-[12px] text-muted">
             {plan.cloneTarget}
           </p>
           {plan.localNotes && (
-            <label className="mt-3 flex cursor-pointer items-start gap-2 text-[12.5px] leading-[1.6] text-body">
+            <label className="mt-3 flex cursor-pointer items-start gap-2 text-[13px] leading-[1.6] text-body">
               <input
                 type="checkbox"
                 checked={bringLocal}
@@ -562,7 +562,7 @@ function ConfirmStep({
               />
               <span>
                 把这台电脑上现在的笔记也合并进去
-                <span className="block text-[11.5px] text-muted">
+                <span className="block text-[12px] text-muted">
                   同名的两份都留着；新装的应用里只有示例笔记的话，不用勾
                 </span>
               </span>
@@ -677,13 +677,13 @@ function StatusView({ status }: { status: SyncStatus }) {
         <button
           type="button"
           onClick={() => void openExternal(`https://${status.remote}`)}
-          className="mt-1 font-mono text-[12.5px] text-muted underline-offset-2 hover:text-accent hover:underline"
+          className="mt-1 font-mono text-[13px] text-muted underline-offset-2 hover:text-accent hover:underline"
         >
           {status.remote}
         </button>
       )}
 
-      <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[12.5px]">
+      <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[13px]">
         <dt className="text-muted">上次同步</dt>
         <dd className="text-body">
           {status.lastSyncedAt ? formatSyncedAt(status.lastSyncedAt, now) : "还没有"}
@@ -798,7 +798,7 @@ function ProxyLine() {
 
   if (!proxy) {
     return (
-      <div aria-hidden="true" className="mt-5 border-t border-line pt-3 text-[11.5px]">
+      <div aria-hidden="true" className="mt-5 border-t border-line pt-3 text-[12px]">
         <p className="invisible">网络：</p>
       </div>
     );
@@ -810,7 +810,7 @@ function ProxyLine() {
       : "直连，没有代理";
 
   return (
-    <div className="mt-5 border-t border-line pt-3 text-[11.5px] text-muted">
+    <div className="mt-5 border-t border-line pt-3 text-[12px] text-muted">
       {editing ? (
         <form
           className="flex items-center gap-1.5"
@@ -827,7 +827,7 @@ function ProxyLine() {
             placeholder="http://127.0.0.1:7890，空着就用系统代理"
             spellCheck={false}
             className="h-7 min-w-0 flex-1 rounded-md border border-line-strong bg-canvas px-2 font-mono
-                       text-[11.5px] text-ink outline-none placeholder:text-faint focus:border-accent"
+                       text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
           />
           <SecondaryButton type="submit">保存</SecondaryButton>
           <SecondaryButton onClick={() => setEditing(false)}>取消</SecondaryButton>
@@ -870,7 +870,7 @@ function PrimaryButton({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-[12.5px] font-medium
+      className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-[13px] font-medium
                  text-accent-ink transition-colors duration-[140ms] hover:bg-accent-hover disabled:opacity-50"
     >
       {children}

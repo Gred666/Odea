@@ -98,8 +98,8 @@ export function ConflictBanner({
                 {stats ? (
                   <>
                     查看差异
-                    <span className="font-mono text-[10.5px] text-success">+{stats.added}</span>
-                    <span className="font-mono text-[10.5px] text-danger">−{stats.removed}</span>
+                    <span className="font-mono text-[11px] text-success">+{stats.added}</span>
+                    <span className="font-mono text-[11px] text-danger">−{stats.removed}</span>
                   </>
                 ) : (
                   "查看差异"
@@ -109,7 +109,7 @@ export function ConflictBanner({
             <BannerButton onClick={() => openDocument(target)}>打开原文</BannerButton>
             {confirming ? (
               <span className="flex items-center gap-1.5 rounded-md bg-warning/10 py-0.5 pl-2 pr-0.5">
-                <span className="text-[11.5px] text-body">原文现在的内容会被这一版覆盖</span>
+                <span className="text-[12px] text-body">原文现在的内容会被这一版覆盖</span>
                 <BannerButton strong disabled={busy} onClick={() => void resolve("copy")}>
                   替换
                 </BannerButton>

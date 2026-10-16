@@ -634,7 +634,7 @@ export function CommandPalette({
                     return (
                       <div key={item.id}>
                         {showGroup && (
-                          <p className="px-2.5 pb-1 pt-2.5 text-[10.5px] font-medium tracking-[0.05em] text-faint">
+                          <p className="px-2.5 pb-1 pt-2.5 text-[12px] font-medium tracking-[0.05em] text-faint">
                             {item.group}
                           </p>
                         )}
@@ -678,7 +678,7 @@ export function CommandPalette({
                               <Marked text={item.label} ranges={item.ranges} />
                             </span>
                             {item.snippet && (
-                              <span className="mt-px block truncate text-[11.5px] leading-[1.45] text-muted">
+                              <span className="mt-px block truncate text-[12px] leading-[1.45] text-muted">
                                 <Marked text={item.snippet.text} ranges={[item.snippet.range]} />
                               </span>
                             )}
@@ -686,7 +686,7 @@ export function CommandPalette({
                           {item.hint && (
                             <span
                               className={cn(
-                                "relative z-10 max-w-[45%] shrink-0 self-start truncate text-[11px] leading-[1.45]",
+                                "relative z-10 max-w-[45%] shrink-0 self-start truncate text-[12px] leading-[1.45]",
                                 "mt-[1.5px]",
                                 item.hint === "当前" ? "text-accent/80" : "text-faint",
                               )}
@@ -708,7 +708,7 @@ export function CommandPalette({
                 </div>
               </AutoHeight>
 
-              <div className="flex h-8 items-center gap-3.5 border-t border-line px-4 text-[11px] text-faint">
+              <div className="flex h-8 items-center gap-3.5 border-t border-line px-4 text-[12px] text-faint">
                 {/* 按键画成图标，不用箭头、回车这类字：正文字体里没有，第一次画它们浏览器要把
                     系统字体挨个找一遍，打开面板就卡一下（见 editor/popupGlyphs.test.ts） */}
                 <KeyHint keys={[ArrowUp, ArrowDown]} label="选择" />
@@ -812,7 +812,7 @@ export function KeyHint({ keys, label }: { keys: (string | LucideIcon)[]; label:
           // biome-ignore lint/suspicious/noArrayIndexKey: 固定的一两个键，不会重排
           key={index}
           className="grid h-[17px] min-w-[17px] place-items-center rounded border border-line-strong px-1
-                     font-sans text-[10px] leading-none text-muted"
+                     font-sans text-[11px] leading-none text-muted"
         >
           {typeof Key === "string" ? Key : <Key size={10} strokeWidth={2.2} aria-hidden="true" />}
         </kbd>
