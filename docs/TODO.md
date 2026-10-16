@@ -315,7 +315,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
     - 第一次试打包（2026-10-13）四个都挂了：Windows / Linux / macOS Apple 芯片编完了，签名时「Wrong password for that key」—— Secret 里的密码和私钥对不上，要重填；macOS Intel 在 Apple 芯片机器上交叉编，找不到 OpenSSL（git2 带进来的 openssl-sys），改成 macOS 上 vendored，CI 加了 otool 检查。Actions 升到 Node 24 的版本（checkout / setup-node v7、pnpm/action-setup v6、tauri-action v1）
   - [x] ~~Gitee 镜像~~（2026-10-13 做的，2026-10-16 去掉了，见下面）：仓库 `hyxzs111111/on-the-way`（公开）。附件不登录能下、单个 ≤ 100 MB、仓库一共 ≤ 1 GB（实测 + 帮助文档）；没有 latest/download，latest.json 放在固定的 `updater` 发行版。`scripts/gitee-release.mjs` + CI 的「同步到 Gitee」，四个打包都成了才镜像、镜像成了才正式发布，只留最近两版。应用的 `endpoints` 改成 Gitee 在前、GitHub 兜底，`update.rs` 一个地址从查到下载验签整条不行就换下一个（本机走过）。下载页（deb / rpm）改成 Gitee 的发行版页。Mac 加了临时签名（`signingIdentity: "-"`）
   - [x] 去掉 Gitee 镜像（2026-10-16）：从 GitHub 的机器往 Gitee 传又慢又常常传不上，发版人在国外。删了 `scripts/gitee-release.mjs`、CI 的「Gitee 令牌」「同步到 Gitee」，`endpoints` 只留 GitHub；`github-latest.mjs` 把要用的几个函数搬了过来；手动 Run workflow 的 `mirror` 改名 `latest_only`（只补改已发布那一版的 latest.json）
-  - [ ] **需要你**：删掉 Gitee 上 `hyxzs111111/on-the-way` 的 `updater` 发行版（或它里面的 latest.json，或者把仓库设为私有 / 删掉）。0.1.0 先问 Gitee、Gitee 说「已经最新」就停，不删的话装着 0.1.0 的人永远收不到下一版（技术方案 §14.4）
+  - [x] **需要你**：删掉 Gitee 上 `hyxzs111111/on-the-way` 的 `updater` 发行版（或它里面的 latest.json，或者把仓库设为私有 / 删掉）。0.1.0 先问 Gitee、Gitee 说「已经最新」就停，不删的话装着 0.1.0 的人永远收不到下一版（技术方案 §14.4）
   - [ ] **需要你**：GitHub 仓库 Settings → Secrets 里的 `GITEE_TOKEN` 用不上了，可以删
   - [ ] 代码签名（Windows Authenticode、macOS 公证），以后再说
 - [x] 清理旧代码：没用的依赖（`@dnd-kit/*`、`fractional-indexing`、`marked`、Radix dialog / popover / tooltip，Rust 的 `r2d2`、`rrule`、`chrono-tz`）；旧数据模型留下的字段（笔记的 `icon`、恒为空的 `actionGroup`、任务的 `priority` / `goalId` / `sortKey` / `completedAt`）、没人调的 `note_list`、用不上的 `NoteIcon` 组件；日历当日安排从 `ActionGroup` 简化成 `DayTasks`
