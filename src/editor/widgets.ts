@@ -1,3 +1,4 @@
+import { snapToDevicePixels } from "@/lib/devicePixels";
 import { type EditorView, WidgetType } from "@codemirror/view";
 import {
   type AnimatedEmoji,
@@ -11,8 +12,10 @@ import {
 import { type CalloutHead, type CalloutKind, calloutIcon } from "./callout";
 import { glideTo } from "./glide";
 import { hasRenderableHtml, safeHref, sanitizeHtml } from "./html";
+import { openImageViewer } from "./imageViewer";
 import { inlinePlainText } from "./inlineDom";
 import { openExternal } from "./links";
+import { revealNow } from "./reveal";
 
 /* ============================================================
    编辑器里所有的 DOM 替身。（表格、公式、图表的替身各有自己的文件：
@@ -26,7 +29,7 @@ import { openExternal } from "./links";
 
 /** 点一下把光标放回源码位置。所有「点击即编辑」的替身都用它。 */
 export function jumpToSource(view: EditorView, position: number) {
-  view.dispatch({ selection: { anchor: position } });
+  view.dispatch({ selection: { anchor: position }, effects: revealNow() });
   view.focus();
 }
 
@@ -370,8 +373,62 @@ export interface ImageSpec {
   height: number | null;
 }
 
+/** 图片在源码里怎么写的：改尺寸时按它写回去 */
+export type ImageSyntax = "markdown" | "html";
+
+/** 拖着改宽度时最窄到这么多 */
+const IMAGE_MIN_WIDTH = 48;
+/** 比这小的图不放悬停按钮（会盖住大半张图），右下角的拖柄照样有 */
+const IMAGE_TOOLS_MIN = { width: 128, height: 72 };
+
+const ZOOM_ICON = "M3 11a8 8 0 1 0 16 0a8 8 0 1 0-16 0M21 21l-4.35-4.35M11 8v6M8 11h6";
+const SOURCE_ICON = "M18 16l4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16";
+
+/** 正文里每一张图的 DOM 现在对应哪个替身（updateDOM 换了替身，事件里要用新的） */
+const liveImages = new WeakMap<HTMLElement, ImageWidget>();
+
+/**
+ * `![alt|宽](地址)` 换成新的宽度（null 是去掉尺寸，回到原图大小）；HTML 的 `<img>` 改 width
+ * 属性。高度一律去掉，按原图比例走。认不出来就返回 null
+ */
+export function resizedImageSource(
+  raw: string,
+  syntax: ImageSyntax,
+  width: number | null,
+): string | null {
+  if (syntax === "markdown") {
+    const head = /^!\[([^\]]*)\]/.exec(raw);
+    if (!head) return null;
+    const alt = head[1]!.replace(/\|\d+(?:x\d+)?$/, "");
+    return `![${width ? `${alt}|${width}` : alt}]${raw.slice(head[0].length)}`;
+  }
+  const attribute = (name: string) =>
+    new RegExp(`\\s${name}\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s>]+)`, "i");
+  const tag = raw.replace(attribute("height"), "");
+  if (!width) return tag.replace(attribute("width"), "");
+  if (attribute("width").test(tag)) return tag.replace(attribute("width"), ` width="${width}"`);
+  return tag.replace(/\s*(\/?>)$/, ` width="${width}"$1`);
+}
+
+/**
+ * 图片。一直画着：光标碰到它时源码在图片下面露出来一行（open），图片本身一动不动 ——
+ * 以前是整张图换成一行源码，几百 px 高的图一下缩成一行字，下面整篇往上一跳。
+ *
+ * 点图片本身：光标放到源码末尾，接着就能改。悬停时右上角两个按钮，查看大图、编辑源码
+ * （开着时再点是收起）；右下角的拖柄拖一下改宽度，松手写回 `![alt|宽](…)`，双击拖柄
+ * 回到原图大小。都是普通的编辑，撤销一下就回去。
+ *
+ * 身份里有源码原文（raw）和 open：光标进出、改了宽度时 eq 不相等，CodeMirror 拿
+ * updateDOM 就地改 —— 同一个 <img> 一直用着，不会重新加载、闪一下。位置不进身份，
+ * 点的时候再问（positionOf），拿 raw 核对一遍
+ */
 export class ImageWidget extends OtwWidget {
-  constructor(private readonly image: ImageSpec) {
+  constructor(
+    private readonly image: ImageSpec,
+    private readonly raw = "",
+    private readonly syntax: ImageSyntax = "markdown",
+    private readonly open = false,
+  ) {
     super();
   }
 
@@ -383,32 +440,253 @@ export class ImageWidget extends OtwWidget {
       a.source === b.source &&
       a.title === b.title &&
       a.width === b.width &&
-      a.height === b.height
+      a.height === b.height &&
+      other.raw === this.raw &&
+      other.syntax === this.syntax &&
+      other.open === this.open
     );
   }
 
   toDOM(view: EditorView) {
+    // 外层管留白（padding，见文件头），里层贴着图片的边，按钮和拖柄按它定位
+    const frame = document.createElement("span");
+    frame.className = "cm-otw-image-frame";
+    const box = document.createElement("span");
+    box.className = "cm-otw-image-box";
     const image = document.createElement("img");
     image.className = "cm-otw-image";
-    image.alt = this.image.alt;
-    if (this.image.title) image.title = this.image.title;
-    if (this.image.width) image.style.width = `${this.image.width}px`;
-    if (this.image.height) image.style.height = `${this.image.height}px`;
     image.loading = "lazy";
     image.decoding = "async";
+    image.draggable = false;
     // 加载完再淡入。直接出现的话大图会「啪」地把下面的正文顶下去。
     // 图到了这一行就变高了：告诉 CodeMirror 重新量。它自己只在上次更新 75ms 以后才理会
     // 尺寸变化，刚粘贴的截图几十毫秒就加载完 —— 光标、选区还按图片没高度时画，停在图片中间
     const settle = (state: "is-loaded" | "is-error") => {
       image.classList.add(state);
+      measureTools(frame, image);
       if (image.isConnected) view.requestMeasure();
     };
     image.addEventListener("load", () => settle("is-loaded"));
     image.addEventListener("error", () => settle("is-error"));
-    image.src = this.image.source;
+
+    const tools = document.createElement("span");
+    tools.className = "cm-otw-image-tools";
+    const zoom = imageTool(ZOOM_ICON, "查看大图", () => openImageViewer(image));
+    const source = imageTool(SOURCE_ICON, "编辑源码", () =>
+      liveImages.get(frame)?.toggleSource(view, frame),
+    );
+    source.classList.add("is-source");
+    tools.append(zoom, source);
+
+    const handle = document.createElement("span");
+    handle.className = "cm-otw-image-handle";
+    handle.title = "拖动改大小，双击还原";
+    handle.addEventListener("pointerdown", (event) => startResize(view, frame, image, event));
+    handle.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      liveImages.get(frame)?.resize(view, frame, null);
+    });
+
+    image.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      liveImages.get(frame)?.openSource(view, frame);
+    });
+    image.addEventListener("dblclick", () => openImageViewer(image));
+
+    // 悬停按钮、拖柄淡入淡出前先对齐到整物理像素（lib/devicePixels.ts），不然淡完会闪一下
+    const snapControls = () => {
+      snapToDevicePixels(tools);
+      snapToDevicePixels(handle);
+    };
+    box.addEventListener("pointerenter", snapControls);
+    box.addEventListener("pointerleave", snapControls);
+
+    box.append(image, tools, handle);
+    frame.append(box);
+    liveImages.set(frame, this);
+    this.paint(frame, image);
     if (image.complete && image.naturalWidth > 0) settle("is-loaded");
-    return this.settle(image);
+    return this.settle(frame);
   }
+
+  override updateDOM(dom: HTMLElement): boolean {
+    const image = dom.querySelector<HTMLImageElement>("img.cm-otw-image");
+    if (!dom.classList.contains("cm-otw-image-frame") || !image) return false;
+    liveImages.set(dom, this);
+    this.paint(dom, image);
+    return true;
+  }
+
+  /** 把这一份的内容写到 DOM 上（新建和 updateDOM 共用） */
+  private paint(frame: HTMLElement, image: HTMLImageElement) {
+    const { alt, title, width, height, source } = this.image;
+    frame.classList.toggle("is-open", this.open);
+    frame.querySelector(".cm-otw-image-tool.is-source")?.classList.toggle("is-active", this.open);
+    image.alt = alt;
+    image.title = title;
+    image.style.width = width ? `${width}px` : "";
+    image.style.height = height ? `${height}px` : "";
+    image.classList.toggle("has-size", !!width);
+    // 地址真的变了才换：同一个 src 再赋一遍，有的 WebView 会重新走一遍加载
+    if (image.getAttribute("src") !== source) {
+      image.classList.remove("is-loaded", "is-error");
+      image.src = source;
+    }
+  }
+
+  /** 这张图的源码在文档里的位置；文档对不上（刚改过、还没重画）就是 null */
+  private rangeIn(view: EditorView, frame: HTMLElement) {
+    const from = positionOf(view, frame);
+    const to = from + this.raw.length;
+    return this.raw && view.state.sliceDoc(from, to) === this.raw ? { from, to } : null;
+  }
+
+  openSource(view: EditorView, frame: HTMLElement) {
+    const range = this.rangeIn(view, frame);
+    if (range) jumpToSource(view, range.to);
+  }
+
+  /** 编辑源码按钮：没开就打开；开着就收起 —— 离开正文，光标还留在原处 */
+  toggleSource(view: EditorView, frame: HTMLElement) {
+    if (this.open && view.hasFocus) view.contentDOM.blur();
+    else this.openSource(view, frame);
+  }
+
+  /** 宽度写回源码（null：去掉尺寸）。只换变了的那一截，后面的光标不会被挤走 */
+  resize(view: EditorView, frame: HTMLElement, width: number | null) {
+    const range = this.rangeIn(view, frame);
+    const next = range && resizedImageSource(this.raw, this.syntax, width);
+    if (!range || !next || next === this.raw) return;
+    const raw = this.raw;
+    let start = 0;
+    while (start < raw.length && start < next.length && raw[start] === next[start]) start += 1;
+    let end = 0;
+    while (
+      end < raw.length - start &&
+      end < next.length - start &&
+      raw[raw.length - 1 - end] === next[next.length - 1 - end]
+    ) {
+      end += 1;
+    }
+    view.dispatch({
+      changes: {
+        from: range.from + start,
+        to: range.to - end,
+        insert: next.slice(start, next.length - end),
+      },
+      userEvent: "input.resize",
+    });
+  }
+
+  /** 图片里的按下、拖动都自己管，CodeMirror 别拿去放光标、拖选 */
+  override ignoreEvent() {
+    return true;
+  }
+}
+
+/** 悬停按钮。mousedown 拦掉：不然焦点会被抢走、光标被放到别处 */
+function imageTool(icon: string, label: string, run: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "cm-otw-image-tool";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.append(svg("0 0 24 24", icon, "cm-otw-image-tool-icon"));
+  button.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    run();
+  });
+  return button;
+}
+
+/** 太小的图不放悬停按钮（见 IMAGE_TOOLS_MIN） */
+function measureTools(frame: HTMLElement, image: HTMLImageElement) {
+  const { width, height } = image.getBoundingClientRect();
+  frame.classList.toggle(
+    "is-tiny",
+    width > 0 && (width < IMAGE_TOOLS_MIN.width || height < IMAGE_TOOLS_MIN.height),
+  );
+}
+
+/**
+ * 拖右下角改宽度：按原图比例，拖的时候图片跟着手实时变，角上显示「宽 × 高」；
+ * 松手才写回源码（一次编辑，一次撤销）。拖的时候每帧让 CodeMirror 重新量一次高度，
+ * 下面的正文跟着走，光标、选区不会画歪
+ */
+function startResize(
+  view: EditorView,
+  frame: HTMLElement,
+  image: HTMLImageElement,
+  event: PointerEvent,
+) {
+  if (event.button !== 0) return;
+  // pointerdown 拦掉，后面就不会再有兼容的 mousedown —— CodeMirror 不会趁机拖选
+  event.preventDefault();
+  event.stopPropagation();
+  const handle = event.currentTarget as HTMLElement;
+  const rect = image.getBoundingClientRect();
+  const startX = event.clientX;
+  const startWidth = Math.round(rect.width);
+  const ratio = image.naturalWidth
+    ? image.naturalHeight / image.naturalWidth
+    : rect.height / rect.width;
+  const line = frame.closest(".cm-line") ?? view.contentDOM;
+  const limit = Math.max(IMAGE_MIN_WIDTH, Math.floor(line.getBoundingClientRect().width));
+  const badge = document.createElement("span");
+  badge.className = "cm-otw-image-size";
+  let width = startWidth;
+  let frameRequest = 0;
+
+  const show = () => {
+    badge.textContent = `${width} × ${Math.round(width * ratio)}`;
+  };
+  const move = (moveEvent: PointerEvent) => {
+    const next = Math.round(startWidth + moveEvent.clientX - startX);
+    width = Math.min(limit, Math.max(IMAGE_MIN_WIDTH, next));
+    image.style.width = `${width}px`;
+    image.style.height = "";
+    image.classList.add("has-size");
+    show();
+    if (!frameRequest) {
+      frameRequest = requestAnimationFrame(() => {
+        frameRequest = 0;
+        view.requestMeasure();
+      });
+    }
+  };
+  const finish = (commit: boolean) => {
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", up);
+    handle.removeEventListener("pointercancel", cancel);
+    if (handle.hasPointerCapture?.(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    cancelAnimationFrame(frameRequest);
+    badge.remove();
+    frame.classList.remove("is-resizing");
+    const widget = liveImages.get(frame);
+    if (commit && width !== startWidth) widget?.resize(view, frame, width);
+    // 没改（或者文档对不上、没写成）：按源码里的尺寸画回去
+    const now = liveImages.get(frame);
+    if (now === widget) now?.updateDOM(frame);
+    measureTools(frame, image);
+    view.requestMeasure();
+  };
+  const up = () => finish(true);
+  const cancel = () => finish(false);
+
+  handle.setPointerCapture?.(event.pointerId);
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up);
+  handle.addEventListener("pointercancel", cancel);
+  frame.classList.add("is-resizing");
+  show();
+  image.parentElement?.append(badge);
+  snapToDevicePixels(badge);
 }
 
 /* ---------------- 行内小替身：Emoji / 实体 / 硬换行 ---------------- */

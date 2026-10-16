@@ -19,6 +19,7 @@ const WIDGET_ROOT_CLASSES = [
   "cm-otw-table-block",
   "cm-otw-fence-block",
   "cm-otw-hr",
+  "cm-otw-image-frame",
   "cm-otw-image",
 ];
 

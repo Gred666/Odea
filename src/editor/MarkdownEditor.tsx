@@ -76,11 +76,13 @@ import {
   markdownSourceStyleRules,
   rulesByNode,
   selectionEntersRange,
+  selectionOpensRange,
   selectionTouchesRange,
   widgetByNode,
 } from "./markdownStyleRegistry";
 import { type MarkdownTableModel, parseDelimitedTable, parseMarkdownTable } from "./markdownTable";
 import { MathWidget } from "./math";
+import { revealField, revealIdle, revealRanges, trackEditing } from "./reveal";
 import { registerEditorFlush } from "./saveBus";
 import { createSearchPanel, matchOnLine, queryOfAnchor, scrollToMatch } from "./searchPanel";
 import { selectionLayer } from "./selectionLayer";
@@ -122,6 +124,7 @@ import {
   HorizontalRuleWidget,
   HtmlBlockWidget,
   type ImageSpec,
+  type ImageSyntax,
   ImageWidget,
   LineBreakWidget,
   ListMarkerWidget,
@@ -665,7 +668,7 @@ export function MarkdownEditor({
     const state = cached
       ? // 解析好的语法树、装饰、撤销历史原样沿用
         cached.update({
-          effects: session.reconfigure(sessionExtensions),
+          effects: [session.reconfigure(sessionExtensions), ...revealIdle()],
           selection: EditorSelection.cursor(restoredHead),
         }).state
       : EditorState.create({
@@ -680,6 +683,8 @@ export function MarkdownEditor({
             searchPhrases,
             keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
             typoraDecorations,
+            // 焦点不在正文、鼠标正按着时不按光标展开源码（reveal.ts）
+            trackEditing,
             selectionLayer,
             smoothCaret,
             hoverCard,
@@ -1194,8 +1199,9 @@ function linkClickHandler(onWikiLink: (title: string, heading?: string) => void)
   });
 }
 
+/** 光标碰没碰到这一段（碰到了就露出源码）。选区不在编辑、鼠标按着时另算，见 reveal.ts */
 function selectionTouches(state: EditorState, from: number, to: number): boolean {
-  return selectionTouchesRange(state.selection.ranges, from, to);
+  return selectionTouchesRange(revealRanges(state), from, to);
 }
 
 type DecorationRange = { from: number; to: number; value: Decoration };
@@ -1677,7 +1683,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
 
 /** 换成新选区，构建时问过的那些「光标碰没碰到」是不是还是同样的答案 */
 function sameTouches(probes: readonly number[], state: EditorState): boolean {
-  const { ranges } = state.selection;
+  const ranges = revealRanges(state);
   for (let index = 0; index < probes.length; index += 3) {
     const hit = selectionTouchesRange(ranges, probes[index]!, probes[index + 1]!);
     if (hit !== (probes[index + 2] === 1)) return false;
@@ -1812,8 +1818,12 @@ export const typoraBlockDecorations = StateField.define<TyporaBlockState>({
     }
     // 只动了光标：大多数时候光标还在原来那些块的里面 / 外面（在正文里上下走、
     // 在一段里左右挪），重建出来和现在一模一样。长文里每按一下方向键以前都要把
-    // 整棵树走一遍（70KB 的文档 4 倍降速下约 10ms）
-    if (transaction.selection && !sameTouches(value.probes, transaction.state)) {
+    // 整棵树走一遍（70KB 的文档 4 倍降速下约 10ms）。
+    // 看的是 revealRanges 不是选区：鼠标拖选时选区在变、它不变；点进 / 点出正文时选区没变、它变了
+    if (
+      revealRanges(transaction.startState) !== revealRanges(transaction.state) &&
+      !sameTouches(value.probes, transaction.state)
+    ) {
       return buildBlockDecorations(transaction.state, transaction.changes);
     }
     return value;
@@ -1873,6 +1883,31 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
     const range = { from, to, value };
     ranges.push(range);
     atomicRanges.push(range);
+  };
+  /**
+   * 图片：替身是插在源码前面的一个点，不盖住源码 —— 光标碰到它时源码在图片下面露出来，
+   * 没碰到时把源码藏掉。两种状态是同一个替身，图片原地不动（见 widgets.ts 的 ImageWidget）。
+   * 图片独占一行时这一行标上 cm-otw-image-line（源码收着时不留空行，见 globals.css），
+   * 露出来的源码画成一行图注
+   */
+  const addImage = (from: number, to: number, spec: ImageSpec, syntax: ImageSyntax): boolean => {
+    // 选区整个包住图片时不算碰到（selectionOpensRange）：拖着选过去，源码不冒出来
+    const open = selectionOpensRange(revealRanges(state), from, to);
+    const raw = state.sliceDoc(from, to);
+    const widget = new ImageWidget(spec, raw, syntax, open);
+    markFreshness(widget, from, to, fresh);
+    ranges.push({ from, to: from, value: Decoration.widget({ widget, side: -1 }) });
+    const line = state.doc.lineAt(from);
+    if (to <= line.to && line.text.trim() === raw) {
+      addLines(
+        line.from,
+        line.to,
+        open ? "cm-otw-image-line cm-otw-image-source" : "cm-otw-image-line",
+      );
+    }
+    if (open) return true;
+    addReplacement(from, to, Decoration.replace({}));
+    return false;
   };
   const addSyntaxMarker = (
     from: number,
@@ -2016,7 +2051,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
       });
     }
     const box = `width: ${listUnits(width)}`;
-    const active = state.selection.ranges.some((range) =>
+    const active = revealRanges(state).some((range) =>
       range.empty
         ? range.head >= line.from && range.head < contentStart
         : range.from < contentStart &&
@@ -2081,16 +2116,16 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
     }
     if (tag.name === "img" && !tag.closing) {
       const source = safeImageSource(tag.attrs.src, state.facet(imageBaseDir));
-      if (source && !selfActive) {
-        const spec: ImageSpec = {
-          alt: tag.attrs.alt ?? "",
-          source,
-          title: tag.attrs.title ?? "",
-          width: Number(tag.attrs.width) || null,
-          height: Number(tag.attrs.height) || null,
-        };
-        addReplacement(node.from, node.to, Decoration.replace({ widget: new ImageWidget(spec) }));
-      } else {
+      const spec: ImageSpec | null = source
+        ? {
+            alt: tag.attrs.alt ?? "",
+            source,
+            title: tag.attrs.title ?? "",
+            width: Number(tag.attrs.width) || null,
+            height: Number(tag.attrs.height) || null,
+          }
+        : null;
+      if (!spec || addImage(node.from, node.to, spec, "html")) {
         addMark(node.from, node.to, "cm-otw-html");
       }
       return;
@@ -2279,26 +2314,20 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
         const widget = widgetByNode.get(name);
         // 勾选框和列表符号是一格，在 decorateListItem 里一起处理
         if (widget === "task") return false;
-        if (widget === "image" && !selfActive) {
+        if (widget === "image") {
           const image = resolveImage(
             state.doc.toString(),
             state.sliceDoc(node.from, node.to),
             state.facet(imageBaseDir),
           );
-          if (image) {
-            addReplacement(
-              node.from,
-              node.to,
-              Decoration.replace({ widget: new ImageWidget(image) }),
-            );
-            return false;
-          }
+          // 源码没露出来就不用往里走了；露出来了照常给 `![`、`](` 这些标记上色
+          if (image && !addImage(node.from, node.to, image, "markdown")) return false;
         }
         if (widget === "emoji") {
           const source = state.sliceDoc(node.from, node.to);
           const animated = animatedEmojiFor(source);
           if (animated) {
-            if (selectionEntersRange(state.selection.ranges, node.from, node.to)) {
+            if (selectionEntersRange(revealRanges(state), node.from, node.to)) {
               addMark(node.from, node.to, "cm-otw-glyph-source");
             } else {
               addReplacement(
@@ -2683,7 +2712,7 @@ const typoraInlineDecorations = ViewPlugin.fromClass(
       if (
         update.docChanged ||
         update.viewportChanged ||
-        update.selectionSet ||
+        revealRanges(update.startState) !== revealRanges(update.state) ||
         syntaxTree(update.startState) !== syntaxTree(update.state) ||
         update.startState.facet(imageBaseDir) !== update.state.facet(imageBaseDir) ||
         update.startState.facet(knownWikiTitles) !== update.state.facet(knownWikiTitles)
@@ -2702,8 +2731,12 @@ const typoraInlineDecorations = ViewPlugin.fromClass(
   },
 );
 
-/** 编辑器要的完整装饰扩展：块级 StateField + 行内 ViewPlugin。 */
-export const typoraDecorations: Extension = [typoraBlockDecorations, typoraInlineDecorations];
+/** 编辑器要的完整装饰扩展：块级 StateField + 行内 ViewPlugin，外加两层共用的「算数的选区」（reveal.ts）。 */
+export const typoraDecorations: Extension = [
+  revealField,
+  typoraBlockDecorations,
+  typoraInlineDecorations,
+];
 
 /**
  * `![alt](src "title")` / `![alt][ref]`，alt 里的 `|300` / `|300x200` 是 Obsidian 式尺寸。

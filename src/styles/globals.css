@@ -871,8 +871,12 @@ body.otw-dragging .otw-row-actions {
 .otw-editor .cm-content :focus ::selection {
   background: color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
+/* 选区层盖在文字上面，鼠标得穿过去：以前点在选区上（全选后点一下、在选区里点一下取消）
+   按下落在色块上，CodeMirror 收不到，焦点被 .cm-scroller（tabindex -1）接走，光标放不进去；
+   拖选时鼠标在色块和标题行之间来回进出，标题左边悬停浮出的「H1」也一闪一闪 */
 .otw-editor .otw-selection-layer {
   opacity: 0;
+  pointer-events: none;
 }
 .otw-editor .cm-editor.cm-focused .otw-selection-layer {
   opacity: 0.2;
@@ -1071,7 +1075,7 @@ body.otw-dragging .otw-row-actions {
   animation: none !important;
 }
 /* 图片是加载完靠 opacity 过渡淡入的，同理 */
-.otw-editor .cm-otw-image.is-settled {
+.otw-editor .cm-otw-image-frame.is-settled .cm-otw-image {
   transition: none;
 }
 
@@ -2317,16 +2321,47 @@ body.otw-dragging .otw-row-actions {
   line-height: calc(1.8em + 1px);
 }
 
-/* ---------- 图片 ---------- */
+/* ---------- 图片 ----------
+   图片一直画着，光标碰到它时源码在图片下面露出来一行（editor/widgets.ts 的 ImageWidget）。
+   外层 frame 管上下留白（行内 widget 同样别用 margin：块级子元素的上下 margin 会穿透
+   .cm-line 折叠出去，那一行量到的高度就少了），里层 box 贴着图片的边，悬停按钮、拖柄
+   按它定位。留白写 px 不写 em：源码露出来时那一行字号变小，em 会让图片跟着挪 */
+
+.otw-editor .cm-otw-image-frame {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 14px 0;
+  font-size: var(--otw-body-size);
+  line-height: 1.7;
+}
+/* 独占一行的图片、源码收着：这一行只剩图片，可 CodeMirror 在图片后面放的光标占位
+   （img.cm-widgetBuffer，1em 高）会在图片下面再撑出一行空行，这一行比图片高出 29px，
+   源码一露出来又换成一行小字 —— 高度对不上。字号压成 0，那一行空行就没有高度了 */
+.otw-editor .cm-line.cm-otw-image-line:not(.cm-otw-image-source) {
+  font-size: 0;
+  line-height: 0;
+}
+/* 源码贴着图片下沿，像一行图注：下面的正文只让出一行小字的高度 */
+.otw-editor .cm-otw-image-frame.is-open {
+  padding-bottom: 4px;
+}
+.otw-editor .cm-line.cm-otw-image-source {
+  color: var(--color-muted);
+  font-size: 0.86em;
+  line-height: 1.6;
+}
+.otw-editor .cm-otw-image-box {
+  position: relative;
+  display: block;
+  line-height: 0;
+}
 
 .otw-editor .cm-otw-image {
   display: block;
-  /* 行内 widget 同样别用 margin：块级子元素的上下 margin 会穿透 .cm-line
-     折叠出去，那一行量到的高度就少了。padding 不会折叠。 */
   box-sizing: content-box;
   max-width: min(100%, 680px);
   max-height: 520px;
-  padding: 0.8em 0;
   border-radius: 8px;
   object-fit: contain;
   /* 加载完再淡入，别让大图「啪」地把正文顶下去 */
@@ -2340,6 +2375,236 @@ body.otw-dragging .otw-row-actions {
 .otw-editor .cm-otw-image.is-error {
   color: var(--color-faint);
   font-size: 0.9em;
+  line-height: 1.6;
+}
+/* 自己定了宽度（`![alt|宽]`、拖过拖柄）：不再按 680 / 520 封顶，只是别超出这一栏 */
+.otw-editor .cm-otw-image.has-size {
+  max-width: 100%;
+  max-height: none;
+}
+/* 正在看大图：这一张飞出去了，原地留空位（imageViewer.ts） */
+.otw-editor .cm-otw-image.is-viewing {
+  visibility: hidden;
+}
+
+/* 源码开着、正在拖大小：隔一圈底色的主色描边，告诉人改的是这一张。和焦点框一样
+   直接出现，不做过渡：box-shadow 不做动画（docs/技术方案.md §10.1 第 2 条），淡 opacity
+   又会让这一圈在淡完时挪半个像素（CLAUDE.md「动效：先对齐再动」） */
+.otw-editor .cm-otw-image-frame:is(.is-open, .is-resizing) .cm-otw-image {
+  box-shadow: 0 0 0 2px var(--color-canvas), 0 0 0 4px
+    color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+.otw-editor .cm-otw-image-frame.is-resizing {
+  cursor: nwse-resize;
+  user-select: none;
+}
+
+/* 右上角的悬停按钮、右下角的拖柄、拖大小时的「宽 × 高」：同一块深色底，浅图深图上
+   都看得清。只淡入 —— 不位移、不缩放、不用 backdrop-filter：合成器上跑的位移会把整块
+   当位图平移，动画里图标发虚，结束那一帧重画、清楚一下，看着就是「出来的时候闪了一下」
+   （docs/技术方案.md §10.1 第 4 条）。底色要够深，白图标才清楚 */
+.otw-editor :is(.cm-otw-image-tools, .cm-otw-image-handle, .cm-otw-image-size) {
+  background: rgb(20 20 19 / 0.74);
+  box-shadow: inset 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 2px 8px rgb(0 0 0 / 0.16);
+  /* 一直待在自己的图层上：淡入那几帧浏览器本来就会把它提成单独一层，层里和页面里的
+     抗锯齿不一样，淡完退回页面里画的那一帧，图标笔画、圆角整体变一下（逐帧对比 536 个
+     像素不同）—— 看着就是闪了一下。一直在层上，淡入前后是同一种画法。位置另外对齐到
+     整物理像素（lib/devicePixels.ts），层里画出来才不糊。见 CLAUDE.md「动效：先对齐再动」 */
+  will-change: opacity;
+}
+.otw-editor .cm-otw-image-tools {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  /* 内边距、按钮、间隔都取偶数：1.5 倍屏上落在整物理像素上，图标笔画不糊 */
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  line-height: 0;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out-quint);
+  pointer-events: none;
+}
+.otw-editor .cm-otw-image-box:hover .cm-otw-image-tools {
+  opacity: 1;
+  pointer-events: auto;
+}
+.otw-editor .cm-otw-image-tool {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  transition: background-color var(--duration-instant) linear;
+}
+.otw-editor .cm-otw-image-tool:hover {
+  background: rgb(255 255 255 / 0.18);
+}
+.otw-editor .cm-otw-image-tool:active {
+  background: rgb(255 255 255 / 0.26);
+}
+.otw-editor .cm-otw-image-tool.is-active {
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+}
+.otw-editor .cm-otw-image-tool-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* 拖柄：一个圆角的直角 */
+.otw-editor .cm-otw-image-handle {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out-quint);
+}
+.otw-editor .cm-otw-image-handle::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid #fff;
+  border-bottom: 1.5px solid #fff;
+  border-bottom-right-radius: 2px;
+}
+.otw-editor :is(.cm-otw-image-box:hover, .cm-otw-image-frame.is-resizing) .cm-otw-image-handle {
+  opacity: 1;
+}
+/* 太小的图不放按钮（盖住大半张）；拖大小时按钮也先收起来；坏图两样都没有 */
+.otw-editor .cm-otw-image-frame:is(.is-tiny, .is-resizing) .cm-otw-image-tools,
+.otw-editor .cm-otw-image.is-error ~ :is(.cm-otw-image-tools, .cm-otw-image-handle) {
+  display: none;
+}
+
+.otw-editor .cm-otw-image-size {
+  position: absolute;
+  right: 30px;
+  bottom: 5px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: otw-fade-in var(--duration-fast) var(--ease-out-quint) both;
+}
+
+/* 查看大图（editor/imageViewer.ts）：背后的页面磨砂、淡下去，图片从正文里原地飞出来。
+   磨砂层是静态的，只淡 opacity（和命令面板一样） */
+.otw-image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  outline: none;
+  user-select: none;
+}
+.otw-image-viewer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--color-canvas) 78%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  backdrop-filter: blur(20px) saturate(1.3);
+  cursor: zoom-out;
+}
+/* 缩放改的是 left / top / width / height，不是 transform：每一帧都按当时的大小画，
+   放大到几倍也是清楚的。transform 只在飞出、飞回那一下用 */
+.otw-image-viewer-image {
+  position: fixed;
+  max-width: none;
+  border-radius: 10px;
+  box-shadow: var(--shadow-modal);
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.otw-image-viewer-image.is-pannable {
+  cursor: grab;
+}
+.otw-image-viewer-image.is-panning {
+  cursor: grabbing;
+}
+/* 底部的缩放条、右上角的关闭：和图片上的悬停按钮同一块深色底。居中用 margin 不用
+   translate(-50%)：宽度是奇数时会落在半个像素上，字发虚 */
+.otw-image-viewer-bar,
+.otw-image-viewer-close {
+  position: fixed;
+  display: flex;
+  align-items: center;
+  /* 同图片上的悬停按钮：一直在自己的图层上，淡入淡出前后同一种画法 */
+  will-change: opacity;
+  background: rgb(20 20 19 / 0.78);
+  box-shadow: inset 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 4px 16px rgb(0 0 0 / 0.18);
+  color: #fff;
+}
+.otw-image-viewer-bar {
+  right: 0;
+  bottom: 24px;
+  left: 0;
+  gap: 1px;
+  width: fit-content;
+  margin: 0 auto;
+  padding: 3px;
+  border-radius: 10px;
+}
+.otw-image-viewer-close {
+  top: 18px;
+  right: 18px;
+  padding: 3px;
+  border-radius: 10px;
+}
+.otw-image-viewer-button {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  transition: background-color var(--duration-instant) linear;
+}
+.otw-image-viewer-button:hover {
+  background: rgb(255 255 255 / 0.16);
+}
+.otw-image-viewer-button:active {
+  background: rgb(255 255 255 / 0.24);
+}
+.otw-image-viewer-button:disabled {
+  cursor: default;
+  opacity: 0.38;
+  background: transparent;
+}
+.otw-image-viewer-button.is-zoom {
+  min-width: 54px;
+}
+.otw-image-viewer-button svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* ---------- [TOC] ---------- */

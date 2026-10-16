@@ -101,6 +101,23 @@ export function selectionTouchesRange(
 }
 
 /**
+ * 选区是否要把图片换回源码：光标碰到它（贴在两边也算，点在图片旁边就能改地址），
+ * 或者选区只切到它的一部分。选区把它整个包住时不算 —— 拖着选过一张图，图还是图，
+ * 不会一松手缩成一行地址、下面整篇往上跳一大截。
+ */
+export function selectionOpensRange(
+  ranges: readonly SelectionRangeLike[],
+  from: number,
+  to: number,
+): boolean {
+  return ranges.some((range) =>
+    range.empty
+      ? range.head >= from && range.head <= to
+      : range.from < to && range.to > from && (range.from > from || range.to < to),
+  );
+}
+
+/**
  * 选区是否「进到了」一个当字符用的替身里（动态表情）：光标严格落在内部，
  * 或者选区只切到它的一部分。光标贴在两边、选区整个把它包住都不算 ——
  * 这时它仍然显示成一个表情。

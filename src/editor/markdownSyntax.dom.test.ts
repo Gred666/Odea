@@ -421,7 +421,9 @@ describe("打字时的块级层", () => {
       }
     }
     expect(checked).toBeGreaterThan(300);
-  });
+    // 整篇每隔 53 个字符改三种、每次都整篇重建一遍比对：单独跑 2–3 秒，全量并行时机器忙，
+    // 会超过默认的 5 秒
+  }, 20_000);
 
   it("matches a rebuild at every position of the list and quote sections", () => {
     for (const [start, end] of [
