@@ -1,7 +1,7 @@
 /* ============================================================
 自动更新（技术方案 §14.4）。
 
-发版时 CI 把安装包和 latest.json 放到 GitHub Releases，再传一份到 Gitee（国内）。这里：
+发版时 CI 把安装包和 latest.json 放到 GitHub Releases。这里：
 - 窗口出来以后等一会儿查一次，之后每 6 小时查一次。查到新版就在后台下载、验签，
   下好了才告诉前端（导航栏里出现「新版本」那一行），用户点了只等重启，不等下载。
   连不上就算了，半小时后再试 —— 本地优先的应用，离线是常态，不报错
@@ -10,8 +10,8 @@
   macOS / Linux 换掉程序文件以后自己重启
 - Linux 的 deb / rpm 要 root 才能装，不在应用里装：只提示，「去下载」打开下载页
 - 请求走同步的那个代理（sync/proxy.rs）：开着 Clash 时同步连得上，检查更新也连得上
-- 两个地址：Gitee 在前、GitHub 兜底，一个地址从查到下载、验签哪一步不行就整条换下一个；
-  一个地址说「已经是最新」也接着问下一个（发版时 Gitee 比 GitHub 晚一步，见 check）
+- 地址可以有好几个（tauri.conf.json 的 endpoints，现在只有 GitHub 一个）：一个地址从查到下载、验签
+  哪一步不行就整条换下一个；一个地址说「已经是最新」也接着问下一个（见 check）
 
 安装包用发版人的私钥签过名，公钥写在 tauri.conf.json 的 plugins.updater.pubkey，
 下载完先验签，对不上的不装。公钥没填（还没生成密钥）就不查。
@@ -36,7 +36,7 @@ use crate::error::{AppError, Result};
 use crate::state::AppState;
 use crate::sync::proxy;
 
-/// 在应用里装不了的（deb / rpm）点「去下载」打开这里。deb 只放 GitHub（Gitee 只放自动更新要的那几个包）
+/// 在应用里装不了的（deb / rpm）点「去下载」打开这里
 const DOWNLOAD_PAGE: &str = "https://github.com/Gred666/OnTheWay/releases/latest";
 /// 窗口出来以后等多久查第一次：别和启动、第一轮同步抢网
 const FIRST_CHECK: Duration = Duration::from_secs(20);
@@ -147,13 +147,12 @@ fn auto_check() -> bool {
     !cfg!(debug_assertions) || std::env::var_os("ONTHEWAY_UPDATER_ENDPOINT").is_some()
 }
 
-/// 查一次。latest.json 的地址一个一个试（tauri.conf.json 里的顺序：Gitee 在前，国内连得快；GitHub 兜底）。
+/// 查一次。latest.json 的地址一个一个试（tauri.conf.json 里的顺序；现在只有 GitHub，
+/// 测试时 ONTHEWAY_UPDATER_ENDPOINT 可以给好几个）。
 /// 一个地址查到了新版、安装包却下不下来或者签名对不上，就换下一个地址整条再走一遍 ——
-/// latest.json 拿得到不代表安装包也下得动（国内能打开 GitHub 的页面，下载却常常卡住）。
-/// 插件自己的多地址只管「latest.json 取不到就换」，管不到这一层。
+/// latest.json 拿得到不代表安装包也下得动。插件自己的多地址只管「latest.json 取不到就换」，管不到这一层。
 ///
-/// 一个地址回答「已经是最新的」也接着问下一个：发版时 GitHub 先上线，Gitee 在后台慢慢传、
-/// 传完才换它的 latest.json（技术方案 §14.4），这段时间里 Gitee 说的「最新」是上一版。
+/// 一个地址回答「已经是最新的」也接着问下一个：前面的地址可能是不再更新的镜像（以前的 Gitee 就是）。
 /// 都问过了、没有一个查到新版：有一个说「最新」就是最新，不然报最后那个错
 async fn check<R: Runtime>(app: &AppHandle<R>, hub: &UpdateHub, data_dir: &Path) -> Result<Checked> {
     let _one_at_a_time = hub.checking.lock().await;

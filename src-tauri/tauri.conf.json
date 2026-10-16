@@ -48,7 +48,6 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkyMTNBM0M4MDBBNTYwQTgKUldTb1lLVUF5S01Ua3RSZDkrSmg4N29wTEZoTDZyM2UyNm1aR2d6RjdEaEFzZkJvUC9rTXRmckcK",
       "endpoints": [
-        "https://gitee.com/hyxzs111111/on-the-way/releases/download/updater/latest.json",
         "https://github.com/Gred666/OnTheWay/releases/latest/download/latest.json"
       ],
       "windows": { "installMode": "passive" }

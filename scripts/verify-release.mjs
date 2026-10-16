@@ -1,10 +1,10 @@
-// 发版以后核对两边：node scripts/verify-release.mjs 0.1.0
+// 发版以后核对：node scripts/verify-release.mjs 0.1.0
 //
 // 只用公开地址、不带令牌 —— 用户的应用看到的就是这些：
 // - GitHub Release 正式发布了（不是草稿）
-// - 两个 latest.json（应用依次查的地址，tauri.conf.json 的 endpoints）都是这一版，签名一样
-// - Gitee 那份里，传到 Gitee 的更新包（Windows、Mac）地址指向 gitee.com —— 0.1.0 第一次就是这里全指着 GitHub、
-//   Gitee 上一个文件都没有，旧的核对脚本没看出来
+// - latest.json（应用查的地址，tauri.conf.json 的 endpoints）是这一版
+// - 里面的下载地址都是 github.com/…/releases/download/… 的普通下载地址，不是 api.github.com 的接口地址
+//   （接口地址不登录每个 IP 每小时只能调 60 次，scripts/github-latest.mjs 在发布前换掉）
 // - 每个下载地址都像应用那样下得动（Accept: application/octet-stream），下来的是文件、不是网页或 JSON
 import { readFileSync } from "node:fs";
 
@@ -17,8 +17,6 @@ const tag = `v${version}`;
 const GITHUB = "Gred666/OnTheWay";
 const config = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const endpoints = config.plugins.updater.endpoints;
-/** 只放 GitHub 的（和 scripts/gitee-release.mjs 一致）：Gitee 那份里它们照旧指向 GitHub */
-const GITHUB_ONLY = /^linux-/;
 
 let failures = 0;
 const check = (ok, what, detail = "") => {
@@ -62,16 +60,10 @@ for (const url of endpoints) {
   }
 }
 
-const gitee = feeds.find((entry) => entry.host === "gitee.com")?.feed;
-const github = feeds.find((entry) => entry.host === "github.com")?.feed;
-if (gitee && github) {
-  const same = Object.keys(github.platforms).every(
-    (platform) => gitee.platforms[platform]?.signature === github.platforms[platform].signature,
-  );
-  check(same, "两份 latest.json 的平台和签名一样");
-  for (const [platform, entry] of Object.entries(gitee.platforms)) {
-    const onGitee = new URL(entry.url).hostname === "gitee.com";
-    check(onGitee !== GITHUB_ONLY.test(platform), `Gitee 那份的 ${platform} 指向 ${onGitee ? "Gitee" : "GitHub"}`);
+const plain = `https://github.com/${GITHUB}/releases/download/${tag}/`;
+for (const { host, feed } of feeds) {
+  for (const [platform, entry] of Object.entries(feed.platforms)) {
+    check(entry.url.startsWith(plain), `${host} 那份的 ${platform} 是普通下载地址`, `（是 ${entry.url}）`);
   }
 }
 
