@@ -47,9 +47,12 @@ async winIsMaximized() : Promise<boolean> {
 async winStartDragging() : Promise<boolean> {
     return await TAURI_INVOKE("win_start_dragging");
 },
-async noteListFull(archived: boolean) : Promise<Result<Note[], AppError>> {
+/**
+ * 一个列表（笔记 / 归档）的全部笔记，不带正文：打开哪篇再 note_get 哪篇
+ */
+async noteList(archived: boolean) : Promise<Result<NoteSummary[], AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("note_list_full", { archived }) };
+    return { status: "ok", data: await TAURI_INVOKE("note_list", { archived }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -199,9 +202,25 @@ async folderReveal(folder: string) : Promise<Result<null, AppError>> {
     else return { status: "error", error: e  as any };
 }
 },
-async searchNotes(query: string, limit: number) : Promise<Result<SearchResult, AppError>> {
+/**
+ * 搜正文：大小写不敏感的子串，笔记（含归档）和日记、目标各自最多 limit 条；archived_only
+ * 只搜归档里的笔记（归档的搜索框）。被同一处后来的搜索顶掉的这一次返回空结果（前端只认最后一次的）
+ */
+async searchText(query: string, limit: number, archivedOnly: boolean) : Promise<Result<TextSearch, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("search_notes", { query, limit }) };
+    return { status: "ok", data: await TAURI_INVOKE("search_text", { query, limit, archivedOnly }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 全局搜索（Ctrl+Shift+F，像 VS Code 的「在文件中查找」）：笔记（含归档）、日记、目标的正文里
+ * 每一处命中，可以区分大小写、全词匹配、用正则。被后来的搜索顶掉的这一次返回空结果
+ */
+async findInVault(query: string, options: FindOptions) : Promise<Result<FindResult, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("find_in_vault", { query, options }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -820,6 +839,58 @@ mine: boolean;
  */
 title: string }
 /**
+ * 全局搜索里命中了的一篇
+ */
+export type FindFile = { target: DocTarget; 
+/**
+ * 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc）
+ */
+title: string; updatedAt: number; 
+/**
+ * 这一篇里给出的命中（总数到了上限，后面的就不给了）
+ */
+matches: FindMatch[]; 
+/**
+ * 这一篇里一共几处
+ */
+count: number }
+/**
+ * 全局搜索里的一处命中
+ */
+export type FindMatch = { 
+/**
+ * 第几行，从 1 开始
+ */
+line: number; 
+/**
+ * 在这一行里从第几个 UTF-16 码元开始、占几个（编辑器里的位置按 UTF-16 算）：跳进文档后选中它
+ */
+column: number; length: number; 
+/**
+ * 给人看的一段：命中处前面一小截（截掉了的话以「…」开头）、命中的字、后面一截
+ */
+before: string; text: string; after: string }
+/**
+ * 全局搜索（find_in_vault）的条件：和编辑器里查找面板的三个开关一样
+ */
+export type FindOptions = { caseSensitive: boolean; wholeWord: boolean; regex: boolean }
+/**
+ * 全局搜索的结果：笔记（含归档，顺序同两个列表接起来）在前，日记、目标（最近改过的在前）在后
+ */
+export type FindResult = { files: FindFile[]; 
+/**
+ * 一共几处（没给出来的也数了）
+ */
+total: number; 
+/**
+ * 命中太多，只给了前面一部分（vault::FIND_MATCH_LIMIT）
+ */
+truncated: boolean; 
+/**
+ * 正则写错了：给人看的原因（这时 files 是空的）
+ */
+error: string | null }
+/**
  * 删掉一个文件夹的结果，原样交回 folder_undelete 就能撤销
  */
 export type FolderDeletion = { 
@@ -882,7 +953,7 @@ body: string }
  */
 export type IndexProgress = { done: number; total: number }
 /**
- * 某一天 / 某个周期的目标，连同正文：命令面板拿它搜日记和目标
+ * 写过的某一天 / 某个周期的目标（不带正文）：命令面板拿它按标题搜日记和目标，正文走 search_text
  */
 export type JournalDoc = { target: DocTarget; 
 /**
@@ -892,7 +963,7 @@ kind: string;
 /**
  * 给人看的标题：「10月6日 · 完成专注模式原型」「第 41 周目标」
  */
-title: string; contentMd: string; updatedAt: number }
+title: string; updatedAt: number }
 export type LinkRewrite = { relPath: string; before: string; after: string }
 export type Note = { id: string; title: string; contentMd: string; excerpt: string; wordCount: number; isPinned: boolean; isArchived: boolean; archiveCategory: string | null; archivedAt: number | null; createdAt: number; updatedAt: number; 
 /**
@@ -908,6 +979,11 @@ conflictOf: string | null }
  * id 为 None 表示新建。
  */
 export type NoteInput = { id: string | null; title: string; contentMd: string }
+/**
+ * 列表里的一篇：Note 去掉正文。仓库里有多少篇列表就给多少篇，正文打开时再取（note_get）、
+ * 搜正文走 search_text —— 前端不留每篇的全文，篇数再多常驻内存也只多一点摘要（技术方案 §13.2）
+ */
+export type NoteSummary = { id: string; title: string; excerpt: string; wordCount: number; isPinned: boolean; isArchived: boolean; archiveCategory: string | null; archivedAt: number | null; createdAt: number; updatedAt: number; relPath: string; conflictOf: string | null }
 /**
  * 笔记改了标题之后，别处的 `[[旧标题]]` 改成了新标题（Vault::relink）
  */
@@ -928,16 +1004,6 @@ skipped: string | null;
  * 每篇改之前、之后的全文，原样交给 note_relink_undo 就能撤销
  */
 rewrites: LinkRewrite[] }
-export type SearchHit = { id: string; title: string; excerpt: string; isArchived: boolean; updatedAt: number; 
-/**
- * bm25 分数，越小越相关
- */
-score: number }
-export type SearchResult = { hits: SearchHit[]; 
-/**
- * 前端拿它在原始正文上做高亮（不能用 SQLite 的 snippet，见 search.rs）
- */
-tokens: string[] }
 /**
  * 一个登录过的同步账号
  */
@@ -1066,6 +1132,22 @@ source: DocTarget | null;
  * 在那篇正文里的行号（从 0 开始）
  */
 line: number | null }
+/**
+ * search_text 的一条：正文里出现了要找的字的文档
+ */
+export type TextHit = { target: DocTarget; 
+/**
+ * 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc）
+ */
+title: string; updatedAt: number; 
+/**
+ * 第一次出现的那一行（很长的话截一段，前后各留一大截）：前端在里面再截出要显示的一小段
+ */
+line: string }
+/**
+ * 搜正文的结果：笔记（含归档，顺序同两个列表接起来）和日记、目标（最近改过的在前）各自最多 limit 条
+ */
+export type TextSearch = { notes: TextHit[]; journal: TextHit[] }
 /**
  * 一个等着装的新版本
  */

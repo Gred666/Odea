@@ -1,5 +1,5 @@
 import { useData } from "@/data/store";
-import { type DocumentSaveTarget, goalKey } from "@/data/types";
+import { type DocumentAnchor, type DocumentSaveTarget, goalKey } from "@/data/types";
 import { useApp } from "./store";
 
 /**
@@ -35,16 +35,24 @@ export function selectNeighbor(id: string): void {
 }
 
 /**
- * 打开一篇文档：切到它所在的区、选中它，可选地记下要滚到的小节或行
- * （DocumentView 在那一篇的编辑器挂上后滚过去）。
+ * 打开一篇文档：切到它所在的区、选中它，可选地记下要滚到的小节或行（全局搜索的结果还要选中
+ * 那一处命中，见 DocumentAnchor）。DocumentView 在那一篇的编辑器挂上后滚过去。
  *
  * docKey 要和 data/adapter.ts 给每篇文档起的 key 一模一样，否则锚点永远等不到它那一篇：
  * 笔记 `note-` / 归档 `archive-` / 某一天 `day-` / 目标 `goal-周期键`。
  */
-export function openDocument(
-  target: DocumentSaveTarget,
-  anchor?: { heading?: string; line?: number },
-): void {
+export function openDocument(target: DocumentSaveTarget, anchor?: DocumentAnchor): void {
+  // 笔记的正文是按需取的：先取回来再切过去（一般就几毫秒），不然常常还要跨区，先换区、
+  // 再在新的区里等正文，会先闪一下那个区上次显示的那一篇
+  const data = useData.getState();
+  if (target.kind === "note" && data.bodies[target.id] === undefined) {
+    void data.loadBody(target.id).then(() => show(target, anchor));
+    return;
+  }
+  show(target, anchor);
+}
+
+function show(target: DocumentSaveTarget, anchor?: DocumentAnchor): void {
   const app = useApp.getState();
   let docKey: string;
   if (target.kind === "note") {

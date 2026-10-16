@@ -15,6 +15,7 @@ const POPUPS = [
   "TemplatePicker.tsx",
   "SuggestMenu.tsx",
   "../components/CommandPalette.tsx",
+  "../components/FindDialog.tsx",
 ];
 
 /** 箭头（U+2190–21FF）、杂项技术符号（U+2300–23FF，⌘ ⌫ ⏎） */

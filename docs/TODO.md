@@ -180,7 +180,7 @@ cd src-tauri; cargo run --example export_bindings --features typegen --no-defaul
 - `0001_init.sql` + 三次迁移（见技术方案 §5.3）
 - 连接池 + PRAGMA（WAL / foreign_keys 每连接都要设）；迁移前 Online Backup；`DbTooNew` 拒绝降级
 - `domain/` 各模块 + 59 个单测（迁移链路、FTS5、rrule / 时区、双链、延续语义…）
-- jieba 分词 + FTS5（**不要用 trigram**，中文双字词搜不到）；`build_match_query` 空 / 纯标点返回 None
+- 搜正文：纯文本匹配，不分词（`search_text` 子串；全局搜索 `find_in_vault` 带大小写 / 全词 / 正则）。jieba 分词 + FTS5 在 2026-10-16 去掉了：词典常驻 40 多 MB，那套搜索没有界面在用（技术方案 §6）
 - tauri-specta 生成 `src/lib/bindings.ts`；三个 crate 版本 `=` 锁死；`typegen` feature 可不起 app 导出
 - 笔记 / 任务变更与 append-only `activity` 同一事务
 - 双链保存时同步 `link(kind='ref')`，不存在的目标保留 Markdown
@@ -238,6 +238,8 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 ## P7 打磨
 
 - [x] ~~全文搜索接回界面~~ —— 不做：标题筛选（归档按标题 + 正文）就够用（2026-10-06）
+- [x] 全局搜索（2026-10-16）：Ctrl+Shift+F 或命令面板「在所有笔记里搜索…」，像 VS Code 的「在文件中查找」—— 笔记（含归档）、日记、目标的正文里每一处，按篇分组、带行号；区分大小写 / 全词 / 正则三个开关（Alt+C / W / R）；回车打开那一篇并选中那一处，篇内查找接着用同一个条件。Rust 的 `find_in_vault`，纯文本匹配（技术方案 §6.1）。还没做：批量替换
+- [x] 去掉 jieba 分词 + FTS5 全文索引（2026-10-16）：词典常驻 43 MB 工作集，那套搜索没有界面在用。0.1.0 的 Rust 进程 49 MB 几乎全是它（技术方案 §6.2、§13.2）
 - [x] 双链 `[[…]]` 编辑器内表现 + Mod 点击跳转（反向链接面板还没有）
 - [x] callout `> [!标签]` 的编辑器内表现
 - [x] 代码块语法高亮 + 复制按钮
@@ -288,21 +290,33 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - 块级公式缩字号改成一批一起量（`math.ts`）：以前每条公式「写字号 → 量宽度」各强制排版一次；顺带修了窄窗口冷启动时泰勒展开式被截掉 2px
   - 命令面板搜全文时按笔记对象缓存小写的正文（以前每打一个字把所有正文重新转一遍小写）
   - 结果：启动停在短笔记首屏 966 → 386ms（最长任务 728 → 238）；停在长文 1147 → 630ms；切换笔记 INP 中位数 304 → 176ms（切到长文 552 → 256）；长文里按 ↓ 47 → 31ms；切回笔记区最长一帧 399 → 290ms；列表 DOM 节点 3463 → 2176。打字、命令面板、切区基本没变
-  - Rust 侧不是瓶颈（`large_vault_timings`，2000 篇 + 365 天日记、正文 6.7 MB，release）：再次启动对齐索引 16ms、全量笔记列表 32ms + 序列化 8ms（7.6 MB JSON）、搜索 21ms、反向链接 27ms、自动保存一次 27ms。只有第一次打开一个大文件夹建索引要 2 秒（分词），在 `setup` 里、窗口出来之前
+  - Rust 侧不是瓶颈（`large_vault_timings`，2000 篇 + 365 天日记、正文 6.7 MB，release）：再次启动对齐索引 16ms、全量笔记列表 32ms + 序列化 8ms（7.6 MB JSON）、搜索 21ms、反向链接 27ms、自动保存一次 27ms。只有第一次打开一个大文件夹建索引要 2 秒（分词，2026-10-16 去掉 jieba 后不用分词了），在 `setup` 里、窗口出来之前
   - 开发构建（`pnpm dev` / `tauri dev`）同样的操作慢 2.5–3.5 倍：启动 950ms、切换 376ms、切到长文 900ms。体感卡不卡以发布版为准
 - [x] 性能回归脚本（2026-10-13）：`scripts/perf/`，见「常用命令」。Rust 侧是 `vault/tests.rs` 的 `large_vault_timings`（`#[ignore]`，手动跑）
 - [x] 性能第二轮（2026-10-13）
   - 打字时块级层不再整篇重建：改动全落在一个普通段落（列表、引用里的也算）里、段落头尾跟着平移时，把旧的映射过去（`mapBlockState`，技术方案 §11.2）。70KB 长文里一次按键的状态更新 1.5–2ms → 0.3–0.5ms（不降速）。语法全览里各处插字、删字、回车都和整篇重建的结果比对过（测试守着）
   - 归档列表也分批画、卡片 `memo`（分批的逻辑挪到 `ListColumn` 的 `useRowBatch` / `MoreRows`，两个列表共用）；归档搜索也用缓存的小写正文
   - 文件多时后台读进索引（技术方案 §5.7）：第一次打开一个大文件夹、索引 `VERSION` 升了要重建时，以前窗口要等 2 秒（两千篇）才出来，现在等 12ms，后台 2 秒读完；侧栏显示「正在读取笔记 1234 / 2000」。某一天 / 某个周期还没读到时取它会当场补读，不会拿空文档盖掉磁盘上的。还没在真实桌面应用里走过一遍（要关掉正在用的应用）
-- [ ] 打包与签名、自动更新：Tauri updater，安装包和 latest.json 放 GitHub Releases + Gitee Releases（国内）；更新说明随安装包带、升级后第一次打开提示一次，不写进仓库。更新签名的私钥要先生成、自己保管（技术方案 §14.4）
+- [x] 编辑区打磨第一轮（2026-10-14，用户报的两张截图起头，技术方案 §11.2「列表的几何」、§11.4.4、§11.5）
+  - 选区高低不齐（「没对齐」）：原生选区按每段文字自己的字号画，`#`、`**` 这些小字号标记底下矮一截。改成自己画（`selectionLayer.ts`），每行一整块；选中的淡灰标记也不再被染黑
+  - 粘贴截图后光标停在图片中间（「光标」）：图片加载完没让 CodeMirror 重新量。现在图片、块级 HTML 里的图加载完都 `requestMeasure`
+  - 列表：折行悬挂对齐正文；缩进按层级算（两个空格、四个空格一样宽）；嵌套待办看得出缩进；光标进到列表项里圆点不再变回 `- `、正文不再左右跳（只有光标在符号上才露源码，格子一样宽）；列表项里的标题、图片、第二段对齐这一项的正文
+  - Tab / Shift+Tab 按层级挪整项（有序列表以前加两个空格等于没缩进）；Home 先到正文开头
+  - 列表项里粘贴图片留在这一项里，光标那一行也在
+  - 引用：光标进引用块不再每行露出 `> `、整块右移；`>` 只在光标碰到时画在竖线右边的留白里
+  - 标题的 `#` 和标题字一样大、同一条基线
+  - 四个空格缩进的代码块补上上下边和圆角（以前是一条敞口的色带）
+  - 性能：生产构建 4 倍降速，打字、↓、滚动和改前一样；Shift+↓ 扩选每键多约 1–5ms（选区多一次版面读取）
+- [ ] 打包与签名、自动更新：Tauri updater，安装包和 latest.json 放 GitHub Releases（Gitee 镜像 2026-10-16 去掉了）；更新说明随安装包带、升级后第一次打开提示一次，不写进仓库。更新签名的私钥要先生成、自己保管（技术方案 §14.4）
   - [x] 应用这一侧（2026-10-13）：`update.rs` 后台查、下载、验签，下好了导航栏同步那一行上面出现「新版本 0.2.0」，点开是新版本卡片（「稍后」/「重启并更新」，没有跳过这个版本）；装之前先存编辑器、推同步、记窗口位置；deb / rpm 只提示、打开下载页；请求走同步的代理。命令面板「检查更新」「这一版的更新说明」。升级后第一次打开弹一次更新说明（`config.json` 的 `lastVersion`，正文是 `src/content/changelog.md`）。版本号只剩 `package.json` 和 `Cargo.toml` 两处，`pnpm bump` 一起改，测试对两处一样。本机用测试密钥 + 本地 latest.json 在真实应用里走过：签名不对的不装、对的下好后卡片弹出、点「重启并更新」交给安装包、进程退出
   - [x] 生成正式的更新签名密钥（2026-10-13）：私钥在 `%USERPROFILE%\.tauri\ontheway.key`（带密码，公钥 ID 9213A3C800A560A8；第一对的密码在 GitHub 上对不上，重新生成过），公钥已填进 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥和密码另外备份（密码管理器）；`.gitignore` 挡了 `*.key`。PowerShell 里 `-w ~/…` 不展开 `~`，会生成在当前目录下一个叫 `~` 的文件夹里。本机打包要设 `TAURI_SIGNING_PRIVATE_KEY`（私钥内容或文件路径；这一版 CLI 不认 `_PATH`）和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。密钥要设密码：PowerShell 里把环境变量设成空串等于删掉，CLI 会卡在问密码
   - [x] 发版 CI（2026-10-13，写好了、还没在 GitHub 上跑过）：`.github/workflows/release.yml`，打 `v*` tag 触发。先 `scripts/release-notes.mjs` 对版本（tag = package.json = Cargo.toml = Cargo.lock）、取 `changelog.md` 最上面那一节（不是这一版就不发），跑类型检查和前端测试；再 Windows / macOS（Apple 芯片、Intel 各一个）/ Linux 并行打包、签名，建草稿 Release，附件里有安装包、`.sig`、`latest.json`。Publish 之后用户才查得到。手动 Run workflow = 试打包，安装包在 Artifacts 里，不建 Release。两个 Secret 已经加了。bundle 目标加了 `app`（macOS 的更新包从 .app 打）
   - [ ] 第一次在 GitHub 上跑：先试打包，看 macOS / Linux 能不能编过（这个项目还没在这两个平台上编过）
     - 第一次试打包（2026-10-13）四个都挂了：Windows / Linux / macOS Apple 芯片编完了，签名时「Wrong password for that key」—— Secret 里的密码和私钥对不上，要重填；macOS Intel 在 Apple 芯片机器上交叉编，找不到 OpenSSL（git2 带进来的 openssl-sys），改成 macOS 上 vendored，CI 加了 otool 检查。Actions 升到 Node 24 的版本（checkout / setup-node v7、pnpm/action-setup v6、tauri-action v1）
-  - [x] Gitee 镜像（2026-10-13）：仓库 `hyxzs111111/on-the-way`（公开）。附件不登录能下、单个 ≤ 100 MB、仓库一共 ≤ 1 GB（实测 + 帮助文档）；没有 latest/download，latest.json 放在固定的 `updater` 发行版。`scripts/gitee-release.mjs` + CI 的「同步到 Gitee」，四个打包都成了才镜像、镜像成了才正式发布，只留最近两版。应用的 `endpoints` 改成 Gitee 在前、GitHub 兜底，`update.rs` 一个地址从查到下载验签整条不行就换下一个（本机走过）。下载页（deb / rpm）改成 Gitee 的发行版页。Mac 加了临时签名（`signingIdentity: "-"`）
-  - [ ] Secret `GITEE_TOKEN` 加上以后试打包一次（看 Mac 临时签名编不编得过、Gitee 令牌能不能推），再发 0.1.0
+  - [x] ~~Gitee 镜像~~（2026-10-13 做的，2026-10-16 去掉了，见下面）：仓库 `hyxzs111111/on-the-way`（公开）。附件不登录能下、单个 ≤ 100 MB、仓库一共 ≤ 1 GB（实测 + 帮助文档）；没有 latest/download，latest.json 放在固定的 `updater` 发行版。`scripts/gitee-release.mjs` + CI 的「同步到 Gitee」，四个打包都成了才镜像、镜像成了才正式发布，只留最近两版。应用的 `endpoints` 改成 Gitee 在前、GitHub 兜底，`update.rs` 一个地址从查到下载验签整条不行就换下一个（本机走过）。下载页（deb / rpm）改成 Gitee 的发行版页。Mac 加了临时签名（`signingIdentity: "-"`）
+  - [x] 去掉 Gitee 镜像（2026-10-16）：从 GitHub 的机器往 Gitee 传又慢又常常传不上，发版人在国外。删了 `scripts/gitee-release.mjs`、CI 的「Gitee 令牌」「同步到 Gitee」，`endpoints` 只留 GitHub；`github-latest.mjs` 把要用的几个函数搬了过来；手动 Run workflow 的 `mirror` 改名 `latest_only`（只补改已发布那一版的 latest.json）
+  - [ ] **需要你**：删掉 Gitee 上 `hyxzs111111/on-the-way` 的 `updater` 发行版（或它里面的 latest.json，或者把仓库设为私有 / 删掉）。0.1.0 先问 Gitee、Gitee 说「已经最新」就停，不删的话装着 0.1.0 的人永远收不到下一版（技术方案 §14.4）
+  - [ ] **需要你**：GitHub 仓库 Settings → Secrets 里的 `GITEE_TOKEN` 用不上了，可以删
   - [ ] 代码签名（Windows Authenticode、macOS 公证），以后再说
 - [x] 清理旧代码：没用的依赖（`@dnd-kit/*`、`fractional-indexing`、`marked`、Radix dialog / popover / tooltip，Rust 的 `r2d2`、`rrule`、`chrono-tz`）；旧数据模型留下的字段（笔记的 `icon`、恒为空的 `actionGroup`、任务的 `priority` / `goalId` / `sortKey` / `completedAt`）、没人调的 `note_list`、用不上的 `NoteIcon` 组件；日历当日安排从 `ActionGroup` 简化成 `DayTasks`
 
@@ -370,14 +384,14 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - **今日TODO = 今天的 `day_doc`**，未写过时延续最近一天。原来是一篇藏起来的特殊笔记，和日历里的今天是两份数据。
 - **内置指南是普通笔记，但由应用管新旧**（2026-10-13）：id 以 `guide-<名字>-` 开头（启动时只读这几篇的文件），属性块里一行 `ontheway-guide: <名字> <应用版本> <指纹>`。指纹按勾选框都没勾算，所以勾清单不算改过；新旧按写它的应用版本认，只升不降；两台设备各自升级写出的字节一样，同步不撞车。改了正文不用改版本号。
 - **GOAL 一个周期一篇**，键是 `(horizon, period_start)`，由前端算周期起点、后端校验。「本周目标」是今天所在那一周，不是最新一条。
-- **笔记列表只按标题筛**：全文匹配的结果和标题栏对不上，异步回填还会闪一次。全文搜索留给专门的入口。
+- **笔记列表只按标题筛**：全文匹配的结果和标题栏对不上，异步回填还会闪一次。全文搜索留给专门的入口（Ctrl+Shift+F 的全局搜索）。
 - **自动保存不重排列表**：每 400ms 刷新 `updatedAt`，按它排序会让正在编辑的笔记当着用户的面往上跳。「按更新时间」排序直接用 store 的顺序，不在 `NotesView` 里再按 `updatedAt` 排。
 - **删除 = 挪进回收站 + 6 秒撤销**：不弹确认框（多数删除是有意的），删完底部给「撤销」，走 `note_undelete` 从 `.ontheway/trash/` 挪回原来的位置。回收站 30 天后清掉，没有回收站界面。
 - **保存失败的正文留作草稿**：`drafts` 按 `saveKeyOf` 的键存，切走再切回来还在（adapter 优先用它），下一次保存成功就清掉，关窗时编辑器 flush 之后再试一次（`flushDrafts`）。状态栏只显示这一篇自己的保存失败。
 - **其它操作失败走 ErrorToast**：置顶 / 归档 / 恢复 / 删除 / 勾选 / 新建 / 加载失败写进 `error`，底部提示条显示；启动加载失败时常驻并带「重试」。保存失败不走这里。
 - **同一篇文档的写入排队**（store 里的 `serialized`）：标题和正文两条路保存、各自写整篇，并发时后到的会把另一半覆盖回旧值。
 - **迁移期间关外键**：`migrate::run` 事务外关、每次迁移后 `foreign_key_check` 只拦新增的悬空引用，结束再恢复。重建表时开着外键，DROP TABLE 会级联删掉引用它的行。
-- **启动一次取全文**：`note_list_full` 每个列表一次往返，不再「摘要列表 + 逐篇 `note_get`」。
+- **列表只取摘要，正文按需取**（2026-10-14 起）：`note_list` 每个列表一次往返、不带正文；正文打开哪篇 `note_get` 哪篇，前端只留最近 24 篇；搜正文走 Rust 的 `search_text`。以前是「启动一次取全文」（`note_list_full`），篇数一多常驻内存跟着涨（技术方案 §8.2、§13.2）。
 - **摘要 / 字数的算法改了要升索引的 `VERSION`**（`vault/index.rs`）：索引整个重建，摘要字数跟着重算。
 - **Logo 改成手写 SVG**：九段笔画按书写顺序 `stroke-dashoffset` 描出再收回，`pathLength="1"` 归一化、`currentColor` 跟主题走。原来的 `Brand.png` 是 53760×11528 的巨图，缩到 22px 发糊，已删。减少动效时停在「写完」态。
 - **目录树首项固定为「概览」**，五个视图统一；callout 标签进目录树。
@@ -476,6 +490,10 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - front matter 的 `---` 会被 CommonMark 解析成分隔线 + Setext 标题，两层装饰和目录收集都要先用 `frontMatterRange` 绕开；光标停在 0（新挂载的编辑器）不算点进了属性块，否则每篇一打开就是展开的 YAML。
 - 预览面板里 `navigator.clipboard.writeText` 会因权限被拒（真机不会），复制按钮要有 execCommand 退路并吞掉 rejection。
 - 用 `::before` 做行首提示（标题的 H2）要给 `width: max-content; white-space: nowrap`，否则 `right: 100%` 的绝对定位伪元素会被压成一列字。
+- **原生选区在一行里字号不一时高低不齐**：浏览器按每段文字自己的字框画底色，小字号的标记底下矮一截。所以选区是自己画的（`selectionLayer.ts`）。CodeMirror 的 `RectangleMarker.forRange` 一行的高度只看选区两端那两个字，两端都落在小标记上时整块也矮，得用 `Range.getClientRects` 补；它量的左右边界跟着视口里**第一行**的 padding 走，引用打头时整片选区都往右缩。
+- **widget 加载完变高了要自己 `view.requestMeasure()`**：CodeMirror 的 ResizeObserver 只理会距上次更新 75ms 以后的尺寸变化。刚粘贴的截图几十毫秒就加载完，光标、高度图都停在图片没高度的时候（光标画在图片中间）。图片、块级 HTML 里的图、mermaid 都这么做了，以后异步出内容的 widget 照办。
+- 列表项后面只有缩进的空白行不属于语法树里的任何一项；行首一个列表项的 `resolveInner(行尾, 1)` 在文末会落到 `Document` 上，找「光标在哪一项」时行尾要往左找（`resolveInner(pos, -1)`）。
+- 有序列表 `1. ` 下面要缩进三个空格才是子项（正文那一栏），两个空格还是同一级。CodeMirror 自带的缩进一律加 indentUnit（两个空格），在列表里用不得。
 
 **数据**
 
@@ -487,6 +505,6 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - 编辑器分辨不了「store 里的正文变了」是外部改动还是自己的保存回来了（边打字边保存时两者都是 `当前 ≠ 已同步`）：store 只在外部改动真的改了正文时给 `externalRevisions` 加一，编辑器看这个数有没有变。
 - `saveBus` 引用了数据 store，store 要 flush 编辑器时只能动态 `import("@/editor/saveBus")`，静态引入会成环。
 - 这台机器的 Git 开了 `core.autocrlf`，工作区里的文件是 CRLF，Biome 按 LF 检查会报格式错；改过的文件存成 LF 即可（提交时本来就是 LF）。
-- FTS5 的 `snippet()` / `highlight()` 作用在分词串上，中文会显示成「今天 开会 讨论」；高亮在前端用 `tokens` 做。
-- jieba 会把标点单独切出来，进了 FTS5 查询就是 `""""*`，要先过滤掉不含字母数字汉字的 token。
+- 全局搜索的位置按 UTF-16 给（编辑器里的位置），Rust 里按字节找到后要换算；不区分大小写别用转小写再找（有的字转小写会变长，位置就对不上），交给正则的大小写折叠。
+- 全局搜索的全词判断要和 CodeMirror 一样（汉字也是词字符），不然搜出来的和跳进去后篇内查找的对不上。
 - 延续来的「今天」不落库；跨过零点后缓存里的延续文档要丢掉，否则翻回昨天会把它当成昨天写的。

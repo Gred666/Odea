@@ -3,12 +3,12 @@ import { useApp } from "@/app/store";
 import { ListColumn, MoreRows, ROW_BATCH, useRowBatch } from "@/components/ListColumn";
 import { SearchInput } from "@/components/SearchInput";
 import { useData } from "@/data/store";
-import type { Note } from "@/data/types";
+import { useTextSearch } from "@/data/textSearch";
+import type { NoteSummary } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { formatSmartCN, toISODate } from "@/lib/date";
 import { animatedEmojiText } from "@/lib/emojiText";
 import { spring, tween } from "@/lib/motion";
-import { lowerContent } from "@/lib/paletteSearch";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { memo, useEffect, useMemo, useRef } from "react";
@@ -16,6 +16,8 @@ import { ConflictTag, EmptyResult, useListTitle } from "./NotesView";
 
 /** 归档卡片的高度（三行字 + 上下留白）：分批画时给还没画的那一截占位（ListColumn 的 MoreRows） */
 const CARD_HEIGHT = 86.08;
+/** 搜索框在正文里最多找出几篇（Rust 那边的上限） */
+const ARCHIVE_SEARCH_LIMIT = 1000;
 
 /** 卡片上的操作。身份不变：卡片是 memo 的，不能每次渲染都拿到一份新的回调 */
 interface ArchiveActions {
@@ -28,7 +30,7 @@ export function ArchiveList({
   items,
   onRestore,
 }: {
-  items: Note[];
+  items: NoteSummary[];
   onRestore: (id: string) => void;
 }) {
   const selectedId = useApp((s) => s.selectedArchiveId);
@@ -44,16 +46,22 @@ export function ArchiveList({
     selectArchive(items[0]!.id);
   }, [items, selectedId, selectArchive]);
 
-  const q = query.trim().toLowerCase();
+  // 正文里有没有由 Rust 搜（data/textSearch）。列表按最后一次搜完的那个词整个换：
+  // 不先剩下标题命中的、过一会儿再冒出正文命中的
+  const searched = useTextSearch(query, ARCHIVE_SEARCH_LIMIT, true);
+  const q = query.trim() ? (searched?.query ?? "").toLowerCase() : "";
   const filtered = useMemo(() => {
-    if (!q) return items;
+    if (!q || !searched) return items;
+    const inBody = new Set(
+      searched.result.notes.map((hit) => (hit.target.kind === "note" ? hit.target.id : "")),
+    );
     return items.filter(
       (n) =>
         n.title.toLowerCase().includes(q) ||
         n.excerpt.toLowerCase().includes(q) ||
-        lowerContent(n).includes(q),
+        inBody.has(n.id),
     );
-  }, [items, q]);
+  }, [items, q, searched]);
 
   // 分批画（同笔记列表）：几百篇归档整列画出来，切进归档要多花好几百毫秒
   const { shown, more } = useRowBatch(
@@ -125,7 +133,7 @@ const ArchiveCard = memo(function ArchiveCard({
   appear,
   actions,
 }: {
-  note: Note;
+  note: NoteSummary;
   index: number;
   divided: boolean;
   selected: boolean;

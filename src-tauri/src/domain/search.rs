@@ -1,94 +1,101 @@
-use jieba_rs::Jieba;
-use once_cell::sync::Lazy;
+use regex::{Regex, RegexBuilder};
+
+pub use super::model::FindOptions;
 
 /* ============================================================
-中文全文搜索的分词层。
+搜正文用到的几样：全局搜索（commands::find_in_vault）的匹配器，以及索引时算好的摘要、字数。
 
-为什么不直接用 FTS5 的内置分词器（技术方案 §6）：
-- unicode61 不切中文，整句会变成一个 token，搜「季度」完全搜不到
-- trigram 按 3 字符切，而中文双字词（「笔记」「目标」「复盘」）极常见，
-  2 字查询直接无结果
+全局搜索和 VS Code 的「在文件中查找」一样是纯文本匹配，不分词：输入的字在正文里原样出现就算命中，
+三个开关（区分大小写 / 全词匹配 / 正则）的含义和编辑器里的查找面板（searchPanel.ts，
+CodeMirror 的 SearchQuery）一致，从结果跳进文档后，篇内查找接着用同一个条件。
 
-方案：写入时用 jieba 预切分成空格分隔串存进 note.content_tokens，
-FTS5 用 unicode61 索引这一列；查询时同样切词。
+以前这里是 jieba 分词 + FTS5 全文索引：词典常驻 40 多 MB（2026-10-16 实测），可那套搜索
+没有任何界面在用（技术方案 §6），2026-10-16 去掉了。
 ============================================================ */
 
-/// 首次初始化约 50ms，进程内只做一次。
-/// 在 Tauri setup 里预热，别等到用户第一次搜索才付这个代价。
-static JIEBA: Lazy<Jieba> = Lazy::new(Jieba::new);
-
-pub fn warm_up() {
-    Lazy::force(&JIEBA);
+/// 编译好的查找条件。不论哪种开关都编成一个正则：不是正则模式就先转义，
+/// 不区分大小写交给正则的 Unicode 大小写折叠（和 JS 的 `iu` 一样，转小写会改变字节长度，不好换算位置）
+pub struct Finder {
+    re: Regex,
+    whole_word: bool,
+    /// 不是正则模式：可以整篇先过一遍再一行一行地找（见 may_match）
+    literal: bool,
 }
 
-/// token 里至少要有一个字母、数字或汉字。
-///
-/// jieba 会把标点单独切出来（`say "hi"` → `say` `"` `hi` `"`）。
-/// 这类 token 进了 FTS5 查询就是 `""""*` 这种项 —— unicode61 分词器
-/// 会把它规约成空，匹配不到任何东西，还可能触发语法错误。
-fn is_meaningful(t: &str) -> bool {
-    t.chars().any(|c| c.is_alphanumeric())
+/// 全词匹配里算「词」的字符：和 CodeMirror 一样是 `[\p{Alphabetic}\p{Number}_]` ——
+/// 汉字也算，所以全词搜「笔记」不会命中「写笔记本」，和编辑器里的查找面板一致
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
-/// 写入索引用。
-///
-/// `cut_for_search` 产生**重叠的细粒度切分**：
-/// 「季度目标」既产生 `季度目标`，也产生 `季度`、`目标`。
-/// 这样用户搜整词还是搜子词都能命中。
-pub fn tokenize_for_index(text: &str) -> String {
-    JIEBA
-        .cut_for_search(text, true)
-        .into_iter()
-        .map(str::trim)
-        .filter(|t| is_meaningful(t))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+impl Finder {
+    /// 空查询返回 Ok(None)；正则写错了返回 Err(给人看的原因)
+    pub fn new(query: &str, options: FindOptions) -> std::result::Result<Option<Self>, String> {
+        if query.is_empty() {
+            return Ok(None);
+        }
+        let pattern = if options.regex {
+            query.to_string()
+        } else {
+            regex::escape(query)
+        };
+        let re = RegexBuilder::new(&pattern)
+            .case_insensitive(!options.case_sensitive)
+            // 一行一行地搜：^ $ 是行首行尾
+            .multi_line(true)
+            // 防止写出来的正则编译成一个巨大的自动机
+            .size_limit(1 << 22)
+            .build()
+            .map_err(|error| match error {
+                regex::Error::Syntax(message) => {
+                    // 原文最后一行是「error: …」，前面是带箭头的示意，界面上只放得下最后一行
+                    let last = message.lines().rev().find(|line| !line.trim().is_empty());
+                    last.unwrap_or("").trim().trim_start_matches("error: ").to_string()
+                }
+                regex::Error::CompiledTooBig(_) => "正则太复杂了".to_string(),
+                _ => "正则写错了".to_string(),
+            })?;
+        Ok(Some(Self {
+            re,
+            whole_word: options.whole_word,
+            literal: !options.regex,
+        }))
+    }
 
-/// 查询用：切词 + 每个 token 加前缀通配 + 隐式 AND。
-///
-/// 前缀通配解决单字查询：搜「笔」变成 `"笔"*`，能命中 `笔记`、`笔试`。
-/// 双引号包裹 + 内部双引号转义，防止用户输入破坏 FTS5 查询语法。
-pub fn build_match_query(q: &str) -> Option<String> {
-    let toks: Vec<String> = JIEBA
-        .cut_for_search(q, true)
-        .into_iter()
-        .map(str::trim)
-        .filter(|t| is_meaningful(t))
-        // 双引号包裹 + 内部双引号转义，防止用户输入破坏 FTS5 语法
-        .map(|t| format!("\"{}\"*", t.replace('"', "\"\"")))
-        .collect();
+    /// 这篇正文里可能有命中吗：不是正则时先整篇找一遍，大多数不含这个词的文档就不用一行一行地看了。
+    /// 正则不这么省：`\A`、`\z` 这类锚点在整篇和在一行里意思不一样
+    pub fn may_match(&self, text: &str) -> bool {
+        !self.literal || self.re.is_match(text)
+    }
 
-    if toks.is_empty() {
-        None
-    } else {
-        Some(toks.join(" "))
+    /// 一行里的匹配（字节位置，不含空匹配），最多 limit 个；行里不该有换行
+    pub fn find_in_line(&self, line: &str, limit: usize) -> Vec<(usize, usize)> {
+        let mut found = Vec::new();
+        let mut at = 0;
+        while at <= line.len() && found.len() < limit {
+            let Some(hit) = self.re.find_at(line, at) else { break };
+            let (from, to) = (hit.start(), hit.end());
+            if from == to || (self.whole_word && !word_bounded(line, from, to)) {
+                // 空匹配（`^`、`a*`）不算；全词不成立的从下一个字再找 —— 不能从 to 接着找，
+                // 「aab ab」里全词找「ab」，第一个候选失败后真正的那个可能和它重叠
+                at = from + line[from..].chars().next().map_or(1, char::len_utf8);
+                continue;
+            }
+            found.push((from, to));
+            at = to;
+        }
+        found
     }
 }
 
-/// 前端高亮用的 token 列表。
-///
-/// 不能用 SQLite 的 `snippet()` / `highlight()` —— 它们作用在
-/// content_tokens 上，返回的是分词后的空格分隔文本，
-/// 中文看起来会像「今天 开会 讨论 季度 目标」，很丑。
-/// 所以只把 token 传回前端，让前端在原始 content_md 上做高亮。
-pub fn query_tokens(q: &str) -> Vec<String> {
-    let mut toks: Vec<String> = JIEBA
-        .cut_for_search(q, true)
-        .into_iter()
-        .map(str::trim)
-        .filter(|t| is_meaningful(t))
-        .map(str::to_string)
-        .collect();
-    // 长词优先高亮；同长度再按字面排，重复的词才会相邻，dedup 才去得掉
-    toks.sort_by(|a, b| {
-        b.chars()
-            .count()
-            .cmp(&a.chars().count())
-            .then_with(|| a.cmp(b))
-    });
-    toks.dedup();
-    toks
+/// CodeMirror 的全词判断：匹配的两头，各自只要「外面那个字」和「里面那个字」不都是词字符就行
+fn word_bounded(line: &str, from: usize, to: usize) -> bool {
+    let word = |c: Option<char>| c.is_some_and(is_word_char);
+    let before = line[..from].chars().next_back();
+    let first = line[from..].chars().next();
+    let last = line[..to].chars().next_back();
+    let after = line[to..].chars().next();
+    (!word(before) || !word(first)) && (!word(last) || !word(after))
 }
 
 /// 正文摘要：取纯文本前 n 个字符。
@@ -443,53 +450,64 @@ fn html(rest: &str) -> Option<(String, &str)> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn indexes_chinese_with_overlapping_tokens() {
-        let t = tokenize_for_index("完成季度目标");
-        // cut_for_search 应该同时给出细粒度和粗粒度的切分
-        assert!(t.contains("季度"), "缺少子词切分: {t}");
-        assert!(t.contains("目标"), "缺少子词切分: {t}");
+    fn hits(query: &str, options: FindOptions, line: &str) -> Vec<(usize, usize)> {
+        Finder::new(query, options).unwrap().unwrap().find_in_line(line, usize::MAX)
     }
 
-    /// 这是整个方案存在的理由：双字中文词必须能被搜到
-    #[test]
-    fn two_char_chinese_word_is_searchable() {
-        let indexed = tokenize_for_index("这一周把季度目标推进到可交付状态");
-        let q = build_match_query("季度").unwrap();
+    const PLAIN: FindOptions = FindOptions {
+        case_sensitive: false,
+        whole_word: false,
+        regex: false,
+    };
 
-        // FTS5 的 "季度"* 要能匹配到索引串里的 季度 这个 token
-        assert!(q.contains("季度"));
-        assert!(
-            indexed.split_whitespace().any(|t| t == "季度"),
-            "索引串里没有独立的「季度」token: {indexed}"
+    #[test]
+    fn finder_matches_text_literally_and_ignores_case_by_default() {
+        assert_eq!(hits("a.b", PLAIN, "axb a.b"), vec![(4, 7)]);
+        assert_eq!(hits("hello", PLAIN, "HeLLo hello"), vec![(0, 5), (6, 11)]);
+        assert_eq!(hits("äb", PLAIN, "ÄB"), vec![(0, 3)]);
+        let exact = FindOptions { case_sensitive: true, ..PLAIN };
+        assert_eq!(hits("hello", exact, "HeLLo hello"), vec![(6, 11)]);
+        assert!(Finder::new("", PLAIN).unwrap().is_none());
+    }
+
+    #[test]
+    fn finder_whole_word_follows_codemirror() {
+        let word = FindOptions { whole_word: true, ..PLAIN };
+        // 第一个候选（aab 里的 ab）不成立，真正的那个要从下一个字接着找才找得到
+        assert_eq!(hits("ab", word, "aab ab"), vec![(4, 6)]);
+        assert_eq!(hits("ab", word, "ab_c ab1 (ab)"), vec![(10, 12)]);
+        // 汉字也是词字符
+        assert!(hits("笔记", word, "写笔记本").is_empty());
+        assert_eq!(hits("笔记", word, "「笔记」").len(), 1);
+        // 查询两头不是词字符时，那一头不用看边界
+        assert_eq!(hits(" b", word, "a bc"), vec![]);
+        assert_eq!(hits(" b", word, "a b c"), vec![(1, 3)]);
+    }
+
+    #[test]
+    fn finder_regex_skips_empty_matches() {
+        let regex = FindOptions { regex: true, ..PLAIN };
+        assert_eq!(hits(r"\d+", regex, "a12b345"), vec![(1, 3), (4, 7)]);
+        assert_eq!(hits("x*", regex, "axxb"), vec![(1, 3)]);
+        assert!(hits("^", regex, "abc").is_empty());
+        assert_eq!(hits("^ab", regex, "abab"), vec![(0, 2)]);
+        let reason = Finder::new("(a", regex).err().unwrap();
+        assert!(!reason.is_empty() && !reason.contains('\n'), "{reason}");
+        // limit
+        assert_eq!(
+            Finder::new("a", PLAIN).unwrap().unwrap().find_in_line("aaaa", 2),
+            vec![(0, 1), (1, 2)]
         );
     }
 
-    /// 用户输入的标点不能变成查询项 —— 否则会生成 `""""*` 这种匹配不到
-    /// 任何东西、还可能触发 FTS5 语法错误的项
     #[test]
-    fn drops_punctuation_only_tokens() {
-        let q = build_match_query("say \"hi\"").unwrap();
-        assert_eq!(q, "\"say\"* \"hi\"*", "标点没被过滤掉: {q}");
-    }
-
-    #[test]
-    fn punctuation_only_input_yields_none() {
-        assert!(build_match_query("!!!???").is_none());
-        assert!(build_match_query("，。、").is_none());
-    }
-
-    /// 引号仍要转义 —— 万一 jieba 把它和字母粘在一起切出来
-    #[test]
-    fn escapes_embedded_quotes() {
-        let q = build_match_query("a\"b").unwrap();
-        assert!(!q.contains("a\"b"), "内嵌引号没转义: {q}");
-    }
-
-    #[test]
-    fn empty_query_yields_none() {
-        assert!(build_match_query("   ").is_none());
-        assert!(build_match_query("").is_none());
+    fn finder_prefilter_is_skipped_for_regex_anchors() {
+        let regex = FindOptions { regex: true, ..PLAIN };
+        let finder = Finder::new(r"\Ab", regex).unwrap().unwrap();
+        // 整篇的开头不是 b，可第二行的开头是：不能拿整篇先过一遍
+        assert!(finder.may_match("a\nb"));
+        assert_eq!(finder.find_in_line("b", 10), vec![(0, 1)]);
+        assert!(!Finder::new("zz", PLAIN).unwrap().unwrap().may_match("a\nb"));
     }
 
     #[test]
@@ -570,28 +588,5 @@ mod tests {
     fn excerpt_truncates_with_ellipsis() {
         let e = make_excerpt("一二三四五六七八九十", 5);
         assert_eq!(e, "一二三四五…");
-    }
-
-    #[test]
-    fn query_tokens_are_longest_first() {
-        let toks = query_tokens("季度目标");
-        assert!(!toks.is_empty());
-        // 长词优先，前端高亮时先匹配长的才不会被短的切碎
-        let lens: Vec<usize> = toks.iter().map(|t| t.chars().count()).collect();
-        assert!(
-            lens.windows(2).all(|w| w[0] >= w[1]),
-            "没有按长度降序: {toks:?}"
-        );
-    }
-
-    /// 同长度的重复词不相邻时，光靠 dedup 去不掉
-    #[test]
-    fn query_tokens_are_deduplicated() {
-        let toks = query_tokens("季度 目标 季度");
-        assert_eq!(
-            toks.iter().filter(|t| t.as_str() == "季度").count(),
-            1,
-            "重复的查询词没去重: {toks:?}"
-        );
     }
 }

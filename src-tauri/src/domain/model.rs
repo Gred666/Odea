@@ -26,6 +26,25 @@ pub struct Note {
     pub conflict_of: Option<String>,
 }
 
+/// 列表里的一篇：Note 去掉正文。仓库里有多少篇列表就给多少篇，正文打开时再取（note_get）、
+/// 搜正文走 search_text —— 前端不留每篇的全文，篇数再多常驻内存也只多一点摘要（技术方案 §13.2）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteSummary {
+    pub id: String,
+    pub title: String,
+    pub excerpt: String,
+    pub word_count: i64,
+    pub is_pinned: bool,
+    pub is_archived: bool,
+    pub archive_category: Option<String>,
+    pub archived_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub rel_path: String,
+    pub conflict_of: Option<String>,
+}
+
 /// 日历「当日安排」里的一条：某篇文档正文里带日期的 `- [ ]`（见 vault/tasks.rs）
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -56,7 +75,7 @@ pub struct CalendarMarks {
     pub open: Vec<String>,
 }
 
-/// 某一天 / 某个周期的目标，连同正文：命令面板拿它搜日记和目标
+/// 写过的某一天 / 某个周期的目标（不带正文）：命令面板拿它按标题搜日记和目标，正文走 search_text
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct JournalDoc {
@@ -65,8 +84,27 @@ pub struct JournalDoc {
     pub kind: String,
     /// 给人看的标题：「10月6日 · 完成专注模式原型」「第 41 周目标」
     pub title: String,
-    pub content_md: String,
     pub updated_at: i64,
+}
+
+/// search_text 的一条：正文里出现了要找的字的文档
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TextHit {
+    pub target: DocTarget,
+    /// 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc）
+    pub title: String,
+    pub updated_at: i64,
+    /// 第一次出现的那一行（很长的话截一段，前后各留一大截）：前端在里面再截出要显示的一小段
+    pub line: String,
+}
+
+/// 搜正文的结果：笔记（含归档，顺序同两个列表接起来）和日记、目标（最近改过的在前）各自最多 limit 条
+#[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TextSearch {
+    pub notes: Vec<TextHit>,
+    pub journal: Vec<TextHit>,
 }
 
 /// 某个周期（某一周 / 某个月 / 某一年）的目标。
@@ -104,24 +142,55 @@ pub struct DayDoc {
     pub rel_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+/// 全局搜索（find_in_vault）的条件：和编辑器里查找面板的三个开关一样
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchHit {
-    pub id: String,
-    pub title: String,
-    pub excerpt: String,
-    pub is_archived: bool,
-    pub updated_at: i64,
-    /// bm25 分数，越小越相关
-    pub score: f64,
+pub struct FindOptions {
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub regex: bool,
 }
 
+/// 全局搜索里的一处命中
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FindMatch {
+    /// 第几行，从 1 开始
+    pub line: u32,
+    /// 在这一行里从第几个 UTF-16 码元开始、占几个（编辑器里的位置按 UTF-16 算）：跳进文档后选中它
+    pub column: u32,
+    pub length: u32,
+    /// 给人看的一段：命中处前面一小截（截掉了的话以「…」开头）、命中的字、后面一截
+    pub before: String,
+    pub text: String,
+    pub after: String,
+}
+
+/// 全局搜索里命中了的一篇
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchResult {
-    pub hits: Vec<SearchHit>,
-    /// 前端拿它在原始正文上做高亮（不能用 SQLite 的 snippet，见 search.rs）
-    pub tokens: Vec<String>,
+pub struct FindFile {
+    pub target: DocTarget,
+    /// 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc）
+    pub title: String,
+    pub updated_at: i64,
+    /// 这一篇里给出的命中（总数到了上限，后面的就不给了）
+    pub matches: Vec<FindMatch>,
+    /// 这一篇里一共几处
+    pub count: u32,
+}
+
+/// 全局搜索的结果：笔记（含归档，顺序同两个列表接起来）在前，日记、目标（最近改过的在前）在后
+#[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FindResult {
+    pub files: Vec<FindFile>,
+    /// 一共几处（没给出来的也数了）
+    pub total: u32,
+    /// 命中太多，只给了前面一部分（vault::FIND_MATCH_LIMIT）
+    pub truncated: bool,
+    /// 正则写错了：给人看的原因（这时 files 是空的）
+    pub error: Option<String>,
 }
 
 /// 新建 / 更新笔记的入参。

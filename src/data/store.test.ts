@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backend } from "./backend";
-import type { DayDoc, IndexProgress, Note, VaultChange } from "./types";
+import type { DayDoc, IndexProgress, Note, NoteSummary, VaultChange } from "./types";
 
 const api = {
   calendarDay: vi.fn(),
@@ -12,7 +12,7 @@ const api = {
   goalSave: vi.fn(),
   noteUpsert: vi.fn(),
   noteGet: vi.fn(),
-  noteListFull: vi.fn(),
+  noteList: vi.fn(),
   noteDelete: vi.fn(),
   noteUndelete: vi.fn(),
   noteArchive: vi.fn(),
@@ -76,6 +76,31 @@ const note = (contentMd: string): Note => ({
 
 const initial = useData.getState();
 
+const summary = ({ contentMd: _body, ...rest }: Note): NoteSummary => rest;
+
+/**
+ * 放进 store，和 initialize / loadBody 之后一样：列表里是摘要，正文在 bodies。
+ * 测试里的笔记写成整篇（带 contentMd）好读
+ */
+function put(
+  state: { notes?: Note[]; archived?: Note[] } & Omit<
+    Partial<ReturnType<typeof useData.getState>>,
+    "notes" | "archived"
+  >,
+) {
+  const { notes, archived, ...rest } = state;
+  const all = [...(notes ?? []), ...(archived ?? [])];
+  useData.setState({
+    ...rest,
+    ...(notes ? { notes: notes.map(summary) } : {}),
+    ...(archived ? { archived: archived.map(summary) } : {}),
+    bodies: {
+      ...useData.getState().bodies,
+      ...Object.fromEntries(all.map((n) => [n.id, n.contentMd])),
+    },
+  });
+}
+
 /** store 订阅的后台读文件进度（只订阅一次，哪个测试先 initialize 就在那时记下） */
 let progress: ((progress: IndexProgress) => void) | null = null;
 
@@ -89,6 +114,7 @@ beforeEach(() => {
     ...initial,
     notes: [],
     archived: [],
+    bodies: {},
     dayDocs: [],
     goals: {},
     savingDocs: new Set(),
@@ -124,7 +150,7 @@ describe("saveDocument", () => {
   });
 
   it("writes a calendar day once it is loaded", async () => {
-    useData.setState({ dayDocs: [day("原有备注")] });
+    put({ dayDocs: [day("原有备注")] });
     api.calendarDaySave.mockResolvedValue(day("新的备注"));
 
     await useData.getState().saveDocument({ kind: "day", id: "2026-08-29" }, "新的备注");
@@ -135,7 +161,7 @@ describe("saveDocument", () => {
   it("saves a carried-over today under its own date, keeping the carried title", async () => {
     // 今天还没写过，内容是从 8/27 延续来的；第一次编辑就以今天的身份落库，
     // 标题跟着一起带过去，昨天那篇不动。
-    useData.setState({
+    put({
       dayDocs: [day("- [ ] 跑步", { title: "周四的 TODO", carriedFrom: "2026-08-27" })],
     });
     api.calendarDaySave.mockResolvedValue(day("- [x] 跑步", { title: "周四的 TODO" }));
@@ -164,7 +190,7 @@ describe("saveDocument", () => {
       updatedAt: 0,
       relPath: "目标/2026/2026-W35.md",
     };
-    useData.setState({ goals: { "week:2026-08-24": empty } });
+    put({ goals: { "week:2026-08-24": empty } });
     api.goalSave.mockResolvedValue({ ...empty, id: "g1", contentMd: "本周", updatedAt: 5 });
 
     await useData
@@ -179,7 +205,7 @@ describe("saveDocument", () => {
     // 在侧栏里当着用户的面往上跳。
     const older = { ...note("甲"), id: "n-old", updatedAt: 1 };
     const newer = { ...note("乙"), id: "n-new", updatedAt: 9 };
-    useData.setState({ notes: [newer, older] });
+    put({ notes: [newer, older] });
     api.noteUpsert.mockResolvedValue("n-old");
     api.noteGet.mockResolvedValue({ ...older, contentMd: "甲甲", updatedAt: 99 });
 
@@ -188,7 +214,7 @@ describe("saveDocument", () => {
   });
 
   it("surfaces a failed save instead of swallowing it", async () => {
-    useData.setState({ notes: [note("原文")] });
+    put({ notes: [note("原文")] });
     api.noteUpsert.mockRejectedValue(new Error("磁盘只读"));
 
     await expect(
@@ -200,7 +226,7 @@ describe("saveDocument", () => {
   });
 
   it("clears a stale error after the next successful save", async () => {
-    useData.setState({
+    put({
       notes: [note("原文")],
       saveError: { key: "note:n-1", message: "磁盘只读" },
     });
@@ -226,7 +252,7 @@ describe("saveDocument / saveTitle 排队", () => {
     // 标题改完失焦就存，正文 400ms 后自动保存；两次都写整篇。以前两次同时在路上时，
     // 正文那次带的是旧标题，后落库就把新标题覆盖回去了。
     const saved = { title: "旧标题", contentMd: "旧正文" };
-    useData.setState({ notes: [{ ...note("旧正文"), title: "旧标题" }] });
+    put({ notes: [{ ...note("旧正文"), title: "旧标题" }] });
     const firstUpsert = gate<string>();
     api.noteUpsert
       .mockImplementationOnce(async (input: { title: string; contentMd: string }) => {
@@ -249,12 +275,13 @@ describe("saveDocument / saveTitle 排队", () => {
     expect(api.noteUpsert).toHaveBeenLastCalledWith(
       expect.objectContaining({ title: "新标题", contentMd: "新正文" }),
     );
-    expect(useData.getState().notes[0]).toMatchObject({ title: "新标题", contentMd: "新正文" });
+    expect(useData.getState().notes[0]?.title).toBe("新标题");
+    expect(useData.getState().bodies["n-1"]).toBe("新正文");
   });
 
   it("keeps a day's new title when its body is saved right after", async () => {
     const saved = { title: "旧", noteMd: "旧正文" };
-    useData.setState({ dayDocs: [day("旧正文", { title: "旧" })] });
+    put({ dayDocs: [day("旧正文", { title: "旧" })] });
     const firstSave = gate<void>();
     api.calendarDaySave
       .mockImplementationOnce(async (_date: string, title: string, noteMd: string) => {
@@ -275,7 +302,7 @@ describe("saveDocument / saveTitle 排队", () => {
   });
 
   it("keeps going after a failed write", async () => {
-    useData.setState({ notes: [note("原文")] });
+    put({ notes: [note("原文")] });
     api.noteUpsert.mockRejectedValueOnce(new Error("磁盘只读")).mockResolvedValue("n-1");
     api.noteGet.mockResolvedValue(note("第二版"));
 
@@ -283,7 +310,7 @@ describe("saveDocument / saveTitle 排队", () => {
     const second = useData.getState().saveDocument({ kind: "note", id: "n-1" }, "第二版");
     await expect(first).rejects.toThrow("磁盘只读");
     await second;
-    expect(useData.getState().notes[0]?.contentMd).toBe("第二版");
+    expect(useData.getState().bodies["n-1"]).toBe("第二版");
     expect(useData.getState().saveError).toBeNull();
   });
 });
@@ -291,7 +318,7 @@ describe("saveDocument / saveTitle 排队", () => {
 describe("saveError 按文档区分", () => {
   it("a success on another document does not clear this one's error", async () => {
     const other = { ...note("乙"), id: "n-2" };
-    useData.setState({
+    put({
       notes: [note("甲"), other],
       saveError: { key: "note:n-1", message: "磁盘只读" },
     });
@@ -303,7 +330,7 @@ describe("saveError 按文档区分", () => {
   });
 
   it("a failed title save is reported on that document, not as a global error", async () => {
-    useData.setState({ notes: [note("甲")] });
+    put({ notes: [note("甲")] });
     api.noteUpsert.mockRejectedValue(new Error("磁盘只读"));
 
     await expect(
@@ -316,7 +343,7 @@ describe("saveError 按文档区分", () => {
 
 describe("saveTitle", () => {
   it("first-saves a carried-over today when only the title changes", async () => {
-    useData.setState({
+    put({
       dayDocs: [day("延续来的正文", { title: "旧标题", carriedFrom: "2026-08-27" })],
     });
     api.calendarDaySave.mockResolvedValue(day("延续来的正文", { title: "新标题" }));
@@ -327,7 +354,7 @@ describe("saveTitle", () => {
   });
 
   it("ignores empty titles and goal targets", async () => {
-    useData.setState({ dayDocs: [day("正文", { title: "标题" })] });
+    put({ dayDocs: [day("正文", { title: "标题" })] });
     await useData.getState().saveTitle({ kind: "day", id: "2026-08-29" }, "   ");
     await useData
       .getState()
@@ -339,7 +366,7 @@ describe("saveTitle", () => {
 
 describe("forgetCarriedDays", () => {
   it("drops carried-over docs but keeps real ones", () => {
-    useData.setState({
+    put({
       dayDocs: [
         day("真的", { date: "2026-08-27" }),
         day("延续的", { date: "2026-08-29", carriedFrom: "2026-08-27" }),
@@ -352,7 +379,7 @@ describe("forgetCarriedDays", () => {
   it("refetches the new today with carry-over when it was peeked at the day before", async () => {
     // 前一晚在日历里点开过明天：那时它不是今天，取回来的是一篇不延续的空白文档。
     // 过了零点它成了今天，得重新取一次才能延续前一天的内容。
-    useData.setState({ dayDocs: [day("", { date: "2026-08-29" })] });
+    put({ dayDocs: [day("", { date: "2026-08-29" })] });
     api.calendarDay.mockResolvedValue(
       day("- [ ] 跑步", { date: "2026-08-29", carriedFrom: "2026-08-28" }),
     );
@@ -364,26 +391,59 @@ describe("forgetCarriedDays", () => {
   });
 
   it("keeps the new today when it already has its own content", () => {
-    useData.setState({ dayDocs: [day("自己写的", { date: "2026-08-29" })] });
+    put({ dayDocs: [day("自己写的", { date: "2026-08-29" })] });
     useData.getState().forgetCarriedDays("2026-08-29");
     expect(useData.getState().dayDocs).toHaveLength(1);
   });
 });
 
 describe("initialize", () => {
-  it("loads each list with one round trip instead of one per note", async () => {
+  it("loads the lists without bodies, and only the body that is on screen", async () => {
     const notes = [1, 2, 3].map((n) => ({ ...note(`正文${n}`), id: `n-${n}` }));
-    api.noteListFull.mockImplementation(async (archived: boolean) => (archived ? [] : notes));
+    api.noteList.mockImplementation(async (archived: boolean) =>
+      archived ? [] : notes.map(summary),
+    );
+    api.noteGet.mockImplementation(async (id: string) => notes.find((item) => item.id === id));
     api.calendarMarks.mockResolvedValue({ written: new Set(), open: new Set() });
 
     await useData.getState().initialize();
-    expect(api.noteListFull).toHaveBeenCalledTimes(2);
-    expect(api.noteGet).not.toHaveBeenCalled();
-    expect(useData.getState().notes.map((item) => item.contentMd)).toEqual([
-      "正文1",
-      "正文2",
-      "正文3",
+    expect(api.noteList).toHaveBeenCalledTimes(2);
+    // 没有上次停在哪的记录：正文显示列表第一篇，只取它
+    expect(api.noteGet).toHaveBeenCalledTimes(1);
+    expect(useData.getState().notes.map((item) => item.id)).toEqual(["n-1", "n-2", "n-3"]);
+    expect(useData.getState().bodies).toEqual({ "n-1": "正文1" });
+  });
+});
+
+describe("loadBody", () => {
+  it("fetches a body once, even when asked twice at the same time", async () => {
+    put({ notes: [] });
+    api.noteGet.mockResolvedValue({ ...note("正文"), id: "n-9" });
+    const [a, b] = await Promise.all([
+      useData.getState().loadBody("n-9"),
+      useData.getState().loadBody("n-9"),
     ]);
+    expect(a).toBe("正文");
+    expect(b).toBe("正文");
+    expect(api.noteGet).toHaveBeenCalledTimes(1);
+    // 已经有了就不再取
+    expect(await useData.getState().loadBody("n-9")).toBe("正文");
+    expect(api.noteGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps only the most recent bodies", async () => {
+    api.noteGet.mockImplementation(async (id: string) => ({ ...note(`正文${id}`), id }));
+    for (let i = 0; i < 40; i++) await useData.getState().loadBody(`n-${i}`);
+    const kept = Object.keys(useData.getState().bodies);
+    expect(kept.length).toBeLessThanOrEqual(24);
+    expect(kept).toContain("n-39");
+    expect(kept).not.toContain("n-0");
+  });
+
+  it("returns undefined for a note that is gone, without an error", async () => {
+    api.noteGet.mockRejectedValue({ kind: "NotFound", message: "note x" });
+    expect(await useData.getState().loadBody("x")).toBeUndefined();
+    expect(useData.getState().error).toBeNull();
   });
 });
 
@@ -391,7 +451,7 @@ describe("后台读文件进索引", () => {
   const listed = (...ids: string[]) => ids.map((id) => ({ ...note(`正文${id}`), id }));
 
   it("shows how far it got and reloads the lists once everything is read", async () => {
-    api.noteListFull.mockImplementation(async (archived: boolean) => (archived ? [] : listed("a")));
+    api.noteList.mockImplementation(async (archived: boolean) => (archived ? [] : listed("a")));
     api.calendarMarks.mockResolvedValue({ written: new Set(), open: new Set() });
     api.indexProgress.mockResolvedValue({ done: 40, total: 300 });
     await useData.getState().initialize();
@@ -400,7 +460,7 @@ describe("后台读文件进索引", () => {
     progress?.({ done: 120, total: 300 });
     expect(useData.getState().indexing).toEqual({ done: 120, total: 300 });
 
-    api.noteListFull.mockImplementation(async (archived: boolean) =>
+    api.noteList.mockImplementation(async (archived: boolean) =>
       archived ? [] : listed("a", "b"),
     );
     api.folderList.mockResolvedValue(["工作"]);
@@ -417,7 +477,7 @@ describe("后台读文件进索引", () => {
       release = resolve;
     });
     let calls = 0;
-    api.noteListFull.mockImplementation(async (archived: boolean) => {
+    api.noteList.mockImplementation(async (archived: boolean) => {
       if (archived) return [];
       calls += 1;
       if (calls === 1) {
@@ -445,7 +505,7 @@ describe("deleteNote / undoDelete", () => {
   const three = () => ["a", "b", "c"].map((id) => ({ ...note(id), id, title: id.toUpperCase() }));
 
   it("offers an undo that puts the note back where it was, with fresh content", async () => {
-    useData.setState({ notes: three() });
+    put({ notes: three() });
     api.noteDelete.mockResolvedValue(undefined);
     api.noteUndelete.mockResolvedValue(undefined);
     // 删之前失焦触发的保存可能晚一步落库：撤销后用库里的版本
@@ -458,12 +518,12 @@ describe("deleteNote / undoDelete", () => {
     expect(await useData.getState().undoDelete()).toBe("b");
     expect(api.noteUndelete).toHaveBeenCalledWith("b");
     expect(useData.getState().notes.map((item) => item.id)).toEqual(["a", "b", "c"]);
-    expect(useData.getState().notes[1]?.contentMd).toBe("删之前刚存的");
+    expect(useData.getState().bodies.b).toBe("删之前刚存的");
     expect(useData.getState().lastDeleted).toBeNull();
   });
 
   it("waits for an in-flight delete before undoing it", async () => {
-    useData.setState({ notes: three() });
+    put({ notes: three() });
     let finishDelete = () => {};
     const order: string[] = [];
     api.noteDelete.mockImplementation(
@@ -490,7 +550,7 @@ describe("deleteNote / undoDelete", () => {
   });
 
   it("rolls a failed delete back into place and withdraws the undo", async () => {
-    useData.setState({ notes: three() });
+    put({ notes: three() });
     api.noteDelete.mockRejectedValue(new Error("磁盘只读"));
 
     await useData.getState().deleteNote("b");
@@ -500,7 +560,7 @@ describe("deleteNote / undoDelete", () => {
   });
 
   it("does nothing once the undo was dismissed", async () => {
-    useData.setState({ notes: three() });
+    put({ notes: three() });
     api.noteDelete.mockResolvedValue(undefined);
     await useData.getState().deleteNote("b");
     useData.getState().dismissUndo();
@@ -521,7 +581,7 @@ describe("归档里的笔记", () => {
   });
 
   it("can be deleted without restoring first, and the undo puts it back into the archive", async () => {
-    useData.setState({ notes: [], archived: [archivedNote("x"), archivedNote("y")] });
+    put({ notes: [], archived: [archivedNote("x"), archivedNote("y")] });
     api.noteDelete.mockResolvedValue(undefined);
     api.noteUndelete.mockResolvedValue(undefined);
     api.noteGet.mockResolvedValue(archivedNote("y"));
@@ -537,7 +597,7 @@ describe("归档里的笔记", () => {
   });
 
   it("archiving and restoring both offer an undo that does not offer another one", async () => {
-    useData.setState({ notes: [{ ...note("a"), id: "a", title: "A" }], archived: [], folders: [] });
+    put({ notes: [{ ...note("a"), id: "a", title: "A" }], archived: [], folders: [] });
     api.noteArchive.mockResolvedValue(undefined);
     api.noteRestore.mockResolvedValue(undefined);
     api.folderList.mockResolvedValue([]);
@@ -561,7 +621,7 @@ describe("drafts（保存失败的正文）", () => {
   const target = { kind: "note", id: "n-1" } as const;
 
   it("keeps a failed version as a draft and clears it once a save succeeds", async () => {
-    useData.setState({ notes: [note("原文")] });
+    put({ notes: [note("原文")] });
     api.noteUpsert.mockRejectedValueOnce(new Error("database is locked"));
     await expect(useData.getState().saveDocument(target, "没存进去的字")).rejects.toThrow();
     // 编辑器卸载后它的保存队列就没了，这一版只剩 store 里这份
@@ -574,7 +634,7 @@ describe("drafts（保存失败的正文）", () => {
   });
 
   it("flushDrafts retries drafts left by editors that are gone", async () => {
-    useData.setState({
+    put({
       notes: [note("原文")],
       drafts: { "note:n-1": { target, contentMd: "草稿" } },
     });
@@ -584,11 +644,11 @@ describe("drafts（保存失败的正文）", () => {
     await useData.getState().flushDrafts();
     expect(api.noteUpsert).toHaveBeenCalledWith(expect.objectContaining({ contentMd: "草稿" }));
     expect(useData.getState().drafts).toEqual({});
-    expect(useData.getState().notes[0]?.contentMd).toBe("草稿");
+    expect(useData.getState().bodies["n-1"]).toBe("草稿");
   });
 
   it("flushDrafts rejects while the backend still fails, keeping the draft", async () => {
-    useData.setState({
+    put({
       notes: [note("原文")],
       drafts: { "note:n-1": { target, contentMd: "草稿" } },
     });
@@ -600,16 +660,16 @@ describe("drafts（保存失败的正文）", () => {
 
 describe("applyVaultChange（别的程序改了仓库里的文件）", () => {
   it("refreshes a changed note and marks it as an external revision", async () => {
-    useData.setState({ notes: [note("旧的")] });
+    put({ notes: [note("旧的")] });
     api.noteGet.mockResolvedValue(note("别处改的"));
 
     await useData.getState().applyVaultChange(change({ notes: ["n-1"] }));
-    expect(useData.getState().notes[0]?.contentMd).toBe("别处改的");
+    expect(useData.getState().bodies["n-1"]).toBe("别处改的");
     expect(useData.getState().externalRevisions["note:n-1"]).toBe(1);
   });
 
   it("does not count a refresh that changed nothing in the body", async () => {
-    useData.setState({ notes: [note("一样")] });
+    put({ notes: [note("一样")] });
     api.noteGet.mockResolvedValue({ ...note("一样"), isPinned: true });
 
     await useData.getState().applyVaultChange(change({ notes: ["n-1"] }));
@@ -618,7 +678,7 @@ describe("applyVaultChange（别的程序改了仓库里的文件）", () => {
   });
 
   it("adds new files, moves archived ones and drops deleted ones", async () => {
-    useData.setState({ notes: [note("x"), { ...note("y"), id: "n-2" }] });
+    put({ notes: [note("x"), { ...note("y"), id: "n-2" }] });
     api.noteGet.mockImplementation(async (id: string) => {
       if (id === "n-new") return { ...note("新文件"), id: "n-new" };
       if (id === "n-2") return { ...note("y"), id: "n-2", isArchived: true };
@@ -634,7 +694,7 @@ describe("applyVaultChange（别的程序改了仓库里的文件）", () => {
 
   it("only refreshes the tasks of cached days when just the tasks changed", async () => {
     // 那一天的编辑器可能正有没存的修改：只是任务变了的话正文不能动
-    useData.setState({ dayDocs: [day("编辑器里的正文")] });
+    put({ dayDocs: [day("编辑器里的正文")] });
     const task = {
       id: "n-1#2",
       title: "交稿",
@@ -679,7 +739,7 @@ describe("applyVaultChange（别的程序改了仓库里的文件）", () => {
 
 describe("外部改动撞上没存的修改", () => {
   it("keeps the disk version as a conflict copy before saving the editor's", async () => {
-    useData.setState({ notes: [note("别处改的")] });
+    put({ notes: [note("别处改的")] });
     const order: string[] = [];
     api.vaultKeepConflictCopy.mockImplementation(async () => {
       order.push("copy");
@@ -715,12 +775,12 @@ describe("folders", () => {
   const inFolder = (id: string, relPath: string): Note => ({ ...note(id), id, title: id, relPath });
 
   beforeEach(() => {
-    useData.setState({ folders: [], undoable: null, lastDeleted: null });
+    put({ folders: [], undoable: null, lastDeleted: null });
   });
 
   it("moves a note, refreshes the editor when its links were rewritten, and can undo", async () => {
     const before = { ...inFolder("周报", "笔记/周报.md"), contentMd: "![图](../附件/图.png)" };
-    useData.setState({ notes: [before], folders: ["工作"] });
+    put({ notes: [before], folders: ["工作"] });
     const moved = {
       ...before,
       relPath: "笔记/工作/周报.md",
@@ -730,7 +790,8 @@ describe("folders", () => {
 
     await useData.getState().moveNote("周报", "工作");
     expect(api.noteMove).toHaveBeenCalledWith("周报", "工作");
-    expect(useData.getState().notes[0]).toEqual(moved);
+    expect(useData.getState().notes[0]).toEqual(summary(moved));
+    expect(useData.getState().bodies.周报).toBe(moved.contentMd);
     // 正文里的相对链接改了：编辑器要换上新正文，不然下一次自动保存会把旧链接写回去
     expect(useData.getState().externalRevisions["note:周报"]).toBe(1);
     const undoable = useData.getState().undoable;
@@ -744,17 +805,17 @@ describe("folders", () => {
 
   it("puts a note back when the move fails", async () => {
     const before = inFolder("周报", "笔记/周报.md");
-    useData.setState({ notes: [before], folders: ["工作"] });
+    put({ notes: [before], folders: ["工作"] });
     api.noteMove.mockRejectedValue({ kind: "NotFound", message: "文件夹「工作」不在了" });
 
     await useData.getState().moveNote("周报", "工作");
-    expect(useData.getState().notes[0]).toEqual(before);
+    expect(useData.getState().notes[0]).toEqual(summary(before));
     expect(useData.getState().error).toBe("文件夹「工作」不在了");
     expect(useData.getState().undoable).toBeNull();
   });
 
   it("renames a folder and every path under it", async () => {
-    useData.setState({
+    put({
       folders: ["工作", "工作/周报", "生活"],
       notes: [inFolder("a", "笔记/工作/周报/a.md"), inFolder("b", "笔记/生活/b.md")],
     });
@@ -774,7 +835,7 @@ describe("folders", () => {
       inFolder("b", "笔记/读书/小说/b.md"),
       inFolder("c", "笔记/c.md"),
     ];
-    useData.setState({ notes, folders: ["读书", "读书/小说"] });
+    put({ notes, folders: ["读书", "读书/小说"] });
     const deletion = {
       folder: "读书",
       notes: ["a", "b"],
@@ -789,7 +850,7 @@ describe("folders", () => {
     expect(useData.getState().undoable?.message).toBe("已删除「读书」和里面的 2 篇笔记");
 
     api.folderUndelete.mockResolvedValue(undefined);
-    api.noteListFull.mockResolvedValue(notes);
+    api.noteList.mockResolvedValue(notes);
     api.folderList.mockResolvedValue(["读书", "读书/小说"]);
     await useData.getState().undoable?.undo();
     expect(api.folderUndelete).toHaveBeenCalledWith(deletion);
@@ -798,7 +859,7 @@ describe("folders", () => {
   });
 
   it("shows a new folder before the backend answers, then follows what it says", async () => {
-    useData.setState({ folders: ["工作"] });
+    put({ folders: ["工作"] });
     let answer: (path: string) => void = () => {};
     api.folderCreate.mockReturnValueOnce(
       new Promise<string>((resolve) => {
@@ -838,7 +899,7 @@ describe("resolveConflict（冲突副本的原文是某一天 / 目标）", () =
   });
 
   it("loads the day first, writes the copy's version into it, then deletes the copy", async () => {
-    useData.setState({ notes: [copyOf("day:2026-08-29", "- [x] 另一台的")] });
+    put({ notes: [copyOf("day:2026-08-29", "- [x] 另一台的")] });
     api.calendarDay.mockResolvedValue(day("- [ ] 本机的", { title: "周六" }));
     api.calendarDaySave.mockResolvedValue(day("- [x] 另一台的", { title: "周六" }));
     api.noteDelete.mockResolvedValue(undefined);
@@ -854,7 +915,7 @@ describe("resolveConflict（冲突副本的原文是某一天 / 目标）", () =
   });
 
   it("keeping the original only deletes the copy", async () => {
-    useData.setState({ notes: [copyOf("goal:week:2026-09-21", "另一台的目标")] });
+    put({ notes: [copyOf("goal:week:2026-09-21", "另一台的目标")] });
     api.noteDelete.mockResolvedValue(undefined);
 
     const opened = await useData.getState().resolveConflict("copy", "original");
@@ -875,7 +936,7 @@ describe("使用指南有新版、用户改过那一篇", () => {
   const update = { id: "guide-welcome-1", name: "welcome", body: "新版的指南" };
 
   it("taking the new version saves it, settles, and can be undone", async () => {
-    useData.setState({ notes: [guide("我改过的指南")], guideUpdates: [update] });
+    put({ notes: [guide("我改过的指南")], guideUpdates: [update] });
     api.noteUpsert.mockResolvedValue("guide-welcome-1");
     api.noteGet.mockImplementation(async () => guide(api.noteUpsert.mock.lastCall![0].contentMd));
     api.guideSettle.mockResolvedValue(undefined);
@@ -904,7 +965,7 @@ describe("使用指南有新版、用户改过那一篇", () => {
   });
 
   it("keeping mine only settles", async () => {
-    useData.setState({ notes: [guide("我改过的指南")], guideUpdates: [update] });
+    put({ notes: [guide("我改过的指南")], guideUpdates: [update] });
     api.guideSettle.mockResolvedValue(undefined);
 
     await useData.getState().keepGuide("guide-welcome-1");

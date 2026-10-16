@@ -49,14 +49,15 @@ describe("mock backend", () => {
 describe("mock backend：使用指南", () => {
   it("a new vault holds only the guides, the welcome one pinned on top", async () => {
     const api = await reopen();
-    const notes = await api.noteListFull(false);
+    const notes = await api.noteList(false);
     expect(notes.map((note) => note.title)).toEqual(["欢迎使用 OnTheWay", "语法全览"]);
     expect(notes[0]!.isPinned).toBe(true);
-    expect(await api.noteListFull(true)).toEqual([]);
+    expect(await api.noteList(true)).toEqual([]);
     expect(await api.journalList()).toEqual([]);
     expect(await api.guidePending()).toEqual([]);
-    // 给前端的笔记里没有 mock 自己的记号
+    // 给前端的笔记里没有 mock 自己的记号；列表里不带正文（和 Rust 的 note_list 一样）
     expect(Object.keys(notes[0]!)).not.toContain("guide");
+    expect(Object.keys(notes[0]!)).not.toContain("contentMd");
   });
 
   it("after an upgrade: untouched guides follow, edited ones wait for the user", async () => {
@@ -77,7 +78,9 @@ describe("mock backend：使用指南", () => {
     vi.resetModules();
 
     const api = await reopen();
-    const [welcome, syntax] = await api.noteListFull(false);
+    const [welcome, syntax] = await Promise.all(
+      (await api.noteList(false)).map((note) => api.noteGet(note.id)),
+    );
     expect(welcome!.contentMd).toContain(`- [x] ${firstTask}`);
     expect(welcome!.contentMd).not.toContain("旧版的欢迎");
     expect(syntax!.contentMd).toBe("旧版的语法\n\n我自己加的一段");
@@ -95,7 +98,7 @@ describe("mock backend：使用指南", () => {
     vi.resetModules();
 
     const again = await reopen();
-    expect((await again.noteListFull(false)).map((note) => note.title)).toEqual(["语法全览"]);
+    expect((await again.noteList(false)).map((note) => note.title)).toEqual(["语法全览"]);
     const recreated = await again.guideOpen("welcome");
     expect(recreated).not.toBe(id);
     expect((await again.noteGet(recreated)).contentMd).toBe(GUIDES[0]!.body);

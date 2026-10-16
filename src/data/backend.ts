@@ -8,6 +8,8 @@ import type {
   DayDoc,
   DocHistory,
   DocumentSaveTarget,
+  FindOptions,
+  FindResult,
   FolderDeletion,
   Goal,
   GoalHorizon,
@@ -18,8 +20,8 @@ import type {
   LinkRewrite,
   Note,
   NoteInput,
+  NoteSummary,
   Relink,
-  SearchResult,
   SyncAccount,
   SyncDeviceCode,
   SyncPlan,
@@ -28,6 +30,7 @@ import type {
   SyncRemoteRepo,
   SyncStatus,
   Task,
+  TextSearch,
   UpdateInfo,
   VaultChange,
   VaultInfo,
@@ -45,8 +48,8 @@ import type {
    ============================================================ */
 
 export interface Backend {
-  /** 一个列表的全部笔记（含正文），一次取回。启动时用它，免得逐篇 noteGet。 */
-  noteListFull(archived: boolean): Promise<Note[]>;
+  /** 一个列表（笔记 / 归档）的全部笔记，不带正文。正文打开哪篇取哪篇（noteGet） */
+  noteList(archived: boolean): Promise<NoteSummary[]>;
   noteGet(id: string): Promise<Note>;
   noteUpsert(input: NoteInput): Promise<string>;
   noteSetPinned(id: string, pinned: boolean): Promise<void>;
@@ -80,7 +83,16 @@ export interface Backend {
   folderUndelete(deletion: FolderDeletion): Promise<void>;
   /** 在系统的文件管理器里打开这个文件夹 */
   folderReveal(folder: string): Promise<void>;
-  searchNotes(query: string, limit: number): Promise<SearchResult>;
+  /**
+   * 搜正文：大小写不敏感的子串，笔记和日记、目标各自最多 limit 条；archivedOnly 只搜归档里的笔记
+   * （归档的搜索框）。被同一处后来的一次顶掉的会返回空结果，调用方只认最后一次的
+   */
+  searchText(query: string, limit: number, archivedOnly: boolean): Promise<TextSearch>;
+  /**
+   * 全局搜索（Ctrl+Shift+F）：笔记（含归档）、日记、目标的正文里每一处命中，可以区分大小写、全词匹配、
+   * 用正则（含义同编辑器里的查找面板）。正则写错了放在结果的 error 里。被后来的一次顶掉的会返回空结果
+   */
+  findInVault(query: string, options: FindOptions): Promise<FindResult>;
   taskToggle(id: string): Promise<Task>;
   /** 某个周期的目标；没写过的周期返回空文档（id 为空） */
   goalGet(horizon: GoalHorizon, periodStart: string): Promise<Goal>;
@@ -90,7 +102,7 @@ export interface Backend {
   calendarDaySave(date: string, title: string, noteMd: string): Promise<DayDoc>;
   /** 月网格上的记号：写过记录 / 做过事的日子，和还有待办的日子 */
   calendarMarks(from: string, to: string): Promise<CalendarMarks>;
-  /** 所有写过的某一天、某个周期的目标，连同正文（命令面板搜它们），最近改过的在前 */
+  /** 所有写过的某一天、某个周期的目标（不带正文，命令面板按标题搜它们），最近改过的在前 */
   journalList(): Promise<JournalDoc[]>;
   /** 用户改过、而这个版本带着新版的使用指南（在那一篇上问换不换） */
   guidePending(): Promise<GuideUpdate[]>;
@@ -171,7 +183,7 @@ async function unwrap<T>(request: Promise<IpcResult<T, unknown>>): Promise<T> {
 }
 
 const tauriBackend: Backend = {
-  noteListFull: (archived) => unwrap(commands.noteListFull(archived)) as Promise<Note[]>,
+  noteList: (archived) => unwrap(commands.noteList(archived)),
   noteGet: (id) => unwrap(commands.noteGet(id)) as Promise<Note>,
   noteUpsert: (input) => unwrap(commands.noteUpsert(input)),
   noteSetPinned: async (id, pinned) => {
@@ -206,8 +218,10 @@ const tauriBackend: Backend = {
   folderReveal: async (folder) => {
     await unwrap(commands.folderReveal(folder));
   },
-  searchNotes: (query, limit) =>
-    unwrap(commands.searchNotes(query, limit)) as Promise<SearchResult>,
+  searchText: (query, limit, archivedOnly) =>
+    unwrap(commands.searchText(query, limit, archivedOnly)) as Promise<TextSearch>,
+  findInVault: (query, options) =>
+    unwrap(commands.findInVault(query, options)) as Promise<FindResult>,
   taskToggle: (id) => unwrap(commands.taskToggle(id)) as Promise<Task>,
   goalGet: (horizon, periodStart) =>
     unwrap(commands.goalGet(horizon, periodStart)) as Promise<Goal>,

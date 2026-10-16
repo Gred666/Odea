@@ -1,3 +1,4 @@
+import { useApp } from "@/app/store";
 import { type ISODate, today } from "@/lib/date";
 import { isTauri } from "@/lib/tauri";
 import { create } from "zustand";
@@ -29,8 +30,8 @@ import {
   type IndexProgress,
   type JournalDoc,
   type Note,
+  type NoteSummary,
   SYNC_OFF,
-  type SearchResult,
   type SyncStatus,
   type Task,
   type UpdateInfo,
@@ -39,8 +40,16 @@ import {
 } from "./types";
 
 interface DataState {
-  notes: Note[];
-  archived: Note[];
+  /** 两个列表放的是摘要，不带正文：仓库里有多少篇放多少篇（技术方案 §13.2） */
+  notes: NoteSummary[];
+  archived: NoteSummary[];
+  /**
+   * 笔记的正文，键是笔记 id：只有最近打开过的几篇（BODY_CACHE），正在看的不会被挤掉。
+   * 打开一篇时 loadBody 去取；搜正文不靠它，走 Rust（searchText）
+   */
+  bodies: Record<string, string>;
+  /** 取这篇笔记的正文放进 bodies（有了就只记一下最近用过）。笔记不在了返回 undefined */
+  loadBody: (id: string) => Promise<string | undefined>;
   tasks: Record<string, Task>;
   /** 按 `horizon:periodStart` 缓存的目标（见 goalKey）。没写过的周期也会缓存一篇空文档。 */
   goals: Record<string, Goal>;
@@ -54,8 +63,8 @@ interface DataState {
   /** 重新取一次日历记号（勾了任务、别处改了带日期的任务） */
   refreshMarks: () => Promise<void>;
   /**
-   * 所有写过的某一天、某个周期的目标（连同正文）。命令面板打开时取一次，
-   * 搜索时和笔记一起搜；取回来之前是空的。
+   * 所有写过的某一天、某个周期的目标（不带正文）。命令面板打开时取一次，按标题和笔记一起搜
+   * （正文走 searchText）；取回来之前是空的。
    */
   journal: JournalDoc[];
   loadJournal: () => Promise<void>;
@@ -147,7 +156,6 @@ interface DataState {
    * 命中缓存，今日TODO 就一直是空白，不会延续前一天。
    */
   forgetCarriedDays: (today: ISODate) => void;
-  searchNotes: (query: string) => Promise<SearchResult>;
   saveDocument: (target: DocumentSaveTarget, contentMd: string) => Promise<void>;
   /** 新建一篇空笔记（放在 folder 里，默认「笔记」本身），返回后端分配的 id；失败返回 null。 */
   createNote: (folder?: string) => Promise<string | null>;
@@ -210,7 +218,7 @@ interface DataState {
    * 刚删掉、还能撤销的那篇笔记，它原来在哪个列表的第几行。撤销提示条据此显示；
    * 只保留最近一篇，提示条消失（dismissUndo）后就不能撤销了。
    */
-  lastDeleted: { note: Note; index: number; archived: boolean } | null;
+  lastDeleted: { note: NoteSummary; index: number; archived: boolean } | null;
   /** 撤销最近一次删除。成功返回恢复的笔记 id，失败或没有可撤销的返回 null。 */
   undoDelete: () => Promise<string | null>;
   dismissUndo: () => void;
@@ -253,8 +261,51 @@ export const messageOf = (error: unknown): string => {
 /** 新笔记 / 还没起标题的某一天的占位标题。空标题存不进去 —— saveTitle 会拒绝空串。 */
 export const NEW_NOTE_TITLE = "无标题笔记";
 
-const noteOrder = (a: Note, b: Note) =>
+const noteOrder = (a: NoteSummary, b: NoteSummary) =>
   a.isPinned === b.isPinned ? b.updatedAt - a.updatedAt : a.isPinned ? -1 : 1;
+
+/** noteGet 拿回来的整篇 → 列表里放的摘要 */
+function summaryOf({ contentMd: _body, ...summary }: Note): NoteSummary {
+  return summary;
+}
+
+/** 正文最多留几篇（正在看的不算，不会被挤掉）。编辑器自己也按篇缓存着 12 个状态 */
+const BODY_CACHE = 24;
+/** bodies 里谁最近用过：越靠后越近 */
+let bodyOrder: string[] = [];
+/** 正在取的正文：同一篇同时要好几次（点一下、再点一下）只取一次 */
+const bodyRequests = new Map<string, Promise<string | undefined>>();
+
+function touchBody(id: string): void {
+  bodyOrder = [...bodyOrder.filter((other) => other !== id), id];
+}
+
+/** 放进（或换掉）一篇的正文；超过 BODY_CACHE 就把最久没用的挤掉，正在看的两篇留着 */
+function withBody(
+  bodies: Record<string, string>,
+  id: string,
+  body: string,
+): Record<string, string> {
+  touchBody(id);
+  const { selectedNoteId, selectedArchiveId } = useApp.getState();
+  const keep = (other: string) =>
+    other === id || other === selectedNoteId || other === selectedArchiveId;
+  const evicted = new Set<string>();
+  for (const other of bodyOrder) {
+    if (bodyOrder.length - evicted.size <= BODY_CACHE) break;
+    if (!keep(other)) evicted.add(other);
+  }
+  const next = { ...bodies, [id]: body };
+  if (!evicted.size) return next;
+  bodyOrder = bodyOrder.filter((other) => !evicted.has(other));
+  return Object.fromEntries(Object.entries(next).filter(([key]) => !evicted.has(key)));
+}
+
+/** 只有已经留着这篇正文的时候才换成新的（没打开过的不用特意放进来） */
+const refreshedBody = (bodies: Record<string, string>, note: Note) =>
+  bodies[note.id] === undefined || bodies[note.id] === note.contentMd
+    ? bodies
+    : withBody(bodies, note.id, note.contentMd);
 
 /** 日历记号取多大的范围：两个 Set 而已，一次取完比按月分页省事 */
 const MARKS_FROM = "2000-01-01";
@@ -263,7 +314,7 @@ const MARKS_TO = "2100-12-31";
 const isDone = (task: Task) => task.status === "done";
 
 /** 提示条里的标题：还没起名的显示占位 */
-const titleOf = (note: Note) => note.title.trim() || NEW_NOTE_TITLE;
+const titleOf = (note: NoteSummary) => note.title.trim() || NEW_NOTE_TITLE;
 
 /** 某一天写没写过记录变了：只动 written，待办那一种等 refreshMarks */
 function withWritten(marks: CalendarMarks, date: string, written: boolean): CalendarMarks {
@@ -280,7 +331,7 @@ const withGoal = (goals: Record<string, Goal>, goal: Goal): Record<string, Goal>
 });
 
 /** 放回原来的位置，而不是按排序规则重排 —— 撤销后它应该出现在删掉之前那一行。 */
-const insertAt = (notes: Note[], index: number, note: Note): Note[] => [
+const insertAt = (notes: NoteSummary[], index: number, note: NoteSummary): NoteSummary[] => [
   ...notes.slice(0, index),
   note,
   ...notes.slice(index),
@@ -339,6 +390,33 @@ let pendingDelete: Promise<unknown> = Promise.resolve();
 export const useData = create<DataState>((set, get) => ({
   notes: [],
   archived: [],
+  bodies: {},
+  loadBody: (id) => {
+    const cached = get().bodies[id];
+    if (cached !== undefined) {
+      touchBody(id);
+      return Promise.resolve(cached);
+    }
+    const pending = bodyRequests.get(id);
+    if (pending) return pending;
+    const request = (async () => {
+      try {
+        const note = await (await backend()).noteGet(id);
+        // 取的这一路上编辑器可能已经存过一版（存完会放进来）：那一版更新，不覆盖
+        const now = get().bodies[id];
+        if (now !== undefined) return now;
+        set((state) => ({ bodies: withBody(state.bodies, id, note.contentMd) }));
+        return note.contentMd;
+      } catch (error) {
+        if (!isNotFound(error)) set({ error: messageOf(error) });
+        return undefined;
+      } finally {
+        bodyRequests.delete(id);
+      }
+    })();
+    bodyRequests.set(id, request);
+    return request;
+  },
   tasks: {},
   goals: {},
   dayDocs: [],
@@ -357,10 +435,7 @@ export const useData = create<DataState>((set, get) => ({
     if (initializePromise) await initializePromise;
     const api = await backend();
     try {
-      const [notes, archived] = await Promise.all([
-        api.noteListFull(false),
-        api.noteListFull(true),
-      ]);
+      const [notes, archived] = await Promise.all([api.noteList(false), api.noteList(true)]);
       set({ notes: notes.sort(noteOrder), archived });
     } catch (error) {
       set({ error: messageOf(error) });
@@ -454,21 +529,22 @@ export const useData = create<DataState>((set, get) => ({
     for (const id of change.notes) {
       try {
         const fresh = await api.noteGet(id);
+        const summary = summaryOf(fresh);
         set((state) => {
-          const previous =
-            state.notes.find((note) => note.id === id) ??
-            state.archived.find((note) => note.id === id);
-          const place = (list: Note[], belongs: boolean) => {
+          const place = (list: NoteSummary[], belongs: boolean) => {
             if (!belongs) return list.filter((note) => note.id !== id);
             return list.some((note) => note.id === id)
-              ? list.map((note) => (note.id === id ? fresh : note))
-              : [fresh, ...list];
+              ? list.map((note) => (note.id === id ? summary : note))
+              : [summary, ...list];
           };
+          // 正文只有留着的那几篇要换（正在看的总在里面）；没留着的下次打开时取的就是新的
+          const previous = state.bodies[id];
           return {
             notes: place(state.notes, !fresh.isArchived).sort(noteOrder),
             archived: place(state.archived, fresh.isArchived),
+            bodies: refreshedBody(state.bodies, fresh),
             externalRevisions:
-              previous && previous.contentMd !== fresh.contentMd
+              previous !== undefined && previous !== fresh.contentMd
                 ? bumped(state.externalRevisions, `note:${id}`)
                 : state.externalRevisions,
           };
@@ -602,11 +678,18 @@ export const useData = create<DataState>((set, get) => ({
           }),
         );
         await indexSubscription.catch(() => undefined);
-        // 两个列表各一次往返拿回全文。以前是先取摘要列表、再逐篇 noteGet，
-        // N 篇笔记就是 N 次 IPC，笔记一多启动就慢。
+        // 两个列表只要摘要（几万篇也只是一点内存），正文只取一开窗就要显示的那两篇：
+        // 上次停在的笔记、归档里那一篇，和列表一起去取，不多等一个来回
+        const { selectedNoteId, selectedArchiveId } = useApp.getState();
+        // 取不到（那一篇已经不在了）不耽误启动：正文退到列表第一篇，下面补取
+        const bodyOf = (id: string) =>
+          Promise.resolve()
+            .then(() => api.noteGet(id))
+            .catch(() => null);
+        const early = [selectedNoteId, selectedArchiveId].filter(Boolean).map(bodyOf);
         const [notes, archived, folders, marks, info, indexing] = await Promise.all([
-          api.noteListFull(false),
-          api.noteListFull(true),
+          api.noteList(false),
+          api.noteList(true),
           // 文件夹列表取不到也不耽误启动：笔记都在，只是先全摊在「全部笔记」里
           Promise.resolve()
             .then(() => api.folderList())
@@ -622,6 +705,21 @@ export const useData = create<DataState>((set, get) => ({
         ]);
         // 进度事件比这一问先到的话，用事件里那个新的
         set((state) => ({ indexing: state.indexing ?? indexing }));
+        // 正文显示的是哪篇和 data/adapter.ts 的口径一样：选中的不在了就是列表第一篇
+        let bodies: Record<string, string> = {};
+        const got = (await Promise.all(early)).filter((note): note is Note => !!note);
+        const shown = [
+          notes.find((note) => note.id === selectedNoteId) ?? notes[0],
+          archived.find((note) => note.id === selectedArchiveId) ?? archived[0],
+        ].filter((note): note is NoteSummary => !!note);
+        const missing = shown.filter((note) => !got.some((body) => body.id === note.id));
+        for (const note of await Promise.all(missing.map((note) => bodyOf(note.id)))) {
+          if (note) got.push(note);
+        }
+        for (const note of got) {
+          if (shown.some((wanted) => wanted.id === note.id))
+            bodies = withBody(bodies, note.id, note.contentMd);
+        }
 
         // 别的程序改了仓库里的文件、或者一次操作连带改了别的文档：刷新受影响的缓存
         vaultSubscription ??= api.onVaultChanged((change) => {
@@ -655,15 +753,16 @@ export const useData = create<DataState>((set, get) => ({
           });
 
         // 目标和某天的文档都按需取：切到哪个周期 / 哪一天再 loadGoal / loadDay
-        set({
+        set((state) => ({
           notes: notes.sort(noteOrder),
           archived,
+          bodies: { ...state.bodies, ...bodies },
           folders,
           marks,
           vaultRoot: isTauri && info ? info.root : null,
           initialized: true,
           loading: false,
-        });
+        }));
       } catch (error) {
         set({ error: messageOf(error), loading: false });
       } finally {
@@ -707,8 +806,6 @@ export const useData = create<DataState>((set, get) => ({
         ? { dayDocs: state.dayDocs.filter((day) => !stale(day)) }
         : {};
     }),
-
-  searchNotes: async (query) => (await backend()).searchNotes(query, 200),
 
   saveDocument: async (target, contentMd) => {
     const key = saveKeyOf(target);
@@ -754,17 +851,20 @@ export const useData = create<DataState>((set, get) => ({
       const source =
         get().notes.find((note) => note.id === id) ?? get().archived.find((note) => note.id === id);
       if (!source) return false;
-      if (source.contentMd === contentMd) return true;
+      // 正文没留着（存失败的草稿，那一篇早就切走了）：不知道库里是哪一版，照写
+      if (get().bodies[id] === contentMd) return true;
 
       const api = await backend();
       await api.noteUpsert({ id, title: source.title, contentMd });
       const updated = await api.noteGet(id);
+      const summary = summaryOf(updated);
       set((state) => ({
         // 刻意不重排：自动保存每 400ms 刷新一次 updatedAt，
         // 按它排序会让正在编辑的这篇笔记在侧栏里当着用户的面往上跳。
         // 顺序在下次加载 / 置顶 / 归档时自然会更新。
-        notes: state.notes.map((note) => (note.id === id ? updated : note)),
-        archived: state.archived.map((note) => (note.id === id ? updated : note)),
+        notes: state.notes.map((note) => (note.id === id ? summary : note)),
+        archived: state.archived.map((note) => (note.id === id ? summary : note)),
+        bodies: withBody(state.bodies, id, updated.contentMd),
       }));
       return true;
     };
@@ -811,7 +911,11 @@ export const useData = create<DataState>((set, get) => ({
       // 新建是个一次性动作，不像输入那样每次按键都要响应。
       const id = await api.noteCreate(folder, NEW_NOTE_TITLE);
       const created = await api.noteGet(id);
-      set((state) => ({ notes: [created, ...state.notes].sort(noteOrder), error: null }));
+      set((state) => ({
+        notes: [summaryOf(created), ...state.notes].sort(noteOrder),
+        bodies: withBody(state.bodies, id, created.contentMd),
+        error: null,
+      }));
       return id;
     } catch (error) {
       set({ error: messageOf(error) });
@@ -874,18 +978,18 @@ export const useData = create<DataState>((set, get) => ({
         get().notes.find((note) => note.id === id) ?? get().archived.find((note) => note.id === id);
       if (!source || source.title === cleanTitle) return;
 
-      await api.noteUpsert({
-        id,
-        title: cleanTitle,
-        contentMd: source.contentMd,
-      });
+      // 写的是整篇：正文用库里的那一版（正在改标题的这篇一般留着；没留着就取一次）
+      const contentMd = get().bodies[id] ?? (await api.noteGet(id)).contentMd;
+      await api.noteUpsert({ id, title: cleanTitle, contentMd });
       // 刚新建、还没起名的那篇（占位标题）没人会链它
       if (source.title !== NEW_NOTE_TITLE) renamed = { id, from: source.title };
       const updated = await api.noteGet(id);
+      const summary = summaryOf(updated);
       set((state) => ({
         // 同样不重排：改标题时列表在脚下跳一下同样很吓人。
-        notes: state.notes.map((note) => (note.id === id ? updated : note)),
-        archived: state.archived.map((note) => (note.id === id ? updated : note)),
+        notes: state.notes.map((note) => (note.id === id ? summary : note)),
+        archived: state.archived.map((note) => (note.id === id ? summary : note)),
+        bodies: refreshedBody(state.bodies, updated),
       }));
     };
 
@@ -936,6 +1040,7 @@ export const useData = create<DataState>((set, get) => ({
       // 编辑器里没存的先存掉：恢复之前的样子要是最新的，晚到的保存也不会把旧正文写回来
       const { flushAllEditors } = await import("@/editor/saveBus");
       await flushAllEditors();
+      if (target.kind === "note") await get().loadBody(target.id);
       const before = conflictOriginalContent(target, get());
       if (before === undefined || before === body) return;
       const key = saveKeyOf(target);
@@ -1000,7 +1105,7 @@ export const useData = create<DataState>((set, get) => ({
   archiveNote: async (id, { undoable = true } = {}) => {
     const previous = get().notes.find((note) => note.id === id);
     if (!previous) return;
-    const optimistic: Note = {
+    const optimistic: NoteSummary = {
       ...previous,
       isArchived: true,
       isPinned: false,
@@ -1014,7 +1119,7 @@ export const useData = create<DataState>((set, get) => ({
     try {
       const api = await backend();
       await api.noteArchive(id);
-      const saved = await api.noteGet(id);
+      const saved = summaryOf(await api.noteGet(id));
       set((state) => ({
         archived: state.archived.map((note) => (note.id === id ? saved : note)),
         ...(undoable
@@ -1050,7 +1155,7 @@ export const useData = create<DataState>((set, get) => ({
     try {
       const api = await backend();
       await api.noteRestore(id);
-      const saved = await api.noteGet(id);
+      const saved = summaryOf(await api.noteGet(id));
       set((state) => ({
         notes: state.notes.map((note) => (note.id === id ? saved : note)).sort(noteOrder),
         ...(undoable
@@ -1082,7 +1187,7 @@ export const useData = create<DataState>((set, get) => ({
     const archived = !get().notes.some((note) => note.id === id);
     const listOf = (state: Pick<DataState, "notes" | "archived">) =>
       archived ? state.archived : state.notes;
-    const patch = (list: Note[]) => (archived ? { archived: list } : { notes: list });
+    const patch = (list: NoteSummary[]) => (archived ? { archived: list } : { notes: list });
     const index = listOf(get()).findIndex((note) => note.id === id);
     const previous = listOf(get())[index];
     if (!previous) return;
@@ -1121,7 +1226,9 @@ export const useData = create<DataState>((set, get) => ({
       await api.noteUndelete(id);
       // 重新取一次：删之前失焦触发的那次保存可能比删除晚一步落库，
       // 手里这份未必是最新的正文。归档里删的，放回去还在归档里
-      const restored = await api.noteGet(id);
+      const full = await api.noteGet(id);
+      const restored = summaryOf(full);
+      set((state) => ({ bodies: refreshedBody(state.bodies, full) }));
       const index = restored.isArchived === deleted.archived ? deleted.index : 0;
       set((state) => {
         if (present(state)) return { error: null };
@@ -1224,7 +1331,7 @@ export const useData = create<DataState>((set, get) => ({
           undo: async () => {
             const api = await backend();
             await api.folderUndelete(deletion);
-            const [notes, folders] = await Promise.all([api.noteListFull(false), api.folderList()]);
+            const [notes, folders] = await Promise.all([api.noteList(false), api.folderList()]);
             set({ notes: notes.sort(noteOrder), folders });
           },
         },
@@ -1263,10 +1370,13 @@ export const useData = create<DataState>((set, get) => ({
       await flushAllEditors();
       const key = saveKeyOf({ kind: "note", id });
       const moved = await serialized(key, async () => (await backend()).noteMove(id, folder));
+      const summary = summaryOf(moved);
       set((state) => ({
-        notes: state.notes.map((note) => (note.id === id ? moved : note)),
+        notes: state.notes.map((note) => (note.id === id ? summary : note)),
+        bodies: refreshedBody(state.bodies, moved),
+        // 相对链接改写了：开着的编辑器当成一次外部改动，换上新正文
         externalRevisions:
-          moved.contentMd !== previous.contentMd
+          state.bodies[id] !== undefined && state.bodies[id] !== moved.contentMd
             ? bumped(state.externalRevisions, key)
             : state.externalRevisions,
         lastDeleted: null,
@@ -1303,10 +1413,12 @@ export const useData = create<DataState>((set, get) => ({
         // 某一天 / 目标是按需取的：没取回来时 saveDocument 什么都不写
         if (target.kind === "day") await get().loadDay(target.id, target.id === today());
         if (target.kind === "goal") await get().loadGoal(target.horizon, target.periodStart);
+        if (target.kind === "note") await get().loadBody(target.id);
         const current = conflictOriginalContent(target, get());
-        if (current === undefined) return null;
-        if (current !== copy.contentMd) {
-          await get().saveDocument(target, copy.contentMd);
+        const copyBody = await get().loadBody(copy.id);
+        if (current === undefined || copyBody === undefined) return null;
+        if (current !== copyBody) {
+          await get().saveDocument(target, copyBody);
           // 原文的编辑器状态可能缓存着（切走时留的）：当成一次外部改动，下次打开换成新正文
           set((state) => ({
             externalRevisions: bumped(state.externalRevisions, saveKeyOf(target)),
@@ -1337,6 +1449,7 @@ export const useData = create<DataState>((set, get) => ({
       // 编辑器里没存的先存掉：撤销时换回来的要是最新的那一版
       const { flushAllEditors } = await import("@/editor/saveBus");
       await flushAllEditors();
+      await get().loadBody(id);
       const before = conflictOriginalContent(target, get());
       if (before === undefined) return;
       const replace = async (content: string) => {
@@ -1384,7 +1497,10 @@ export const useData = create<DataState>((set, get) => ({
       if (!known) {
         // 删掉了、刚照这个版本重新放了一篇：放进列表
         const created = await api.noteGet(id);
-        set((state) => ({ notes: [created, ...state.notes].sort(noteOrder) }));
+        set((state) => ({
+          notes: [summaryOf(created), ...state.notes].sort(noteOrder),
+          bodies: withBody(state.bodies, id, created.contentMd),
+        }));
       }
       return id;
     } catch (error) {

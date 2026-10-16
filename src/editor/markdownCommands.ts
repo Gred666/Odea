@@ -1,3 +1,4 @@
+import { syntaxTree } from "@codemirror/language";
 import {
   type ChangeSpec,
   EditorSelection,
@@ -5,6 +6,7 @@ import {
   type TransactionSpec,
 } from "@codemirror/state";
 import type { Command, EditorView } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
 
 interface CommandTarget {
   state: EditorView["state"];
@@ -279,6 +281,154 @@ function selectedLines(view: CommandTarget) {
 function replaceLines(view: CommandTarget, changes: ChangeSpec[]): boolean {
   view.dispatch({ changes });
   return true;
+}
+
+/* ---------------- 列表项 ---------------- */
+
+/** 列表项第一行里正文开头的位置：`- `、`1. `、`- [ ] ` 和后面的空格之后 */
+export function listItemContentStart(state: EditorState, item: SyntaxNode): number | null {
+  const mark = item.getChild("ListMark");
+  if (!mark) return null;
+  const line = state.doc.lineAt(mark.from);
+  const task = item.getChild("Task")?.firstChild;
+  let content = task?.name === "TaskMarker" && task.from <= line.to ? task.to : mark.to;
+  while (content < line.to && /[ \t]/.test(state.sliceDoc(content, content + 1))) content += 1;
+  return content;
+}
+
+/** 列表项的正文那一栏在源码里的列。空的一项（`- ` 后面什么都没有）算符号后面隔一个空格 */
+export function listItemContentColumn(state: EditorState, item: SyntaxNode): number {
+  const mark = item.getChild("ListMark");
+  const start = listItemContentStart(state, item);
+  if (!mark || start === null) return 0;
+  const line = state.doc.lineAt(mark.from);
+  return (start < line.to ? start : mark.to + 1) - line.from;
+}
+
+/** pos 所在的最里面那一项 */
+function listItemAt(state: EditorState, pos: number): SyntaxNode | null {
+  const line = state.doc.lineAt(pos);
+  const lead = /^[ \t]*/.exec(line.text)![0].length;
+  // 行首（缩进里、符号上）的光标往右找符号，免得落到上一项的末尾；别的往左找
+  // （行尾、文末往右什么都没有，会落到整篇文档上）
+  const atStart = pos <= line.from + lead;
+  const tree = syntaxTree(state);
+  const start = atStart ? tree.resolveInner(line.from + lead, 1) : tree.resolveInner(pos, -1);
+  for (let node: SyntaxNode | null = start; node; node = node.parent) {
+    if (node.name === "ListItem") return node;
+  }
+  return null;
+}
+
+/** 一行开头的空白有几列（制表符按 4 列） */
+const leadingColumns = (text: string) =>
+  [.../^[ \t]*/.exec(text)![0]].reduce((sum, char) => sum + (char === "\t" ? 4 : 1), 0);
+
+/**
+ * Tab / Shift+Tab 在列表项里：整项（连同它的子项、续行）一起挪。
+ * - Tab：挪到上一项的正文那一栏，成为上一项的子项。第一项前面没有可挂的，不动。
+ * - Shift+Tab：挪回上一级那一项的符号位置。已经在最外层的交给自带的。
+ * 以前是自带的缩进：一律加两个空格。`1. a` 下面的项要缩进三个空格才算子项，加两个
+ * 等于没缩（Markdown 里还是同一级），只是看着往右挪了一点。
+ * 选了好几项时按第一项算挪多少，几项一起挪，彼此的层级关系不变。
+ */
+export function indentListItem(direction: 1 | -1): Command {
+  return (view) => {
+    const { state } = view;
+    const range = state.selection.main;
+    const first = listItemAt(state, range.from);
+    if (!first) return false;
+    const mark = first.getChild("ListMark");
+    if (!mark) return false;
+    const firstLine = state.doc.lineAt(mark.from);
+    // 只管光标在这一项第一行（符号那一行）的时候；项里的代码块等照旧缩进那一行
+    if (state.doc.lineAt(range.from).number !== firstLine.number) return false;
+    const markColumn = leadingColumns(firstLine.text);
+
+    let target: number;
+    if (direction > 0) {
+      const previous = first.prevSibling;
+      // 列表的第一项：没有可以挂上去的，Tab 也别让焦点跑掉
+      if (previous?.name !== "ListItem") return true;
+      target = listItemContentColumn(state, previous);
+    } else {
+      const parent = first.parent?.parent;
+      if (parent?.name !== "ListItem") return false;
+      const parentMark = parent.getChild("ListMark");
+      if (!parentMark) return false;
+      target = leadingColumns(state.doc.lineAt(parentMark.from).text);
+    }
+    const delta = target - markColumn;
+    if (direction > 0 ? delta <= 0 : delta >= 0) return true;
+    // 有序的一项挂到上一项下面、又是那里的第一项：成了一个新的子列表，编号从 1 起
+    // （源码里的编号是子列表的起始编号，不改的话子列表从 2、3 开始数）
+    let renumber: ChangeSpec | null = null;
+    const number = /^(\d+)([.)])$/.exec(state.sliceDoc(mark.from, mark.to));
+    const previousLast = first.prevSibling?.lastChild?.name;
+    if (direction > 0 && number && number[1] !== "1" && !/List$/.test(previousLast ?? "")) {
+      renumber = { from: mark.from, to: mark.from + number[1]!.length, insert: "1" };
+    }
+
+    const lastItem = listItemAt(state, range.to);
+    const end = Math.max(first.to, lastItem && lastItem.from >= first.from ? lastItem.to : 0);
+    const changes: ChangeSpec[] = [];
+    for (const line of linesBetween(state, firstLine.from, end)) {
+      if (!line.text.trim()) continue;
+      if (delta > 0) {
+        changes.push({ from: line.from, insert: " ".repeat(delta) });
+        continue;
+      }
+      // 往回挪：最多删掉这一行开头有的那么多空白
+      let removed = 0;
+      let at = line.from;
+      while (removed < -delta && at < line.to) {
+        const char = state.sliceDoc(at, at + 1);
+        if (char !== " " && char !== "\t") break;
+        removed += char === "\t" ? 4 : 1;
+        at += 1;
+      }
+      if (at > line.from) changes.push({ from: line.from, to: at });
+    }
+    if (renumber) changes.push(renumber);
+    view.dispatch({
+      changes,
+      scrollIntoView: true,
+      userEvent: direction > 0 ? "indent" : "delete.dedent",
+    });
+    return true;
+  };
+}
+
+function linesBetween(state: EditorState, from: number, to: number) {
+  const first = state.doc.lineAt(from).number;
+  const last = state.doc.lineAt(to).number;
+  return Array.from({ length: last - first + 1 }, (_, index) => state.doc.line(first + index));
+}
+
+/**
+ * Home（mac 上 ⌘←）在列表项的第一行：先到正文开头，已经在那儿了再按一次才到行首 ——
+ * 和 Typora 一样。CodeMirror 自带的停在缩进后面、`-` 前面，圆点一下换回了源码。
+ * 折行的第二截以后、不在列表项第一行的，照旧交给自带的。
+ */
+export function listItemHome(extend: boolean): Command {
+  return (view) => {
+    const { state } = view;
+    if (state.selection.ranges.length > 1) return false;
+    const range = state.selection.main;
+    const line = state.doc.lineAt(range.head);
+    const lead = /^[ \t]*/.exec(line.text)![0].length;
+    const mark = syntaxTree(state).resolveInner(line.from + lead, 1);
+    if (mark.name !== "ListMark" || mark.from !== line.from + lead || !mark.parent) return false;
+    const contentStart = listItemContentStart(state, mark.parent);
+    if (contentStart === null || range.head <= contentStart) return false;
+    if (view.moveToLineBoundary(range, false).head > contentStart) return false;
+    view.dispatch({
+      selection: EditorSelection.range(extend ? range.anchor : contentStart, contentStart),
+      scrollIntoView: true,
+      userEvent: "select",
+    });
+    return true;
+  };
 }
 
 export function commandTarget(

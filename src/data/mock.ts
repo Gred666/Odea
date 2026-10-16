@@ -35,6 +35,9 @@ import {
   type DayDoc,
   type DocHistory,
   type DocumentSaveTarget,
+  type FindFile,
+  type FindMatch,
+  type FindOptions,
   type FolderDeletion,
   type Goal,
   type GoalHorizon,
@@ -44,10 +47,11 @@ import {
   type LinkRewrite,
   type Note,
   type NoteInput,
+  type NoteSummary,
   type Relink,
   SYNC_OFF,
-  type SearchResult,
   type Task,
+  type TextHit,
   type UpdateInfo,
   type VaultChange,
   type VaultInfo,
@@ -399,10 +403,130 @@ const emptyGoal = (horizon: GoalHorizon, periodStart: string): Goal => ({
   relPath: goalRelPath(periodStart),
 });
 
+/** 去掉正文：和 Rust 的 note_list 一样，列表里不带 */
+function summary(note: MockNote): NoteSummary {
+  const { contentMd: _body, ...rest } = present(note);
+  return rest;
+}
+
+/** 写过的某一天和目标，连同正文（journalList 去掉正文给出去，searchText 在正文里找） */
+function journalEntries(): (JournalDoc & { contentMd: string })[] {
+  const days = Object.entries(state.days)
+    .filter(([, day]) => day.noteMd || day.title)
+    .map(([date, day]) => ({
+      target: { kind: "day", id: date } as DocumentSaveTarget,
+      kind: "day" as const,
+      title: day.title ? `${formatMonthDayCN(date)} · ${day.title}` : formatMonthDayCN(date),
+      contentMd: day.noteMd,
+      updatedAt: day.updatedAt,
+    }));
+  const goals = Object.values(state.goals)
+    .filter((goal) => goal.contentMd)
+    .map((goal) => ({
+      target: {
+        kind: "goal",
+        horizon: goal.horizon,
+        periodStart: goal.periodStart,
+      } as DocumentSaveTarget,
+      kind: "goal" as const,
+      title: goalTitle(goal.horizon, goal.periodStart),
+      contentMd: goal.contentMd,
+      updatedAt: goal.updatedAt,
+    }));
+  return [...days, ...goals].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/* ---- 全局搜索（findInVault），同 Rust 的 domain::search::Finder / vault::find_text ---- */
+
+const FIND_MATCH_LIMIT = 1000;
+
+/** 空查询返回 null；正则写错了返回原因 */
+function compileFinder(query: string, options: FindOptions): RegExp | string | null {
+  if (!query) return null;
+  const source = options.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  try {
+    return new RegExp(source, `gmu${options.caseSensitive ? "" : "i"}`);
+  } catch (error) {
+    return error instanceof Error ? error.message : "正则写错了";
+  }
+}
+
+const WORD_CHAR = /[\p{Alphabetic}\p{Number}_]/u;
+
+function charAfter(text: string, at: number): string | undefined {
+  const code = text.codePointAt(at);
+  return code === undefined ? undefined : String.fromCodePoint(code);
+}
+
+function charBefore(text: string, at: number): string | undefined {
+  if (at <= 0) return undefined;
+  const low = text.charCodeAt(at - 1);
+  const pair = low >= 0xdc00 && low <= 0xdfff && at >= 2;
+  return text.slice(pair ? at - 2 : at - 1, at);
+}
+
+/** CodeMirror 的全词判断：两头各自只要外面那个字和里面那个字不都是词字符 */
+function wordBounded(line: string, from: number, to: number): boolean {
+  const word = (c: string | undefined) => !!c && WORD_CHAR.test(c);
+  return (
+    (!word(charBefore(line, from)) || !word(charAfter(line, from))) &&
+    (!word(charBefore(line, to)) || !word(charAfter(line, to)))
+  );
+}
+
+/** 一行里的匹配（UTF-16 位置，不含空匹配） */
+function findInLine(finder: RegExp, line: string, wholeWord: boolean): [number, number][] {
+  const found: [number, number][] = [];
+  let at = 0;
+  while (at <= line.length) {
+    finder.lastIndex = at;
+    const hit = finder.exec(line);
+    if (!hit) break;
+    const from = hit.index;
+    const to = from + hit[0].length;
+    if (from === to || (wholeWord && !wordBounded(line, from, to))) {
+      at = from + (charAfter(line, from)?.length ?? 1);
+      continue;
+    }
+    found.push([from, to]);
+    at = to;
+  }
+  return found;
+}
+
+function findMatch(line: string, index: number, from: number, to: number): FindMatch {
+  const clip = (text: string, max: number) => {
+    const chars = [...text];
+    return chars.length > max ? `${chars.slice(0, max).join("")}…` : text;
+  };
+  const head = [...line.slice(0, from).trimStart()];
+  return {
+    line: index + 1,
+    column: from,
+    length: to - from,
+    before: head.length > 32 ? `…${head.slice(-32).join("")}` : head.join(""),
+    text: clip(line.slice(from, to), 200),
+    after: clip(line.slice(to).trimEnd(), 160),
+  };
+}
+
+/** 正文里第一次出现 needle（已经转成小写）的那一行，同 Rust 的 index::line_with */
+function lineWith(content: string, needle: string): string | null {
+  const lower = content.toLowerCase();
+  const at = lower.indexOf(needle);
+  if (at < 0) return null;
+  const start = lower.lastIndexOf("\n", at - 1) + 1;
+  const end = content.indexOf("\n", at);
+  const line = content.slice(start, end < 0 ? content.length : end).replace(/\r$/, "");
+  if (line.length <= 600) return line;
+  const from = Math.max(0, at - start - 200);
+  return line.slice(from, from + 600);
+}
+
 export const mockBackend: Backend = {
-  async noteListFull(archived) {
+  async noteList(archived) {
     await tick();
-    return listed(archived).map(present);
+    return listed(archived).map(summary);
   },
 
   async noteGet(id) {
@@ -744,27 +868,74 @@ export const mockBackend: Backend = {
     notFound(`version ${blob}`);
   },
 
-  async searchNotes(query, limit): Promise<SearchResult> {
+  async searchText(query, limit, archivedOnly) {
     await tick();
-    const q = query.trim().toLowerCase();
-    if (!q) return { hits: [], tokens: [] };
-    const hits = state.notes
-      .filter(
-        (n) =>
-          n.title.toLowerCase().includes(q) ||
-          n.contentMd.toLowerCase().includes(q) ||
-          n.excerpt.toLowerCase().includes(q),
-      )
-      .slice(0, limit)
-      .map((n) => ({
-        id: n.id,
-        title: n.title,
-        excerpt: n.excerpt,
-        isArchived: n.isArchived,
-        updatedAt: n.updatedAt,
-        score: 0,
-      }));
-    return { hits, tokens: [query.trim()] };
+    const needle = query.trim().toLowerCase();
+    if (!needle) return { notes: [], journal: [] };
+    const notes: TextHit[] = [];
+    for (const note of archivedOnly ? listed(true) : [...listed(false), ...listed(true)]) {
+      if (notes.length >= limit) break;
+      const line = lineWith(note.contentMd, needle);
+      if (line !== null) {
+        const target = { kind: "note", id: note.id } as const;
+        notes.push({ target, title: note.title, updatedAt: note.updatedAt, line });
+      }
+    }
+    const journal: TextHit[] = [];
+    for (const entry of archivedOnly ? [] : journalEntries()) {
+      if (journal.length >= limit) break;
+      const line = lineWith(entry.contentMd, needle);
+      if (line !== null)
+        journal.push({
+          target: entry.target,
+          title: entry.title,
+          updatedAt: entry.updatedAt,
+          line,
+        });
+    }
+    return { notes, journal };
+  },
+
+  async findInVault(query, options) {
+    await tick();
+    const finder = compileFinder(query, options);
+    if (finder === null) return { files: [], total: 0, truncated: false, error: null };
+    if (typeof finder === "string") return { files: [], total: 0, truncated: false, error: finder };
+    const docs = [
+      ...[...listed(false), ...listed(true)].map((note) => ({
+        target: { kind: "note", id: note.id } as DocumentSaveTarget,
+        title: note.title,
+        updatedAt: note.updatedAt,
+        contentMd: note.contentMd,
+      })),
+      ...journalEntries(),
+    ];
+    const files: FindFile[] = [];
+    let total = 0;
+    let budget = FIND_MATCH_LIMIT;
+    for (const doc of docs) {
+      const matches: FindMatch[] = [];
+      let count = 0;
+      doc.contentMd.split("\n").forEach((raw, index) => {
+        const line = raw.replace(/\r$/, "");
+        for (const [from, to] of findInLine(finder, line, options.wholeWord)) {
+          count += 1;
+          if (matches.length < budget) matches.push(findMatch(line, index, from, to));
+        }
+      });
+      total += count;
+      if (count && budget > 0) {
+        budget -= matches.length;
+        files.push({
+          target: doc.target,
+          title: doc.title,
+          updatedAt: doc.updatedAt,
+          matches,
+          count,
+        });
+      }
+    }
+    return { files, total, truncated: total > FIND_MATCH_LIMIT, error: null };
   },
 
   async taskToggle(id) {
@@ -859,25 +1030,7 @@ export const mockBackend: Backend = {
 
   async journalList(): Promise<JournalDoc[]> {
     await tick();
-    const days: JournalDoc[] = Object.entries(state.days)
-      .filter(([, day]) => day.noteMd || day.title)
-      .map(([date, day]) => ({
-        target: { kind: "day", id: date },
-        kind: "day",
-        title: day.title ? `${formatMonthDayCN(date)} · ${day.title}` : formatMonthDayCN(date),
-        contentMd: day.noteMd,
-        updatedAt: day.updatedAt,
-      }));
-    const goals: JournalDoc[] = Object.values(state.goals)
-      .filter((goal) => goal.contentMd)
-      .map((goal) => ({
-        target: { kind: "goal", horizon: goal.horizon, periodStart: goal.periodStart },
-        kind: "goal",
-        title: goalTitle(goal.horizon, goal.periodStart),
-        contentMd: goal.contentMd,
-        updatedAt: goal.updatedAt,
-      }));
-    return [...days, ...goals].sort((a, b) => b.updatedAt - a.updatedAt);
+    return journalEntries().map(({ contentMd: _body, ...entry }) => entry);
   },
 
   async guidePending(): Promise<GuideUpdate[]> {

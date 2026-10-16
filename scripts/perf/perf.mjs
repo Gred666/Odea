@@ -135,6 +135,26 @@ const openSession = (noteId) =>
     `localStorage.setItem("otw.session", JSON.stringify({ workspace: "notes", noteId: "${noteId}", archiveId: "", noteFolder: "" })); true`,
   );
 const VIEW = "document.querySelector('.cm-content').cmTile.view";
+/** 堆里有几个 EditorView（queryObjects 会先做一次 GC）。查完放掉句柄，不然它们被控制台握着 */
+const liveEditorViews = async () => {
+  const group = { objectGroup: "perf-views" };
+  const { result } = await send("Runtime.evaluate", {
+    expression: `${VIEW}.constructor.prototype`,
+    ...group,
+  });
+  const { objects } = await send("Runtime.queryObjects", {
+    prototypeObjectId: result.objectId,
+    ...group,
+  });
+  const { result: count } = await send("Runtime.callFunctionOn", {
+    objectId: objects.objectId,
+    functionDeclaration: "function () { return this.length; }",
+    returnByValue: true,
+    ...group,
+  });
+  await send("Runtime.releaseObjectGroup", group);
+  return count.value;
+};
 
 try {
   await send("Page.enable");
@@ -214,6 +234,10 @@ try {
     }
     out.switch = { short: stats(short), long };
     out.listRows = rows.length;
+    // 切过 16 次以后还活着几个编辑器：应该只有眼前这一个。多出来的就是切走的那些连着整棵 DOM
+    // 没放掉（2026-10-14 修过一次：切 120 篇留着 122 个）。下面要重新加载，得在这之前数
+    await send("HeapProfiler.collectGarbage");
+    out.editorViews = await liveEditorViews();
     // 后面打字、滚动都在长文里
     await openSession(STRESS_ID);
     await reload();

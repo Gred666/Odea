@@ -1,3 +1,4 @@
+import type { MatchAnchor } from "@/data/types";
 import { isTauri } from "@/lib/tauri";
 import {
   SearchQuery,
@@ -177,6 +178,49 @@ export function firstMatchFrom(
     return step.done ? null : { from: step.value.from, to: step.value.to };
   };
   return first(Math.min(from, state.doc.length)) ?? (from > 0 ? first(0) : null);
+}
+
+/** 全局搜索的条件换成篇内查找的（literal：不是正则时 `\n` 这类也照字面找，和 Rust 那边一样） */
+export function queryOfAnchor(anchor: MatchAnchor): SearchQuery {
+  return new SearchQuery({
+    search: anchor.query,
+    caseSensitive: anchor.caseSensitive,
+    wholeWord: anchor.wholeWord,
+    regexp: anchor.regex,
+    literal: true,
+  });
+}
+
+/**
+ * 全局搜索的一处命中在这一篇里的位置：在第 line 行（从 1 开始）里按同样的条件找，取列号对得上的那个；
+ * 对不上（打开后的正文和索引不完全一样，或者 JS 和 Rust 的正则有出入）取离得最近的；这一行里一个都没有，
+ * 按列号选那一段（还在这一行里的话）。行号不存在返回 null
+ */
+export function matchOnLine(
+  state: EditorState,
+  line: number,
+  anchor: MatchAnchor,
+): { from: number; to: number } | null {
+  if (line < 1 || line > state.doc.lines) return null;
+  const row = state.doc.line(line);
+  const expected = row.from + anchor.column;
+  const query = queryOfAnchor(anchor);
+  let nearest: { from: number; to: number } | null = null;
+  if (query.valid && query.search) {
+    const cursor = query.getCursor(state, row.from, row.to);
+    for (let step = cursor.next(); !step.done; step = cursor.next()) {
+      const { from, to } = step.value;
+      if (from === expected) return { from, to };
+      if (!nearest || Math.abs(from - expected) < Math.abs(nearest.from - expected)) {
+        nearest = { from, to };
+      }
+    }
+  }
+  if (nearest) return nearest;
+  if (anchor.column + anchor.length <= row.length) {
+    return { from: expected, to: expected + anchor.length };
+  }
+  return { from: row.from, to: row.from };
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";

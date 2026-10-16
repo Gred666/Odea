@@ -37,8 +37,9 @@ use rusqlite::Connection;
 
 use crate::db::now_ms;
 use crate::domain::model::{
-    Attachment, Backlink, BacklinkLine, CalendarMarks, DayDoc, DocTarget, FolderDeletion, Goal,
-    JournalDoc, LinkRewrite, Note, Relink, SearchHit, SearchResult, Task, VaultChange, VaultInfo,
+    Attachment, Backlink, BacklinkLine, CalendarMarks, DayDoc, DocTarget, FindFile, FindMatch,
+    FindOptions, FindResult, FolderDeletion, Goal, JournalDoc, LinkRewrite, Note, NoteSummary,
+    Relink, Task, TextHit, TextSearch, VaultChange, VaultInfo,
 };
 use crate::domain::search;
 use crate::error::{AppError, Result};
@@ -491,19 +492,8 @@ impl Vault {
             change.tasks = true;
         }
 
-        let fts = (row.kind == "note").then(|| {
-            (
-                search::tokenize_for_index(&row.title),
-                search::tokenize_for_index(&format!("{} {body}", row.title)),
-            )
-        });
         row.content_md = body;
-        index::put(
-            &self.db,
-            &row,
-            &scheduled,
-            fts.as_ref().map(|(title, tokens)| (title.as_str(), tokens.as_str())),
-        )?;
+        index::put(&self.db, &row, &scheduled)?;
 
         if let Some(previous) = &previous {
             if previous.id != row.id {
@@ -687,6 +677,16 @@ impl Vault {
             .ok_or_else(|| AppError::NotFound(format!("note {id}")))
     }
 
+    /// 一个列表（笔记 / 归档）的全部笔记，不带正文
+    pub fn note_list(&self, archived: bool) -> Result<Vec<NoteSummary>> {
+        index::note_summaries(&self.db, archived)?
+            .iter()
+            .map(|row| Ok(summary_from_row(row, self.conflict_of(row)?)))
+            .collect()
+    }
+
+    /// 带正文的列表：只有测试还在用（前端早就不一次拿全文了，见 note_list）
+    #[cfg(test)]
     pub fn note_list_full(&self, archived: bool) -> Result<Vec<Note>> {
         index::notes(&self.db, archived)?
             .iter()
@@ -1008,30 +1008,6 @@ impl Vault {
         }
     }
 
-    pub fn search(&self, query: &str, limit: u32) -> Result<SearchResult> {
-        let Some(match_query) = search::build_match_query(query) else {
-            return Ok(SearchResult {
-                hits: vec![],
-                tokens: vec![],
-            });
-        };
-        let hits = index::search(&self.db, &match_query, limit)?
-            .into_iter()
-            .map(|hit| SearchHit {
-                id: hit.doc.id,
-                title: hit.doc.title,
-                excerpt: hit.doc.excerpt,
-                is_archived: hit.doc.archived,
-                updated_at: hit.doc.updated_at,
-                score: hit.score,
-            })
-            .collect();
-        Ok(SearchResult {
-            hits,
-            tokens: search::query_tokens(query),
-        })
-    }
-
     /* ---------------- 某一天 ---------------- */
 
     fn tasks_due(&self, date: &str) -> Result<Vec<Task>> {
@@ -1141,7 +1117,6 @@ impl Vault {
                     target,
                     kind: row.kind.to_string(),
                     title,
-                    content_md: row.content_md,
                     updated_at: row.updated_at,
                 }
             })
@@ -1642,6 +1617,206 @@ fn trash_rel(id: &str) -> String {
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
     format!("{}/{safe}.md", layout::TRASH_DIR)
+}
+
+/// 搜正文（命令面板；archived_only 是归档的搜索框）：大小写不敏感的子串，和以前前端在全文里
+/// indexOf 的结果一样。
+/// 不在 Vault 上 —— 调用方拿一个单独的只读连接来搜，不占仓库的锁，搜大仓库时保存不用等
+/// （索引是 WAL）。cancelled() 返回 true 说明又来了新的搜索，这一次作废，返回 None
+pub fn search_text(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+    archived_only: bool,
+    cancelled: impl Fn() -> bool,
+) -> Result<Option<TextSearch>> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Ok(Some(TextSearch::default()));
+    }
+    let Some(found) = index::scan_text(conn, &needle, archived_only, cancelled)? else {
+        return Ok(None);
+    };
+    let (mut notes, mut journal): (Vec<_>, Vec<_>) =
+        found.into_iter().partition(|hit| hit.doc.kind == "note");
+    notes.sort_by(|a, b| list_order(&a.doc, &b.doc));
+    journal.sort_by(|a, b| b.doc.updated_at.cmp(&a.doc.updated_at));
+    let hits = |list: Vec<index::TextMatch>| -> Vec<TextHit> {
+        list.into_iter()
+            .take(limit)
+            .map(|hit| {
+                let (target, title) = target_and_title(&hit.doc);
+                TextHit {
+                    target,
+                    title,
+                    updated_at: hit.doc.updated_at,
+                    line: hit.line,
+                }
+            })
+            .collect()
+    };
+    Ok(Some(TextSearch {
+        notes: hits(notes),
+        journal: hits(journal),
+    }))
+}
+
+/// 搜出来的笔记怎么排：和两个列表接起来的顺序一样（index::notes）—— 笔记在归档前，置顶在前，
+/// 再按时间倒序
+fn list_order(a: &DocRow, b: &DocRow) -> std::cmp::Ordering {
+    let when = |doc: &DocRow| {
+        if doc.archived {
+            doc.archived_at.unwrap_or(doc.updated_at)
+        } else {
+            doc.updated_at
+        }
+    };
+    (a.archived, !a.pinned, std::cmp::Reverse(when(a)), &a.rel_path).cmp(&(
+        b.archived,
+        !b.pinned,
+        std::cmp::Reverse(when(b)),
+        &b.rel_path,
+    ))
+}
+
+/// 全局搜索最多给出多少处命中：再多就该换个更准的词了（一共几处照样数完）
+pub const FIND_MATCH_LIMIT: usize = 1000;
+/// 命中处前面留几个字、后面留几个字、命中的字本身最多显示几个（一段 Markdown 常常整段一行）
+const PREVIEW_BEFORE: usize = 32;
+const PREVIEW_AFTER: usize = 160;
+const PREVIEW_TEXT: usize = 200;
+
+/// 全局搜索（commands::find_in_vault）：每一篇里每一处命中，一行一行地找，和 VS Code 的
+/// 「在文件中查找」一样只搜正文。不在 Vault 上，理由同 search_text。
+/// 正则写错了放在结果的 error 里；cancelled() 返回 true 说明又来了新的搜索，这一次作废，返回 None
+pub fn find_text(
+    conn: &Connection,
+    query: &str,
+    options: FindOptions,
+    cancelled: impl Fn() -> bool,
+) -> Result<Option<FindResult>> {
+    let finder = match search::Finder::new(query, options) {
+        Ok(Some(finder)) => finder,
+        Ok(None) => return Ok(Some(FindResult::default())),
+        Err(error) => {
+            return Ok(Some(FindResult {
+                error: Some(error),
+                ..FindResult::default()
+            }))
+        }
+    };
+    // 每一篇：命中的位置 (第几行（从 0 数）, 这一行里的字节区间)，和一共几处。位置一篇最多留
+    // FIND_MATCH_LIMIT 个（再多也给不出去），一大篇里搜一个「的」不会攒下几十万个
+    let mut found: Vec<(DocRow, Vec<(usize, usize, usize)>, usize)> = Vec::new();
+    let finished = index::each_text_doc(conn, false, |doc| {
+        if cancelled() {
+            return false;
+        }
+        if !finder.may_match(&doc.content_md) {
+            return true;
+        }
+        let mut hits = Vec::new();
+        let mut count = 0;
+        for (number, line) in doc.content_md.split('\n').enumerate() {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            for (from, to) in finder.find_in_line(line, usize::MAX) {
+                count += 1;
+                if hits.len() < FIND_MATCH_LIMIT {
+                    hits.push((number, from, to));
+                }
+            }
+        }
+        if count > 0 {
+            found.push((doc, hits, count));
+        }
+        true
+    })?;
+    if !finished {
+        return Ok(None);
+    }
+
+    let (mut notes, mut journal): (Vec<_>, Vec<_>) =
+        found.into_iter().partition(|(doc, _, _)| doc.kind == "note");
+    notes.sort_by(|a, b| list_order(&a.0, &b.0));
+    journal.sort_by(|a, b| b.0.updated_at.cmp(&a.0.updated_at));
+
+    let total: usize = notes.iter().chain(&journal).map(|(_, _, count)| count).sum();
+    let mut budget = FIND_MATCH_LIMIT;
+    let mut files = Vec::new();
+    for (doc, hits, count) in notes.into_iter().chain(journal) {
+        if budget == 0 {
+            break;
+        }
+        let lines: Vec<&str> = doc.content_md.split('\n').collect();
+        let matches: Vec<FindMatch> = hits
+            .iter()
+            .take(budget)
+            .map(|&(number, from, to)| {
+                let line = lines[number];
+                let line = line.strip_suffix('\r').unwrap_or(line);
+                find_match(line, number, from, to)
+            })
+            .collect();
+        budget -= matches.len();
+        let (target, title) = target_and_title(&doc);
+        files.push(FindFile {
+            target,
+            title,
+            updated_at: doc.updated_at,
+            matches,
+            count: count as u32,
+        });
+    }
+    Ok(Some(FindResult {
+        files,
+        total: total as u32,
+        truncated: total > FIND_MATCH_LIMIT,
+        error: None,
+    }))
+}
+
+/// 一处命中给前端的样子：位置按 UTF-16 算（编辑器里的位置），显示的那段前后各截一截
+fn find_match(line: &str, number: usize, from: usize, to: usize) -> FindMatch {
+    let utf16 = |text: &str| text.encode_utf16().count() as u32;
+    let head = line[..from].trim_start();
+    let before = if head.chars().count() > PREVIEW_BEFORE {
+        let skip = head.chars().count() - PREVIEW_BEFORE;
+        format!("…{}", head.chars().skip(skip).collect::<String>())
+    } else {
+        head.to_string()
+    };
+    let clip = |text: &str, max: usize| {
+        if text.chars().count() > max {
+            format!("{}…", text.chars().take(max).collect::<String>())
+        } else {
+            text.to_string()
+        }
+    };
+    FindMatch {
+        line: number as u32 + 1,
+        column: utf16(&line[..from]),
+        length: utf16(&line[from..to]),
+        before,
+        text: clip(&line[from..to], PREVIEW_TEXT),
+        after: clip(line[to..].trim_end(), PREVIEW_AFTER),
+    }
+}
+
+fn summary_from_row(row: &DocRow, conflict_of: Option<String>) -> NoteSummary {
+    NoteSummary {
+        id: row.id.clone(),
+        title: row.title.clone(),
+        excerpt: row.excerpt.clone(),
+        word_count: row.word_count,
+        is_pinned: row.pinned,
+        is_archived: row.archived,
+        archive_category: row.category.clone(),
+        archived_at: row.archived_at,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        rel_path: row.rel_path.clone(),
+        conflict_of,
+    }
 }
 
 fn note_from_row(row: &DocRow, conflict_of: Option<String>) -> Note {

@@ -4,6 +4,7 @@ import { LIST_WIDTH, chromeWidth, hasListColumn, startTodayTicker, useApp } from
 import { CommandPalette } from "@/components/CommandPalette";
 import { DocumentView } from "@/components/DocumentView";
 import { ErrorToast, NoticeToast } from "@/components/ErrorToast";
+import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
 import { Sidebar } from "@/components/Sidebar";
@@ -265,6 +266,7 @@ export function Shell() {
           </div>
         </div>
         <CommandPalette docTarget={doc.editor?.target} />
+        <FindDialog />
         <SyncDialog />
         <HistoryDialog />
         <UpdateDialog />

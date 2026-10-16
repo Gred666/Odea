@@ -26,7 +26,7 @@ import {
   within,
 } from "@/data/folders";
 import { useData } from "@/data/store";
-import type { Note } from "@/data/types";
+import type { NoteSummary } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { animatedEmojiText } from "@/lib/emojiText";
 import { spring, tween } from "@/lib/motion";
@@ -119,7 +119,7 @@ const entryMotion = {
    - 搜索标题时搜所有文件夹
    ============================================================ */
 
-export function NotesList({ notes }: { notes: Note[] }) {
+export function NotesList({ notes }: { notes: NoteSummary[] }) {
   const selectedId = useApp((s) => s.selectedNoteId);
   const selectNote = useApp((s) => s.selectNote);
   const query = useApp((s) => s.noteQuery);
@@ -191,7 +191,7 @@ export function NotesList({ notes }: { notes: Note[] }) {
   }, [folder, folders, setNoteFolder]);
 
   const sortNotes = useCallback(
-    (list: Note[]) =>
+    (list: NoteSummary[]) =>
       // 「按更新时间」直接用 store 里的顺序（加载 / 置顶 / 归档时已按 updatedAt 排好），
       // 不在这里按 updatedAt 重排：自动保存每 400ms 刷新一次它，正在编辑的那篇
       // 会在侧栏里当着用户的面往上跳 —— store 刻意不重排就是为了避免这个。
@@ -207,7 +207,7 @@ export function NotesList({ notes }: { notes: Note[] }) {
 
   /** 每个文件夹里直接放着的笔记（按当前排序） */
   const notesByFolder = useMemo(() => {
-    const map = new Map<string, Note[]>();
+    const map = new Map<string, NoteSummary[]>();
     for (const note of sortNotes(notes)) {
       const key = folderOf(note);
       const list = map.get(key);
@@ -224,7 +224,7 @@ export function NotesList({ notes }: { notes: Note[] }) {
     if (q) {
       return {
         search: true,
-        pinned: [] as Note[],
+        pinned: [] as NoteSummary[],
         folders: folders
           .filter((path) => nameOf(path).toLowerCase().includes(q))
           .sort((a, b) => a.localeCompare(b, "zh-Hans-CN")),
@@ -680,9 +680,9 @@ interface TreeActions {
 /** 文件夹那几行要的东西：数据 + 操作。笔记、展开、起名……一变就换一份 */
 interface TreeContextValue extends TreeActions {
   folder: string;
-  notesByFolder: Map<string, Note[]>;
+  notesByFolder: Map<string, NoteSummary[]>;
   folders: string[];
-  notes: Note[];
+  notes: NoteSummary[];
   expanded: Set<string>;
   editing: Editing;
   flash: { path: string; at: number } | null;
@@ -968,7 +968,10 @@ function FolderGlyph({
 }
 
 /** 展开的文件夹里一篇笔记：只有标题，一行。选中与否自己订阅：换一篇只重渲染新旧两行 */
-const TreeNoteRow = memo(function TreeNoteRow({ note, depth }: { note: Note; depth: number }) {
+const TreeNoteRow = memo(function TreeNoteRow({
+  note,
+  depth,
+}: { note: NoteSummary; depth: number }) {
   const tree = useTreeActions();
   const selected = useApp((s) => s.selectedNoteId === note.id);
   const dragging = useNoteDrag((s) => s.noteId === note.id);
@@ -1169,7 +1172,7 @@ const NoteCard = memo(function NoteCard({
   divided,
   appear = true,
 }: {
-  note: Note;
+  note: NoteSummary;
   index: number;
   selected: boolean;
   /** 列表栏现在在哪个文件夹 */
@@ -1370,7 +1373,7 @@ function FolderChip({ path }: { path: string }) {
  * 列表里换成原文的标题 —— 身份和时间由摘要前面的标签说（ConflictTag）。原文是某一天 /
  * 目标时是「10月7日」「第 41 周目标」（data/conflicts.ts）
  */
-export function useListTitle(note: Note): string {
+export function useListTitle(note: NoteSummary): string {
   const original = useData((state) =>
     note.conflictOf ? conflictOriginalTitle(conflictTarget(note.conflictOf), state) : undefined,
   );

@@ -53,6 +53,7 @@ for (let i = 0; i < Math.max(before.nav?.length ?? 0, after.nav?.length ?? 0); i
   row(`切到「${label}」INP / 最长一帧`, (r) => `${r.nav[i].inp} / ${r.nav[i].longestFrame}`);
 }
 row("列表里画出来的行", (r) => r.listRows);
+row("切完笔记还活着的编辑器（应为 1）", (r) => r.editorViews);
 row("JS 堆 MB", (r) => r.memory.heapMB);
 row("DOM 节点", (r) => r.memory.domNodes);
 

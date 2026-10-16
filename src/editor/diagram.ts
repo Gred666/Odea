@@ -24,6 +24,10 @@ export const diagramEngine = {
         startOnLoad: false,
         securityLevel: "strict",
         theme: "neutral",
+        // mermaid 12 的默认布局是 ELK：画一张最普通的 graph TD 也要拉 1.4 MB 的 elkjs，
+        // JS 堆多 6–7 MB（2026-10-14 量的）。dagre 只有 46 KB，连线是曲线（ELK 是直角折线）。
+        // 图里自己写了 layout: elk 的照样用 ELK
+        layout: "dagre",
         fontFamily: "Inter, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', sans-serif",
       });
       return mermaid;

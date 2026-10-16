@@ -149,12 +149,16 @@ function svg(viewBox: string, d: string, className: string): SVGSVGElement {
  */
 
 export class TaskWidget extends OtwWidget {
-  constructor(private readonly checked: boolean) {
+  /** offset：替身盖住的是整段 `- [ ] `，`[` 离开头几个字符 */
+  constructor(
+    private readonly checked: boolean,
+    private readonly offset = 0,
+  ) {
     super();
   }
 
   eq(other: TaskWidget) {
-    return other.checked === this.checked;
+    return other.checked === this.checked && other.offset === this.offset;
   }
 
   toDOM(view: EditorView) {
@@ -167,8 +171,7 @@ export class TaskWidget extends OtwWidget {
     box.append(svg("0 0 16 16", "M3.5 8.5l3 3 6-6.5", "cm-otw-task-check"));
     box.addEventListener("mousedown", (event) => {
       event.preventDefault();
-      // 勾选框替身盖住的正好是 `[ ]` / `[x]` 这三个字符
-      const from = positionOf(view, box);
+      const from = positionOf(view, box) + this.offset;
       view.dispatch({ changes: { from, to: from + 3, insert: this.checked ? "[ ]" : "[x]" } });
       view.focus();
     });
@@ -180,21 +183,26 @@ export class TaskWidget extends OtwWidget {
 
 /**
  * 显示什么由调用方算好传进来：有序列表按在列表里的位置自动编号（源码里写
- * `1. 1. 1.` 也显示 1 2 3），无序列表按嵌套深度换 • ◦ ▪。
+ * `1. 1. 1.` 也显示 1 2 3），无序列表按嵌套深度换 • ◦ ▪。style 是符号格的宽度
+ * （光标移上来换回源码时格子一样宽，见 globals.css「列表的几何」）。
  */
 export class ListMarkerWidget extends OtwWidget {
-  constructor(private readonly display: string) {
+  constructor(
+    private readonly display: string,
+    private readonly style = "",
+  ) {
     super();
   }
 
   eq(other: ListMarkerWidget) {
-    return other.display === this.display;
+    return other.display === this.display && other.style === this.style;
   }
 
   toDOM(view: EditorView) {
     const marker = document.createElement("span");
     marker.className = "cm-otw-list-marker";
     marker.textContent = this.display;
+    if (this.style) marker.setAttribute("style", this.style);
     marker.addEventListener("mousedown", (event) => {
       event.preventDefault();
       jumpToSource(view, positionOf(view, marker));
@@ -379,7 +387,7 @@ export class ImageWidget extends OtwWidget {
     );
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     const image = document.createElement("img");
     image.className = "cm-otw-image";
     image.alt = this.image.alt;
@@ -389,7 +397,12 @@ export class ImageWidget extends OtwWidget {
     image.loading = "lazy";
     image.decoding = "async";
     // 加载完再淡入。直接出现的话大图会「啪」地把下面的正文顶下去。
-    const settle = (state: "is-loaded" | "is-error") => image.classList.add(state);
+    // 图到了这一行就变高了：告诉 CodeMirror 重新量。它自己只在上次更新 75ms 以后才理会
+    // 尺寸变化，刚粘贴的截图几十毫秒就加载完 —— 光标、选区还按图片没高度时画，停在图片中间
+    const settle = (state: "is-loaded" | "is-error") => {
+      image.classList.add(state);
+      if (image.isConnected) view.requestMeasure();
+    };
     image.addEventListener("load", () => settle("is-loaded"));
     image.addEventListener("error", () => settle("is-error"));
     image.src = this.image.source;
@@ -918,6 +931,12 @@ export class HtmlBlockWidget extends OtwWidget {
       event.preventDefault();
       jumpToSource(view, positionOf(view, block));
     });
+    // 里面的 <img> 加载完、<details> 展开收起，这一块的高度都变了，让 CodeMirror 重新量
+    // （见 ImageWidget）。load / toggle 不冒泡，在捕获阶段接
+    const remeasure = () => {
+      if (block.isConnected) view.requestMeasure();
+    };
+    for (const type of ["load", "error", "toggle"]) host.addEventListener(type, remeasure, true);
     block.append(host);
     return this.settle(block);
   }

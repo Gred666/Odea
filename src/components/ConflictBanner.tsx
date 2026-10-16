@@ -1,7 +1,7 @@
 import { openDocument } from "@/app/navigate";
 import { conflictOriginalContent } from "@/data/conflicts";
 import { useData } from "@/data/store";
-import type { DocumentModel, Note } from "@/data/types";
+import type { DocumentModel } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { today } from "@/lib/date";
 import { diffLines, diffStats } from "@/lib/lineDiff";
@@ -29,28 +29,33 @@ export function ConflictBanner({
   conflict: NonNullable<DocumentModel["conflict"]>;
 }) {
   const target = conflict.original;
-  const copy = useData((s) => findNote(s, conflict.copyId));
+  // 副本就是正在看的这篇，正文一定在；原文是笔记的话打开副本时一起取了（data/adapter.ts）
+  const copy = useData((s) => s.bodies[conflict.copyId]);
   const original = useData((s) => conflictOriginalContent(target, s));
   const resolveConflict = useData((s) => s.resolveConflict);
   const loadDay = useData((s) => s.loadDay);
   const loadGoal = useData((s) => s.loadGoal);
+  const loadBody = useData((s) => s.loadBody);
 
-  // 原文是某一天 / 目标、还没取过：取一次（target 每次渲染都是新对象，按里面的值认）
+  // 原文还没取过（某一天 / 目标是按需取的；笔记的正文也可能被挤掉了）：取一次
+  // （target 每次渲染都是新对象，按里面的值认）
   const loaded = original !== undefined;
   const dayId = target.kind === "day" ? target.id : null;
   const goalHorizon = target.kind === "goal" ? target.horizon : null;
   const goalStart = target.kind === "goal" ? target.periodStart : null;
+  const noteId = target.kind === "note" ? target.id : null;
   useEffect(() => {
     if (loaded) return;
     if (dayId) void loadDay(dayId, dayId === today());
     else if (goalHorizon && goalStart) void loadGoal(goalHorizon, goalStart);
-  }, [loaded, dayId, goalHorizon, goalStart, loadDay, loadGoal]);
+    else if (noteId) void loadBody(noteId);
+  }, [loaded, dayId, goalHorizon, goalStart, noteId, loadDay, loadGoal, loadBody]);
   const [showDiff, setShowDiff] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const diff = useMemo(
-    () => (copy && original !== undefined ? diffLines(original, copy.contentMd) : null),
+    () => (copy !== undefined && original !== undefined ? diffLines(original, copy) : null),
     [copy, original],
   );
   const stats = diff ? diffStats(diff) : null;
@@ -180,11 +185,5 @@ export function BannerButton({
     >
       {children}
     </button>
-  );
-}
-
-function findNote(state: { notes: Note[]; archived: Note[] }, id: string) {
-  return (
-    state.notes.find((note) => note.id === id) ?? state.archived.find((note) => note.id === id)
   );
 }

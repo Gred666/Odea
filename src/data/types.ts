@@ -13,12 +13,14 @@ export type WorkspaceId = "notes" | "today" | "goal" | "calendar" | "archive" | 
 
 /* ---------------- 笔记 ---------------- */
 
-/** 完整笔记（含正文）。对应 Rust 的 domain::model::Note。 */
-export interface Note {
+/**
+ * 列表里的一篇：不带正文。对应 Rust 的 domain::model::NoteSummary。
+ * store 里两个列表放的都是它 —— 仓库里有多少篇放多少篇，正文只留最近打开的几篇
+ * （store 的 bodies），搜正文走 Rust（searchText）。几万篇也只多一点摘要的内存
+ */
+export interface NoteSummary {
   id: string;
   title: string;
-  /** 正文，Markdown 源码 */
-  contentMd: string;
   excerpt: string;
   wordCount: number;
   isPinned: boolean;
@@ -34,6 +36,12 @@ export interface Note {
    * 某一天（`day:2026-10-07`）或某个周期的目标（`goal:week:2026-09-21`），见 data/conflicts.ts
    */
   conflictOf: string | null;
+}
+
+/** 完整笔记（含正文）。对应 Rust 的 domain::model::Note：noteGet 取一篇时才有 */
+export interface Note extends NoteSummary {
+  /** 正文，Markdown 源码 */
+  contentMd: string;
 }
 
 export interface NoteInput {
@@ -77,13 +85,12 @@ export interface CalendarMarks {
   open: Set<ISODate>;
 }
 
-/** 某一天 / 某个周期的目标，连同正文：命令面板拿它搜日记和目标 */
+/** 写过的某一天 / 某个周期的目标（不带正文）：命令面板按标题搜它们，正文走 searchText */
 export interface JournalDoc {
   target: DocumentSaveTarget;
   kind: "day" | "goal";
   /** 「10月6日 · 完成专注模式原型」「第 41 周目标」 */
   title: string;
-  contentMd: string;
   updatedAt: number;
 }
 
@@ -139,24 +146,82 @@ export interface DayDoc {
 
 /* ---------------- 搜索 ---------------- */
 
-export interface SearchHit {
-  id: string;
+/** searchText 的一条：正文里出现了要找的字的文档 */
+export interface TextHit {
+  target: DocumentSaveTarget;
+  /** 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc） */
   title: string;
-  excerpt: string;
-  isArchived: boolean;
   updatedAt: number;
-  /** bm25 分数，越小越相关 */
-  score: number;
+  /** 第一次出现的那一行（很长的截一段）：面板在里面截出要显示的一小段（snippetAround） */
+  line: string;
 }
 
-export interface SearchResult {
-  hits: SearchHit[];
-  /**
-   * 分词后的查询词。前端拿它在原始正文上做高亮 ——
-   * 不能用 SQLite 的 snippet()，那是在分词串上取的，中文会显示成
-   * 「今天 开会 讨论 季度 目标」。
-   */
-  tokens: string[];
+/** 搜正文：笔记（含归档，顺序同两个列表接起来）和日记、目标，各自最多 limit 条 */
+export interface TextSearch {
+  notes: TextHit[];
+  journal: TextHit[];
+}
+
+/** 全局搜索（findInVault）的条件：和编辑器里查找面板的三个开关一样 */
+export interface FindOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+}
+
+/** 全局搜索里的一处命中 */
+export interface FindMatch {
+  /** 第几行，从 1 开始 */
+  line: number;
+  /** 在这一行里从第几个 UTF-16 码元开始、占几个（和编辑器里的位置同一个单位）：跳进文档后选中它 */
+  column: number;
+  length: number;
+  /** 给人看的一段：命中处前面一小截（截掉了的以「…」开头）、命中的字、后面一截 */
+  before: string;
+  text: string;
+  after: string;
+}
+
+/** 全局搜索里命中了的一篇 */
+export interface FindFile {
+  target: DocumentSaveTarget;
+  /** 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc） */
+  title: string;
+  updatedAt: number;
+  /** 这一篇里给出的命中（总数到了上限，后面的就不给了） */
+  matches: FindMatch[];
+  /** 这一篇里一共几处 */
+  count: number;
+}
+
+/**
+ * 从全局搜索的结果跳进一篇：在那一行（app/navigate 的行号锚点）里选中这一处命中，
+ * 篇内查找（Mod-F、F3）接着用同一个条件
+ */
+export interface MatchAnchor extends FindOptions {
+  query: string;
+  /** 同 FindMatch：这一行里的 UTF-16 位置 */
+  column: number;
+  length: number;
+}
+
+/** 打开一篇时要去的位置（app/navigate 的 openDocument）：某个小节，或者某一行（从 1 开始） */
+export interface DocumentAnchor {
+  heading?: string;
+  line?: number;
+  /** 只和 line 一起用 */
+  match?: MatchAnchor;
+}
+
+/** 全局搜索的结果：笔记（含归档，顺序同两个列表接起来）在前，日记、目标（最近改过的在前）在后 */
+export interface FindResult {
+  files: FindFile[];
+  /** 一共几处（没给出来的也数了） */
+  total: number;
+  /** 命中太多，只给了前面一部分 */
+  truncated: boolean;
+  /** 正则写错了：给人看的原因（这时 files 是空的） */
+  error: string | null;
 }
 
 /* ---------------- 仓库文件夹 ---------------- */

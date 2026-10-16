@@ -180,8 +180,8 @@ describe("Callout 变体", () => {
   it("keeps the body visible while the cursor is inside a collapsed callout", () => {
     const { parent } = mount("> [!note]-\n> 第一行\n\n后", 12);
     expect(parent.querySelector(".cm-otw-callout-fold-button")).toBeNull();
-    // 光标在正文行上：徽章照常显示，`>` 因为整个引用块处于激活态而露出
-    expect(lines(parent)).toEqual(["> note", "> 第一行", "", "后"]);
+    // 光标在正文行的 `>` 后面：徽章照常显示，只有光标碰到的那一个 `>` 露出来
+    expect(lines(parent)).toEqual(["note", "> 第一行", "", "后"]);
   });
 });
 

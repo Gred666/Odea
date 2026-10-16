@@ -11,6 +11,8 @@ mod commands;
 mod db;
 mod domain;
 mod error;
+#[cfg(feature = "desktop-runtime")]
+mod memory;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod state;
 mod sync;
@@ -167,7 +169,7 @@ fn command_builder() -> Builder<tauri::Wry> {
         win_force_close,
         win_is_maximized,
         win_start_dragging,
-        commands::note_list_full,
+        commands::note_list,
         commands::note_get,
         commands::note_upsert,
         commands::note_set_pinned,
@@ -183,7 +185,8 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::folder_delete,
         commands::folder_undelete,
         commands::folder_reveal,
-        commands::search_notes,
+        commands::search_text,
+        commands::find_in_vault,
         commands::task_toggle,
         commands::goal_get,
         commands::goal_save,
@@ -244,7 +247,7 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
     let builder = command_builder();
     #[cfg(all(feature = "typegen", not(feature = "desktop-runtime")))]
     let builder = Builder::<tauri::test::MockRuntime>::new().commands(collect_commands![
-        commands::note_list_full,
+        commands::note_list,
         commands::note_get,
         commands::note_upsert,
         commands::note_set_pinned,
@@ -260,7 +263,8 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::folder_delete,
         commands::folder_undelete,
         commands::folder_reveal,
-        commands::search_notes,
+        commands::search_text,
+        commands::find_in_vault,
         commands::task_toggle,
         commands::goal_get,
         commands::goal_save,
@@ -356,12 +360,16 @@ pub fn run() {
         // 只在 Rust 里用（update.rs），前端没有它的权限
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(specta_builder.invoke_handler())
-        // 窗口获得焦点：可能刚在别的设备上写过，拉一次（距上一轮不到 1 分钟的不拉）
         .on_window_event(|window, event| {
+            // 窗口获得焦点：可能刚在别的设备上写过，拉一次（距上一轮不到 1 分钟的不拉）
             if let tauri::WindowEvent::Focused(true) = event {
                 if let Some(state) = window.try_state::<AppState>() {
                     state.sync.focus();
                 }
+            }
+            // 最小化 / 还原：前者也会失焦，还原时会改大小
+            if matches!(event, tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_)) {
+                memory::follow_window(window);
             }
         })
         .setup(move |app| {
@@ -423,9 +431,6 @@ pub fn run() {
                 update: Arc::new(update::UpdateHub::new(upgrade)),
                 indexing,
             });
-
-            // jieba 首次初始化约 50ms。仓库是空的时候打开仓库不会用到它，放后台预热
-            std::thread::spawn(domain::search::warm_up);
 
             Ok(())
         })

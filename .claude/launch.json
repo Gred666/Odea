@@ -20,6 +20,18 @@
       "port": 1432
     },
     {
+      "name": "ontheway-preview-v4",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["exec", "vite", "preview", "--host", "127.0.0.1", "--port", "1433", "--strictPort"],
+      "port": 1433
+    },
+    {
+      "name": "otw-mem-app",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["exec", "vite", "preview", "--outDir", "C:/Users/Gred/AppData/Local/Temp/claude/D--OnTheWay/0ed682fa-015f-44da-9936-f5ad0b3c37c0/scratchpad/dist-new", "--port", "1450", "--strictPort"],
+      "port": 1450
+    },
+    {
       "name": "ontheway-desktop",
       "runtimeExecutable": "powershell",
       "runtimeArgs": [

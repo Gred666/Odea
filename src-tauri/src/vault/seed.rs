@@ -39,6 +39,7 @@ mod tests {
         assert!(vault.journal_list().unwrap().is_empty(), "没有日记和目标");
         // 指南里的待办都没写日期，不会出现在日历上
         assert!(vault.marked_dates("2000-01-01", "2100-12-31").unwrap().is_empty());
-        assert!(!vault.search("命令面板", 10).unwrap().hits.is_empty(), "指南能搜到");
+        let found = crate::vault::find_text(&vault.db, "命令面板", Default::default(), || false);
+        assert!(!found.unwrap().unwrap().files.is_empty(), "指南能搜到");
     }
 }

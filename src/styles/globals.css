@@ -183,7 +183,8 @@ body {
   cursor: default;
 }
 
-::selection {
+/* 正文编辑区不在内：那里的选区是自己画的，选中的字保持原来的颜色（见「选区」） */
+:not(.cm-content *)::selection {
   background: color-mix(in srgb, var(--color-accent) 22%, transparent);
   color: var(--color-ink);
 }
@@ -762,11 +763,14 @@ body.otw-dragging .otw-row-actions {
 
 /* CodeMirror 保留 Markdown 源文，语法标记仅在光标不处于对应语法范围时隐藏。 */
 .otw-editor .cm-editor {
+  /* 正文字号。列表缩进、列表符号这些按它算（calc(var(--otw-body-size) * n)），
+     不跟着所在行的字号走：列表项里的大标题不该把缩进也撑大 */
+  --otw-body-size: 17px;
   min-height: inherit;
   background: transparent;
   color: var(--color-body);
   font-family: var(--font-sans);
-  font-size: 17px;
+  font-size: var(--otw-body-size);
   line-height: 1.4;
   letter-spacing: 0.012em;
 }
@@ -816,9 +820,25 @@ body.otw-dragging .otw-row-actions {
   cursor: text;
 }
 
-.otw-editor .cm-selectionBackground,
+/* 选区由 editor/selectionLayer.ts 按行画在文字上面，原生选区藏掉（原生的按每段文字自己的
+   字号画底色，标题的 `#`、正文的 `**` 这些小字号标记底下矮一截、高低不齐）。字色也不换：
+   全局的 ::selection 把选中的字染成墨色，淡灰的标记一选中就变黑，所以它不管正文区。
+   格子里改表格这类自己获得焦点的可编辑块还用原生选区（和 CodeMirror 自带的 drawSelection 一样） */
 .otw-editor .cm-content ::selection {
-  background: color-mix(in srgb, var(--color-accent) 20%, transparent) !important;
+  background: transparent;
+}
+.otw-editor .cm-content :focus::selection,
+.otw-editor .cm-content :focus ::selection {
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+.otw-editor .otw-selection-layer {
+  opacity: 0;
+}
+.otw-editor .cm-editor.cm-focused .otw-selection-layer {
+  opacity: 0.2;
+}
+.otw-editor .otw-selection {
+  background: var(--color-accent);
 }
 
 /* 空的某一天 / 某个周期：「…或输入 /模板 从模板开始」（editor/templates.ts） */
@@ -1036,6 +1056,28 @@ body.otw-dragging .otw-row-actions {
   overflow-wrap: anywhere;
   vertical-align: 0.08em;
   animation: otw-fade-in 160ms var(--ease-out-quint) both;
+}
+/* 标题的 `#` 和标题字一样大、坐在同一条基线上（和 Typora 一样）。以前也是 0.78em、
+   往上提一点：大标题前面一个小小的 `#` 浮在半空，和后面的字对不齐 */
+.otw-editor .cm-otw-syntax-marker.is-heading {
+  font-size: 1em;
+  font-weight: 500;
+  vertical-align: baseline;
+}
+/* 引用的 `>`：光标碰到它时才露出来，画在这一层竖线右边的留白里，不占正文的位置
+   （以前一露出来整块字往右跳）。第 n 层的竖线在 (n-1) × 1.1em，见「引用块」 */
+.otw-editor .cm-otw-syntax-marker.is-quote {
+  position: absolute;
+  left: calc(var(--otw-body-size) * 0.3);
+}
+.otw-editor .cm-otw-syntax-marker.is-quote.is-q2 {
+  left: calc(var(--otw-body-size) * 1.4);
+}
+.otw-editor .cm-otw-syntax-marker.is-quote.is-q3 {
+  left: calc(var(--otw-body-size) * 2.5);
+}
+.otw-editor .cm-otw-syntax-marker.is-quote.is-q4 {
+  left: calc(var(--otw-body-size) * 3.6);
 }
 
 /* ---------- 标题 ---------- */
@@ -1670,6 +1712,47 @@ body.otw-dragging .otw-row-actions {
   border-top: 0;
   border-radius: 0 0 8px 8px;
 }
+/* 缩进（四个空格）的代码块：没有围栏封口，以前上下敞着，就是一条方角的色带。
+   第一行、最后一行自己画上下两条边和圆角，和围栏代码块是同一张卡片；
+   框也画在 ::before 上，上下的留白在框外面（不能用 margin，见文件开头） */
+.otw-editor .cm-line.cm-otw-code-edge {
+  z-index: 0;
+  border-right-color: transparent;
+  border-left-color: transparent;
+  background: transparent;
+}
+.otw-editor .cm-line.cm-otw-code-edge::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0 -1px;
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-panel);
+  pointer-events: none;
+}
+.otw-editor .cm-line.cm-otw-code-edge.is-top {
+  padding-top: calc(var(--fence-gap) + 10px);
+}
+.otw-editor .cm-line.cm-otw-code-edge.is-top::before {
+  top: var(--fence-gap);
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+.otw-editor .cm-line.cm-otw-code-edge.is-bottom {
+  padding-bottom: calc(var(--fence-gap) + 10px);
+}
+.otw-editor .cm-line.cm-otw-code-edge.is-bottom::before {
+  bottom: var(--fence-gap);
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+.otw-editor .cm-line.cm-otw-code-edge.is-top:not(.is-bottom)::before {
+  border-bottom: 0;
+}
+.otw-editor .cm-line.cm-otw-code-edge.is-bottom:not(.is-top)::before {
+  border-top: 0;
+}
+
 /* 行高已经按框算好了，里面的 ``` 别再缩小、上抬 —— 那会把这一行撑高零点几像素 */
 .otw-editor .cm-otw-fence-source .cm-otw-syntax-marker {
   font-size: inherit;
@@ -2046,16 +2129,48 @@ body.otw-dragging .otw-row-actions {
 
 /* ---------- 列表 / 任务 ---------- */
 
-.otw-editor .cm-otw-list-item {
-  padding-left: 0.35em;
+/* 列表的几何（MarkdownEditor 的 decorateListItem 算好写在行上）：
+   - 每一项的第一行：padding-left 是正文那一栏，text-indent 往回拉同样多，开头依次是
+     缩进格（上一级正文那一栏宽）、符号格（这一项自己的宽）。折到第二行的字从
+     padding-left 起，和第一行的正文对齐（悬挂缩进）。以前折行顶到圆点底下。
+   - 同一项里后面的段落、标题、图片：同样的 padding-left，行首缩进放进缩进格。
+   - 缩进按语法树的层级算，不按源码里的空格数：两个空格、四个空格缩进出来一样。
+   光标移到符号上时圆点换回源码 `-`，符号格宽度不变，正文一个像素都不动。 */
+.otw-editor .cm-line * {
+  /* 行上的 text-indent 会被行内块（符号格、勾选框、表情）继承，得清掉 */
+  text-indent: 0;
+}
+.otw-editor .cm-otw-list-indent {
+  display: inline-block;
+  /* 空格靠右：光标在缩进末尾（只有缩进的一行、正文开头）时画在正文那一栏上 */
+  text-align: right;
+  white-space: pre;
 }
 .otw-editor .cm-otw-list-marker {
   display: inline-block;
-  min-width: 0.85em;
+  box-sizing: border-box;
+  /* 符号右边留的空：这一点 + 后面一个空格（替身用 ::after 补，源码里本来就有）*/
+  padding-right: calc(var(--otw-body-size) * 0.14);
   color: var(--color-muted);
+  font-size: var(--otw-body-size);
+  font-style: normal;
+  font-weight: 400;
+  letter-spacing: 0;
   font-variant-numeric: tabular-nums;
   text-align: right;
+  white-space: pre;
   animation: otw-fade-in 140ms var(--ease-out-quint) both;
+}
+.otw-editor .cm-otw-list-marker:not(.is-source)::after {
+  content: " ";
+}
+.otw-editor .cm-otw-list-marker.is-source {
+  color: var(--color-faint);
+  animation: none;
+}
+/* 任务项的源码 `- [ ] ` 比勾选框宽，缩小一号才放得进同一个格子 */
+.otw-editor .cm-otw-list-marker.is-source.is-task {
+  font-size: calc(var(--otw-body-size) * 0.78);
 }
 
 /* 勾选框：悬停亮边、按下微缩、勾上时盒子弹一下 + 对勾从左到右描出来 */
@@ -2082,7 +2197,9 @@ body.otw-dragging .otw-row-actions {
   display: inline-grid;
   width: 16px;
   height: 16px;
-  margin: 0 0.42em 0 0.1em;
+  /* 连同左右的空正好是任务项的符号格（MarkdownEditor 的 LIST_TASK_WIDTH = 1.8 个正文字号），
+     替身盖住的是整段 `- [ ] `，后面没有空格了 */
+  margin: 0 calc(var(--otw-body-size) * 1.5 - 16px) 0 calc(var(--otw-body-size) * 0.3);
   place-items: center;
   border: 1.5px solid var(--color-control-edge);
   border-radius: 4px;

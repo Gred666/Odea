@@ -18,11 +18,8 @@ import { DiffView } from "./DiffView";
    ============================================================ */
 
 export function GuideUpdateBanner({ update }: { update: GuideUpdate }) {
-  const current = useData(
-    (s) =>
-      s.notes.find((note) => note.id === update.id)?.contentMd ??
-      s.archived.find((note) => note.id === update.id)?.contentMd,
-  );
+  // 横幅挂在这一篇上，正在看它，正文一定在（store 的 bodies）
+  const current = useData((s) => s.bodies[update.id]);
   const adopt = useData((s) => s.adoptGuideUpdate);
   const keep = useData((s) => s.keepGuide);
   const [showDiff, setShowDiff] = useState(false);

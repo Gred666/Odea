@@ -4,17 +4,19 @@ import { releaseOf } from "@/content/changelog";
 import { backend } from "@/data/backend";
 import { folderLabel, folderOf } from "@/data/folders";
 import { useData } from "@/data/store";
-import type { DocumentSaveTarget, JournalDoc, Note, WorkspaceId } from "@/data/types";
+import { useTextSearch } from "@/data/textSearch";
+import type {
+  DocumentSaveTarget,
+  JournalDoc,
+  NoteSummary,
+  TextHit,
+  WorkspaceId,
+} from "@/data/types";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
 import { popoverCard, spring, tween } from "@/lib/motion";
-import {
-  type Range,
-  lowerContent,
-  matchKeywords,
-  matchText,
-  snippetAround,
-} from "@/lib/paletteSearch";
+import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/paletteSearch";
+import { isMac } from "@/lib/platform";
 import {
   Archive,
   ArrowDown,
@@ -43,6 +45,7 @@ import {
   SquareCheckBig,
   Sun,
   Target,
+  TextSearch,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -59,7 +62,8 @@ type Group =
   | "文件"
   | "同步"
   | "帮助"
-  | "新建";
+  | "新建"
+  | "搜索";
 
 interface Item {
   id: string;
@@ -84,6 +88,8 @@ const LIST_MAX = 304;
 const RECENT_COUNT = 5;
 /** 搜笔记时最多列多少篇：再多就该换个更准的词了 */
 const NOTE_RESULTS = 40;
+/** 全局搜索（FindDialog）的快捷键。写字不写 ⇧⌘：正文字体里没有（见 editor/popupGlyphs.test.ts） */
+const FIND_SHORTCUT = isMac ? "Cmd+Shift+F" : "Ctrl+Shift+F";
 
 /**
  * 命令面板（⌘K / Ctrl+K）。
@@ -92,8 +98,11 @@ const NOTE_RESULTS = 40;
  *   跳转侧栏上就有，最常用的是回到刚才那几篇
  * - 搜索：标题连续命中 > 几个词都出现 > 按顺序跳着命中；命令还认别名（「深色」「dark」都能找到
  *   「切换到暗色」）；笔记的正文也搜，命中的那一行显示在标题下面。命中的字标成强调色
- * - 日记（某一天）和目标也搜：打开面板时取一次它们的正文（data/store 的 loadJournal）
- * - 打了字就一定有最后一项「新建笔记「…」」：什么都没搜到也不是死路
+ * - 日记（某一天）和目标也搜：打开面板时取一次它们的标题（data/store 的 loadJournal）。
+ *   正文（笔记、日记、目标）由 Rust 在索引里搜（data/textSearch）：前端不留全文。
+ *   标题命中的立刻出来，正文命中的晚几毫秒补上
+ * - 打了字就一定有「新建笔记「…」」和最后一项「在所有笔记里搜索「…」」（全局搜索，FindDialog）：
+ *   什么都没搜到也不是死路
  * - 结果多少变了，列表的高度跟着平滑地变，不会一下缩成一截
  * - 输入法选字时的回车 / 上下键是在选字，不执行、不挪高亮
  *
@@ -130,8 +139,10 @@ export function CommandPalette({
   const update = useData((s) => s.update);
   const checkUpdate = useData((s) => s.checkUpdate);
   const setUpdateDialog = useApp((s) => s.setUpdateDialog);
+  const setFindOpen = useApp((s) => s.setFindOpen);
 
   const [query, setQuery] = useState("");
+  const searched = useTextSearch(open ? query : "", NOTE_RESULTS * 2);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -197,6 +208,17 @@ export function CommandPalette({
         hint: here,
         keywords: "new note 创建 添加 新笔记 写",
         run: () => void createNoteNamed(noteFolder),
+      },
+      {
+        id: "find-in-vault",
+        group: "操作",
+        icon: TextSearch,
+        label: "在所有笔记里搜索…",
+        hint: FIND_SHORTCUT,
+        keywords:
+          "find search grep vscode 全局搜索 全文搜索 搜索全部 查找全部 在文件中查找 正文 每一处 正则 regex 大小写 全词",
+        // 不带面板里打的字：打的多半是这条命令的名字（「全局搜索」）。要搜打的字用列表最后那一项
+        run: () => setFindOpen(true),
       },
       ...(docTarget
         ? [
@@ -350,6 +372,7 @@ export function CommandPalette({
         : []),
     ];
   }, [
+    setFindOpen,
     update,
     checkUpdate,
     setUpdateDialog,
@@ -400,38 +423,58 @@ export function CommandPalette({
       else if (matchKeywords(command.keywords, q)) scored.push({ item: command, score: 55 });
     }
 
+    // 正文里的由 Rust 搜（data/textSearch）。这个词的还没回来时用上一次的：接着往下打的话，
+    // 命中的那一行里还有这个词的照样算（第一次出现在哪一行没变），别的等新结果
+    const lower = q.toLowerCase();
+    const fresh = searched?.query === q;
+    const body =
+      searched && (fresh || lower.startsWith(searched.query.toLowerCase()))
+        ? searched.result
+        : null;
+    const usable = (hit: TextHit) => fresh || hit.line.toLowerCase().includes(lower);
+
     const found: { item: Item; score: number }[] = [];
+    const byId = new Map<string, NoteSummary>();
     for (const note of [...notes, ...archived]) {
-      const where = [note.isArchived ? "归档" : "", folderLabel(folderOf(note))]
-        .filter((part) => part && part !== folderLabel(""))
-        .join(" · ");
+      byId.set(note.id, note);
       const title = matchText(note.title, q);
       if (title) {
         // 笔记是这里最主要的东西：同样命中时排在命令前面
         found.push({
-          item: noteItem(note, "笔记", { hint: where, ranges: title.ranges }),
+          item: noteItem(note, "笔记", { hint: whereOf(note), ranges: title.ranges }),
           score: title.score + 8,
         });
-        continue;
+        byId.delete(note.id);
       }
-      const snippet = snippetAround(note.contentMd, q, undefined, lowerContent(note));
-      if (snippet)
-        found.push({ item: noteItem(note, "笔记", { hint: where, snippet }), score: 30 });
+    }
+    for (const hit of body?.notes ?? []) {
+      // 标题已经命中的不再按正文算一次（byId 里删掉了）
+      const note = hit.target.kind === "note" ? byId.get(hit.target.id) : undefined;
+      const snippet = note && usable(hit) ? snippetAround(hit.line, q) : null;
+      if (note && snippet)
+        found.push({ item: noteItem(note, "笔记", { hint: whereOf(note), snippet }), score: 30 });
     }
     found.sort((a, b) => b.score - a.score);
     scored.push(...found.slice(0, NOTE_RESULTS));
 
     // 日记和目标：标题（「10月6日 · …」「第 41 周目标」）和正文都搜，排在同分的笔记后面
     const days: { item: Item; score: number }[] = [];
+    const titled = new Set<string>();
     for (const entry of journal) {
-      const hint = formatRelativeTime(entry.updatedAt);
       const title = matchText(entry.title, q);
-      if (title) {
-        days.push({ item: journalItem(entry, { hint, ranges: title.ranges }), score: title.score });
+      if (!title) continue;
+      const hint = formatRelativeTime(entry.updatedAt);
+      days.push({ item: journalItem(entry, { hint, ranges: title.ranges }), score: title.score });
+      titled.add(journalKey(entry.target));
+    }
+    for (const hit of body?.journal ?? []) {
+      if (hit.target.kind === "note" || titled.has(journalKey(hit.target)) || !usable(hit))
         continue;
-      }
-      const snippet = snippetAround(entry.contentMd, q, undefined, lowerContent(entry));
-      if (snippet) days.push({ item: journalItem(entry, { hint, snippet }), score: 28 });
+      const snippet = snippetAround(hit.line, q);
+      if (!snippet) continue;
+      const entry: JournalDoc = { ...hit, kind: hit.target.kind };
+      const hint = formatRelativeTime(entry.updatedAt);
+      days.push({ item: journalItem(entry, { hint, snippet }), score: 28 });
     }
     days.sort((a, b) => b.score - a.score);
     scored.push(...days.slice(0, NOTE_RESULTS));
@@ -457,8 +500,17 @@ export function CommandPalette({
       hint: noteFolder ? `放在「${folderLabel(noteFolder)}」` : undefined,
       run: () => void createNoteNamed(noteFolder, q),
     });
+    // 再往下一项：在全局搜索（FindDialog）里搜打的字，看每一处。排在新建后面：搜不到时回车还是新建
+    ordered.push({
+      id: "find-query",
+      group: "搜索",
+      icon: TextSearch,
+      label: `在所有笔记里搜索「${q}」`,
+      hint: FIND_SHORTCUT,
+      run: () => setFindOpen(true, q),
+    });
     return ordered;
-  }, [query, recent, commands, notes, archived, journal, noteFolder]);
+  }, [query, recent, commands, notes, archived, journal, noteFolder, searched, setFindOpen]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 输入变化时复位高亮
   useEffect(() => setCursor(0), [query]);
@@ -475,7 +527,9 @@ export function CommandPalette({
   };
 
   const searching = query.trim() !== "";
-  const matchCount = results.filter((item) => item.group !== "新建").length;
+  const matchCount = results.filter(
+    (item) => item.group !== "新建" && item.group !== "搜索",
+  ).length;
 
   return (
     <AnimatePresence>
@@ -676,7 +730,19 @@ export function CommandPalette({
   );
 }
 
-function noteItem(note: Note, group: Group, extra: Partial<Item>): Item {
+/** 笔记的出处：「归档 · 工作 / 周报」，「笔记」根下的不写 */
+function whereOf(note: NoteSummary): string {
+  return [note.isArchived ? "归档" : "", folderLabel(folderOf(note))]
+    .filter((part) => part && part !== folderLabel(""))
+    .join(" · ");
+}
+
+/** 某一天 / 某个周期的目标的键：标题命中过的不再按正文算一次 */
+function journalKey(target: DocumentSaveTarget): string {
+  return target.kind === "goal" ? `goal:${target.horizon}:${target.periodStart}` : target.id;
+}
+
+function noteItem(note: NoteSummary, group: Group, extra: Partial<Item>): Item {
   return {
     id: `${group}-note-${note.id}`,
     group,
@@ -738,7 +804,7 @@ function Marked({ text, ranges }: { text: string; ranges?: Range[] }) {
   return <>{parts}</>;
 }
 
-function KeyHint({ keys, label }: { keys: (string | LucideIcon)[]; label: string }) {
+export function KeyHint({ keys, label }: { keys: (string | LucideIcon)[]; label: string }) {
   return (
     <span className="flex items-center gap-1">
       {keys.map((Key, index) => (
@@ -760,7 +826,7 @@ function KeyHint({ keys, label }: { keys: (string | LucideIcon)[]; label: string
  * 高度跟着里面的内容平滑地变：结果从十几项变成两三项，面板不会一下缩上去。
  * 只动这一层的 height（面板是 fixed 的小盒子，每帧只重排它自己），里面的字不缩放、不位移。
  */
-function AutoHeight({ children }: { children: ReactNode }) {
+export function AutoHeight({ children }: { children: ReactNode }) {
   const inner = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState<number | "auto">("auto");
   useLayoutEffect(() => {

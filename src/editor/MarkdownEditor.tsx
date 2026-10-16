@@ -1,10 +1,10 @@
-import type { Attachment, OutlineItem } from "@/data/types";
+import type { Attachment, MatchAnchor, OutlineItem } from "@/data/types";
 import { MOD_KEY } from "@/lib/platform";
 import { rememberSpot, spotOf } from "@/lib/viewMemory";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { closeSearchPanel, search, searchPanelOpen } from "@codemirror/search";
+import { closeSearchPanel, search, searchPanelOpen, setSearchQuery } from "@codemirror/search";
 import {
   Annotation,
   type ChangeSet,
@@ -35,7 +35,12 @@ import { createPortal } from "react-dom";
 import { EmojiPicker, type EmojiPickerAnchor } from "./EmojiPicker";
 import { SuggestMenu, type SuggestMenuHandle, type SuggestRow } from "./SuggestMenu";
 import { TemplatePicker, type TemplatePickerHandle } from "./TemplatePicker";
-import { type AnimatedEmoji, animatedEmojiFor, primeIntro } from "./animatedEmoji";
+import {
+  type AnimatedEmoji,
+  animatedEmojiFor,
+  forgetDetachedEmoji,
+  primeIntro,
+} from "./animatedEmoji";
 import { type AttachHooks, attachmentHandlers, watchDesktopFileDrops } from "./attachments";
 import { type CalloutHead, parseCalloutHead } from "./callout";
 import { codeHighlight } from "./codeHighlight";
@@ -77,7 +82,8 @@ import {
 import { type MarkdownTableModel, parseDelimitedTable, parseMarkdownTable } from "./markdownTable";
 import { MathWidget } from "./math";
 import { registerEditorFlush } from "./saveBus";
-import { createSearchPanel, scrollToMatch } from "./searchPanel";
+import { createSearchPanel, matchOnLine, queryOfAnchor, scrollToMatch } from "./searchPanel";
+import { selectionLayer } from "./selectionLayer";
 import { smoothCaret } from "./smoothCaret";
 import {
   type SlashItem,
@@ -389,14 +395,15 @@ export function MarkdownEditor({
       }, 250);
     };
 
+    /**
+     * 这个 effect 里的闭包要用编辑器都从这里取，卸载时清空。不能直接闭包住下面的 view：
+     * V8 里同一个作用域的闭包共用一份上下文，session 那一截的闭包会跟着状态一直留着
+     * （缓存的状态、语法解析握着的旧状态），只要有一个闭包捕获了 view，旧编辑器连同整棵
+     * DOM 就都放不掉。目录句柄也只经过它（见 createOutlineHandle）
+     */
+    const live: { view: EditorView | null } = { view: null };
     const listeners = new Set<(id: string) => void>();
-    const notifyActive = (state: EditorState) => {
-      const line = state.doc.lineAt(state.selection.main.head).number;
-      const active =
-        [...outlineItemsRef.current].filter((item) => item.line <= line).at(-1) ??
-        outlineItemsRef.current[0];
-      if (active) for (const listener of listeners) listener(active.id);
-    };
+    const { handle, notifyActive } = createOutlineHandle(live, outlineItemsRef, listeners);
 
     // 模板选择器：一行里只写着触发词（`/模板`）、光标在它末尾时打开。只认打字
     // （含输入法上屏），撤销回来的、外部回填的不算 —— 否则撤销一次模板又弹出来。
@@ -673,6 +680,7 @@ export function MarkdownEditor({
             searchPhrases,
             keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
             typoraDecorations,
+            selectionLayer,
             smoothCaret,
             hoverCard,
             modKeyCursor,
@@ -692,6 +700,7 @@ export function MarkdownEditor({
     const view = new EditorView({ state });
     host.appendChild(view.dom);
     viewRef.current = view;
+    live.view = view;
     // 切走时开着查找面板：回来时不该还开着（和以前每次新建编辑器一样）
     if (searchPanelOpen(view.state)) closeSearchPanel(view);
 
@@ -715,7 +724,8 @@ export function MarkdownEditor({
     const recordScroll = () => {
       cancelAnimationFrame(spotFrame);
       spotFrame = requestAnimationFrame(() => {
-        if (!key || !scroller || !host.isConnected || viewRef.current !== view) return;
+        const view = live.view;
+        if (!key || !scroller || !view || !host.isConnected) return;
         const above = scroller.getBoundingClientRect().top - view.documentTop;
         if (above <= 0) {
           rememberSpot(key, { scrollTop: scroller.scrollTop });
@@ -727,50 +737,16 @@ export function MarkdownEditor({
     };
     scroller?.addEventListener("scroll", recordScroll, { passive: true });
 
-    const handle: EditorOutlineHandle = {
-      scrollTo(id) {
-        // 编辑器已经卸载（切换文档的那一帧上层还握着旧句柄）就当没这回事
-        if (viewRef.current !== view) return false;
-        const item = outlineItemsRef.current.find((entry) => entry.id === id);
-        if (!item) return false;
-        const line = view.state.doc.line(Math.min(item.line, view.state.doc.lines));
-        view.dispatch({ selection: { anchor: line.from } });
-        view.focus();
-        // 平滑地滑过去（见 glide.ts）：顺带给路上没画过的内容留出画出来的时间，停得准
-        glideTo(view, line.from, { y: "start", margin: 72 });
-        for (const listener of listeners) listener(id);
-        return true;
-      },
-      subscribe(listener) {
-        listeners.add(listener);
-        notifyActive(view.state);
-        return () => listeners.delete(listener);
-      },
-      scrollToLine(number) {
-        if (viewRef.current !== view) return false;
-        if (number < 1 || number > view.state.doc.lines) return false;
-        const line = view.state.doc.line(number);
-        view.dispatch({ selection: { anchor: line.to } });
-        view.focus();
-        glideTo(view, line.from, { y: "center" });
-        return true;
-      },
-      focusStart() {
-        if (viewRef.current !== view) return false;
-        // 属性块折着放在最前面：落到它后面，不然一聚焦整块 YAML 就展开了
-        const front = frontMatterRange(view.state.doc);
-        const at = front ? Math.min(view.state.doc.length, front.to + 1) : 0;
-        view.dispatch({ selection: { anchor: at }, scrollIntoView: true });
-        view.focus();
-        return true;
-      },
-    };
     onOutlineHandle(handle);
     host.dataset.editorReady = "true";
-    const stopFileDrops = watchDesktopFileDrops(view, () => attachRef.current);
+    // 它返回的闭包握着 view（同上），停掉后就扔掉
+    let stopFileDrops: (() => void) | null = watchDesktopFileDrops(view, () => attachRef.current);
 
     return () => {
-      stopFileDrops();
+      const view = live.view;
+      if (!view) return;
+      stopFileDrops?.();
+      stopFileDrops = null;
       scroller?.removeEventListener("scroll", recordScroll);
       cancelAnimationFrame(spotFrame);
       if (key) rememberSpot(key, { head: view.state.selection.main.head });
@@ -782,10 +758,13 @@ export function MarkdownEditor({
       saver.flushQuietly();
       saverRef.current = null;
       viewRef.current = null;
+      live.view = null;
+      listeners.clear();
       onOutlineHandle(null);
       delete host.dataset.editorReady;
       if (key) rememberState(key, view.state);
       view.destroy();
+      forgetDetachedEmoji();
     };
   }, [onOutlineHandle, closeTemplateMenu, closeSuggest, openEmojiPicker]);
 
@@ -1099,10 +1078,89 @@ export interface EditorOutlineHandle {
   /** 滚到某个目录条目；编辑器已卸载或条目不存在时返回 false */
   scrollTo: (id: string) => boolean;
   subscribe: (listener: (id: string) => void) => () => void;
-  /** 滚到第几行（从 1 开始）并把光标放在行尾；行号不存在或编辑器已卸载时返回 false */
-  scrollToLine: (line: number) => boolean;
+  /**
+   * 滚到第几行（从 1 开始）并把光标放在行尾；带着全局搜索的命中时改成选中它，篇内查找换成同一个条件。
+   * 行号不存在或编辑器已卸载时返回 false
+   */
+  scrollToLine: (line: number, match?: MatchAnchor) => boolean;
   /** 光标放到正文开头并聚焦（标题里按回车 / ↓、新建了带标题的笔记）；编辑器已卸载时返回 false */
   focusStart: () => boolean;
+}
+
+/**
+ * 编辑器的目录句柄，外加「光标进了哪一节」的通知。
+ *
+ * 句柄只能经过 `live` 这个格子够到编辑器，卸载时清空它。上层会在闭包里握着旧句柄
+ * （DocumentView 按 target 记住的回调建在旧句柄还在 state 里的那一次渲染里），
+ * 而 V8 里同一个作用域的闭包共用一份上下文：句柄要是直接闭包住 view，就是
+ * 旧句柄 → 旧 effect 的作用域 → 旧组件的 ref → 上层的回调 → 更旧的句柄……
+ * 打开过的每一篇都连着整棵 DOM 放不掉（2026-10-14 实测切 120 篇留着 122 个编辑器）。
+ * 所以写在模块顶层，闭包里只有这几个参数。
+ */
+function createOutlineHandle(
+  live: { view: EditorView | null },
+  outlineItemsRef: { readonly current: OutlineItem[] },
+  listeners: Set<(id: string) => void>,
+) {
+  const notifyActive = (state: EditorState) => {
+    const line = state.doc.lineAt(state.selection.main.head).number;
+    const active =
+      [...outlineItemsRef.current].filter((item) => item.line <= line).at(-1) ??
+      outlineItemsRef.current[0];
+    if (active) for (const listener of listeners) listener(active.id);
+  };
+  const handle: EditorOutlineHandle = {
+    scrollTo(id) {
+      // 编辑器已经卸载（切换文档的那一帧上层还握着旧句柄）就当没这回事
+      const view = live.view;
+      if (!view) return false;
+      const item = outlineItemsRef.current.find((entry) => entry.id === id);
+      if (!item) return false;
+      const line = view.state.doc.line(Math.min(item.line, view.state.doc.lines));
+      view.dispatch({ selection: { anchor: line.from } });
+      view.focus();
+      // 平滑地滑过去（见 glide.ts）：顺带给路上没画过的内容留出画出来的时间，停得准
+      glideTo(view, line.from, { y: "start", margin: 72 });
+      for (const listener of listeners) listener(id);
+      return true;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      if (live.view) notifyActive(live.view.state);
+      return () => listeners.delete(listener);
+    },
+    scrollToLine(number, match) {
+      const view = live.view;
+      if (!view) return false;
+      if (number < 1 || number > view.state.doc.lines) return false;
+      const line = view.state.doc.line(number);
+      const found = match ? matchOnLine(view.state, number, match) : null;
+      if (match && found) {
+        const query = queryOfAnchor(match);
+        view.dispatch({
+          selection: { anchor: found.from, head: found.to },
+          // F3 / Mod-F 接着找同一个词（编辑器里的查找面板关着时也认这个条件）
+          effects: query.valid ? setSearchQuery.of(query) : [],
+        });
+      } else {
+        view.dispatch({ selection: { anchor: line.to } });
+      }
+      view.focus();
+      glideTo(view, found?.from ?? line.from, { y: "center" });
+      return true;
+    },
+    focusStart() {
+      const view = live.view;
+      if (!view) return false;
+      // 属性块折着放在最前面：落到它后面，不然一聚焦整块 YAML 就展开了
+      const front = frontMatterRange(view.state.doc);
+      const at = front ? Math.min(view.state.doc.length, front.to + 1) : 0;
+      view.dispatch({ selection: { anchor: at }, scrollIntoView: true });
+      view.focus();
+      return true;
+    },
+  };
+  return { handle, notifyActive };
 }
 
 /* ============================================================
@@ -1221,6 +1279,14 @@ const SMART_GLYPHS: Readonly<Record<string, string>> = {
   "(tm)": "™",
 };
 const BULLET_GLYPHS = ["•", "◦", "▪"];
+/* 列表符号格的宽度，单位是正文字号（globals.css「列表的几何」）。任务项的宽度和
+   .cm-otw-task 左右的空加起来要相等；有序列表按最大编号的位数加宽 */
+const LIST_BULLET_WIDTH = 1.55;
+const LIST_TASK_WIDTH = 1.8;
+const LIST_ORDERED_WIDTH = 1;
+const LIST_DIGIT_WIDTH = 0.56;
+const listUnits = (value: number) =>
+  `calc(var(--otw-body-size) * ${Math.round(value * 1000) / 1000})`;
 
 /* ============================================================
    装饰分成两层，因为两层的成本量级完全不同。
@@ -1808,7 +1874,12 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
     ranges.push(range);
     atomicRanges.push(range);
   };
-  const addSyntaxMarker = (from: number, to: number, visible: boolean) => {
+  const addSyntaxMarker = (
+    from: number,
+    to: number,
+    visible: boolean,
+    className = "cm-otw-syntax-marker",
+  ) => {
     if (from >= to) return;
     if (!visible) {
       // Let CodeMirror own the source-to-DOM mapping while the inactive marker is folded.
@@ -1817,7 +1888,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
       addReplacement(from, to, Decoration.replace({}));
       return;
     }
-    ranges.push({ from, to, value: Decoration.mark({ class: "cm-otw-syntax-marker" }) });
+    ranges.push({ from, to, value: Decoration.mark({ class: className }) });
   };
   const addLines = (from: number, to: number, className: string) => {
     // 引用块 / 代码块可能远远长过视口，只给看得见的那几行加类。
@@ -1835,30 +1906,159 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
   const insideAny = (list: Array<[number, number]>, position: number) =>
     list.some(([from, to]) => position >= from && position < to);
 
-  /** 列表符号的显示文本：有序列表按位置编号，无序按深度换符号。 */
-  const listMarkerText = (mark: SyntaxNode, marker: string): string => {
-    const item = mark.parent;
-    const list = item?.parent;
-    if (!item || !list) return marker;
-    if (list.name === "OrderedList") {
-      let index = 0;
-      let start = 1;
-      for (let child = list.firstChild; child; child = child.nextSibling) {
-        if (child.name !== "ListItem") continue;
-        if (index === 0) {
-          const first = child.getChild("ListMark");
-          start = first ? Number.parseInt(state.sliceDoc(first.from, first.to), 10) || 1 : 1;
-        }
-        if (child.from === item.from) break;
-        index += 1;
+  /* ---------- 列表（几何见 globals.css「列表的几何」） ---------- */
+
+  /** 行上的内联样式（列表的缩进）；一行只写一次 */
+  const lineStyle = (from: number, style: string) => {
+    const key = `${from}:style`;
+    if (lineRanges.has(key)) return;
+    lineRanges.add(key);
+    ranges.push({ from, to: from, value: Decoration.line({ attributes: { style } }) });
+  };
+
+  /** 有序列表的起始编号和每一项是第几个。同一个列表里的项共用，算一次 */
+  const orderedLists = new Map<number, { start: number; indexOf: Map<number, number> }>();
+  const orderedInfo = (list: SyntaxNode) => {
+    const known = orderedLists.get(list.from);
+    if (known) return known;
+    let start = 1;
+    const indexOf = new Map<number, number>();
+    for (let child = list.firstChild; child; child = child.nextSibling) {
+      if (child.name !== "ListItem") continue;
+      if (indexOf.size === 0) {
+        const first = child.getChild("ListMark");
+        start = first ? Number.parseInt(state.sliceDoc(first.from, first.to), 10) || 1 : 1;
       }
-      return `${start + index}${marker.endsWith(")") ? ")" : "."}`;
+      indexOf.set(child.from, indexOf.size);
+    }
+    const info = { start, indexOf };
+    orderedLists.set(list.from, info);
+    return info;
+  };
+
+  /** 列表符号的显示文本：有序列表按位置编号，无序按深度换符号。 */
+  const listMarkerText = (item: SyntaxNode, list: SyntaxNode, marker: string): string => {
+    if (list.name === "OrderedList") {
+      const { start, indexOf } = orderedInfo(list);
+      return `${start + (indexOf.get(item.from) ?? 0)}${marker.endsWith(")") ? ")" : "."}`;
     }
     let depth = 0;
     for (let ancestor = list.parent; ancestor; ancestor = ancestor.parent) {
       if (ancestor.name === "BulletList" || ancestor.name === "OrderedList") depth += 1;
     }
     return BULLET_GLYPHS[depth % BULLET_GLYPHS.length]!;
+  };
+
+  /** 这一项开头的 `[ ]` / `[x]`（和列表符号在同一行才算） */
+  const taskMarkerOf = (item: SyntaxNode): SyntaxNode | null => {
+    const marker = item.getChild("Task")?.firstChild;
+    if (marker?.name !== "TaskMarker") return null;
+    return state.doc.lineAt(marker.from).from === state.doc.lineAt(item.from).from ? marker : null;
+  };
+
+  /**
+   * 这一项的符号格多宽、正文那一栏从哪起，单位是正文字号。按语法树的层级算：
+   * 子项的符号格接在上一级正文那一栏后面，源码里缩进了几个空格不影响
+   */
+  const listColumns = new Map<number, { width: number; column: number }>();
+  /** 列表项后面只有缩进的那一行 → 它该对齐的正文那一栏（见 decorateListItem） */
+  const blankAfterItems = new Map<number, number>();
+  const listLayout = (item: SyntaxNode): { width: number; column: number } => {
+    const known = listColumns.get(item.from);
+    if (known) return known;
+    const list = item.parent;
+    let width = LIST_BULLET_WIDTH;
+    if (taskMarkerOf(item)) {
+      width = LIST_TASK_WIDTH;
+    } else if (list?.name === "OrderedList") {
+      // 同一个列表按最大的那个编号定宽，9 和 10 的点对得齐
+      const { start, indexOf } = orderedInfo(list);
+      width = LIST_ORDERED_WIDTH + String(start + indexOf.size - 1).length * LIST_DIGIT_WIDTH;
+    }
+    const parent = list?.parent;
+    const outer = parent?.name === "ListItem" ? listLayout(parent).column : 0;
+    const layout = { width, column: outer + width };
+    listColumns.set(item.from, layout);
+    return layout;
+  };
+
+  /**
+   * 列表项的第一行：缩进格 + 符号格 + 正文，折行悬挂到正文那一栏。光标在符号上
+   * （行首到正文开头之间）时圆点 / 勾选框换回源码，格子一样宽；光标在正文里时不换 ——
+   * 以前一进这一项整行就露出 `- `，正文往左跳一下。
+   */
+  const decorateListItem = (item: SyntaxNode): void => {
+    const mark = item.getChild("ListMark");
+    const list = item.parent;
+    if (!mark || !list) return;
+    const line = state.doc.lineAt(mark.from);
+    if (line.to < windowFrom || line.from > windowTo || foldedLines?.has(line.from)) return;
+    const { width, column } = listLayout(item);
+    const task = taskMarkerOf(item);
+    let contentStart = (task ?? mark).to;
+    while (contentStart < line.to && /[ \t]/.test(state.sliceDoc(contentStart, contentStart + 1))) {
+      contentStart += 1;
+    }
+    lineStyle(line.from, `padding-left: ${listUnits(column)}; text-indent: ${listUnits(-column)}`);
+    // 这一项后面紧跟的、只有缩进的一行（在列表项里插完图片光标落下的那一行）：缩进够得着
+    // 这一项的正文那一栏，就还算这一项的，画在那一栏上。语法树里它不属于任何一项
+    const last = state.doc.lineAt(item.to);
+    if (last.number < state.doc.lines) {
+      const next = state.doc.line(last.number + 1);
+      const indent = (contentStart < line.to ? contentStart : mark.to + 1) - line.from;
+      if (next.length >= indent && next.length > 0 && !next.text.trim()) {
+        blankAfterItems.set(next.from, Math.max(column, blankAfterItems.get(next.from) ?? 0));
+      }
+    }
+    if (mark.from > line.from) {
+      addMark(line.from, mark.from, "cm-otw-list-indent", {
+        style: `width: ${listUnits(column - width)}`,
+      });
+    }
+    const box = `width: ${listUnits(width)}`;
+    const active = state.selection.ranges.some((range) =>
+      range.empty
+        ? range.head >= line.from && range.head < contentStart
+        : range.from < contentStart &&
+          range.to > line.from &&
+          (range.from > line.from || range.to < contentStart),
+    );
+    if (active) {
+      const className = task
+        ? "cm-otw-list-marker is-source is-task"
+        : "cm-otw-list-marker is-source";
+      addMark(mark.from, contentStart, className, { style: box });
+      return;
+    }
+    const widget = task
+      ? new TaskWidget(/x/i.test(state.sliceDoc(task.from, task.to)), task.from - mark.from)
+      : new ListMarkerWidget(listMarkerText(item, list, state.sliceDoc(mark.from, mark.to)), box);
+    addReplacement(mark.from, contentStart, Decoration.replace({ widget }));
+  };
+
+  /** 同一项里第一行以后的段落、标题、图片：和第一行的正文对齐，行首的空格放进缩进格 */
+  const decorateListContinuation = (block: SyntaxNode, item: SyntaxNode): void => {
+    const { column } = listLayout(item);
+    const first = state.doc.lineAt(item.from).number + 1;
+    const start = state.doc.lineAt(Math.max(block.from, windowFrom)).number;
+    const end = state.doc.lineAt(Math.min(block.to, windowTo)).number;
+    for (let number = Math.max(start, first); number <= end; number += 1) {
+      const line = state.doc.line(number);
+      if (foldedLines?.has(line.from)) continue;
+      const indent = /^[ \t]*/.exec(line.text)![0].length;
+      if (indent === line.length) continue;
+      if (!indent) {
+        lineStyle(line.from, `padding-left: ${listUnits(column)}`);
+        continue;
+      }
+      lineStyle(
+        line.from,
+        `padding-left: ${listUnits(column)}; text-indent: ${listUnits(-column)}`,
+      );
+      addMark(line.from, line.from + indent, "cm-otw-list-indent", {
+        style: `width: ${listUnits(column)}`,
+      });
+    }
   };
 
   /**
@@ -2007,6 +2207,12 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
 
         if (literalNodes.has(name)) literalRanges.push([node.from, node.to]);
         if (name === "Table") tableRanges.push([node.from, node.to]);
+        if (name === "CodeBlock") {
+          // 缩进（四个空格）的代码块没有围栏封口：上下两条边由第一行、最后一行自己画
+          const last = state.doc.lineAt(node.to);
+          addLines(line.from, line.to, "cm-otw-code-edge is-top");
+          addLines(last.from, last.to, "cm-otw-code-edge is-bottom");
+        }
         // 围栏里挂着的是别的语言的语法树，交给 codeHighlight，这里不下探。
         if (name === "CodeText") {
           addMark(node.from, node.to, "cm-otw-code-text");
@@ -2020,6 +2226,15 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
             to: line.from,
             value: Decoration.line({ class: `cm-otw-h${heading[1]}` }),
           });
+        }
+
+        if (name === "ListItem") decorateListItem(node.node);
+        if (
+          owner &&
+          parentName === "ListItem" &&
+          (name === "Paragraph" || name === "Task" || heading)
+        ) {
+          decorateListContinuation(node.node, owner);
         }
 
         if (name === "Paragraph") {
@@ -2062,15 +2277,8 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
         }
 
         const widget = widgetByNode.get(name);
-        if (widget === "task" && !syntaxActive) {
-          const checked = /x/i.test(state.sliceDoc(node.from, node.to));
-          addReplacement(
-            node.from,
-            node.to,
-            Decoration.replace({ widget: new TaskWidget(checked) }),
-          );
-          return;
-        }
+        // 勾选框和列表符号是一格，在 decorateListItem 里一起处理
+        if (widget === "task") return false;
         if (widget === "image" && !selfActive) {
           const image = resolveImage(
             state.doc.toString(),
@@ -2193,27 +2401,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
         }
         // 表格和分隔线整行都归块级层管，这里不重复处理。
 
-        if (name === "ListMark") {
-          const marker = state.sliceDoc(node.from, node.to);
-          // 任务项：连同「- 」后面的空格一起藏掉，否则勾选框前面会多出一格缩进。
-          const taskGap = /^(\s+)\[[ xX]\]/.exec(
-            state.sliceDoc(node.to, Math.min(line.to, node.to + 5)),
-          );
-          if (!syntaxActive) {
-            addReplacement(
-              node.from,
-              taskGap ? node.to + taskGap[1]!.length : node.to,
-              Decoration.replace({
-                widget: taskGap
-                  ? undefined
-                  : new ListMarkerWidget(listMarkerText(node.node, marker)),
-              }),
-            );
-          } else {
-            addMark(node.from, node.to, "cm-otw-syntax-marker");
-          }
-          return;
-        }
+        if (name === "ListMark") return false;
 
         if (name === "CodeInfo" && !syntaxActive) {
           addReplacement(
@@ -2359,9 +2547,33 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           if (hiddenLinkDestination && node.node.nextSibling?.name === "LinkTitle") {
             markerTo = node.node.nextSibling.to;
           }
-          addSyntaxMarker(node.from, markerTo, syntaxActive);
+          if (name === "QuoteMark") {
+            // 引用的 `>` 只在光标碰到它自己时露出来，画在这一层竖线右边的留白里
+            // （globals.css）—— 以前光标进引用块的任何地方，每一行都露出 `> `，整块字往右跳
+            const level = state.sliceDoc(line.from, node.from).split(">").length;
+            addSyntaxMarker(
+              node.from,
+              markerTo,
+              selectionTouches(state, node.from, markerTo),
+              `cm-otw-syntax-marker is-quote is-q${Math.min(level, 4)}`,
+            );
+            return;
+          }
+          addSyntaxMarker(
+            node.from,
+            markerTo,
+            syntaxActive,
+            name === "HeaderMark" ? "cm-otw-syntax-marker is-heading" : undefined,
+          );
         }
       },
+    });
+  }
+  for (const [from, column] of blankAfterItems) {
+    if (lineRanges.has(`${from}:style`)) continue;
+    lineStyle(from, `padding-left: ${listUnits(column)}; text-indent: ${listUnits(-column)}`);
+    addMark(from, state.doc.lineAt(from).to, "cm-otw-list-indent", {
+      style: `width: ${listUnits(column)}`,
     });
   }
 

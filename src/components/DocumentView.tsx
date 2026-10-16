@@ -164,7 +164,8 @@ export function DocumentView({
   useEffect(() => {
     if (!pendingAnchor || pendingAnchor.docKey !== doc.key || !editorOutline) return;
     if (pendingAnchor.line !== undefined) {
-      if (editorOutline.scrollToLine(pendingAnchor.line)) setPendingAnchor(null);
+      if (editorOutline.scrollToLine(pendingAnchor.line, pendingAnchor.match))
+        setPendingAnchor(null);
       return;
     }
     const wanted = (pendingAnchor.heading ?? "").trim().toLowerCase();

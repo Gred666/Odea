@@ -1,5 +1,5 @@
 import { folderOf } from "@/data/folders";
-import type { Note } from "@/data/types";
+import type { NoteSummary } from "@/data/types";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { create } from "zustand";
 
@@ -50,7 +50,7 @@ export function consumeDragClick(): boolean {
 
 export function beginNoteDrag(
   event: ReactPointerEvent,
-  note: Note,
+  note: NoteSummary,
   handlers: {
     /** 松手时指针下面是一个文件夹 */
     onDrop: (folder: string) => void;

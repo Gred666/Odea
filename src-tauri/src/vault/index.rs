@@ -15,7 +15,8 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use super::tasks::ScheduledTask;
 use crate::error::Result;
 
-const VERSION: i64 = 2;
+/// 3：去掉了全文索引表 doc_fts（2026-10-16，jieba 分词不要了，技术方案 §6）
+const VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE doc (
@@ -56,14 +57,6 @@ CREATE TABLE task (
 );
 CREATE INDEX task_doc ON task(doc_id);
 CREATE INDEX task_due ON task(due_date);
-
--- 只有笔记进全文索引。中文靠写入前的 jieba 预切分（domain/search.rs）
-CREATE VIRTUAL TABLE doc_fts USING fts5(
-  id UNINDEXED,
-  title,
-  tokens,
-  tokenize = 'unicode61 remove_diacritics 2'
-);
 ";
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -90,6 +83,7 @@ fn prepare(conn: &Connection) -> Result<()> {
     if version == VERSION {
         return Ok(());
     }
+    // doc_fts 是版本 3 以前的全文索引表，旧索引里还有
     conn.execute_batch(
         "DROP TABLE IF EXISTS doc_fts; DROP TABLE IF EXISTS task; DROP TABLE IF EXISTS doc;",
     )?;
@@ -204,6 +198,91 @@ pub fn notes(conn: &Connection, archived: bool) -> Result<Vec<DocRow>> {
     )
 }
 
+/// 同 notes，但不读正文（content_md 是空串）：列表只要摘要，几万篇也不该把全文都读一遍
+pub fn note_summaries(conn: &Connection, archived: bool) -> Result<Vec<DocRow>> {
+    let order = if archived {
+        "is_pinned DESC, COALESCE(archived_at, updated_at) DESC"
+    } else {
+        "is_pinned DESC, updated_at DESC"
+    };
+    let columns = COLUMNS.replace("content_md", "'' AS content_md");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {columns} FROM doc WHERE kind = 'note' AND is_archived = ?1 ORDER BY {order}, rel_path"
+    ))?;
+    let rows = stmt.query_map(params![archived as i64], row)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub struct TextMatch {
+    /// content_md 已经清空了，只剩列表要的那些
+    pub doc: DocRow,
+    pub line: String,
+}
+
+/// 正文里有 needle 的文档（needle 已经 to_lowercase）：笔记（含归档）、写过的某一天和目标；
+/// archived_only 只要归档里的笔记（归档的搜索框）。
+/// 整张表顺着扫一遍，每篇在 Rust 里转小写再找 —— SQLite 的 lower() 只管 ASCII，
+/// 和前端以前的 toLowerCase().indexOf 不一样。cancelled() 返回 true 就不扫了，返回 None
+pub fn scan_text(
+    conn: &Connection,
+    needle: &str,
+    archived_only: bool,
+    cancelled: impl Fn() -> bool,
+) -> Result<Option<Vec<TextMatch>>> {
+    let mut found = Vec::new();
+    let finished = each_text_doc(conn, archived_only, |mut doc| {
+        if cancelled() {
+            return false;
+        }
+        if let Some(line) = line_with(&doc.content_md, needle) {
+            doc.content_md = String::new();
+            found.push(TextMatch { doc, line });
+        }
+        true
+    })?;
+    Ok(finished.then_some(found))
+}
+
+/// 搜正文要看的每一篇（连同正文）：笔记（含归档；archived_only 只要归档里的）和写过东西的日记、目标。
+/// visit 返回 false 就不往下看了（又来了新的搜索），这时返回 false
+pub fn each_text_doc(
+    conn: &Connection,
+    archived_only: bool,
+    mut visit: impl FnMut(DocRow) -> bool,
+) -> Result<bool> {
+    let filter = if archived_only {
+        "kind = 'note' AND is_archived = 1"
+    } else {
+        "kind = 'note' OR (kind IN ('day', 'goal') AND (title != '' OR content_md != ''))"
+    };
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM doc WHERE {filter}"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        if !visit(row(r)?) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// 第一次出现 needle 的那一行（原样，不转小写）。超过 600 个字的行只留命中处前 200、后 400 个字
+fn line_with(content: &str, needle: &str) -> Option<String> {
+    const LONG: usize = 600;
+    let lower = content.to_lowercase();
+    let at = lower.find(needle)?;
+    // 转小写不增减换行，第几行在两边是一样的
+    let number = lower[..at].matches('\n').count();
+    let line = content.split('\n').nth(number)?.trim_end_matches('\r');
+    if line.len() <= LONG || line.chars().count() <= LONG {
+        return Some(line.to_string());
+    }
+    // 命中处在这一行的第几个字（大小写换算后字数不变的绝大多数情况下是准的；不准也还在窗口里）
+    let line_start = lower[..at].rfind('\n').map_or(0, |i| i + 1);
+    let column = lower[line_start..at].chars().count();
+    let from = column.saturating_sub(200);
+    Some(line.chars().skip(from).take(LONG).collect())
+}
+
 /// 之前最近一天写过东西的（今日TODO 的延续）
 pub fn latest_day_before(conn: &Connection, date: &str) -> Result<Option<DocRow>> {
     one(
@@ -243,12 +322,7 @@ pub fn id_taken(conn: &Connection, id: &str, except_path: &str) -> Result<bool> 
 }
 
 /// 写入（或替换）一篇文档，连同它的任务和全文索引。同一个 id 或同一个路径的旧行先删掉。
-pub fn put(
-    conn: &Connection,
-    doc: &DocRow,
-    tasks: &[ScheduledTask],
-    fts: Option<(&str, &str)>,
-) -> Result<()> {
+pub fn put(conn: &Connection, doc: &DocRow, tasks: &[ScheduledTask]) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     for old in tx
         .prepare("SELECT id FROM doc WHERE id = ?1 OR rel_path = ?2")?
@@ -297,12 +371,6 @@ pub fn put(
                 task.time_label,
                 task.category,
             ],
-        )?;
-    }
-    if let Some((title, tokens)) = fts {
-        tx.execute(
-            "INSERT INTO doc_fts (id, title, tokens) VALUES (?1, ?2, ?3)",
-            params![doc.id, title, tokens],
         )?;
     }
     tx.commit()?;
@@ -357,7 +425,6 @@ pub fn remove(conn: &Connection, id: &str) -> Result<()> {
 
 fn delete_rows(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM task WHERE doc_id = ?1", params![id])?;
-    conn.execute("DELETE FROM doc_fts WHERE id = ?1", params![id])?;
     conn.execute("DELETE FROM doc WHERE id = ?1", params![id])?;
     Ok(())
 }
@@ -490,40 +557,15 @@ pub fn calendar_marks(
     Ok((written, open))
 }
 
-/// 所有某一天、某个周期的目标（命令面板搜它们的正文）
+/// 所有写过的某一天、某个周期的目标（命令面板按标题搜它们）。不读正文，content_md 是空串
 pub fn journal(conn: &Connection) -> Result<Vec<DocRow>> {
-    many(
-        conn,
-        "WHERE kind IN ('day', 'goal') AND (title != '' OR content_md != '')
-         ORDER BY updated_at DESC",
-        [],
-    )
-}
-
-pub struct Hit {
-    pub doc: DocRow,
-    pub score: f64,
-}
-
-/// 全文搜索：标题权重 10 倍。bm25 越小越相关。
-pub fn search(conn: &Connection, match_query: &str, limit: u32) -> Result<Vec<Hit>> {
-    let columns = COLUMNS
-        .split(',')
-        .map(|column| format!("d.{}", column.trim()))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let columns = COLUMNS.replace("content_md", "'' AS content_md");
     let mut stmt = conn.prepare(&format!(
-        "SELECT {columns}, bm25(doc_fts, 0.0, 10.0, 1.0) AS score
-         FROM doc_fts JOIN doc d ON d.id = doc_fts.id
-         WHERE doc_fts MATCH ?1 AND d.kind = 'note'
-         ORDER BY score LIMIT ?2"
+        "SELECT {columns} FROM doc
+         WHERE kind IN ('day', 'goal') AND (title != '' OR content_md != '')
+         ORDER BY updated_at DESC"
     ))?;
-    let rows = stmt.query_map(params![match_query, limit], |r| {
-        Ok(Hit {
-            doc: row(r)?,
-            score: r.get("score")?,
-        })
-    })?;
+    let rows = stmt.query_map([], row)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 

@@ -627,6 +627,15 @@ export function wake(target: Element): void {
   if (state && !state.player.playing) start(target, state, { force: true });
 }
 
+/**
+ * 整个编辑器拆掉以后清一遍名单。观察器只为摘掉时还看得见的表情报信，滚在视口外的
+ * 表格、目录里的那些要等别的表情露面才清得掉，一直等不来的话，名单经由它们握着
+ * 整个旧编辑器（表格的事件处理闭包住了 view）。
+ */
+export function forgetDetachedEmoji(): void {
+  sweep();
+}
+
 /** 不再盯着它，停回静止帧（widget 销毁时）。 */
 export function stopAnimating(target: Element): void {
   const state = watched.get(target);

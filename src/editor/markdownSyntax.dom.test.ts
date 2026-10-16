@@ -174,7 +174,11 @@ describe("块级构造", () => {
 
     view.dispatch({ selection: { anchor: 3 } });
     expect(parent.querySelector(".cm-otw-callout-badge")).toBeNull();
+    // `>` 只在光标碰到它自己时露出来（画在竖线右边的留白里，不占正文的位置）
+    expect(lines(parent)[0]).toBe("[!TIP]");
+    view.dispatch({ selection: { anchor: 0 } });
     expect(lines(parent)[0]).toBe("> [!TIP]");
+    expect(parent.querySelector(".cm-otw-syntax-marker.is-quote")?.textContent).toBe("> ");
   });
 
   it("maps Chinese labels to the generic callout", () => {

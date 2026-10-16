@@ -101,8 +101,8 @@ describe("入场动画只给新内容", () => {
     // 刚打开：全都是新出现的
     expect([...parent.querySelectorAll(SMALL_WIDGETS)].some(settled)).toBe(false);
 
-    // 光标进第一项再出来：换回来的圆点直接是最终状态
-    view.dispatch({ selection: { anchor: doc.indexOf("甲") } });
+    // 光标到第一项的符号上再出来：换回来的圆点直接是最终状态
+    view.dispatch({ selection: { anchor: doc.indexOf("- 甲") } });
     view.dispatch({ selection: { anchor: 0 } });
     expect(settled(parent.querySelector(".cm-otw-list-marker"))).toBe(true);
 
@@ -114,7 +114,7 @@ describe("入场动画只给新内容", () => {
 
   it("plays for syntax that was just typed, even while older widgets stay settled", () => {
     const { parent, view } = mount("开头\n\n- 甲\n\n结尾");
-    view.dispatch({ selection: { anchor: 6 } });
+    view.dispatch({ selection: { anchor: 4 } });
     view.dispatch({ selection: { anchor: 0 } });
     expect(settled(parent.querySelector(".cm-otw-list-marker"))).toBe(true);
 
@@ -129,7 +129,7 @@ describe("入场动画只给新内容", () => {
   it("still plays the check animation when a task is ticked", () => {
     const doc = "开头\n\n- [ ] 任务";
     const { parent, view } = mount(doc);
-    view.dispatch({ selection: { anchor: doc.indexOf("任务") } });
+    view.dispatch({ selection: { anchor: doc.indexOf("- [ ]") } });
     view.dispatch({ selection: { anchor: 0 } });
     expect(settled(parent.querySelector(".cm-otw-task"))).toBe(true);
 

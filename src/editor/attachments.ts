@@ -1,7 +1,10 @@
 import type { Attachment } from "@/data/types";
 import { isTauri } from "@/lib/tauri";
-import { type Extension, StateEffect, StateField } from "@codemirror/state";
+import { syntaxTree } from "@codemirror/language";
+import { type EditorState, type Extension, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
+import type { SyntaxNode } from "@lezer/common";
+import { listItemContentColumn } from "./markdownCommands";
 
 /* ============================================================
    把文件放进正文：粘贴截图、拖进图片。
@@ -41,17 +44,54 @@ export function attachmentMarkdown(attachments: Attachment[]): string {
     .join("\n");
 }
 
+/**
+ * pos 在列表项里时，这一项正文那一栏在源码里的列（`1. ` 后面是 3）；不在列表里是 0。
+ * 插进去的几行都缩进到这一列，才留在这一项里、和这一项的字对齐 —— 以前顶格插进去，
+ * 图片成了这一项的「懒惰续行」，下一行的光标却已经出了列表。
+ */
+export function listContentIndent(state: EditorState, pos: number): number {
+  // 只有空格的一行（上一次插完图光标落下的那一行）不在语法树的列表项里：看上一行，
+  // 取缩进放得下的最里面那一项
+  const here = state.doc.lineAt(pos);
+  const blank = !here.text.trim();
+  const probe = blank && here.number > 1 ? state.doc.line(here.number - 1).to : pos;
+  for (
+    let node: SyntaxNode | null = syntaxTree(state).resolveInner(probe, -1);
+    node;
+    node = node.parent
+  ) {
+    if (node.name !== "ListItem") continue;
+    const indent = listItemContentColumn(state, node);
+    if (!blank || indent <= here.length) return indent;
+  }
+  return 0;
+}
+
+/**
+ * 在 pos 插进去的那一段。图片自己占一行，光标落到下一行开头：光标挨着图片时显示的是源码，
+ * 插完就该直接看到图。插在一行中间就把这一行从这里断开，后半截留在下一行。
+ * 列表项里每一行都缩进到这一项的正文那一栏。
+ */
+export function attachmentInsert(
+  state: EditorState,
+  pos: number,
+  attachments: Attachment[],
+): string {
+  const indent = " ".repeat(listContentIndent(state, pos));
+  const prefix = state.sliceDoc(state.doc.lineAt(pos).from, pos);
+  // 光标前面正好是这一栏的缩进（上一张图插完落下的那一行）：就从这里接着插
+  const before = prefix === indent ? "" : prefix ? `\n${indent}` : indent;
+  const body = attachmentMarkdown(attachments).replace(/\n/g, `\n${indent}`);
+  return `${before}${body}\n${indent}`;
+}
+
 /** 存好以后插进去。存的这一会儿正文变了（继续打字）就插在当时的光标处 */
 async function insertWhenSaved(view: EditorView, at: number, pending: Promise<Attachment[]>) {
   const doc = view.state.doc;
   const attachments = await pending;
   if (!attachments.length || !view.dom.isConnected) return;
   const pos = view.state.doc === doc ? at : view.state.selection.main.head;
-  const line = view.state.doc.lineAt(pos);
-  // 图片自己占一行，光标落到下一行开头：光标挨着图片时显示的是源码，插完就该直接看到图。
-  // 插在一行中间就把这一行从这里断开，后半截留在下一行
-  const before = pos > line.from ? "\n" : "";
-  const insert = `${before}${attachmentMarkdown(attachments)}\n`;
+  const insert = attachmentInsert(view.state, pos, attachments);
   view.dispatch({
     changes: { from: pos, insert },
     selection: { anchor: pos + insert.length },

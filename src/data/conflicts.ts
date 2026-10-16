@@ -4,7 +4,7 @@ import {
   type DocumentSaveTarget,
   type Goal,
   type GoalHorizon,
-  type Note,
+  type NoteSummary,
   goalKey,
 } from "./types";
 
@@ -27,16 +27,18 @@ export function conflictTarget(conflictOf: string): DocumentSaveTarget {
 }
 
 interface NoteLists {
-  notes: Note[];
-  archived: Note[];
+  notes: NoteSummary[];
+  archived: NoteSummary[];
 }
 
 interface Documents extends NoteLists {
   dayDocs: DayDoc[];
   goals: Record<string, Goal>;
+  /** 留着的笔记正文（store 的 bodies） */
+  bodies: Record<string, string>;
 }
 
-function findNote(lists: NoteLists, id: string): Note | undefined {
+function findNote(lists: NoteLists, id: string): NoteSummary | undefined {
   return (
     lists.notes.find((note) => note.id === id) ?? lists.archived.find((note) => note.id === id)
   );
@@ -55,7 +57,7 @@ export function conflictOriginalTitle(
   return findNote(lists, target.id)?.title;
 }
 
-/** 原文现在的正文。某一天 / 目标是按需取的，还没取回来时 undefined */
+/** 原文现在的正文。笔记的正文、某一天、目标都是按需取的（loadBody / loadDay / loadGoal），还没取回来时 undefined */
 export function conflictOriginalContent(
   target: DocumentSaveTarget,
   docs: Documents,
@@ -63,5 +65,5 @@ export function conflictOriginalContent(
   if (target.kind === "day") return docs.dayDocs.find((day) => day.date === target.id)?.noteMd;
   if (target.kind === "goal")
     return docs.goals[goalKey(target.horizon, target.periodStart)]?.contentMd;
-  return findNote(docs, target.id)?.contentMd;
+  return findNote(docs, target.id) ? docs.bodies[target.id] : undefined;
 }

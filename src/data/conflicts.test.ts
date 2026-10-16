@@ -55,7 +55,12 @@ describe("conflictTarget", () => {
 
 describe("原文的标题和正文", () => {
   const lists = { notes: [note("n-1", "周报", "本机的")], archived: [] };
-  const docs = { ...lists, dayDocs: [day], goals: { "week:2026-09-21": goal } };
+  const docs = {
+    ...lists,
+    dayDocs: [day],
+    goals: { "week:2026-09-21": goal },
+    bodies: { "n-1": "本机的" },
+  };
 
   it("names a day by its date and a goal by its period, like backlinks do", () => {
     expect(conflictOriginalTitle({ kind: "day", id: "2026-08-29" }, lists)).toBe("8月29日");
@@ -67,7 +72,7 @@ describe("原文的标题和正文", () => {
     expect(conflictOriginalTitle({ kind: "note", id: "gone" }, lists)).toBeUndefined();
   });
 
-  it("reads the original's body, undefined while a day / goal is not loaded yet", () => {
+  it("reads the original's body, undefined while it is not loaded yet", () => {
     expect(conflictOriginalContent({ kind: "day", id: "2026-08-29" }, docs)).toBe("- [x] 买菜");
     expect(conflictOriginalContent({ kind: "day", id: "2026-08-30" }, docs)).toBeUndefined();
     expect(
@@ -77,5 +82,9 @@ describe("原文的标题和正文", () => {
       conflictOriginalContent({ kind: "goal", horizon: "month", periodStart: "2026-09-01" }, docs),
     ).toBeUndefined();
     expect(conflictOriginalContent({ kind: "note", id: "n-1" }, docs)).toBe("本机的");
+    // 笔记的正文也是按需取的（store 的 bodies 里没有就是还没取）
+    expect(
+      conflictOriginalContent({ kind: "note", id: "n-1" }, { ...docs, bodies: {} }),
+    ).toBeUndefined();
   });
 });

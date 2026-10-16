@@ -182,17 +182,155 @@ fn old_trash_is_purged() {
     assert!(!trashed.exists());
 }
 
+fn find(f: &Fixture, query: &str, options: FindOptions) -> FindResult {
+    find_text(&f.vault.db, query, options, || false).unwrap().unwrap()
+}
+
+fn note_id(target: &DocTarget) -> &str {
+    match target {
+        DocTarget::Note { id } => id,
+        other => panic!("不是笔记: {other:?}"),
+    }
+}
+
 #[test]
-fn search_finds_two_character_chinese_words() {
+fn find_lists_every_match_with_its_line_and_utf16_column() {
     let mut f = fixture();
-    f.vault
-        .note_create("秋季项目复盘", "这一周把季度目标推进到可以交付的状态。")
+    let id = f
+        .vault
+        .note_create("周报", "第一行\n今天的进度还可以，进度不错\n🙂进度\n没有")
         .unwrap();
     f.vault.note_create("周末采购", "燕麦奶、灯泡、咖啡豆。").unwrap();
-    let result = f.vault.search("季度", 10).unwrap();
-    assert_eq!(result.hits.len(), 1);
-    assert_eq!(result.hits[0].title, "秋季项目复盘");
-    assert!(f.vault.search("   ", 10).unwrap().hits.is_empty());
+    // 双字词、跨了词的边界都照样找到（以前的分词搜不到「度还」）
+    let found = find(&f, "进度", FindOptions::default());
+    assert_eq!(found.total, 3);
+    assert!(!found.truncated && found.error.is_none());
+    assert_eq!(found.files.len(), 1);
+    let file = &found.files[0];
+    assert_eq!(note_id(&file.target), id);
+    assert_eq!((file.title.as_str(), file.count), ("周报", 3));
+    let at: Vec<_> = file.matches.iter().map(|m| (m.line, m.column, m.length)).collect();
+    // 行号从 1 数；列按 UTF-16 数，🙂 占两个
+    assert_eq!(at, vec![(2, 3, 2), (2, 9, 2), (3, 2, 2)]);
+    let first = &file.matches[0];
+    assert_eq!(
+        (first.before.as_str(), first.text.as_str(), first.after.as_str()),
+        ("今天的", "进度", "还可以，进度不错")
+    );
+    assert_eq!(find(&f, "度还", FindOptions::default()).total, 1);
+    assert_eq!(find(&f, "", FindOptions::default()).files.len(), 0);
+}
+
+#[test]
+fn find_orders_notes_then_archive_then_journal_and_skips_titles() {
+    let mut f = fixture();
+    let older = f.vault.note_create("较早", "进度").unwrap();
+    let pinned = f.vault.note_create("置顶的", "进度").unwrap();
+    f.vault.note_set_pinned(&pinned, true).unwrap();
+    let newer = f.vault.note_create("较新", "进度").unwrap();
+    let archived = f.vault.note_create("归档的", "进度").unwrap();
+    f.vault.note_archive(&archived, None).unwrap();
+    f.vault.note_create("进度", "标题里有，正文里没有").unwrap();
+    f.vault.save_day("2026-09-04", "周报", "进度还可以").unwrap();
+    f.vault.save_goal("week", "2026-08-31", "- [ ] 进度更快").unwrap();
+
+    let found = find(&f, "进度", FindOptions::default());
+    let notes: Vec<_> = found
+        .files
+        .iter()
+        .filter(|file| matches!(file.target, DocTarget::Note { .. }))
+        .map(|file| note_id(&file.target).to_string())
+        .collect();
+    assert_eq!(notes.len(), 4, "只有标题里有的不算：{notes:?}");
+    assert_eq!(notes[0], pinned, "置顶的在前");
+    assert_eq!(notes.last(), Some(&archived), "归档的在笔记后面");
+    assert!(notes.contains(&older) && notes.contains(&newer));
+    // 日记和目标在所有笔记后面
+    let kinds: Vec<_> = found.files.iter().map(|file| matches!(file.target, DocTarget::Note { .. })).collect();
+    assert_eq!(kinds, vec![true, true, true, true, false, false]);
+    assert!(found.files.iter().any(|file| file.title == "9月4日 · 周报"));
+}
+
+#[test]
+fn find_options_work_like_the_editor_search_panel() {
+    let mut f = fixture();
+    f.vault
+        .note_create("英文", "Cat concat CAT cat_food\n日期 2026-10-16 和 2026-1-2")
+        .unwrap();
+    f.vault.note_create("中文", "写笔记本\n「笔记」\n笔记 很多").unwrap();
+    let opts = |case_sensitive, whole_word, regex| FindOptions {
+        case_sensitive,
+        whole_word,
+        regex,
+    };
+    let texts = |found: &FindResult| -> Vec<String> {
+        found.files.iter().flat_map(|file| file.matches.iter().map(|m| m.text.clone())).collect()
+    };
+    assert_eq!(find(&f, "cat", opts(false, false, false)).total, 4);
+    assert_eq!(texts(&find(&f, "cat", opts(true, false, false))), vec!["cat", "cat"]);
+    // 全词：concat、cat_food 里的不算（下划线算词的一部分）
+    assert_eq!(texts(&find(&f, "cat", opts(false, true, false))), vec!["Cat", "CAT"]);
+    // 汉字也算词字符：「写笔记本」里的不是一个词，两边是标点、空格的才是
+    let words = find(&f, "笔记", opts(false, true, false));
+    let lines: Vec<_> = words.files[0].matches.iter().map(|m| m.line).collect();
+    assert_eq!(lines, vec![2, 3]);
+    // 正则
+    assert_eq!(texts(&find(&f, r"\d{4}-\d{2}-\d{2}", opts(false, false, true))), vec!["2026-10-16"]);
+    // 不是正则时，正则的符号就是字面上的字
+    assert_eq!(find(&f, "2026-1.-16", opts(false, false, false)).total, 0);
+    assert_eq!(find(&f, "2026-1.-16", opts(false, false, true)).total, 1);
+    // 正则写错了：给出原因，不是报错
+    let bad = find(&f, "(进度", opts(false, false, true));
+    assert!(bad.files.is_empty());
+    assert!(bad.error.as_deref().is_some_and(|reason| !reason.is_empty()), "{:?}", bad.error);
+}
+
+#[test]
+fn find_caps_the_matches_it_returns_but_counts_them_all() {
+    let mut f = fixture();
+    f.vault.note_create("一", &"的\n".repeat(FIND_MATCH_LIMIT - 10)).unwrap();
+    f.vault.note_create("二", &"的".repeat(30)).unwrap();
+    // 归档的排在笔记后面：前两篇用完了名额，它不列出来
+    let archived = f.vault.note_create("三", "的").unwrap();
+    f.vault.note_archive(&archived, None).unwrap();
+    let found = find(&f, "的", FindOptions::default());
+    assert_eq!(found.total as usize, FIND_MATCH_LIMIT + 21);
+    assert!(found.truncated);
+    let given: usize = found.files.iter().map(|file| file.matches.len()).sum();
+    assert_eq!(given, FIND_MATCH_LIMIT);
+    assert_eq!(found.files.len(), 2);
+    assert!(found.files.iter().all(|file| note_id(&file.target) != archived));
+    // 每篇的数都是全的；给不全的只有最后列出的那篇（两篇谁新谁旧不一定，同一毫秒建的）
+    let counts: Vec<_> = found.files.iter().map(|file| (file.matches.len(), file.count as usize)).collect();
+    assert!(counts[0].0 == counts[0].1 && counts[1].0 < counts[1].1, "{counts:?}");
+    // 又来了新的搜索：这一次作废
+    assert!(find_text(&f.vault.db, "的", FindOptions::default(), || true).unwrap().is_none());
+}
+
+#[test]
+fn find_counts_all_matches_of_one_huge_document() {
+    let mut f = fixture();
+    f.vault.note_create("大", &"的的的的的\n".repeat(FIND_MATCH_LIMIT)).unwrap();
+    let found = find(&f, "的", FindOptions::default());
+    assert_eq!(found.total as usize, FIND_MATCH_LIMIT * 5);
+    assert!(found.truncated);
+    let file = &found.files[0];
+    assert_eq!((file.matches.len(), file.count as usize), (FIND_MATCH_LIMIT, FIND_MATCH_LIMIT * 5));
+    assert_eq!(file.matches.last().map(|m| (m.line, m.column)), Some((200, 4)));
+}
+
+#[test]
+fn find_clips_long_lines_around_the_match() {
+    let mut f = fixture();
+    let line = format!("  {}目标{}\r", "前".repeat(100), "后".repeat(300));
+    f.vault.note_create("长", &format!("{line}\n下一行")).unwrap();
+    let found = find(&f, "目标", FindOptions::default());
+    let hit = &found.files[0].matches[0];
+    assert_eq!(hit.before, format!("…{}", "前".repeat(32)));
+    assert_eq!(hit.text, "目标");
+    assert_eq!(hit.after, format!("{}…", "后".repeat(160)));
+    // 列算的是原样的整行（行首的空格也算），和编辑器里的位置对得上
+    assert_eq!((hit.line, hit.column), (1, 102));
 }
 
 /* ---------------- 某一天 ---------------- */
@@ -329,7 +467,7 @@ fn the_calendar_tells_written_days_from_days_with_open_tasks() {
 }
 
 #[test]
-fn the_journal_lists_written_days_and_goals_with_their_text() {
+fn the_journal_lists_written_days_and_goals_by_title() {
     let mut f = fixture();
     f.vault.note_create("笔记不算", "正文").unwrap();
     f.vault.save_day("2026-09-04", "周报", "今天开会").unwrap();
@@ -337,18 +475,104 @@ fn the_journal_lists_written_days_and_goals_with_their_text() {
     f.vault.save_day("2026-09-05", "", "").unwrap();
 
     let journal = f.vault.journal_list().unwrap();
-    let mut titles: Vec<(&str, &str, &str)> = journal
+    let mut titles: Vec<(&str, &str)> = journal
         .iter()
-        .map(|doc| (doc.kind.as_str(), doc.title.as_str(), doc.content_md.as_str()))
+        .map(|doc| (doc.kind.as_str(), doc.title.as_str()))
         .collect();
     titles.sort();
-    assert_eq!(
-        titles,
-        vec![
-            ("day", "9月4日 · 周报", "今天开会"),
-            ("goal", "第 36 周目标", "本周重点"),
-        ]
-    );
+    assert_eq!(titles, vec![("day", "9月4日 · 周报"), ("goal", "第 36 周目标")]);
+}
+
+#[test]
+fn note_lists_carry_everything_but_the_body() {
+    let mut f = fixture();
+    let a = f.vault.note_create("甲", "甲的正文").unwrap();
+    let b = f.vault.note_create("乙", "乙的正文").unwrap();
+    f.vault.note_set_pinned(&b, true).unwrap();
+    let c = f.vault.note_create("丙", "丙的正文").unwrap();
+    f.vault.note_archive(&c, None).unwrap();
+
+    for archived in [false, true] {
+        let full = f.vault.note_list_full(archived).unwrap();
+        let light = f.vault.note_list(archived).unwrap();
+        assert_eq!(
+            light.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+            full.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+            "顺序和带正文的列表一样"
+        );
+        for (summary, note) in light.iter().zip(&full) {
+            let mut json = serde_json::to_value(note).unwrap();
+            json.as_object_mut().unwrap().remove("contentMd");
+            assert_eq!(serde_json::to_value(summary).unwrap(), json);
+        }
+    }
+    assert_eq!(f.vault.note_list(false).unwrap()[0].id, b, "置顶的在前");
+    assert!(f.vault.note_list(false).unwrap().iter().any(|n| n.id == a));
+}
+
+fn text_search(f: &Fixture, query: &str, limit: usize) -> TextSearch {
+    search_text(&f.vault.db, query, limit, false, || false).unwrap().unwrap()
+}
+
+#[test]
+fn text_search_finds_substrings_like_the_palette_did() {
+    let mut f = fixture();
+    let older = f.vault.note_create("较早", "第一行\n今天的进度还可以，Hello World\n末行").unwrap();
+    let newer = f.vault.note_create("较新", "进度还可以").unwrap();
+    let only_title = f.vault.note_create("进度还可以", "正文里没有").unwrap();
+    let archived = f.vault.note_create("归档的", "进度还可以吗").unwrap();
+    f.vault.note_archive(&archived, None).unwrap();
+    f.vault.save_day("2026-09-04", "周报", "进度还可以\n明天继续").unwrap();
+    f.vault.save_goal("week", "2026-08-31", "- [ ] 进度还可以更快").unwrap();
+
+    // 跨了分词的边界（「进度」「还」「可以」）也找得到；只有标题里有的不算
+    let found = text_search(&f, "度还可", 10);
+    let ids: Vec<_> = found
+        .notes
+        .iter()
+        .map(|hit| match &hit.target {
+            DocTarget::Note { id } => id.clone(),
+            other => panic!("不是笔记: {other:?}"),
+        })
+        .collect();
+    assert!(!ids.contains(&only_title));
+    assert_eq!(ids.last(), Some(&archived), "归档的排在后面");
+    assert!(ids.contains(&older) && ids.contains(&newer));
+    // 返回命中的那一整行，原样
+    let line_of = |id: &str| {
+        found.notes.iter().find(|hit| matches!(&hit.target, DocTarget::Note { id: i } if i == id)).unwrap().line.clone()
+    };
+    assert_eq!(line_of(&older), "今天的进度还可以，Hello World");
+    assert_eq!(found.journal.len(), 2, "某一天和目标的正文也搜");
+    assert!(found.journal.iter().any(|hit| hit.title == "9月4日 · 周报" && hit.line == "进度还可以"));
+
+    // 大小写不敏感
+    let found = text_search(&f, "hello WORLD", 10);
+    assert_eq!(found.notes.len(), 1);
+    assert_eq!(found.notes[0].title, "较早");
+
+    // limit 各管各的；空的什么也不找
+    assert_eq!(text_search(&f, "进度", 1).notes.len(), 1);
+    assert_eq!(text_search(&f, "进度", 1).journal.len(), 1);
+    assert!(text_search(&f, "  ", 10).notes.is_empty());
+    // 归档的搜索框只要归档里的
+    let found = search_text(&f.vault.db, "度还可", 10, true, || false).unwrap().unwrap();
+    assert_eq!(found.notes.len(), 1);
+    assert!(matches!(&found.notes[0].target, DocTarget::Note { id } if *id == archived));
+    assert!(found.journal.is_empty());
+    // 又来了新的搜索：这一次作废
+    assert!(search_text(&f.vault.db, "进度", 10, false, || true).unwrap().is_none());
+}
+
+#[test]
+fn text_search_clips_very_long_lines_around_the_hit() {
+    let mut f = fixture();
+    let line = format!("{}目标在这里{}", "前".repeat(2000), "后".repeat(2000));
+    f.vault.note_create("长", &line).unwrap();
+    let hit = &text_search(&f, "目标在这里", 10).notes[0];
+    assert!(hit.line.contains("目标在这里"));
+    assert_eq!(hit.line.chars().count(), 600);
+    assert!(hit.line.starts_with(&"前".repeat(200)));
 }
 
 #[test]
@@ -1188,17 +1412,27 @@ fn large_vault_timings() {
     eprintln!("再次打开（只比对文件状态）  {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
 
     let t = Instant::now();
-    let notes = vault.note_list_full(false).unwrap();
+    let notes = vault.note_list(false).unwrap();
     let list_ms = t.elapsed().as_secs_f64() * 1000.0;
     let t = Instant::now();
     let json = serde_json::to_string(&notes).unwrap();
     eprintln!(
-        "note_list_full {} 篇          {:>8.1} ms，序列化 {:.1} ms，{:.1} MB JSON",
+        "note_list {} 篇（不带正文）   {:>8.1} ms，序列化 {:.1} ms，{:.2} MB JSON",
         notes.len(),
         list_ms,
         t.elapsed().as_secs_f64() * 1000.0,
         json.len() as f64 / 1048576.0
     );
+    for query in ["进度", "项目计划方案", "这个词哪儿都没有"] {
+        let t = Instant::now();
+        let found = search_text(&vault.db, query, 8, false, || false).unwrap().unwrap();
+        eprintln!(
+            "search_text「{query}」 {:>8.1} ms（{} + {} 条）",
+            t.elapsed().as_secs_f64() * 1000.0,
+            found.notes.len(),
+            found.journal.len()
+        );
+    }
 
     let t = Instant::now();
     let journal = vault.journal_list().unwrap();
@@ -1207,10 +1441,17 @@ fn large_vault_timings() {
     let t = Instant::now();
     vault.calendar_marks("2025-01-01", "2027-12-31").unwrap();
     eprintln!("calendar_marks 三年         {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
-    let t = Instant::now();
-    let hits = vault.search("项目 计划", 50).unwrap();
-    eprintln!("search「项目 计划」         {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
-    drop(hits);
+    for (query, regex) in [("进度", false), ("项目计划方案", false), (r"第\d+周", true)] {
+        let t = Instant::now();
+        let options = FindOptions { regex, ..FindOptions::default() };
+        let found = find_text(&vault.db, query, options, || false).unwrap().unwrap();
+        eprintln!(
+            "find_text「{query}」 {:>8.1} ms（{} 篇 {} 处）",
+            t.elapsed().as_secs_f64() * 1000.0,
+            found.files.len(),
+            found.total
+        );
+    }
     let id = notes[NOTES / 2].id.clone();
     let t = Instant::now();
     let links = vault.backlinks(&id).unwrap();
@@ -1220,7 +1461,7 @@ fn large_vault_timings() {
     vault.day("2026-03-01", true).unwrap();
     eprintln!("day（某一天 + 带日期的任务） {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
 
-    let text = format!("{}\n\n再写一段。", notes[10].content_md);
+    let text = format!("{}\n\n再写一段。", vault.note_get(&notes[10].id).unwrap().content_md);
     let t = Instant::now();
     vault.note_update(&notes[10].id, &notes[10].title, &text).unwrap();
     eprintln!("note_update（自动保存一次）  {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);

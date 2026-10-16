@@ -1,4 +1,4 @@
-import type { Note } from "./types";
+import type { NoteSummary } from "./types";
 
 /* ============================================================
    笔记文件夹的路径小工具。
@@ -23,7 +23,7 @@ export const within = (folder: string, path: string) =>
 export const folderLabel = (path: string) => (path ? path.split("/").join(" / ") : ROOT_LABEL);
 
 /** 笔记所在的文件夹 */
-export function folderOf(note: Pick<Note, "relPath">): string {
+export function folderOf(note: Pick<NoteSummary, "relPath">): string {
   const rel = note.relPath ?? "";
   const dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
   if (dir === NOTES_DIR) return "";
@@ -110,7 +110,7 @@ export function folderTree(
 }
 
 /** 文件夹里一共几篇（子文件夹里的也算） */
-export function countIn(notes: Note[], path: string): number {
+export function countIn(notes: NoteSummary[], path: string): number {
   return notes.filter((note) => within(folderOf(note), path)).length;
 }
 
@@ -129,7 +129,7 @@ export function renamedRelPath(relPath: string, from: string, to: string): strin
 }
 
 /** 一篇笔记挪到 folder 之后的 relPath（文件名不变；重名加序号由后端决定，这里只是乐观的猜测） */
-export function relPathIn(note: Pick<Note, "relPath" | "title">, folder: string): string {
+export function relPathIn(note: Pick<NoteSummary, "relPath" | "title">, folder: string): string {
   const name = note.relPath
     ? note.relPath.slice(note.relPath.lastIndexOf("/") + 1)
     : `${fileStemFor(note.title)}.md`;

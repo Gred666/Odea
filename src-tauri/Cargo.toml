@@ -69,10 +69,10 @@ notify = "8"
 # 搬旧数据时把文件的修改时间设回原来的「上次更新」
 filetime = "0.2"
 
-# --- 中文分词 ---
-# FTS5 默认分词器不切中文；trigram 又搜不到双字词。
-# 详见技术方案 §6。
-jieba-rs = "0.7"
+# --- 搜正文 ---
+# 全局搜索（commands::find_in_vault）的正则、大小写不敏感的匹配。依赖树里本来就有（tauri-utils 等），
+# 不多占体积。以前这里是 jieba 分词，词典常驻 40 多 MB，只给一个界面没在用的全文索引用（技术方案 §6）
+regex = "1"
 
 uuid = { version = "1", features = ["v7", "serde"] }
 # 粘贴的图片从前端以 base64 传过来（见 commands::vault_attach）
@@ -106,6 +106,9 @@ winreg = "0.55"
 # 窗口图标从 exe 里嵌的多尺寸图标资源加载（lib.rs 的 use_app_icon_resource）。
 # 和 tauri / tao 用的是同一个版本，依赖树里本来就有
 windows = { version = "0.61", features = ["Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+# 最小化时让 WebView2 少占内存（memory.rs）。Tauri 只给出 WebView2 的 controller，
+# 要 ICoreWebView2_19 得用它自己用的这个版本的绑定
+webview2-com = "0.38"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }

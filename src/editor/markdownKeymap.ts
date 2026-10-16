@@ -4,9 +4,11 @@ import type { KeyBinding } from "@codemirror/view";
 import {
   changeHeadingLevel,
   clearMarkdownFormat,
+  indentListItem,
   insertFencedBlock,
   insertLink,
   insertTable,
+  listItemHome,
   setHeading,
   toggleLinePrefix,
   wrapMarkdown,
@@ -48,9 +50,13 @@ export const markdownKeymap: readonly KeyBinding[] = [
     run: toggleLinePrefix("- ", /^\s*[-+*]\s+/),
   },
   // 和 VS Code / JetBrains 一致：右方括号加缩进，左方括号减缩进。
-  { key: "Mod-]", run: indentMore },
-  { key: "Mod-[", run: indentLess },
+  // 列表项里先按层级挪整项（indentListItem），别的地方照旧缩进行
+  { key: "Mod-]", run: (view) => indentListItem(1)(view) || indentMore(view) },
+  { key: "Mod-[", run: (view) => indentListItem(-1)(view) || indentLess(view) },
+  { key: "Tab", run: indentListItem(1), shift: indentListItem(-1) },
   indentWithTab,
+  { key: "Home", run: listItemHome(false), shift: listItemHome(true) },
+  { mac: "Mod-ArrowLeft", run: listItemHome(false), shift: listItemHome(true) },
   { key: "Mod-t", mac: "Alt-Mod-t", run: insertTable() },
   { key: "Mod-\\", run: clearMarkdownFormat() },
   ...searchKeymap,

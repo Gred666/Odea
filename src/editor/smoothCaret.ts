@@ -12,8 +12,7 @@ import { type EditorView, type LayerMarker, RectangleMarker, layer } from "@code
    - 闪烁是柔和的呼吸（淡出淡入），每次移动重新从常亮开始 —— 打字时一直是亮的；
    - 高度跟着字号走，从正文移进大标题会平滑地长高。
 
-   只画光标，不接管选区：选区仍然是原生的。CodeMirror 的 drawSelection 会把选区
-   画到文字下面的图层里，代码块、callout、表格源码这些带底色的行会把它整个盖住。
+   只画光标；选区在 selectionLayer.ts。
 
    位置用 transform（合成器上跑，不触发布局），不用 left / top。
    ============================================================ */

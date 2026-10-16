@@ -1,5 +1,5 @@
 import { within } from "@/data/folders";
-import type { DocumentSaveTarget, GoalHorizon, WorkspaceId } from "@/data/types";
+import type { DocumentAnchor, DocumentSaveTarget, GoalHorizon, WorkspaceId } from "@/data/types";
 import { type ISODate, today } from "@/lib/date";
 import { transitionTheme } from "@/lib/themeTransition";
 import { create } from "zustand";
@@ -43,10 +43,10 @@ interface AppState {
   selectArchive: (id: string) => void;
   /**
    * 跳到另一篇之后要滚到的位置：`[[标题#小节]]` 的小节，或反向链接里那一行
-   * （正文的行号，从 1 开始）。那一篇的编辑器挂上、目录算出来之后由 DocumentView
-   * 消费并清掉；docKey 保证不会滚错篇。
+   * （正文的行号，从 1 开始），全局搜索的结果还带着那一处命中（选中它）。那一篇的编辑器挂上、
+   * 目录算出来之后由 DocumentView 消费并清掉；docKey 保证不会滚错篇。
    */
-  pendingAnchor: { docKey: string; heading?: string; line?: number } | null;
+  pendingAnchor: ({ docKey: string } & DocumentAnchor) | null;
   setPendingAnchor: (anchor: AppState["pendingAnchor"]) => void;
   selectDate: (d: ISODate) => void;
   setCalendarScope: (s: AppState["calendarScope"]) => void;
@@ -93,6 +93,11 @@ interface AppState {
   setReduceMotion: (v: boolean) => void;
   paletteOpen: boolean;
   setPaletteOpen: (v: boolean) => void;
+  /** 全局搜索（components/FindDialog.tsx，Ctrl+Shift+F）。和命令面板一次只开一个 */
+  findOpen: boolean;
+  /** 打开时搜什么（命令面板里打了字再选「在所有笔记里搜索」）；null = 接着上次的 */
+  findSeed: string | null;
+  setFindOpen: (open: boolean, seed?: string) => void;
   /** 同步对话框（开启同步 / 同步状态，技术方案 §5.9.9） */
   syncOpen: boolean;
   setSyncOpen: (v: boolean) => void;
@@ -313,7 +318,13 @@ export const useApp = create<AppState>((set, get) => ({
     set({ reduceMotion: v });
   },
   paletteOpen: false,
-  setPaletteOpen: (v) => set({ paletteOpen: v }),
+  setPaletteOpen: (v) => set(v ? { paletteOpen: true, findOpen: false } : { paletteOpen: false }),
+  findOpen: false,
+  findSeed: null,
+  setFindOpen: (open, seed) =>
+    set(
+      open ? { findOpen: true, findSeed: seed ?? null, paletteOpen: false } : { findOpen: false },
+    ),
   syncOpen: false,
   setSyncOpen: (v) => set({ syncOpen: v }),
   updateDialog: null,
