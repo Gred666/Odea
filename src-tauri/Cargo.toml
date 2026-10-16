@@ -1,6 +1,6 @@
 [package]
 name = "ontheway"
-version = "0.1.0"
+version = "0.2.0"
 description = "笔记、待办、目标与日历一体的个人效率工具"
 authors = ["OnTheWay"]
 edition = "2021"
