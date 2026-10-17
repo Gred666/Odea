@@ -32,7 +32,7 @@ afterEach(() => {
 describe("链到还没有的笔记的双链", () => {
   it("draws links to missing notes differently and says how to create them", () => {
     const parent = mount("见 [[秋季复盘]] 和 [[还没写]]\n\n末尾", new Set(["秋季复盘"]));
-    const links = [...parent.querySelectorAll<HTMLElement>(".cm-otw-wikilink")];
+    const links = [...parent.querySelectorAll<HTMLElement>(".cm-odea-wikilink")];
     expect(links.map((link) => link.textContent)).toEqual(["秋季复盘", "还没写"]);
     expect(links[0]?.classList.contains("is-missing")).toBe(false);
     expect(links[1]?.classList.contains("is-missing")).toBe(true);
@@ -41,12 +41,12 @@ describe("链到还没有的笔记的双链", () => {
 
   it("matches titles the way backlinks do: trimmed and case-insensitive", () => {
     const parent = mount("[[ Weekly Notes ]]\n\n末尾", new Set(["weekly notes"]));
-    expect(parent.querySelector(".cm-otw-wikilink.is-missing")).toBeNull();
+    expect(parent.querySelector(".cm-odea-wikilink.is-missing")).toBeNull();
   });
 
   it("marks nothing when the note list is unknown", () => {
     const parent = mount("[[随便]]\n\n末尾", null);
-    expect(parent.querySelector(".cm-otw-wikilink")).not.toBeNull();
-    expect(parent.querySelector(".cm-otw-wikilink.is-missing")).toBeNull();
+    expect(parent.querySelector(".cm-odea-wikilink")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-wikilink.is-missing")).toBeNull();
   });
 });

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <title>OnTheWay</title>
+    <title>Odea</title>
     <script>
       // 在首帧之前定好主题，避免暗色模式闪白。
       // 始终落一个明确的 data-theme，不留「未指定」态，
@@ -13,7 +13,8 @@
       (function () {
         var t = "";
         try {
-          t = localStorage.getItem("otw.theme") || "";
+          // 改名前的键是 otw.theme（src/lib/legacyStorage.ts 稍后才把它换成新的）
+          t = localStorage.getItem("odea.theme") || localStorage.getItem("otw.theme") || "";
         } catch (e) {}
         if (t !== "light" && t !== "dark") {
           t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";

@@ -71,7 +71,7 @@ export class SwapFade extends Component<{
     this.fadeIn?.cancel();
 
     const layer = document.createElement("div");
-    layer.className = "otw-swap-ghost";
+    layer.className = "odea-swap-ghost";
     layer.setAttribute("aria-hidden", "true");
     layer.inert = true;
     Object.assign(snapshot.clone.style, {

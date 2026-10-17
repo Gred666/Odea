@@ -19,7 +19,7 @@ export interface MenuAction {
 
 /**
  * 通用下拉菜单：任意触发元素 + 一列动作。
- * 用 Radix 拿焦点管理、键盘导航和定位；进出场是 globals.css 里的 .otw-menu
+ * 用 Radix 拿焦点管理、键盘导航和定位；进出场是 globals.css 里的 .odea-menu
  * 关键帧，靠 Radix 自己的 data-state 驱动 —— 收起时它会等 animationend 再卸载，
  * 不需要 AnimatePresence。为什么不用 Motion 见那段 CSS 的注释（逐帧栅格化）。
  *
@@ -92,7 +92,7 @@ export function ActionMenu({
           align={align}
           sideOffset={5}
           onCloseAutoFocus={(e) => e.preventDefault()}
-          className="otw-menu z-50 min-w-[142px] overflow-hidden rounded-lg bg-canvas p-1
+          className="odea-menu z-50 min-w-[142px] overflow-hidden rounded-lg bg-canvas p-1
                      shadow-float outline-none ring-1 ring-line-strong"
         >
           {radio ? (

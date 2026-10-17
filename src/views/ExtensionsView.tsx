@@ -84,7 +84,7 @@ export function ExtensionsView() {
             <input
               ref={inputRef}
               type="file"
-              accept=".json,.otwx,application/json"
+              accept=".json,.odeax,.otwx,application/json"
               className="hidden"
               onChange={(event) => void importFile(event.target.files?.[0])}
             />

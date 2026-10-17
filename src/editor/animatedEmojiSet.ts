@@ -1,5 +1,5 @@
 /* ============================================================
-   OnTheWay 动态表情 · 设计稿
+   Odea 动态表情 · 设计稿
 
    一套自己画的表情，跟应用的气质走：
    - 线稿 + 淡彩（duotone）：1.7 的圆头描边是主色，里面铺一层同色系的淡彩，
@@ -78,7 +78,7 @@ export const EMOJI_HUES = [
 export type EmojiHue = (typeof EMOJI_HUES)[number];
 
 export interface AnimatedEmojiDesign {
-  /** 短码里 `otw_` 后面那段 */
+  /** 短码里 `odea_` 后面那段 */
   id: string;
   /** 中文名，选择器和悬停提示里显示 */
   name: string;
@@ -731,7 +731,7 @@ export const ANIMATED_EMOJI_DESIGNS: readonly AnimatedEmojiDesign[] = [
     id: "way",
     name: "在路上",
     group: "way",
-    keywords: "路 出发 前进 旅程 进行中 zailushang lu onthway ontheway road",
+    keywords: "路 出发 前进 旅程 进行中 zailushang lu road",
     hue: "blue",
     svg: `<path class="road" d="M3.4 21c3.4-.3 5.9-1.7 6.6-4.3.8-2.9-1.2-4.6 1.1-6.6 1.9-1.6 4.7-.8 6.6-2.1"/>
     <path data-a="lane" class="o dash thin" pathLength="1" d="M3.4 21c3.4-.3 5.9-1.7 6.6-4.3.8-2.9-1.2-4.6 1.1-6.6 1.9-1.6 4.7-.8 6.6-2.1"/>

@@ -20,12 +20,13 @@ use serde::Deserialize;
 use super::repo::{SyncError, SyncResult};
 use super::secret::Token;
 
-/// GitHub OAuth App「OnTheWay」的 client_id（2026-10-07 注册，开了 Device Flow 和令牌过期）
+/// GitHub OAuth App「Odea」的 client_id（2026-10-07 以 OnTheWay 的名字注册，开了 Device Flow 和令牌过期；
+/// 改名只改 App 的名字，client_id 不变）
 pub const GITHUB_CLIENT_ID: &str = "Ov23lieFMfGc95fA5QQs";
 
-/// 开发时可以用环境变量 `ONTHEWAY_GITHUB_CLIENT_ID` 换成别的 App
+/// 开发时可以用环境变量 `ODEA_GITHUB_CLIENT_ID` 换成别的 App
 pub fn github_client_id() -> String {
-    std::env::var("ONTHEWAY_GITHUB_CLIENT_ID")
+    std::env::var("ODEA_GITHUB_CLIENT_ID")
         .ok()
         .filter(|id| !id.trim().is_empty())
         .unwrap_or_else(|| GITHUB_CLIENT_ID.to_string())
@@ -104,7 +105,7 @@ impl Provider {
                     "name": name,
                     "private": true,
                     "auto_init": false,
-                    "description": "OnTheWay 笔记",
+                    "description": "Odea 笔记",
                 });
                 let request = http
                     .github(http.agent.post(format!("{GITHUB_API}/user/repos")), token)
@@ -118,7 +119,7 @@ impl Provider {
                     ("name", name),
                     ("private", "true"),
                     ("auto_init", "false"),
-                    ("description", "OnTheWay 笔记"),
+                    ("description", "Odea 笔记"),
                 ]);
                 let repo: GiteeRepo = read_json(request)?;
                 Ok(repo.into())
@@ -283,7 +284,7 @@ impl Http {
             .proxy(proxy)
             .timeout_global(Some(Duration::from_secs(20)))
             .http_status_as_error(false)
-            .user_agent("OnTheWay")
+            .user_agent("Odea")
             .build();
         Ok(Self { agent: config.into() })
     }

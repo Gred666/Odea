@@ -194,7 +194,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
     } else if (tok.startsWith("[[")) {
       // 双链：P6 接上真实跳转，现在先渲染成可识别的样式
       out.push(
-        <span key={k} className="otw-wikilink">
+        <span key={k} className="odea-wikilink">
           {tok.slice(2, -2)}
         </span>,
       );
@@ -295,45 +295,81 @@ export function renderMarkdown(md: string, ns = "h"): ReactNode[] {
 /* ---------------- 目录树 ----------------
    右侧目录从正文的标题（ATX / Setext）和 callout 标签自动生成。
    这样文档结构变了目录自动跟上，不需要单独维护一份。
+
+   层级按真实的标题级别算（技术方案 §12.9）：depth = 级别 - 全文最浅的那一级 + 1，
+   callout 是它所在那一节的下一层；缩进 level 跟着走，最多三档。目录树据此建树、收起。
+   以前只分两档（一二级标题算一级），用 `#` 当文档标题、`##` 分节的笔记，所有节和
+   文档标题挤在同一级，谁也收不了谁。
 */
 
+const OUTLINE_FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
+const OUTLINE_CLOSING_FENCE_RE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+
+/** 开头的 YAML 属性块有几行（没有是 0）。和编辑器的 frontMatterRange 同一个规矩 */
+function frontMatterLines(lines: string[]): number {
+  if (lines.length < 3 || !/^---\s*$/.test(lines[0]!)) return 0;
+  let sawKey = false;
+  for (let index = 1; index < Math.min(lines.length, 60); index += 1) {
+    if (/^---\s*$/.test(lines[index]!)) return sawKey ? index + 1 : 0;
+    if (/^[A-Za-z_][\w-]*\s*:/.test(lines[index]!)) sawKey = true;
+  }
+  return 0;
+}
+
 export function buildOutline(md: string): OutlineItem[] {
-  const items: OutlineItem[] = [];
+  /** 先收集：标题带级别（1–6），callout 没有级别 */
+  const found: Array<{ text: string; line: number; heading: number | null }> = [];
   const lines = md.replace(/\r\n/g, "\n").split("\n");
-  let index = 0;
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+  /** 正在哪种围栏代码里（开头那串 ``` / ~~~）；里面的 `# 注释` 不是标题 */
+  let fence: string | null = null;
+  for (let lineIndex = frontMatterLines(lines); lineIndex < lines.length; lineIndex += 1) {
     const source = lines[lineIndex]!;
+    if (fence) {
+      const closing = OUTLINE_CLOSING_FENCE_RE.exec(source)?.[1];
+      if (closing && closing[0] === fence[0] && closing.length >= fence.length) fence = null;
+      continue;
+    }
+    const opening = OUTLINE_FENCE_RE.exec(source)?.[1];
+    if (opening) {
+      fence = opening;
+      continue;
+    }
     const heading = /^\s*(#{1,6})\s+(.+?)\s*$/.exec(source);
     const setext = lineIndex + 1 < lines.length && /^\s*(=+|-+)\s*$/.exec(lines[lineIndex + 1]!);
     const callout = /^\s*>\s*\[!(.+?)\][+-]?(?:[ \t]+(\S.*?))?\s*$/.exec(source);
     if (heading) {
-      const depth = heading[1]!.length;
       const text = animatedEmojiText(heading[2]!.replace(/\s+#+\s*$/, "").trim());
-      items.push({
-        id: slug(text, index++, "h"),
-        text,
-        level: depth <= 2 ? 1 : 2,
-        line: lineIndex + 1,
-      });
+      found.push({ text, line: lineIndex + 1, heading: heading[1]!.length });
     } else if (source.trim() && setext) {
       const text = animatedEmojiText(source.trim());
-      items.push({
-        id: slug(text, index++, "h"),
-        text,
-        level: 1,
-        line: lineIndex + 1,
-      });
+      found.push({ text, line: lineIndex + 1, heading: setext[1]!.startsWith("=") ? 1 : 2 });
       lineIndex += 1;
     } else if (callout) {
       const text = animatedEmojiText((callout[2] ?? callout[1]!).trim());
-      items.push({ id: slug(text, index++, "h"), text, level: 1, line: lineIndex + 1 });
+      found.push({ text, line: lineIndex + 1, heading: null });
     }
   }
+
+  const shallowest = Math.min(...found.map((entry) => entry.heading ?? Number.POSITIVE_INFINITY));
+  const items: OutlineItem[] = [];
+  /** 当前这一节的层级：callout 挂在它下面 */
+  let section = 0;
+  found.forEach((entry, index) => {
+    const depth = entry.heading === null ? section + 1 : entry.heading - shallowest + 1;
+    if (entry.heading !== null) section = depth;
+    items.push({
+      id: slug(entry.text, index, "h"),
+      text: entry.text,
+      depth,
+      level: Math.min(depth, 3) as OutlineItem["level"],
+      line: entry.line,
+    });
+  });
 
   // 开头补一个「概览」锚点回到文档顶部。
   // 只有在下面确实有内容时才加 —— 否则目录里孤零零一个「概览」很傻。
   if (items.length > 0) {
-    items.unshift({ id: "doc-top", text: "概览", level: 1, line: 1 });
+    items.unshift({ id: "doc-top", text: "概览", depth: 0, level: 1, line: 1 });
   }
   return items;
 }

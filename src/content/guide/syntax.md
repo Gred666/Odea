@@ -18,6 +18,10 @@
 
 Ctrl+1 到 Ctrl+6 把这一行变成对应级别的标题，Ctrl+0 变回正文。
 
+鼠标移到标题上，左边会出现一个小箭头：点一下，这一节就收起来，只留标题和后面的「… N 行」，再点一下展开。光标在哪一节里，按 Ctrl+Alt+[ 收起、Ctrl+Alt+] 展开；命令面板里还有「收起所有标题」「展开所有标题」。收起了哪些会记住，下次打开还是收着的，文件本身不会变。
+
+右边的目录树也能收：有下级的条目左边有个小箭头，按住 Alt 点它连下面各层一起收。目录树收起来不影响正文。
+
 ## 行内样式
 
 **粗体**、*斜体*、***粗斜体***、~~删除线~~、<u>下划线</u>、==荧光笔高亮==、`行内代码`、H<sub>2</sub>O 的下标、x^2^ 的上标、<kbd>Ctrl</kbd> + <kbd>K</kbd> 按键。
@@ -34,7 +38,7 @@ HTML 实体：&copy; 2026 &mdash; &ldquo;引号&rdquo; &hellip; &lt;tag&gt; &amp
 
 Emoji 短码：:smile: :rocket: :tada: :coffee: :white_check_mark:
 
-动态表情会一直动，按 Ctrl+E 从选择器里挑（一共 48 个）：:otw_smile: :otw_fire: :otw_party: :otw_coffee: :otw_cat: :otw_666:
+动态表情会一直动，按 Ctrl+E 从选择器里挑（一共 48 个）：:odea_smile: :odea_fire: :odea_party: :odea_coffee: :odea_cat: :odea_666:
 
 换行：行尾加两个空格  
 或者一个反斜杠\
@@ -44,7 +48,7 @@ Emoji 短码：:smile: :rocket: :tada: :coffee: :white_check_mark:
 
 ## 链接
 
-- 网页链接：[OnTheWay](https://github.com "悬停时显示这句话")
+- 网页链接：[Odea](https://github.com "悬停时显示这句话")
 - 引用式链接：[搜索][search]，地址写在文档的任何地方
 - 直接写地址也会变成链接：<https://gitee.com>、https://github.com、www.example.com
 - 邮件：<mailto:hello@example.com>
@@ -145,11 +149,11 @@ Emoji 短码：:smile: :rocket: :tada: :coffee: :white_check_mark:
 def greet(name: str) -> str:
     return f"你好，{name}"
 
-print(greet("OnTheWay"))
+print(greet("Odea"))
 ```
 
 ```json
-{ "name": "ontheway", "notes": 42, "synced": true }
+{ "name": "odea", "notes": 42, "synced": true }
 ```
 
 语言名写 `csv` 或 `tsv`，显示出来就是表格：
@@ -282,6 +286,7 @@ $$
 |:-----|:--------|:------|
 | 一到六级标题 / 变回正文 | <kbd>Ctrl</kbd> + <kbd>1</kbd>…<kbd>6</kbd> / <kbd>0</kbd> | <kbd>⌘</kbd> + <kbd>1</kbd>…<kbd>6</kbd> / <kbd>0</kbd> |
 | 标题升一级 / 降一级 | <kbd>Ctrl</kbd> + <kbd>=</kbd> / <kbd>-</kbd> | <kbd>⌘</kbd> + <kbd>=</kbd> / <kbd>-</kbd> |
+| 收起 / 展开这一节 | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>[</kbd> / <kbd>]</kbd> | <kbd>⌘</kbd> + <kbd>⌥</kbd> + <kbd>[</kbd> / <kbd>]</kbd> |
 | 粗体 / 斜体 / 下划线 | <kbd>Ctrl</kbd> + <kbd>B</kbd> / <kbd>I</kbd> / <kbd>U</kbd> | <kbd>⌘</kbd> + <kbd>B</kbd> / <kbd>I</kbd> / <kbd>U</kbd> |
 | 行内代码 | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>&#96;</kbd> | <kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>&#96;</kbd> |
 | 删除线 | <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>5</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>&#96;</kbd> |

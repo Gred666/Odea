@@ -28,7 +28,7 @@ function mount(doc: string, anchor: number) {
 const lines = (parent: HTMLElement) =>
   [...parent.querySelectorAll(".cm-line")].map((line) => line.textContent);
 const markers = (parent: HTMLElement) =>
-  [...parent.querySelectorAll(".cm-otw-list-marker:not(.is-source)")].map(
+  [...parent.querySelectorAll(".cm-odea-list-marker:not(.is-source)")].map(
     (node) => node.textContent,
   );
 
@@ -40,11 +40,11 @@ afterEach(() => {
 describe("Typora DOM decorations", () => {
   it("reveals strike markers only inside the styled span", () => {
     const { parent, view } = mount("开头 ~~删除~~ 结尾", 1);
-    expect(parent.querySelectorAll(".cm-otw-syntax-marker")).toHaveLength(0);
+    expect(parent.querySelectorAll(".cm-odea-syntax-marker")).toHaveLength(0);
     expect(parent.querySelector(".cm-content")?.textContent).toBe("开头 删除 结尾");
 
     view.dispatch({ selection: { anchor: 7 } });
-    expect(parent.querySelectorAll(".cm-otw-syntax-marker")).toHaveLength(2);
+    expect(parent.querySelectorAll(".cm-odea-syntax-marker")).toHaveLength(2);
     expect(parent.querySelector(".cm-content")?.textContent).toBe("开头 ~~删除~~ 结尾");
   });
 
@@ -72,22 +72,22 @@ describe("Typora DOM decorations", () => {
     expect(lines(parent)).toEqual(["一级", "二级", "### 三级"]);
 
     view.dispatch({ selection: { anchor: 0 } });
-    expect(parent.querySelector(".cm-otw-syntax-marker")?.textContent).toBe("# ");
+    expect(parent.querySelector(".cm-odea-syntax-marker")?.textContent).toBe("# ");
   });
 
   it("renders list markers and task markers without duplicate markdown bullets", () => {
     const source = "- 普通\n1. 有序\n- [x] 完成\n\n尾部";
     const { parent, view } = mount(source, source.length);
     expect(
-      [...parent.querySelectorAll(".cm-otw-list-marker")].map((node) => node.textContent),
+      [...parent.querySelectorAll(".cm-odea-list-marker")].map((node) => node.textContent),
     ).toEqual(["•", "1."]);
     // 对勾现在是一条 SVG 路径，不再是 ✓ 字符
-    expect(parent.querySelector(".cm-otw-task")?.getAttribute("aria-checked")).toBe("true");
-    expect(parent.querySelector(".cm-otw-task.is-checked .cm-otw-task-check")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-task")?.getAttribute("aria-checked")).toBe("true");
+    expect(parent.querySelector(".cm-odea-task.is-checked .cm-odea-task-check")).not.toBeNull();
     expect(parent.querySelectorAll(".cm-line")[2]?.textContent).not.toContain("-");
 
     parent
-      .querySelector(".cm-otw-task")
+      .querySelector(".cm-odea-task")
       ?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     expect(view.state.doc.toString()).toContain("- [ ] 完成");
   });
@@ -96,25 +96,25 @@ describe("Typora DOM decorations", () => {
     // 勾选框盖住整段「- [x] 」，前后都不留源码里的空格，宽度只由符号格决定。
     const { parent } = mount("- [x] 完成\n\n尾部", 999);
     expect(parent.querySelectorAll(".cm-line")[0]?.textContent).toBe("完成");
-    expect(parent.querySelectorAll(".cm-line")[0]?.querySelector(".cm-otw-task")).not.toBeNull();
+    expect(parent.querySelectorAll(".cm-line")[0]?.querySelector(".cm-odea-task")).not.toBeNull();
   });
 
   it("keeps list markers rendered while the caret is in the item's text", () => {
     const source = "- 甲\n  - 乙\n- [ ] 丙\n\n尾部";
     const { parent, view } = mount(source, source.indexOf("乙") + 1);
     expect(markers(parent)).toEqual(["•", "◦"]);
-    expect(parent.querySelector(".cm-otw-task")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-task")).not.toBeNull();
 
     // 光标到了符号上（行首）才换回源码；符号格还是同一个类，宽度不变
     view.dispatch({ selection: { anchor: source.indexOf("- 乙") } });
-    const revealed = parent.querySelector<HTMLElement>(".cm-otw-list-marker.is-source");
-    const rendered = parent.querySelector<HTMLElement>(".cm-otw-list-marker:not(.is-source)");
+    const revealed = parent.querySelector<HTMLElement>(".cm-odea-list-marker.is-source");
+    const rendered = parent.querySelector<HTMLElement>(".cm-odea-list-marker:not(.is-source)");
     expect(revealed?.textContent).toBe("- ");
-    expect(revealed?.style.width).toBe("calc(var(--otw-body-size) * 1.55)");
+    expect(revealed?.style.width).toBe("calc(var(--odea-body-size) * 1.55)");
     expect(rendered?.style.width).toBe(revealed?.style.width);
     view.dispatch({ selection: { anchor: source.indexOf("- [ ]") } });
-    expect(parent.querySelector(".cm-otw-task")).toBeNull();
-    expect(parent.querySelector(".cm-otw-list-marker.is-source.is-task")?.textContent).toBe(
+    expect(parent.querySelector(".cm-odea-task")).toBeNull();
+    expect(parent.querySelector(".cm-odea-list-marker.is-source.is-task")?.textContent).toBe(
       "- [ ] ",
     );
   });
@@ -174,12 +174,12 @@ describe("Typora DOM decorations", () => {
       return [line?.style.paddingLeft, line?.style.textIndent];
     };
     expect(style(0)).toEqual([
-      "calc(var(--otw-body-size) * 1.55)",
-      "calc(var(--otw-body-size) * -1.55)",
+      "calc(var(--odea-body-size) * 1.55)",
+      "calc(var(--odea-body-size) * -1.55)",
     ]);
     expect(style(1)).toEqual([
-      "calc(var(--otw-body-size) * 3.1)",
-      "calc(var(--otw-body-size) * -3.1)",
+      "calc(var(--odea-body-size) * 3.1)",
+      "calc(var(--odea-body-size) * -3.1)",
     ]);
     expect(style(3)).toEqual(style(1));
   });
@@ -189,15 +189,15 @@ describe("Typora DOM decorations", () => {
     const source = "```ts\nconst value = 1;\n```\n\n之后";
     const { parent } = mount(source, source.length);
     expect(lines(parent)).toEqual(["const value = 1;", "", "之后"]);
-    expect(parent.querySelector(".cm-otw-code-lang")?.textContent).toBe("ts");
-    expect(parent.querySelectorAll(".cm-otw-code-fence")).toHaveLength(2);
+    expect(parent.querySelector(".cm-odea-code-lang")?.textContent).toBe("ts");
+    expect(parent.querySelectorAll(".cm-odea-code-fence")).toHaveLength(2);
   });
 
   it("keeps an empty fence reachable instead of folding it out of existence", () => {
     const { parent } = mount("```\n```\n\n后", 999);
-    expect(parent.querySelectorAll(".cm-otw-code-fence")).toHaveLength(0);
+    expect(parent.querySelectorAll(".cm-odea-code-fence")).toHaveLength(0);
     // 没折叠的围栏行照样画成封口那样的框
-    expect(parent.querySelectorAll(".cm-line.cm-otw-fence-source")).toHaveLength(2);
+    expect(parent.querySelectorAll(".cm-line.cm-odea-fence-source")).toHaveLength(2);
   });
 
   it("draws the revealed fence lines as caps of the same size, so the block never jumps", () => {
@@ -205,44 +205,44 @@ describe("Typora DOM decorations", () => {
     // globals.css 按「围栏的几何」把它们排得和封口一样高
     const source = "前\n\n```ts\nconst value = 1;\n```\n\n后";
     const { parent, view } = mount(source, 0);
-    expect(parent.querySelectorAll(".cm-line.cm-otw-fence-source")).toHaveLength(0);
+    expect(parent.querySelectorAll(".cm-line.cm-odea-fence-source")).toHaveLength(0);
     view.dispatch({ selection: { anchor: source.indexOf("value") } });
-    expect(parent.querySelectorAll(".cm-otw-code-fence")).toHaveLength(0);
-    const open = parent.querySelector(".cm-line.cm-otw-fence-source.is-open");
-    const close = parent.querySelector(".cm-line.cm-otw-fence-source.is-close");
+    expect(parent.querySelectorAll(".cm-odea-code-fence")).toHaveLength(0);
+    const open = parent.querySelector(".cm-line.cm-odea-fence-source.is-open");
+    const close = parent.querySelector(".cm-line.cm-odea-fence-source.is-close");
     expect(open?.textContent).toBe("```ts");
     expect(close?.textContent).toBe("```");
     view.dispatch({ selection: { anchor: 0 } });
-    expect(parent.querySelectorAll(".cm-line.cm-otw-fence-source")).toHaveLength(0);
-    expect(parent.querySelectorAll(".cm-otw-code-fence")).toHaveLength(2);
+    expect(parent.querySelectorAll(".cm-line.cm-odea-fence-source")).toHaveLength(0);
+    expect(parent.querySelectorAll(".cm-odea-code-fence")).toHaveLength(2);
   });
 
   it("does not mark an unclosed fence's last line as a closing cap", () => {
     const { parent } = mount("```js\nlet a;\nlet b;", 8);
-    expect(parent.querySelectorAll(".cm-line.cm-otw-fence-source.is-open")).toHaveLength(1);
-    expect(parent.querySelectorAll(".cm-line.cm-otw-fence-source.is-close")).toHaveLength(0);
+    expect(parent.querySelectorAll(".cm-line.cm-odea-fence-source.is-open")).toHaveLength(1);
+    expect(parent.querySelectorAll(".cm-line.cm-odea-fence-source.is-close")).toHaveLength(0);
   });
 
   it("folds the Setext underline row instead of leaving a blank line", () => {
     const { parent } = mount("标题\n===\n\n正文", 999);
     expect(lines(parent)).toEqual(["标题", "", "正文"]);
-    expect(parent.querySelectorAll(".cm-otw-h1")).toHaveLength(1);
+    expect(parent.querySelectorAll(".cm-odea-h1")).toHaveLength(1);
   });
 
   it("replaces a horizontal rule row without leaving the source line behind", () => {
     const { parent, view } = mount("上\n\n---\n\n下", 0);
-    expect(parent.querySelectorAll(".cm-otw-hr")).toHaveLength(1);
+    expect(parent.querySelectorAll(".cm-odea-hr")).toHaveLength(1);
     expect(lines(parent)).toEqual(["上", "", "", "下"]);
     // 光标放上去：露出 `---`，这一行和分隔线一样高
     view.dispatch({ selection: { anchor: 4 } });
-    expect(parent.querySelector(".cm-otw-hr")).toBeNull();
-    expect(parent.querySelector(".cm-line.cm-otw-hr-source")?.textContent).toBe("---");
+    expect(parent.querySelector(".cm-odea-hr")).toBeNull();
+    expect(parent.querySelector(".cm-line.cm-odea-hr-source")?.textContent).toBe("---");
   });
 
   it("renders an inactive GFM table as a real table", () => {
     const source = "| 左 | 右 |\n| --- | ---: |\n| A | B |\n\n表格之后";
     const { parent } = mount(source, source.length);
-    const table = parent.querySelector<HTMLTableElement>(".cm-otw-table-widget");
+    const table = parent.querySelector<HTMLTableElement>(".cm-odea-table-widget");
     expect(table).not.toBeNull();
     expect([...table!.querySelectorAll("th")].map((cell) => cell.textContent)).toEqual([
       "左",
@@ -251,13 +251,13 @@ describe("Typora DOM decorations", () => {
     expect(table!.querySelectorAll("tbody tr")).toHaveLength(1);
 
     table!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(parent.querySelector(".cm-otw-table-widget")).toBeNull();
+    expect(parent.querySelector(".cm-odea-table-widget")).toBeNull();
     expect(parent.querySelector(".cm-content")?.textContent).toContain("| 左 | 右 |");
   });
 
   it("underlines <u> only inside one block", () => {
     const { parent } = mount("前 <u>下划线</u> 后", 0);
-    expect(parent.querySelector(".cm-otw-underline")?.textContent).toBe("下划线");
+    expect(parent.querySelector(".cm-odea-underline")?.textContent).toBe("下划线");
     expect(lines(parent)).toEqual(["前 下划线 后"]);
   });
 
@@ -265,17 +265,17 @@ describe("Typora DOM decorations", () => {
     // 以前是全文 indexOf，两个不相干段落里的 <u> 和 </u> 会被配成一对，
     // 两个标签双双消失，中间整段被画上下划线。
     const { parent } = mount("段落一 <u>下划线\n\n段落二 </u> 结束", 0);
-    expect(parent.querySelectorAll(".cm-otw-underline")).toHaveLength(0);
+    expect(parent.querySelectorAll(".cm-odea-underline")).toHaveLength(0);
     expect(lines(parent)).toEqual(["段落一 <u>下划线", "", "段落二 </u> 结束"]);
   });
 
   it("leaves <u> inside code untouched", () => {
     const fenced = mount("```html\n<u>x</u>\n```\n\n之后", 999);
-    expect(fenced.parent.querySelectorAll(".cm-otw-underline")).toHaveLength(0);
+    expect(fenced.parent.querySelectorAll(".cm-odea-underline")).toHaveLength(0);
     expect(lines(fenced.parent)).toEqual(["<u>x</u>", "", "之后"]);
 
     const inline = mount("看 `<u>x</u>` 结束", 0);
-    expect(inline.parent.querySelectorAll(".cm-otw-underline")).toHaveLength(0);
+    expect(inline.parent.querySelectorAll(".cm-odea-underline")).toHaveLength(0);
     expect(lines(inline.parent)).toEqual(["看 <u>x</u> 结束"]);
   });
 

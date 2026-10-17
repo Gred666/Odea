@@ -200,7 +200,7 @@ export function OverlayScrollbar({ targetRef }: { targetRef: RefObject<HTMLEleme
       ref={thumbRef}
       data-visible="false"
       aria-hidden="true"
-      className="otw-scroll-thumb absolute right-[3px] top-0 w-[5px] rounded-full"
+      className="odea-scroll-thumb absolute right-[3px] top-0 w-[5px] rounded-full"
     />
   );
 }

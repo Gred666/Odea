@@ -38,7 +38,7 @@ const typeIn = (cell: HTMLElement, text: string) => {
 const press = (node: Element, init: KeyboardEventInit) =>
   node.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
 const editing = (parent: HTMLElement) =>
-  parent.querySelector<HTMLTableCellElement>(".cm-otw-table-widget .is-editing");
+  parent.querySelector<HTMLTableCellElement>(".cm-odea-table-widget .is-editing");
 
 afterEach(() => {
   for (const view of views.splice(0)) view.destroy();
@@ -49,7 +49,7 @@ describe("表格里直接编辑", () => {
   it("reveals the cell's own markdown and writes just that cell back", () => {
     const source = "| 语法 | 状态 |\n| :-- | :--: |\n| **粗体** | ok |\n\n后";
     const { parent, view } = mount(source);
-    const block = parent.querySelector(".cm-otw-table-block")!;
+    const block = parent.querySelector(".cm-odea-table-block")!;
     const cell = cellAt(parent, 1, 0);
     expect(cell.querySelector("strong")?.textContent).toBe("粗体");
 
@@ -62,7 +62,7 @@ describe("表格里直接编辑", () => {
       "| 语法 | 状态 |\n| :-- | :--: |\n| **粗体** 改 | ok |\n\n后",
     );
     // 表格没有被重建，正在编辑的格子还是那个、还在编辑
-    expect(parent.querySelector(".cm-otw-table-block")).toBe(block);
+    expect(parent.querySelector(".cm-odea-table-block")).toBe(block);
     expect(editing(parent)).toBe(cell);
     expect(cell.textContent).toBe("**粗体** 改");
 
@@ -138,7 +138,7 @@ describe("表格里直接编辑", () => {
     expect(cell.textContent).toBe("甜");
     typeIn(cell, '红的, "脆"的');
     expect(view.state.doc.line(3).text).toBe('苹果,"红的, ""脆""的"');
-    expect(parent.querySelector(".cm-otw-table-meta")?.textContent).toBe("1 行 · 2 列");
+    expect(parent.querySelector(".cm-odea-table-meta")?.textContent).toBe("1 行 · 2 列");
   });
 
   it("undoes typing through the editor history and shows it in the cell", () => {
@@ -170,7 +170,7 @@ describe("表格里直接编辑", () => {
 
   it("keeps the toolbar up while moving between cells (no re-entrance flash)", () => {
     const { parent } = mount("| a | b |\n|---|---|\n| 1 | 2 |\n\n后");
-    const block = parent.querySelector<HTMLElement>(".cm-otw-table-block")!;
+    const block = parent.querySelector<HTMLElement>(".cm-odea-table-block")!;
     click(cellAt(parent, 1, 0));
     expect(block.classList.contains("is-editing")).toBe(true);
     const observer = new MutationObserver(() => {});
@@ -211,7 +211,7 @@ describe("表格里直接编辑", () => {
     expect(view.state.doc.toString()).toBe(
       "| 名字 | 数量 |\n| :--- | ---: |\n| 苹果 |    3 |\n\n后",
     );
-    expect(parent.querySelectorAll(".cm-otw-table-widget th")).toHaveLength(2);
+    expect(parent.querySelectorAll(".cm-odea-table-widget th")).toHaveLength(2);
   });
 
   it("won't delete the last column or the header row", () => {
@@ -257,7 +257,7 @@ describe("表格里直接编辑", () => {
     const { parent, view } = mount("| a |\n|---|\n| 1 |\n\n后");
     click(cellAt(parent, 1, 0));
     parent.querySelector<HTMLButtonElement>('[data-action="source"]')!.click();
-    expect(parent.querySelector(".cm-otw-table-widget")).toBeNull();
+    expect(parent.querySelector(".cm-odea-table-widget")).toBeNull();
     expect(view.state.selection.main.head).toBe(0);
   });
 });

@@ -156,7 +156,7 @@ export function SuggestMenu({
       onMouseDown={(event) => event.preventDefault()}
       style={{ ...pinnedEdge(anchor, place), pointerEvents: present ? undefined : "none" }}
       className={cn(
-        "otw-suggest-menu fixed z-50 flex flex-col overflow-clip rounded-xl bg-canvas shadow-float ring-1 ring-line-strong",
+        "odea-suggest-menu fixed z-50 flex flex-col overflow-clip rounded-xl bg-canvas shadow-float ring-1 ring-line-strong",
         place.above && "justify-end",
       )}
     >

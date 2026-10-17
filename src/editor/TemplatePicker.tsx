@@ -160,7 +160,7 @@ export function TemplatePicker({
       onMouseDown={(event) => event.preventDefault()}
       style={{ ...pinnedEdge(anchor, place), pointerEvents: present ? undefined : "none" }}
       className={cn(
-        "otw-template-picker fixed z-50 flex w-[540px] max-w-[calc(100vw-16px)] flex-col overflow-clip",
+        "odea-template-picker fixed z-50 flex w-[540px] max-w-[calc(100vw-16px)] flex-col overflow-clip",
         "rounded-xl bg-canvas shadow-float ring-1 ring-line-strong",
         place.above && "justify-end",
       )}
@@ -177,7 +177,7 @@ export function TemplatePicker({
           <div
             role="listbox"
             aria-label="模板"
-            aria-activedescendant={current ? `otw-template-${current.id}` : undefined}
+            aria-activedescendant={current ? `odea-template-${current.id}` : undefined}
             // 焦点一直在正文里，按键由编辑器转过来；这里只是满足 listbox 可聚焦
             tabIndex={-1}
             className="scroll-thin w-[240px] shrink-0 overflow-y-auto overscroll-contain border-r
@@ -189,7 +189,7 @@ export function TemplatePicker({
               return (
                 <button
                   key={template.id}
-                  id={`otw-template-${template.id}`}
+                  id={`odea-template-${template.id}`}
                   type="button"
                   role="option"
                   aria-selected={selected}
@@ -304,7 +304,7 @@ const TemplatePreview = memo(function TemplatePreview({
       initial={fadeIn ? { opacity: 0 } : false}
       animate={{ opacity: 1 }}
       transition={tween.fast}
-      className="otw-template-sheet absolute bottom-0 left-4 right-0 top-4 overflow-hidden rounded-tl-lg
+      className="odea-template-sheet absolute bottom-0 left-4 right-0 top-4 overflow-hidden rounded-tl-lg
                  bg-canvas px-4 pt-3.5 shadow-card ring-1 ring-line-strong"
     >
       <div

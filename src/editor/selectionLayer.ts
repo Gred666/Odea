@@ -78,7 +78,7 @@ function rectsForRange(view: EditorView, range: SelectionRange): readonly Rectan
       bottom = Math.max(bottom, rect.bottom);
     }
     return new RectangleMarker(
-      "otw-selection",
+      "odea-selection",
       left - baseLeft,
       top - baseTop,
       Math.max(0, right - left),
@@ -89,7 +89,7 @@ function rectsForRange(view: EditorView, range: SelectionRange): readonly Rectan
 
 export const selectionLayer: Extension = layer({
   above: true,
-  class: "otw-selection-layer",
+  class: "odea-selection-layer",
   markers(view) {
     const markers: RectangleMarker[] = [];
     for (const range of view.state.selection.ranges) {

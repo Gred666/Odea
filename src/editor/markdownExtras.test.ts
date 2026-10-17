@@ -85,21 +85,21 @@ describe("renderInline", () => {
 
   it("builds real elements for the inline syntaxes", () => {
     expect(html("**粗** *斜* ~~删~~ ==高== <u>下</u>")).toBe(
-      '<strong class="cm-otw-strong">粗</strong> <em class="cm-otw-emphasis">斜</em> ' +
-        '<del class="cm-otw-strike">删</del> <mark class="cm-otw-highlight">高</mark> ' +
-        '<u class="cm-otw-underline">下</u>',
+      '<strong class="cm-odea-strong">粗</strong> <em class="cm-odea-emphasis">斜</em> ' +
+        '<del class="cm-odea-strike">删</del> <mark class="cm-odea-highlight">高</mark> ' +
+        '<u class="cm-odea-underline">下</u>',
     );
     expect(html("`a**b**` 与 **`c`**")).toBe(
-      '<code class="cm-otw-code">a**b**</code> 与 <strong class="cm-otw-strong"><code class="cm-otw-code">c</code></strong>',
+      '<code class="cm-odea-code">a**b**</code> 与 <strong class="cm-odea-strong"><code class="cm-odea-code">c</code></strong>',
     );
   });
 
   it("renders links, wikilinks, escapes, entities and emoji", () => {
     expect(html("[官网](https://x.dev)")).toBe(
-      '<span class="cm-otw-link" data-href="https://x.dev" title="https://x.dev">官网</span>',
+      '<span class="cm-odea-link" data-href="https://x.dev" title="https://x.dev">官网</span>',
     );
     expect(html("[[目标|别名]]")).toBe(
-      '<span class="cm-otw-wikilink" data-target="目标">别名</span>',
+      '<span class="cm-odea-wikilink" data-target="目标">别名</span>',
     );
     expect(html("\\*不斜\\* &amp; :smile:")).toBe("*不斜* &amp; 😄");
   });

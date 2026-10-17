@@ -1,8 +1,8 @@
 [package]
-name = "ontheway"
+name = "odea"
 version = "0.2.0"
 description = "笔记、待办、目标与日历一体的个人效率工具"
-authors = ["OnTheWay"]
+authors = ["Odea"]
 edition = "2021"
 rust-version = "1.77"
 
@@ -37,7 +37,7 @@ typegen = [
 
 [lib]
 # 桌面端二进制和未来的移动端共用这个 lib
-name = "ontheway_lib"
+name = "odea_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -58,6 +58,11 @@ tauri-plugin-updater = { version = "~2.12", default-features = false, features =
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 「搬过去」跨盘时，复制核对完把原来的笔记文件夹放进回收站（boot::move_vault），不直接删。
+# Windows 上带 FOF_WANTNUKEWARNING：那个盘没有回收站时系统先问一句，不会悄悄删掉
+trash = "5"
+# 改名前（OnTheWay）的数据目录在哪：和 tauri::path 一样按 dirs 找（old_name.rs）。依赖树里本来就有
+dirs = "6"
 
 # --- 数据层 ---
 # 文件是真相（仓库文件夹里的 .md），SQLite 只做可以重建的索引，外加读旧版的库。

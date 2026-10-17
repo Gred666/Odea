@@ -5,6 +5,7 @@ import type {
   Attachment,
   Backlink,
   CalendarMarks,
+  ChangeRootMode,
   DayDoc,
   DocHistory,
   DocumentSaveTarget,
@@ -117,8 +118,13 @@ export interface Backend {
   vaultOpenFolder(): Promise<void>;
   /** 把磁盘上的当前版本另存成冲突副本，返回它的标题（文件不存在时为 null） */
   vaultKeepConflictCopy(target: DocumentSaveTarget): Promise<string | null>;
-  /** 弹选择文件夹对话框换仓库；取消了返回 null */
-  vaultChangeRoot(): Promise<VaultInfo | null>;
+  /**
+   * 弹选择文件夹对话框换仓库；取消了返回 null。`ask`：新文件夹里没有笔记就问搬过去 / 复制过去 /
+   * 只换文件夹；`move`：直接搬过去
+   */
+  vaultChangeRoot(mode: ChangeRootMode): Promise<VaultInfo | null>;
+  /** 新装第一次打开时笔记文件夹在哪；只给一次，不是第一次打开是 null */
+  vaultFirstRun(): Promise<string | null>;
   /** 粘贴进来的文件存进「附件」文件夹（内容是 base64），返回从这篇文档引用它的路径 */
   vaultAttach(target: DocumentSaveTarget, name: string, dataBase64: string): Promise<Attachment>;
   /** 拖进窗口的文件（桌面端拿到的是路径）存进「附件」文件夹 */
@@ -249,7 +255,8 @@ const tauriBackend: Backend = {
     await unwrap(commands.vaultOpenFolder());
   },
   vaultKeepConflictCopy: (target) => unwrap(commands.vaultKeepConflictCopy(target)),
-  vaultChangeRoot: () => unwrap(commands.vaultChangeRoot()),
+  vaultChangeRoot: (mode) => unwrap(commands.vaultChangeRoot(mode)),
+  vaultFirstRun: () => unwrap(commands.vaultFirstRun()),
   vaultAttach: (target, name, dataBase64) => unwrap(commands.vaultAttach(target, name, dataBase64)),
   vaultAttachPath: (target, path) => unwrap(commands.vaultAttachPath(target, path)),
   onVaultChanged: (listener) =>

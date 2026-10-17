@@ -1,4 +1,5 @@
 import type { Attachment, MatchAnchor, OutlineItem } from "@/data/types";
+import { registerEditorCommands } from "@/lib/editorCommands";
 import { MOD_KEY } from "@/lib/platform";
 import { rememberSpot, spotOf } from "@/lib/viewMemory";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -50,6 +51,20 @@ import { emojiFor } from "./emoji";
 import { decodeEntity } from "./entities";
 import { type FrontMatterRange, frontMatterRange } from "./frontMatter";
 import { glideTo } from "./glide";
+import {
+  FoldedSectionWidget,
+  HeadingGutterWidget,
+  foldAllHeadings,
+  foldMarks,
+  foldedHeads,
+  foldsOnlyMoved,
+  headingFoldExtension,
+  headingFolds,
+  isFoldableHeading,
+  outermostSections,
+  restoreFolds,
+  unfoldAllHeadings,
+} from "./headingFold";
 import { abbrTip, hoverCard } from "./hoverCard";
 import {
   INLINE_HTML_TAGS,
@@ -407,6 +422,12 @@ export function MarkdownEditor({
     const live: { view: EditorView | null } = { view: null };
     const listeners = new Set<(id: string) => void>();
     const { handle, notifyActive } = createOutlineHandle(live, outlineItemsRef, listeners);
+    // 命令面板的「收起所有标题」「展开所有标题」交给最近获得焦点的这个编辑器
+    const commands = registerEditorCommands((command) => {
+      const view = live.view;
+      if (!view) return false;
+      return command === "fold-all" ? foldAllHeadings(view) : unfoldAllHeadings(view);
+    });
 
     // 模板选择器：一行里只写着触发词（`/模板`）、光标在它末尾时打开。只认打字
     // （含输入法上屏），撤销回来的、外部回填的不算 —— 否则撤销一次模板又弹出来。
@@ -634,6 +655,14 @@ export function MarkdownEditor({
         if (update.focusChanged && !update.view.hasFocus) saver.flushQuietly();
       }),
       EditorView.updateListener.of((update) => {
+        if (update.focusChanged && update.view.hasFocus) commands.focus();
+        // 收起了哪些标题也记下来，下次打开还是收着的
+        if (
+          key &&
+          update.startState.field(headingFolds, false) !== update.state.field(headingFolds, false)
+        ) {
+          rememberSpot(key, { folds: foldMarks(update.state) });
+        }
         if (!update.selectionSet) return;
         notifyActive(update.state);
         // 光标在哪记下来：切回这篇、下次打开都回到这里（lib/viewMemory.ts）
@@ -708,6 +737,11 @@ export function MarkdownEditor({
     live.view = view;
     // 切走时开着查找面板：回来时不该还开着（和以前每次新建编辑器一样）
     if (searchPanelOpen(view.state)) closeSearchPanel(view);
+    // 上次收起的标题（缓存的状态里本来就带着）。在滚回上次的位置之前：那个位置是按收着的样子记的
+    if (!cached) {
+      const folds = restoreFolds(view.state, spot?.folds);
+      if (folds.length) view.dispatch({ effects: folds });
+    }
 
     // 回到上次看到的地方。上层换篇时已经把滚动容器拨回了顶上（DocumentView），
     // 这里在它之后跑。标题还露着时记的是 scrollTop（上面只有标题，高度是确定的）；
@@ -759,6 +793,7 @@ export function MarkdownEditor({
       closeTemplateMenu();
       closeSuggest();
       unregisterFlush();
+      commands.dispose();
       if (outlineTimer) clearTimeout(outlineTimer);
       saver.flushQuietly();
       saverRef.current = null;
@@ -922,7 +957,7 @@ export function MarkdownEditor({
       <div
         ref={hostRef}
         data-editor-stable-island
-        className={fill ? "otw-editor mt-7 selectable" : "otw-editor is-compact mt-7 selectable"}
+        className={fill ? "odea-editor mt-7 selectable" : "odea-editor is-compact mt-7 selectable"}
       />
       {createPortal(
         <>
@@ -1047,9 +1082,9 @@ function caretAnchor(view: EditorView, pos = view.state.selection.main.head): Em
  * 并且因为刚 primeIntro 过，会整个弹出来。
  *
  * 两种情况先垫一个空格：
- * - 前面紧挨着 `:词`：`12:30` 后面直接接 `:otw_fire:`，Markdown 会先把 `:30:`
+ * - 前面紧挨着 `:词`：`12:30` 后面直接接 `:odea_fire:`，Markdown 会先把 `:30:`
  *   认成短码，把我们的开头冒号吃掉；
- * - 前面紧挨着 `]`：行首的 `[标签]:otw_fire:` 是一条引用定义，不是表情。
+ * - 前面紧挨着 `]`：行首的 `[标签]:odea_fire:` 是一条引用定义，不是表情。
  */
 export function insertAnimatedEmoji(view: EditorView, emoji: AnimatedEmoji): void {
   const { state } = view;
@@ -1177,11 +1212,11 @@ function linkClickHandler(onWikiLink: (title: string, heading?: string) => void)
     mousedown(event, view) {
       if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false;
       const target = (event.target as HTMLElement | null)?.closest?.(
-        ".cm-otw-link, .cm-otw-wikilink",
+        ".cm-odea-link, .cm-odea-wikilink",
       ) as HTMLElement | null;
       if (!target) return false;
       const position = view.posAtDOM(target);
-      if (target.classList.contains("cm-otw-wikilink")) {
+      if (target.classList.contains("cm-odea-wikilink")) {
         const raw = wikiTargetAt(view.state, position);
         if (!raw) return false;
         event.preventDefault();
@@ -1286,13 +1321,13 @@ const SMART_GLYPHS: Readonly<Record<string, string>> = {
 };
 const BULLET_GLYPHS = ["•", "◦", "▪"];
 /* 列表符号格的宽度，单位是正文字号（globals.css「列表的几何」）。任务项的宽度和
-   .cm-otw-task 左右的空加起来要相等；有序列表按最大编号的位数加宽 */
+   .cm-odea-task 左右的空加起来要相等；有序列表按最大编号的位数加宽 */
 const LIST_BULLET_WIDTH = 1.55;
 const LIST_TASK_WIDTH = 1.8;
 const LIST_ORDERED_WIDTH = 1;
 const LIST_DIGIT_WIDTH = 0.56;
 const listUnits = (value: number) =>
-  `calc(var(--otw-body-size) * ${Math.round(value * 1000) / 1000})`;
+  `calc(var(--odea-body-size) * ${Math.round(value * 1000) / 1000})`;
 
 /* ============================================================
    装饰分成两层，因为两层的成本量级完全不同。
@@ -1427,6 +1462,11 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
   const footnotes = new Map<string, string>();
   const frontMatter = frontMatterRange(state.doc);
   const tree = blockTree(state);
+  // 收起的标题下面那几节（headingFold.ts）：整段一个块级替换，里面不再生成别的块级装饰 ——
+  // 替换套着替换时，和外层起点相同的那个可能先被画出来，也省得给看不见的东西建替身
+  const hiddenSections = outermostSections(state);
+  const hidden = (position: number) =>
+    hiddenSections.some((section) => position >= section.from && position <= section.to);
   let headings: TocEntry[] | null = null;
   let toc = false;
   const probes: number[] = [];
@@ -1438,14 +1478,14 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
   };
 
   const foldLine = (from: number, to: number, widget?: WidgetType) => {
-    if (to <= from) return;
+    if (to <= from || hidden(from)) return;
     markFreshness(widget, from, to, fresh);
     foldedLines.add(from);
     ranges.push({ from, to, value: Decoration.replace({ block: true, widget }) });
   };
   /** 整块折叠。范围一律撑到整行：块级替换不能只盖住半行。 */
   const foldRange = (from: number, to: number, widget?: WidgetType) => {
-    if (to <= from) return;
+    if (to <= from || hidden(from)) return;
     const first = state.doc.lineAt(from);
     const last = state.doc.lineAt(to);
     markFreshness(widget, first.from, last.to, fresh);
@@ -1459,6 +1499,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
     });
   };
   const lineClass = (from: number, className: string) => {
+    if (hidden(from)) return;
     ranges.push({ from, to: from, value: Decoration.line({ class: className }) });
   };
   const lineClasses = (from: number, to: number, className: string) => {
@@ -1487,7 +1528,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       if (abbreviation) {
         abbreviations.set(abbreviation[1]!.trim(), abbreviation[2]!.trim());
         abbreviationLines.add(line.from);
-        lineClass(line.from, "cm-otw-abbr-def");
+        lineClass(line.from, "cm-odea-abbr-def");
       }
     }
   };
@@ -1499,12 +1540,12 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
     // 否则每篇带 front matter 的笔记一打开就是一坨展开的 YAML。
     const active = touches(frontMatter.from + 1, frontMatter.to);
     for (let number = open.number + 1; number < close.number; number += 1) {
-      lineClass(state.doc.line(number).from, "cm-otw-frontmatter");
+      lineClass(state.doc.line(number).from, "cm-odea-frontmatter");
     }
     if (active) {
       // 和折叠时的封口一样高（globals.css「围栏的几何」），点进来时下面的正文不跳
-      lineClass(open.from, "cm-otw-frontmatter cm-otw-frontmatter-fence-line is-open");
-      lineClass(close.from, "cm-otw-frontmatter cm-otw-frontmatter-fence-line is-close");
+      lineClass(open.from, "cm-odea-frontmatter cm-odea-frontmatter-fence-line is-open");
+      lineClass(close.from, "cm-odea-frontmatter cm-odea-frontmatter-fence-line is-close");
     } else {
       foldLine(open.from, open.to, new FrontMatterFenceWidget("open"));
       foldLine(close.from, close.to, new FrontMatterFenceWidget("close"));
@@ -1552,14 +1593,14 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
         // 围栏露出源码时画成和封口同样大小的框（globals.css「围栏的几何」）。
         // 以前源码行比封口矮一截：一点进代码块，上面的围栏行缩下去，整块代码
         // 连同刚点的那一行一起往上跳。
-        if (opens) lineClass(open.from, "cm-otw-fence-source is-open");
-        if (closed) lineClass(close.from, "cm-otw-fence-source is-close");
+        if (opens) lineClass(open.from, "cm-odea-fence-source is-open");
+        if (closed) lineClass(close.from, "cm-odea-fence-source is-close");
         return false;
       }
 
       if (name === "MathBlock") {
         if (touches(node.from, node.to)) {
-          lineClasses(node.from, node.to, "cm-otw-math-source");
+          lineClasses(node.from, node.to, "cm-odea-math-source");
         } else {
           const tex = state
             .sliceDoc(node.from, node.to)
@@ -1598,7 +1639,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
         if (line.to >= node.to && TOC_RE.test(line.text)) {
           toc = true;
           if (touches(line.from, line.to)) {
-            lineClass(line.from, "cm-otw-toc-source");
+            lineClass(line.from, "cm-odea-toc-source");
           } else {
             headings ??= collectHeadings(state, tree, frontMatter);
             foldLine(line.from, line.to, new TocWidget(headings));
@@ -1630,7 +1671,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
             foldLine(line.from, line.to, new HorizontalRuleWidget());
           } else {
             // 露出来的 `---` 和分隔线一样高，光标进出时下面的正文不跳
-            lineClass(line.from, "cm-otw-hr-source");
+            lineClass(line.from, "cm-odea-hr-source");
           }
         }
         return false;
@@ -1665,6 +1706,20 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       return blockContainers.has(name);
     },
   });
+
+  for (const section of hiddenSections) {
+    const first = state.doc.lineAt(section.from).number;
+    const last = state.doc.lineAt(section.to).number;
+    for (let number = first; number <= last; number += 1) {
+      foldedLines.add(state.doc.line(number).from);
+    }
+    ranges.push({ from: section.from, to: section.to, value: Decoration.replace({ block: true }) });
+    ranges.push({
+      from: section.headingEnd,
+      to: section.headingEnd,
+      value: Decoration.widget({ widget: new FoldedSectionWidget(section.lines), side: 1 }),
+    });
+  }
 
   const decorations = toDecorationSet(ranges);
   return {
@@ -1803,6 +1858,10 @@ export const typoraBlockDecorations = StateField.define<TyporaBlockState>({
   // 初次构建（刚打开这篇）没有 changes：替身全都算新出现，照常播入场动画
   create: (state) => buildBlockDecorations(state, null),
   update(value, transaction) {
+    // 收起 / 展开了标题（不只是跟着改动平移）：整篇重建
+    if (!foldsOnlyMoved(transaction)) {
+      return buildBlockDecorations(transaction.state, transaction.changes);
+    }
     // 折叠与否取决于光标在不在块里，所以选区变化也要重算；
     // 后台解析往前推进了（语法树换了一棵）也要重算，不然解析得晚的那一段里的
     // 表格、公式、[TOC] 的标题要等下一次点击才出来。
@@ -1852,6 +1911,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
   const abbreviationLines = block?.abbreviationLines;
   const footnotes = block?.footnotes;
   const knownTitles = state.facet(knownWikiTitles);
+  const folded = new Set(foldedHeads(state));
   const ranges: DecorationRange[] = [];
   const atomicRanges: DecorationRange[] = [];
   const lineRanges = new Set<string>();
@@ -1887,7 +1947,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
   /**
    * 图片：替身是插在源码前面的一个点，不盖住源码 —— 光标碰到它时源码在图片下面露出来，
    * 没碰到时把源码藏掉。两种状态是同一个替身，图片原地不动（见 widgets.ts 的 ImageWidget）。
-   * 图片独占一行时这一行标上 cm-otw-image-line（源码收着时不留空行，见 globals.css），
+   * 图片独占一行时这一行标上 cm-odea-image-line（源码收着时不留空行，见 globals.css），
    * 露出来的源码画成一行图注
    */
   const addImage = (from: number, to: number, spec: ImageSpec, syntax: ImageSyntax): boolean => {
@@ -1902,7 +1962,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
       addLines(
         line.from,
         line.to,
-        open ? "cm-otw-image-line cm-otw-image-source" : "cm-otw-image-line",
+        open ? "cm-odea-image-line cm-odea-image-source" : "cm-odea-image-line",
       );
     }
     if (open) return true;
@@ -1913,7 +1973,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
     from: number,
     to: number,
     visible: boolean,
-    className = "cm-otw-syntax-marker",
+    className = "cm-odea-syntax-marker",
   ) => {
     if (from >= to) return;
     if (!visible) {
@@ -2046,7 +2106,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
       }
     }
     if (mark.from > line.from) {
-      addMark(line.from, mark.from, "cm-otw-list-indent", {
+      addMark(line.from, mark.from, "cm-odea-list-indent", {
         style: `width: ${listUnits(column - width)}`,
       });
     }
@@ -2060,8 +2120,8 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
     );
     if (active) {
       const className = task
-        ? "cm-otw-list-marker is-source is-task"
-        : "cm-otw-list-marker is-source";
+        ? "cm-odea-list-marker is-source is-task"
+        : "cm-odea-list-marker is-source";
       addMark(mark.from, contentStart, className, { style: box });
       return;
     }
@@ -2090,7 +2150,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
         line.from,
         `padding-left: ${listUnits(column)}; text-indent: ${listUnits(-column)}`,
       );
-      addMark(line.from, line.from + indent, "cm-otw-list-indent", {
+      addMark(line.from, line.from + indent, "cm-odea-list-indent", {
         style: `width: ${listUnits(column)}`,
       });
     }
@@ -2105,11 +2165,11 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
     const source = state.sliceDoc(node.from, node.to);
     const tag = parseTag(source);
     if (!tag) {
-      addMark(node.from, node.to, "cm-otw-html");
+      addMark(node.from, node.to, "cm-odea-html");
       return;
     }
     if (tag.name === "br" && !tag.closing) {
-      if (selfActive) addMark(node.from, node.to, "cm-otw-html");
+      if (selfActive) addMark(node.from, node.to, "cm-odea-html");
       else
         addReplacement(node.from, node.to, Decoration.replace({ widget: new LineBreakWidget() }));
       return;
@@ -2126,13 +2186,13 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           }
         : null;
       if (!spec || addImage(node.from, node.to, spec, "html")) {
-        addMark(node.from, node.to, "cm-otw-html");
+        addMark(node.from, node.to, "cm-odea-html");
       }
       return;
     }
     const className = INLINE_HTML_TAGS[tag.name];
     if (!className || tag.closing || tag.selfClosing) {
-      addMark(node.from, node.to, "cm-otw-html");
+      addMark(node.from, node.to, "cm-odea-html");
       return;
     }
     // 往后找同名闭标签；中间再遇到同名开标签就要多配一个
@@ -2153,7 +2213,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
       depth -= 1;
     }
     if (!close) {
-      addMark(node.from, node.to, "cm-otw-html");
+      addMark(node.from, node.to, "cm-odea-html");
       return;
     }
     pairedTags.add(close.from);
@@ -2186,10 +2246,10 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
 
       const footnote = FOOTNOTE_DEF_RE.exec(line.text);
       if (footnote) {
-        addLines(line.from, line.to, "cm-otw-footnote-def");
+        addLines(line.from, line.to, "cm-odea-footnote-def");
         const labelTo = line.from + footnote[1]!.length + 3;
         if (selectionTouches(state, line.from, labelTo + 1)) {
-          addMark(line.from, labelTo + 1, "cm-otw-footnote-source");
+          addMark(line.from, labelTo + 1, "cm-odea-footnote-source");
         } else {
           addReplacement(
             line.from,
@@ -2209,9 +2269,9 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
       const termInParagraph = term.from >= node.from;
       if (!term.text.trim() || (!termInParagraph && BLOCK_START_RE.test(term.text))) continue;
       if (!DEFINITION_RE.test(term.text) && !foldedLines?.has(term.from)) {
-        addLines(term.from, term.to, "cm-otw-dt");
+        addLines(term.from, term.to, "cm-odea-dt");
       }
-      addLines(line.from, line.to, "cm-otw-dd");
+      addLines(line.from, line.to, "cm-odea-dd");
       const markerTo = line.from + definition[0].length;
       addSyntaxMarker(line.from, markerTo, selectionTouches(state, line.from, line.to));
     }
@@ -2245,21 +2305,36 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
         if (name === "CodeBlock") {
           // 缩进（四个空格）的代码块没有围栏封口：上下两条边由第一行、最后一行自己画
           const last = state.doc.lineAt(node.to);
-          addLines(line.from, line.to, "cm-otw-code-edge is-top");
-          addLines(last.from, last.to, "cm-otw-code-edge is-bottom");
+          addLines(line.from, line.to, "cm-odea-code-edge is-top");
+          addLines(last.from, last.to, "cm-odea-code-edge is-bottom");
         }
         // 围栏里挂着的是别的语言的语法树，交给 codeHighlight，这里不下探。
         if (name === "CodeText") {
-          addMark(node.from, node.to, "cm-otw-code-text");
+          addMark(node.from, node.to, "cm-odea-code-text");
           return false;
         }
 
         const heading = HEADING_RE.exec(name);
-        if (heading) {
+        if (heading && !lineRanges.has(`${line.from}:heading`)) {
+          lineRanges.add(`${line.from}:heading`);
           ranges.push({
             from: line.from,
             to: line.from,
-            value: Decoration.line({ class: `cm-otw-h${heading[1]}` }),
+            value: Decoration.line({ class: `cm-odea-h${heading[1]}` }),
+          });
+          // 行左边留白里的层级提示和收起箭头（headingFold.ts）
+          const foldable = isFoldableHeading(node.node);
+          ranges.push({
+            from: line.from,
+            to: line.from,
+            value: Decoration.widget({
+              widget: new HeadingGutterWidget(
+                Number(heading[1]),
+                foldable,
+                foldable && folded.has(line.from),
+              ),
+              side: -1,
+            }),
           });
         }
 
@@ -2282,16 +2357,16 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           const head = parseCalloutHead(line.text);
           if (head) {
             calloutHeads.set(line.from, head);
-            addLines(node.from, node.to, `cm-otw-callout is-${head.kind}`);
-            addLines(line.from, line.to, "cm-otw-callout-head");
+            addLines(node.from, node.to, `cm-odea-callout is-${head.kind}`);
+            addLines(line.from, line.to, "cm-odea-callout-head");
             const tail = state.doc.lineAt(node.to);
-            addLines(tail.from, tail.to, "cm-otw-callout-tail");
+            addLines(tail.from, tail.to, "cm-odea-callout-tail");
             // 正文被折叠时头行就是最后一行可见的行，圆角要落在它身上
             if (
               tail.number > line.number &&
               foldedLines?.has(state.doc.line(line.number + 1).from)
             ) {
-              addLines(line.from, line.to, "cm-otw-callout-tail");
+              addLines(line.from, line.to, "cm-odea-callout-tail");
             }
             // 正文折叠会把可见区间切成两段，这个引用块可能被进入两次；标题只标一次
             // （行装饰有 lineRanges 去重，行内 mark 没有）
@@ -2299,7 +2374,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
               seenCalloutTitles.add(line.from);
               const titleFrom =
                 line.to - head.title.length - (line.text.length - line.text.trimEnd().length);
-              addMark(titleFrom, titleFrom + head.title.length, "cm-otw-callout-title");
+              addMark(titleFrom, titleFrom + head.title.length, "cm-odea-callout-title");
             }
             return;
           }
@@ -2307,7 +2382,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           for (let ancestor = owner; ancestor; ancestor = ancestor.parent) {
             if (ancestor.name === "Blockquote") depth += 1;
           }
-          addLines(node.from, node.to, `cm-otw-quote cm-otw-quote-d${Math.min(depth, 4)}`);
+          addLines(node.from, node.to, `cm-odea-quote cm-odea-quote-d${Math.min(depth, 4)}`);
           return;
         }
 
@@ -2328,7 +2403,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           const animated = animatedEmojiFor(source);
           if (animated) {
             if (selectionEntersRange(revealRanges(state), node.from, node.to)) {
-              addMark(node.from, node.to, "cm-otw-glyph-source");
+              addMark(node.from, node.to, "cm-odea-glyph-source");
             } else {
               addReplacement(
                 node.from,
@@ -2348,7 +2423,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
               }),
             );
           } else {
-            addMark(node.from, node.to, glyph ? "cm-otw-glyph-source" : "cm-otw-emoji-unknown");
+            addMark(node.from, node.to, glyph ? "cm-odea-glyph-source" : "cm-odea-emoji-unknown");
           }
           return false;
         }
@@ -2364,7 +2439,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
               }),
             );
           } else {
-            addMark(node.from, node.to, "cm-otw-html");
+            addMark(node.from, node.to, "cm-odea-html");
           }
           return false;
         }
@@ -2373,7 +2448,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           const markerTo = node.to - 1;
           if (markerTo > node.from) {
             if (selectionTouches(state, node.from, markerTo)) {
-              addMark(node.from, markerTo, "cm-otw-syntax-marker");
+              addMark(node.from, markerTo, "cm-odea-syntax-marker");
             } else {
               addReplacement(
                 node.from,
@@ -2387,7 +2462,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
         if (widget === "math") {
           const source = state.sliceDoc(node.from, node.to);
           if (selfActive) {
-            addMark(node.from, node.to, "cm-otw-math-source");
+            addMark(node.from, node.to, "cm-odea-math-source");
             return;
           }
           const display = source.startsWith("$$");
@@ -2402,7 +2477,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           return false;
         }
         if (name === "MathMark") {
-          addMark(node.from, node.to, "cm-otw-syntax-marker");
+          addMark(node.from, node.to, "cm-odea-syntax-marker");
           return false;
         }
         if (widget === "html-tag") {
@@ -2413,7 +2488,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
         if (widget === "comment") {
           // 光标在这一行时露出源码，否则收成一个「注释」标记
           if (selectionTouches(state, line.from, state.doc.lineAt(node.to).to)) {
-            addMark(node.from, node.to, "cm-otw-html");
+            addMark(node.from, node.to, "cm-odea-html");
           } else {
             addReplacement(
               node.from,
@@ -2455,7 +2530,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
               // 折叠符离徽章开头多远（徽章从 `[` 起，折叠符紧跟在 `]` 后面）
               const foldOffset = head.fold ? line.from + head.foldOffset - node.from : null;
               if (headActive) {
-                addMark(node.from, node.to, "cm-otw-callout-label");
+                addMark(node.from, node.to, "cm-odea-callout-label");
                 addSyntaxMarker(node.from, node.from + 2, true);
                 addSyntaxMarker(node.to - 1, node.to + (head.fold ? 1 : 0), true);
               } else {
@@ -2477,7 +2552,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
                 return false;
               }
               if (selfActive) {
-                addMark(node.from, node.to, "cm-otw-footnote-source");
+                addMark(node.from, node.to, "cm-odea-footnote-source");
               } else {
                 addReplacement(
                   node.from,
@@ -2518,7 +2593,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
               addMark(
                 displayFrom,
                 node.to - 1,
-                missing ? "cm-otw-wikilink is-missing" : "cm-otw-wikilink",
+                missing ? "cm-odea-wikilink is-missing" : "cm-odea-wikilink",
                 {
                   title: missing
                     ? `还没有「${target.title}」这篇笔记\n${MOD_KEY}+点击新建`
@@ -2536,7 +2611,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           addMark(
             node.from,
             node.to,
-            "cm-otw-link",
+            "cm-odea-link",
             url ? { title: `${url}\n${MOD_KEY}+点击打开` } : undefined,
           );
           return;
@@ -2584,7 +2659,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
               node.from,
               markerTo,
               selectionTouches(state, node.from, markerTo),
-              `cm-otw-syntax-marker is-quote is-q${Math.min(level, 4)}`,
+              `cm-odea-syntax-marker is-quote is-q${Math.min(level, 4)}`,
             );
             return;
           }
@@ -2592,7 +2667,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
             node.from,
             markerTo,
             syntaxActive,
-            name === "HeaderMark" ? "cm-otw-syntax-marker is-heading" : undefined,
+            name === "HeaderMark" ? "cm-odea-syntax-marker is-heading" : undefined,
           );
         }
       },
@@ -2601,7 +2676,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
   for (const [from, column] of blankAfterItems) {
     if (lineRanges.has(`${from}:style`)) continue;
     lineStyle(from, `padding-left: ${listUnits(column)}; text-indent: ${listUnits(-column)}`);
-    addMark(from, state.doc.lineAt(from).to, "cm-otw-list-indent", {
+    addMark(from, state.doc.lineAt(from).to, "cm-odea-list-indent", {
       style: `width: ${listUnits(column)}`,
     });
   }
@@ -2683,7 +2758,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           addMark(
             from,
             from + abbreviation.length,
-            "cm-otw-abbr",
+            "cm-odea-abbr",
             abbrTip(abbreviation, expansion),
           );
         }
@@ -2714,6 +2789,7 @@ const typoraInlineDecorations = ViewPlugin.fromClass(
         update.viewportChanged ||
         revealRanges(update.startState) !== revealRanges(update.state) ||
         syntaxTree(update.startState) !== syntaxTree(update.state) ||
+        update.startState.field(headingFolds, false) !== update.state.field(headingFolds, false) ||
         update.startState.facet(imageBaseDir) !== update.state.facet(imageBaseDir) ||
         update.startState.facet(knownWikiTitles) !== update.state.facet(knownWikiTitles)
       ) {
@@ -2731,9 +2807,13 @@ const typoraInlineDecorations = ViewPlugin.fromClass(
   },
 );
 
-/** 编辑器要的完整装饰扩展：块级 StateField + 行内 ViewPlugin，外加两层共用的「算数的选区」（reveal.ts）。 */
+/**
+ * 编辑器要的完整装饰扩展：块级 StateField + 行内 ViewPlugin，外加两层共用的「算数的选区」
+ * （reveal.ts）和标题收起的状态（headingFold.ts）。
+ */
 export const typoraDecorations: Extension = [
   revealField,
+  headingFoldExtension,
   typoraBlockDecorations,
   typoraInlineDecorations,
 ];

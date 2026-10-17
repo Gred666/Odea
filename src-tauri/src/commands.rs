@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime, State};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogResult};
 use tauri_specta::Event;
 
 use crate::boot;
@@ -115,7 +115,7 @@ pub async fn note_restore(state: State<'_, AppState>, id: String) -> Result<()> 
     with_vault(&state, move |v| v.note_restore(&id)).await
 }
 
-/// 删除 = 挪进仓库的回收站（.ontheway/trash/，30 天后清掉）
+/// 删除 = 挪进仓库的回收站（.odea/trash/，30 天后清掉）
 #[tauri::command]
 #[specta::specta]
 pub async fn note_delete(state: State<'_, AppState>, id: String) -> Result<()> {
@@ -643,13 +643,37 @@ pub async fn vault_attach_path(
     with_vault(&state, move |v| v.attach_path(&target, std::path::Path::new(&path))).await
 }
 
-/// 换一个文件夹当仓库。弹系统的选择文件夹对话框；新文件夹是空的就问要不要把
-/// 现在的笔记一起复制过去（原来的不动）。取消了返回 null。前端拿到结果后整页重载。
+/// 换位置的时候，现在的笔记怎么办
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ChangeRootMode {
+    /// 新文件夹里没有笔记就问：搬过去 / 复制过去 / 只换文件夹（命令面板「更换笔记文件夹…」）
+    Ask,
+    /// 不问，直接搬过去（新装第一次打开时的「换个位置…」）
+    Move,
+}
+
+/// 新装第一次打开（放了示例内容的那一次）：笔记文件夹在哪。只给一次 —— 前端拿去提示
+/// 「笔记存在这里，要不要换个位置」，换完整页重载后不会再出（技术方案 §5.7）
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_first_run(state: State<'_, AppState>) -> Result<Option<String>> {
+    Ok(state
+        .first_run
+        .lock()
+        .map_err(|_| AppError::Internal("首次启动的标记锁坏了".into()))?
+        .take())
+}
+
+/// 换一个文件夹当仓库。弹系统的选择文件夹对话框；新文件夹里没有笔记的话，现在的笔记
+/// 搬过去（原来的进回收站）、复制过去（原来的不动）还是不带（`mode` 决定问不问）。
+/// 取消了返回 null。前端拿到结果后整页重载。
 #[tauri::command]
 #[specta::specta]
 pub async fn vault_change_root<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, AppState>,
+    mode: ChangeRootMode,
 ) -> Result<Option<VaultInfo>> {
     let current = with_vault(&state, |v| Ok(v.root().to_path_buf())).await?;
 
@@ -685,29 +709,125 @@ pub async fn vault_change_root<R: Runtime>(
         ));
     }
 
-    let target_is_vault =
-        fsio::has_markdown(&new_root) || fsio::abs(&new_root, layout::VAULT_MARKER).exists();
-    if !target_is_vault && fsio::has_markdown(&current) {
-        let asker = app.clone();
-        let bring = blocking(move || {
-            Ok(asker
-                .dialog()
-                .message("新文件夹是空的。要把现在的笔记一起复制过去吗？\n\n原来的文件夹不会被改动。")
-                .title("更换笔记文件夹")
-                .buttons(MessageDialogButtons::OkCancelCustom(
-                    "复制过去".into(),
-                    "只换文件夹".into(),
-                ))
-                .blocking_show())
-        })
-        .await?;
-        if bring {
+    // 新文件夹里已经有笔记（别的仓库、Obsidian 的文件夹）：直接用它，现在的不动
+    // 改名前的仓库标记在 .ontheway/ 里，打开时才搬过来（boot::prepare）
+    let target_is_vault = fsio::has_markdown(&new_root)
+        || fsio::abs(&new_root, layout::VAULT_MARKER).exists()
+        || new_root.join(crate::old_name::VAULT_DIR).join("vault.json").exists();
+    if target_is_vault {
+        return switch_vault(&app, &state, new_root).await.map(Some);
+    }
+    let bring = match mode {
+        ChangeRootMode::Move => Bring::Move,
+        ChangeRootMode::Ask if !fsio::has_markdown(&current) => Bring::Nothing,
+        ChangeRootMode::Ask => {
+            let asker = app.clone();
+            let picked = blocking(move || {
+                Ok(asker
+                    .dialog()
+                    .message(
+                        "新文件夹里还没有笔记。现在的笔记要怎么办？\n\n\
+                         搬过去：笔记挪到新文件夹，原来的文件夹放进回收站。\n\
+                         复制过去：两边各一份，原来的不动。\n\
+                         只换文件夹：从一个空的笔记文件夹开始，现在的笔记留在原处。",
+                    )
+                    .title("更换笔记文件夹")
+                    .buttons(MessageDialogButtons::YesNoCancelCustom(
+                        MOVE_LABEL.into(),
+                        COPY_LABEL.into(),
+                        SWITCH_LABEL.into(),
+                    ))
+                    .blocking_show_with_result())
+            })
+            .await?;
+            match picked {
+                MessageDialogResult::Custom(label) if label == MOVE_LABEL => Bring::Move,
+                MessageDialogResult::Custom(label) if label == COPY_LABEL => Bring::Copy,
+                MessageDialogResult::Custom(label) if label == SWITCH_LABEL => Bring::Nothing,
+                // 直接关掉对话框：不换了（以前关掉等于「只换文件夹」，看着像笔记全没了）
+                _ => return Ok(None),
+            }
+        }
+    };
+
+    match bring {
+        Bring::Move => move_vault_to(&app, &state, current, new_root).await.map(Some),
+        Bring::Copy => {
             let (from, to) = (current.clone(), new_root.clone());
             blocking(move || boot::copy_vault(&from, &to).map(|_| ())).await?;
+            switch_vault(&app, &state, new_root).await.map(Some)
         }
+        Bring::Nothing => switch_vault(&app, &state, new_root).await.map(Some),
     }
+}
 
-    switch_vault(&app, &state, new_root).await.map(Some)
+const MOVE_LABEL: &str = "搬过去";
+const COPY_LABEL: &str = "复制过去";
+const SWITCH_LABEL: &str = "只换文件夹";
+
+/// 换位置时现在的笔记怎么办（用户选的，或者 `ChangeRootMode::Move` 定好的）
+enum Bring {
+    Move,
+    Copy,
+    Nothing,
+}
+
+/// 「搬过去」（技术方案 §5.7，`boot::move_vault`）：停掉监听和同步、搬、记下新位置、换过去。
+/// 原来的没能放进回收站的，换过去以后弹窗说一声
+async fn move_vault_to<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+    current: PathBuf,
+    new_root: PathBuf,
+) -> Result<VaultInfo> {
+    // Windows 上还开着的句柄（文件监听、同步线程里的 git 仓库）会让改名失败：先停掉
+    *state
+        .watcher
+        .lock()
+        .map_err(|_| AppError::Internal("监听锁坏了".into()))? = None;
+    state.sync.stop();
+
+    let (from, to) = (current.clone(), new_root.clone());
+    let moved = blocking(move || {
+        boot::move_vault(&from, &to, |path| trash::delete(path).map_err(|error| error.to_string()))
+    })
+    .await;
+    let moved = match moved {
+        Ok(moved) => moved,
+        Err(error) => {
+            // 原来的仓库没动：监听和同步照旧起来
+            if let Err(restart) = switch_vault(app, state, current).await {
+                eprintln!("搬不过去之后恢复原来的仓库也失败了: {restart}");
+            }
+            return Err(error);
+        }
+    };
+
+    // 仓库已经不在原处了：先记下新位置。后面哪一步失败，下次启动也得去新位置找，
+    // 不然会在原处新建一个空仓库，看着像笔记没了
+    let (data_dir, root) = (state.data_dir.clone(), new_root.clone());
+    blocking(move || {
+        let mut config = boot::Config::load(&data_dir);
+        config.vault_root = Some(root);
+        config.save(&data_dir)
+    })
+    .await?;
+    let info = switch_vault(app, state, new_root.clone()).await?;
+
+    if let boot::Moved::CopiedKeptOriginal(reason) = moved {
+        let teller = app.clone();
+        let text = format!(
+            "笔记已经搬到「{}」了，但原来的文件夹没能放进回收站：{reason}\n\n可以自己把它删掉：{}",
+            new_root.display(),
+            current.display()
+        );
+        blocking(move || {
+            teller.dialog().message(text).title("更换笔记文件夹").blocking_show();
+            Ok(())
+        })
+        .await?;
+    }
+    Ok(info)
 }
 
 /// 换到另一个仓库文件夹：准备好、打开、停旧的监听和同步、换上新的、起新的监听和同步、存配置。

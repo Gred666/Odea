@@ -30,7 +30,7 @@ describe("Markdown outline", () => {
   });
 
   it("shows animated emoji short codes as Unicode in the outline", () => {
-    const outline = buildOutline("## 冲刺 :otw_fire:\n\n> [!NOTE] 完成 :otw_done:\n> 内容");
+    const outline = buildOutline("## 冲刺 :odea_fire:\n\n> [!NOTE] 完成 :odea_done:\n> 内容");
     expect(outline.map((item) => item.text)).toContain("冲刺 🔥");
     expect(outline.map((item) => item.text)).toContain("完成 ✅");
   });

@@ -10,7 +10,7 @@ export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** 起一个用临时配置目录的无头 Chrome，开一个空白页连上去。关的时候连配置目录一起删 */
 export async function launch(port) {
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "otw-perf-"));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), "odea-perf-"));
   const chrome = spawn(
     CHROME,
     [

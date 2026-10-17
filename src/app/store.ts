@@ -119,7 +119,7 @@ interface AppState {
 /** 导航顺序 —— 决定切换时主内容往哪个方向位移 */
 const NAV_ORDER: WorkspaceId[] = ["notes", "today", "goal", "calendar", "archive", "extensions"];
 
-const LS_KEY = "otw.prefs";
+const LS_KEY = "odea.prefs";
 
 interface Prefs {
   theme: ThemePref;
@@ -166,7 +166,7 @@ const initialPrefs = loadPrefs();
 
 /* ---- 上次停在哪：重新打开应用回到那个区、那一篇、那个文件夹 ---- */
 
-const SESSION_KEY = "otw.session";
+const SESSION_KEY = "odea.session";
 
 interface Session {
   workspace: WorkspaceId;
@@ -194,7 +194,7 @@ function loadSession(): Session {
 
 const initialSession = loadSession();
 
-const EXPANDED_KEY = "otw.folders.expanded";
+const EXPANDED_KEY = "odea.folders.expanded";
 
 function loadExpanded(): Set<string> {
   try {
@@ -357,7 +357,7 @@ export function applyTheme(pref: ThemePref, animate = false): boolean {
   if (animate) animated = transitionTheme(resolved === "dark", write);
   else write();
   try {
-    localStorage.setItem("otw.theme", pref === "system" ? "" : pref);
+    localStorage.setItem("odea.theme", pref === "system" ? "" : pref);
   } catch {
     /* 忽略 */
   }

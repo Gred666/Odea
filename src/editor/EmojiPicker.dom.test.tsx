@@ -21,7 +21,7 @@ import { ANIMATED_EMOJIS, animatedEmojiFor } from "./animatedEmoji";
 // happy-dom 里 Motion 取消原生动画会留下没人接的 AbortError；这里测的是逻辑，不是动效
 MotionGlobalConfig.skipAnimations = true;
 
-const emoji = (id: string) => animatedEmojiFor(`:otw_${id}:`)!;
+const emoji = (id: string) => animatedEmojiFor(`:odea_${id}:`)!;
 const ids = (list: { id: string }[]) => list.map((item) => item.id);
 
 beforeEach(() => localStorage.clear());
@@ -37,8 +37,10 @@ describe("搜索", () => {
   });
 
   it("accepts the short code the way people type it", () => {
+    expect(ids(searchEmojis(":odea_fire"))).toEqual(["fire"]);
+    expect(ids(searchEmojis(":odea_fire:"))).toEqual(["fire"]);
+    // 改名前的写法也认
     expect(ids(searchEmojis(":otw_fire"))).toEqual(["fire"]);
-    expect(ids(searchEmojis(":otw_fire:"))).toEqual(["fire"]);
   });
 
   it("returns everything for a blank query and nothing for nonsense", () => {
@@ -160,9 +162,9 @@ describe("最近使用", () => {
   });
 
   it("survives broken or unavailable storage", () => {
-    localStorage.setItem("otw.emoji.recent", "{not json");
+    localStorage.setItem("odea.emoji.recent", "{not json");
     expect(loadRecent()).toEqual([]);
-    localStorage.setItem("otw.emoji.recent", JSON.stringify(["gone", "fire"]));
+    localStorage.setItem("odea.emoji.recent", JSON.stringify(["gone", "fire"]));
     expect(ids(loadRecent())).toEqual(["fire"]);
 
     const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
@@ -219,7 +221,7 @@ describe("<EmojiPicker>", () => {
     const { input, selected } = open();
     expect(document.activeElement).toBe(input);
     expect(selected()).toBe("smile");
-    expect(input.getAttribute("aria-activedescendant")).toMatch(/^otw-emoji-smile-/);
+    expect(input.getAttribute("aria-activedescendant")).toMatch(/^odea-emoji-smile-/);
   });
 
   it("moves with the arrow keys and inserts with Enter", () => {

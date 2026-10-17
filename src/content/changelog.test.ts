@@ -65,7 +65,7 @@ describe("版本号", () => {
   it("package.json、Cargo.toml、Cargo.lock 写的是同一个版本", () => {
     const pkg = JSON.parse(read("package.json")).version as string;
     const cargo = /^\[package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(read("src-tauri/Cargo.toml"));
-    const lock = /^name = "ontheway"\r?\nversion = "([^"]+)"/m.exec(read("src-tauri/Cargo.lock"));
+    const lock = /^name = "odea"\r?\nversion = "([^"]+)"/m.exec(read("src-tauri/Cargo.lock"));
     expect(cargo?.[1]).toBe(pkg);
     expect(lock?.[1]).toBe(pkg);
     expect(JSON.parse(read("src-tauri/tauri.conf.json")).version).toBeUndefined();

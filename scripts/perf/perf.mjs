@@ -1,6 +1,6 @@
 // 性能回归脚本：在无头 Chrome 里用浏览器 mock 后端跑一遍常用操作，量出来写成 JSON。
 //
-//   pnpm build && pnpm exec vite preview --port 1432        （另开一个终端，或 launch.json 的 ontheway-preview）
+//   pnpm build && pnpm exec vite preview --port 1432        （另开一个终端，或 launch.json 的 odea-preview）
 //   node scripts/perf/perf.mjs http://localhost:1432 --out after.json
 //   node scripts/perf/compare.mjs before.json after.json
 //
@@ -46,7 +46,7 @@ const PROBES = `
   // mock 后端每存一次都把整个仓库 JSON.stringify 进 localStorage（几 MB），桌面端是 Rust 写文件：量的时候跳过
   const setItem = Storage.prototype.setItem;
   Storage.prototype.setItem = function (key, value) {
-    if (key === "otw.mock.v5" && window.__perfSeeded) return;
+    if (key === "odea.mock.v5" && window.__perfSeeded) return;
     return setItem.call(this, key, value);
   };
 `;
@@ -132,7 +132,7 @@ const pointOf = (expression) =>
     const r = e.getBoundingClientRect(); return { x: r.x + Math.min(r.width / 2, 120), y: r.y + r.height / 2 }; })()`);
 const openSession = (noteId) =>
   evaluate(
-    `localStorage.setItem("otw.session", JSON.stringify({ workspace: "notes", noteId: "${noteId}", archiveId: "", noteFolder: "" })); true`,
+    `localStorage.setItem("odea.session", JSON.stringify({ workspace: "notes", noteId: "${noteId}", archiveId: "", noteFolder: "" })); true`,
   );
 const VIEW = "document.querySelector('.cm-content').cmTile.view";
 /** 堆里有几个 EditorView（queryObjects 会先做一次 GC）。查完放掉句柄，不然它们被控制台握着 */
@@ -171,14 +171,14 @@ try {
   const first = loaded();
   await send("Page.navigate", { url: BASE });
   await first;
-  for (let i = 0; i < 50 && !(await evaluate(`!!localStorage.getItem("otw.mock.v5")`)); i++)
+  for (let i = 0; i < 50 && !(await evaluate(`!!localStorage.getItem("odea.mock.v5")`)); i++)
     await sleep(100);
   const state = buildState(NOTES);
-  await evaluate(`(() => { const old = JSON.parse(localStorage.getItem("otw.mock.v5") || "null");
+  await evaluate(`(() => { const old = JSON.parse(localStorage.getItem("odea.mock.v5") || "null");
     const state = ${JSON.stringify(state)};
     if (old) state.notes.push(...old.notes.filter((note) => note.id.startsWith("guide-")));
-    localStorage.setItem("otw.mock.v5", JSON.stringify(state));
-    sessionStorage.setItem("otw.introPlayed", "1"); return true; })()`);
+    localStorage.setItem("odea.mock.v5", JSON.stringify(state));
+    sessionStorage.setItem("odea.introPlayed", "1"); return true; })()`);
   await send("Page.addScriptToEvaluateOnNewDocument", { source: "window.__perfSeeded = true;" });
   await send("Emulation.setCPUThrottlingRate", { rate: CPU });
 

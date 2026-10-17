@@ -187,9 +187,9 @@ fn prepare_writes_its_own_block_and_keeps_the_users_lines() {
 
     let repo = SyncRepo::init(&root).unwrap();
     let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
-    assert!(ignore.starts_with("# >>> OnTheWay"));
-    assert!(ignore.contains(".ontheway/trash/\n.*.tmp\n"));
-    assert!(ignore.ends_with("# <<< OnTheWay\n\nnode_modules/\n*.log\n"));
+    assert!(ignore.starts_with("# >>> Odea"));
+    assert!(ignore.contains(".odea/trash/\n.ontheway/trash/\n.*.tmp\n"));
+    assert!(ignore.ends_with("# <<< Odea\n\nnode_modules/\n*.log\n"));
     let attributes = fs::read_to_string(root.join(".gitattributes")).unwrap();
     assert!(attributes.contains("* -text\n*.md text eol=lf\n"));
 
@@ -209,13 +209,76 @@ fn prepare_writes_its_own_block_and_keeps_the_users_lines() {
 }
 
 #[test]
+fn the_block_written_before_the_rename_is_replaced_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(
+        root.join(".gitignore"),
+        "dist/\n# >>> OnTheWay（这一段由应用维护）\n.ontheway/trash/\n.*.tmp\n# <<< OnTheWay\nnode_modules/\n",
+    )
+    .unwrap();
+
+    SyncRepo::init(&root).unwrap();
+    let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert!(!ignore.contains("OnTheWay"), "旧的那一段换掉了：{ignore}");
+    assert!(ignore.starts_with("dist/\n# >>> Odea"), "放在旧的那一段原来的位置：{ignore}");
+    assert!(ignore.ends_with("# <<< Odea\nnode_modules/\n"));
+
+    // 还没升级的设备又在最前面写回来一段：拿掉，新的那一段不动
+    let repo = SyncRepo::open(&root).unwrap().unwrap();
+    fs::write(
+        root.join(".gitignore"),
+        format!("# >>> OnTheWay（这一段由应用维护）\n.ontheway/trash/\n# <<< OnTheWay\n\n{ignore}"),
+    )
+    .unwrap();
+    assert!(repo.prepare().unwrap());
+    let again = fs::read_to_string(root.join(".gitignore")).unwrap();
+    assert!(!again.contains("OnTheWay"));
+    assert_eq!(again.trim_start(), ignore);
+}
+
+#[test]
+fn settings_from_before_the_rename_move_to_the_new_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    fs::create_dir_all(&root).unwrap();
+    let repo = git2::Repository::init(&root).unwrap();
+    let mut config = repo.config().unwrap();
+    config.set_str("ontheway.autosync", "true").unwrap();
+    config.set_str("ontheway.provider", "github").unwrap();
+    config.set_str("ontheway.login", "旧账号").unwrap();
+    // 新版已经写过的以新的为准
+    config.set_str("odea.login", "新账号").unwrap();
+    fs::write(root.join(".git/ontheway.json"), "{\"lastRepack\":1}").unwrap();
+
+    let repo = SyncRepo::open(&root).unwrap().unwrap();
+    assert_eq!(repo.config_get("odea.autosync").as_deref(), Some("true"));
+    assert_eq!(repo.config_get("odea.provider").as_deref(), Some("github"));
+    assert_eq!(repo.config_get("odea.login").as_deref(), Some("新账号"));
+    assert_eq!(repo.config_get("ontheway.autosync"), None);
+    assert_eq!(repo.config_get("ontheway.login"), None);
+    assert!(root.join(".git/odea.json").exists());
+    assert!(!root.join(".git/ontheway.json").exists());
+}
+
+#[test]
+fn commits_from_before_the_rename_still_name_their_device() {
+    use super::engine::device_of;
+    assert_eq!(device_of("Odea (书房的电脑)"), "书房的电脑");
+    assert_eq!(device_of("OnTheWay (书房的电脑)"), "书房的电脑");
+    assert_eq!(device_of("张三"), "张三");
+    assert_eq!(device_of("Odea"), "Odea");
+}
+
+#[test]
 fn commit_leaves_out_temp_files_and_the_trash() {
     let cloud = cloud();
     let a = Device::first(&cloud, "A");
     a.write(WEEKLY, weekly("初稿"));
     a.write("笔记/工作/.周报.md.123-4.tmp", "写到一半");
-    a.write(".ontheway/trash/0199.md", "回收站");
-    a.write(".ontheway/vault.json", "{}");
+    a.write(".odea/trash/0199.md", "回收站");
+    a.write(".odea/vault.json", "{}");
 
     let committed = a.commit();
     assert!(committed
@@ -229,7 +292,7 @@ fn commit_leaves_out_temp_files_and_the_trash() {
         vec![
             ".gitattributes",
             ".gitignore",
-            ".ontheway/vault.json",
+            ".odea/vault.json",
             WEEKLY
         ]
     );
@@ -261,7 +324,7 @@ fn edits_on_two_devices_merge_and_real_conflicts_become_copies() {
     let a = Device::first(&cloud, "A");
     a.write(WEEKLY, weekly("初稿"));
     a.write("日记/2026/2026-10-07.md", "- [ ] 买菜\n");
-    a.write(".ontheway/activity/2026-10.jsonl", "{\"n\":1}\n");
+    a.write(".odea/activity/2026-10.jsonl", "{\"n\":1}\n");
     a.sync();
     let b = Device::join(&cloud, "B");
     assert_eq!(b.read(WEEKLY).unwrap(), weekly("初稿"));
@@ -270,13 +333,13 @@ fn edits_on_two_devices_merge_and_real_conflicts_become_copies() {
     a.write(WEEKLY, weekly("A 写的"));
     a.write("笔记/只在A.md", "A 新建的\n");
     a.write(
-        ".ontheway/activity/2026-10.jsonl",
+        ".odea/activity/2026-10.jsonl",
         "{\"n\":1}\n{\"from\":\"A\"}\n",
     );
     b.write(WEEKLY, weekly("B 写的"));
     b.write("日记/2026/2026-10-07.md", "- [x] 买菜\n- [ ] 跑步\n");
     b.write(
-        ".ontheway/activity/2026-10.jsonl",
+        ".odea/activity/2026-10.jsonl",
         "{\"n\":1}\n{\"from\":\"B\"}\n",
     );
 
@@ -295,7 +358,7 @@ fn edits_on_two_devices_merge_and_real_conflicts_become_copies() {
     assert_eq!(b.read("笔记/只在A.md").unwrap(), "A 新建的\n");
     assert!(second.changed.contains(&"笔记/只在A.md".to_string()));
     assert!(!second.changed.contains(&WEEKLY.to_string()));
-    let log = b.read(".ontheway/activity/2026-10.jsonl").unwrap();
+    let log = b.read(".odea/activity/2026-10.jsonl").unwrap();
     assert!(log.contains("\"A\"") && log.contains("\"B\""), "{log}");
     assert!(!log.contains("<<<<<<<"));
 
@@ -658,7 +721,7 @@ fn tells_an_empty_cloud_from_one_with_history() {
 fn unreachable_remote_is_a_network_error() {
     let dir = tempfile::tempdir().unwrap();
     let repo = SyncRepo::init(dir.path()).unwrap();
-    repo.set_remote_url("https://127.0.0.1:9/ontheway.git")
+    repo.set_remote_url("https://127.0.0.1:9/odea.git")
         .unwrap();
     match repo.fetch(&Net::default()) {
         Err(SyncError::Network(_)) => {}
@@ -684,7 +747,7 @@ fn describe_names_the_files() {
     assert_eq!(describe(&many), "更新 甲、乙、丙 等 4 个文件");
     // 点开头的排在后面
     assert_eq!(
-        describe(&[change(".gitignore"), change(".ontheway/vault.json"), change(WEEKLY)]),
+        describe(&[change(".gitignore"), change(".odea/vault.json"), change(WEEKLY)]),
         "更新 周报、.gitignore、vault.json"
     );
 }

@@ -78,7 +78,7 @@ function render(swapKey: string, title: string) {
 }
 
 const host = () => container.querySelector<HTMLElement>("[data-swap-host]")!;
-const ghosts = () => [...host().querySelectorAll<HTMLElement>(".otw-swap-ghost")];
+const ghosts = () => [...host().querySelectorAll<HTMLElement>(".odea-swap-ghost")];
 const ghostAnimation = (ghost: HTMLElement) => animations.find((a) => a.target === ghost);
 
 describe("SwapFade", () => {

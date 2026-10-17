@@ -336,7 +336,7 @@ pub struct DocVersion {
     pub blob: String,
     /// 提交时间，UTC 毫秒
     pub time: i64,
-    /// 哪台设备改的：同步提交署名「OnTheWay (设备名)」里的设备名；别的 git 工具提交的就是署名
+    /// 哪台设备改的：同步提交署名「Odea (设备名)」（改名前是「OnTheWay (设备名)」）里的设备名；别的 git 工具提交的就是署名
     pub device: String,
     /// 这台设备自己改的
     pub mine: bool,
@@ -390,7 +390,7 @@ pub enum SyncState {
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
     pub state: SyncState,
-    /// 给人看的云端仓库：`github.com/xxx/ontheway-notes`
+    /// 给人看的云端仓库：`github.com/xxx/odea-notes`
     pub remote: Option<String>,
     /// 上一次同步成功的时间（UTC 毫秒）
     pub last_synced_at: Option<i64>,

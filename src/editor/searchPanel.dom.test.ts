@@ -43,8 +43,8 @@ function mount(doc: string, anchor = 0) {
 
 function open(view: EditorView) {
   openSearchPanel(view);
-  const panel = view.dom.querySelector<HTMLElement>(".otw-search")!;
-  const [find, replace] = panel.querySelectorAll<HTMLInputElement>(".otw-search-input");
+  const panel = view.dom.querySelector<HTMLElement>(".odea-search")!;
+  const [find, replace] = panel.querySelectorAll<HTMLInputElement>(".odea-search-input");
   return { panel, find: find!, replace: replace! };
 }
 
@@ -56,7 +56,7 @@ const type = (input: HTMLInputElement, value: string) => {
 const press = (target: EventTarget, init: KeyboardEventInit) =>
   target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
 
-const count = (panel: HTMLElement) => panel.querySelector(".otw-search-count")?.textContent;
+const count = (panel: HTMLElement) => panel.querySelector(".odea-search-count")?.textContent;
 const selected = (view: EditorView) => {
   const { from, to } = view.state.selection.main;
   return [from, to];
@@ -138,7 +138,7 @@ describe("查找面板", () => {
     expect(find.hasAttribute("main-field")).toBe(true);
     expect(document.activeElement).toBe(find);
     // 替换默认折起来
-    expect(panel.querySelector<HTMLElement>(".otw-search-replace")!.hidden).toBe(true);
+    expect(panel.querySelector<HTMLElement>(".odea-search-replace")!.hidden).toBe(true);
   });
 
   it("searches as you type, jumps straight to the first match and counts", () => {
@@ -149,7 +149,7 @@ describe("查找面板", () => {
     expect(count(panel)).toBe("1/3");
     type(find, "虎");
     expect(count(panel)).toBe("无结果");
-    expect(panel.querySelector(".otw-search-box")!.classList.contains("is-empty")).toBe(true);
+    expect(panel.querySelector(".odea-search-box")!.classList.contains("is-empty")).toBe(true);
   });
 
   it("jumps to the first match after where the search started, wrapping to the top", () => {
@@ -237,8 +237,8 @@ describe("查找面板", () => {
   it("replaces one or all from the replace row", () => {
     const { view } = mount("猫 狗 猫");
     const { panel, find, replace } = open(view);
-    panel.querySelector<HTMLButtonElement>(".otw-search-expand")!.click();
-    expect(panel.querySelector<HTMLElement>(".otw-search-replace")!.hidden).toBe(false);
+    panel.querySelector<HTMLButtonElement>(".odea-search-expand")!.click();
+    expect(panel.querySelector<HTMLElement>(".odea-search-replace")!.hidden).toBe(false);
     expect(document.activeElement).toBe(replace);
     type(find, "猫");
     type(replace, "虎");
@@ -255,9 +255,9 @@ describe("查找面板", () => {
     const { find } = open(view);
     press(find, { key: "Escape" });
     expect(searchPanelOpen(view.state)).toBe(false);
-    expect(view.dom.querySelector(".otw-search:not(.is-leaving)")).toBeNull();
+    expect(view.dom.querySelector(".odea-search:not(.is-leaving)")).toBeNull();
     // 原处只留一份收回去的副本：读屏、键盘都碰不到它
-    const leaving = view.dom.querySelector<HTMLElement>(".otw-search.is-leaving");
+    const leaving = view.dom.querySelector<HTMLElement>(".odea-search.is-leaving");
     if (leaving) {
       expect(leaving.getAttribute("aria-hidden")).toBe("true");
       expect(leaving.inert).toBe(true);

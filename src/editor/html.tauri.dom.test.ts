@@ -36,16 +36,12 @@ describe("本机图片（桌面端）", () => {
   // 附件：`../附件/截图.png` 相对文档自己所在的文件夹
   it("resolves paths relative to the document's folder", () => {
     const asset = (path: string) => `asset://localhost/${encodeURIComponent(path)}`;
-    const base = "D:/文档/OnTheWay/笔记";
-    expect(resolveImageSource("../附件/截图.png", base)).toBe(
-      asset("D:/文档/OnTheWay/附件/截图.png"),
-    );
-    expect(resolveImageSource("./图/a%20b.png", base)).toBe(
-      asset("D:/文档/OnTheWay/笔记/图/a b.png"),
-    );
+    const base = "D:/文档/Odea/笔记";
+    expect(resolveImageSource("../附件/截图.png", base)).toBe(asset("D:/文档/Odea/附件/截图.png"));
+    expect(resolveImageSource("./图/a%20b.png", base)).toBe(asset("D:/文档/Odea/笔记/图/a b.png"));
     expect(resolveImageSource("../../../../../x.png", base)).toBe(asset("D:/x.png"));
-    expect(resolveImageSource("../附件/a.png", "/Users/me/OnTheWay/日记/2026")).toBe(
-      asset("/Users/me/OnTheWay/日记/附件/a.png"),
+    expect(resolveImageSource("../附件/a.png", "/Users/me/Odea/日记/2026")).toBe(
+      asset("/Users/me/Odea/日记/附件/a.png"),
     );
     // 没有基准目录、网络地址、data:：原样
     expect(resolveImageSource("../附件/a.png")).toBe("../附件/a.png");
@@ -71,8 +67,8 @@ describe("本机图片（桌面端）", () => {
         extensions: [markdownSupport(), typoraDecorations],
       }),
     });
-    expect(parent.querySelector(".cm-otw-strong")?.textContent).toBe("粗体");
-    expect(parent.querySelector("img.cm-otw-image")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-strong")?.textContent).toBe("粗体");
+    expect(parent.querySelector("img.cm-odea-image")).not.toBeNull();
     view.destroy();
   });
 });

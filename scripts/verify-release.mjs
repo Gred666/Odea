@@ -14,7 +14,7 @@ if (!version) {
   process.exit(1);
 }
 const tag = `v${version}`;
-const GITHUB = "Gred666/OnTheWay";
+const GITHUB = "Gred666/Odea";
 const config = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const endpoints = config.plugins.updater.endpoints;
 
@@ -43,7 +43,7 @@ async function downloadable(url) {
 
 const release = await (
   await fetch(`https://api.github.com/repos/${GITHUB}/releases/tags/${tag}`, {
-    headers: { "User-Agent": "ontheway-release" },
+    headers: { "User-Agent": "odea-release" },
   })
 ).json();
 check(release.tag_name === tag && !release.draft && !release.prerelease, `GitHub Release ${tag} 正式发布了`, release.html_url ?? "");

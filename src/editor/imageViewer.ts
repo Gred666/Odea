@@ -68,7 +68,7 @@ function icon(d: string): SVGSVGElement {
 function button(label: string, content: Node | string, run: () => void, className = "") {
   const node = document.createElement("button");
   node.type = "button";
-  node.className = `otw-image-viewer-button ${className}`.trim();
+  node.className = `odea-image-viewer-button ${className}`.trim();
   node.title = label;
   node.setAttribute("aria-label", label);
   node.append(content);
@@ -118,14 +118,14 @@ export function openImageViewer(source: HTMLImageElement): void {
   let last = 0;
 
   const overlay = doc.createElement("div");
-  overlay.className = "otw-image-viewer";
+  overlay.className = "odea-image-viewer";
   overlay.tabIndex = -1;
   overlay.setAttribute("role", "dialog");
   overlay.setAttribute("aria-label", source.alt ? `查看图片：${source.alt}` : "查看图片");
   const backdrop = doc.createElement("div");
-  backdrop.className = "otw-image-viewer-backdrop";
+  backdrop.className = "odea-image-viewer-backdrop";
   const image = doc.createElement("img");
-  image.className = "otw-image-viewer-image";
+  image.className = "odea-image-viewer-image";
   image.src = source.currentSrc || source.src;
   image.alt = source.alt;
   image.draggable = false;
@@ -134,10 +134,10 @@ export function openImageViewer(source: HTMLImageElement): void {
   const zoomIn = button("放大（+）", icon(PLUS_ICON), () => stepZoom(STEP));
   const level = button("适应屏幕 / 原始大小（双击图片）", "", () => toggleZoom(), "is-zoom");
   const bar = doc.createElement("div");
-  bar.className = "otw-image-viewer-bar";
+  bar.className = "odea-image-viewer-bar";
   bar.append(zoomOut, level, zoomIn);
   const closer = doc.createElement("div");
-  closer.className = "otw-image-viewer-close";
+  closer.className = "odea-image-viewer-close";
   closer.append(button("关闭（Esc）", icon(CLOSE_ICON), () => close()));
 
   const box = (): Box => ({

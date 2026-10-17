@@ -1,6 +1,7 @@
 import { indentLess, indentMore, indentWithTab, selectLine } from "@codemirror/commands";
 import { searchKeymap } from "@codemirror/search";
 import type { KeyBinding } from "@codemirror/view";
+import { foldSectionAtCursor, unfoldSectionAtCursor } from "./headingFold";
 import {
   changeHeadingLevel,
   clearMarkdownFormat,
@@ -58,6 +59,10 @@ export const markdownKeymap: readonly KeyBinding[] = [
   { key: "Home", run: listItemHome(false), shift: listItemHome(true) },
   { mac: "Mod-ArrowLeft", run: listItemHome(false), shift: listItemHome(true) },
   { key: "Mod-t", mac: "Alt-Mod-t", run: insertTable() },
+  // 收起 / 展开光标所在的这一节（headingFold.ts）。Shift-Mod-[ / ] 已经是列表（和 Typora 一样），
+  // 所以没用 CodeMirror 自带的 foldKeymap
+  { key: "Mod-Alt-[", run: foldSectionAtCursor },
+  { key: "Mod-Alt-]", run: unfoldSectionAtCursor },
   { key: "Mod-\\", run: clearMarkdownFormat() },
   ...searchKeymap,
 ];

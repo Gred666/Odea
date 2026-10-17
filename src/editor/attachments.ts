@@ -108,7 +108,7 @@ const setDropPos = StateEffect.define<number | null>();
 class DropCaret extends WidgetType {
   toDOM() {
     const node = document.createElement("span");
-    node.className = "cm-otw-drop-caret";
+    node.className = "cm-odea-drop-caret";
     node.setAttribute("aria-hidden", "true");
     return node;
   }

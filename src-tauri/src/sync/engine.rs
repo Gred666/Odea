@@ -37,29 +37,34 @@ const BACKOFF_SECS: [u64; 4] = [60, 120, 300, 600];
 const ATTEMPTS: usize = 3;
 const REPACK_LOOSE: usize = 1000;
 const REPACK_EVERY_MS: i64 = 24 * 3600 * 1000;
-const AUTHOR_EMAIL: &str = "ontheway@localhost";
+const AUTHOR_EMAIL: &str = "odea@localhost";
 const MB: u64 = 1024 * 1024;
 
-/// 仓库的 .git/config 里 `ontheway.autosync = true` 才同步（技术方案 §5.9.4）
-pub const AUTOSYNC_KEY: &str = "ontheway.autosync";
+/// 仓库的 .git/config 里 `odea.autosync = true` 才同步（技术方案 §5.9.4）。
+/// 改名前的 `ontheway.*` 打开仓库时换成新的（SyncRepo::open）
+pub const AUTOSYNC_KEY: &str = "odea.autosync";
 
-/// 这台设备叫什么：提交署名是「OnTheWay (设备名)」，历史版本里据此说是哪台设备改的
+/// 这台设备叫什么：提交署名是「Odea (设备名)」，历史版本里据此说是哪台设备改的
 pub fn this_device() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "本机".into())
 }
 
-/// 提交署名里的设备名：「OnTheWay (书房的电脑)」→「书房的电脑」；别的 git 工具提交的原样返回
+/// 提交署名里的设备名：「Odea (书房的电脑)」→「书房的电脑」；改名前的提交是「OnTheWay (…)」，
+/// 一样认；别的 git 工具提交的原样返回
 pub fn device_of(author: &str) -> &str {
-    author
-        .strip_prefix("OnTheWay (")
-        .and_then(|rest| rest.strip_suffix(')'))
+    [APP_NAME, crate::old_name::NAME]
+        .iter()
+        .find_map(|name| author.strip_prefix(*name)?.strip_prefix(" (")?.strip_suffix(')'))
         .unwrap_or(author)
 }
-pub const PROVIDER_KEY: &str = "ontheway.provider";
+
+/// 提交署名里的应用名
+const APP_NAME: &str = "Odea";
+pub const PROVIDER_KEY: &str = "odea.provider";
 /// 这个仓库用哪个账号同步（login，令牌在钥匙串里）
-pub const LOGIN_KEY: &str = "ontheway.login";
+pub const LOGIN_KEY: &str = "odea.login";
 
 /// 同步线程和外面打交道的口子
 #[derive(Clone)]
@@ -205,7 +210,7 @@ impl From<SyncError> for Halt {
     }
 }
 
-/// 记在 .git/ontheway.json 里（不会被推上去）：提示过哪些超限文件、上次打包是什么时候
+/// 记在 .git/odea.json 里（不会被推上去）：提示过哪些超限文件、上次打包是什么时候
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Memo {
@@ -361,7 +366,7 @@ impl Engine {
     /// 一轮。返回联没联网（本地轮没东西要推时不联网）
     fn try_round(&mut self, kind: Kind) -> Result<bool, Halt> {
         let limits = limits(self.repo.config_get(PROVIDER_KEY).as_deref());
-        let name = format!("OnTheWay ({})", self.device);
+        let name = format!("{APP_NAME} ({})", self.device);
         let author = Author { name: &name, email: AUTHOR_EMAIL };
 
         // 一下子要进库很多文件（第一次开启同步之类）：先在锁外成批放进包里，
@@ -564,8 +569,11 @@ impl From<Halt> for SyncError {
     }
 }
 
+/// .git 里的记事文件。改名前叫 ontheway.json，打开仓库时换成这个名字（SyncRepo::open）
+pub const MEMO_FILE: &str = "odea.json";
+
 fn memo_path(root: &Path) -> PathBuf {
-    root.join(".git").join("ontheway.json")
+    root.join(".git").join(MEMO_FILE)
 }
 
 /// 上次提交到一半被打断（关窗口时进程没等完）留下的锁。一分钟以前的才删：
@@ -760,7 +768,7 @@ mod tests {
         a.vault().note_create("周报", "正文").unwrap();
         a.sync();
         // 云端换成连不上的地址：本地轮没东西要推，就不该去连
-        a.engine.repo.set_remote_url("https://127.0.0.1:9/ontheway.git").unwrap();
+        a.engine.repo.set_remote_url("https://127.0.0.1:9/odea.git").unwrap();
         assert!(matches!(a.engine.round(Kind::Local), Outcome::Quiet));
 
         // 有了改动，本地轮要推，连不上 → 离线，改动都在本机

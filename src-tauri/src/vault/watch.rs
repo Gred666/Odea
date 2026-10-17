@@ -3,7 +3,7 @@
 
 - 事件先攒 300ms，安静下来再处理一批：保存一个文件往往是好几个事件
   （建临时文件、改名覆盖），网盘同步更是一阵一阵的。
-- 以点开头的路径不管：应用自己的临时文件、.ontheway/、.git/、.obsidian/。
+- 以点开头的路径不管：应用自己的临时文件、.odea/（改名前的 .ontheway/）、.git/、.obsidian/。
 - 一批里全是 .md 文件：只重读这几个；有目录或别的东西（整个文件夹被挪走、改名）：
   整个仓库增量扫一遍（按修改时间和大小，没变的不读）。
 - 应用自己写的文件扫描时指纹对得上，不会被当成外部改动，也不会发通知。
@@ -156,7 +156,7 @@ mod tests {
         let event = |path: &str| {
             Ok(notify::Event::new(EventKind::Any).add_path(PathBuf::from(path)))
         };
-        batch.add(root, event("/vault/.ontheway/trash/x.md"));
+        batch.add(root, event("/vault/.odea/trash/x.md"));
         batch.add(root, event("/vault/笔记/.周报.md.1-0.tmp"));
         batch.add(root, event("/elsewhere/a.md"));
         assert!(batch.is_empty());

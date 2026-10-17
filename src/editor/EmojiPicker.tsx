@@ -36,7 +36,7 @@ const PANEL_HEIGHT = SEARCH_HEIGHT + GRID_HEIGHT + FOOTER_HEIGHT;
 
 /* ---------------- 最近使用 ---------------- */
 
-const RECENT_KEY = "otw.emoji.recent";
+const RECENT_KEY = "odea.emoji.recent";
 const RECENT_LIMIT = COLUMNS;
 
 export function loadRecent(): AnimatedEmoji[] {
@@ -69,9 +69,14 @@ export function rememberRecent(emoji: AnimatedEmoji): void {
 
 /* ---------------- 搜索与分区 ---------------- */
 
-/** 中文名、近义词、拼音、英文、Unicode 表情本身都能搜；也认 `:otw_fire` 这种短码写法。 */
+/** 中文名、近义词、拼音、英文、Unicode 表情本身都能搜；也认 `:odea_fire` 这种短码写法。 */
 export function searchEmojis(query: string): AnimatedEmoji[] {
-  const q = query.trim().toLowerCase().replace(/^:/, "").replace(/^otw_/, "").replace(/:$/, "");
+  const q = query
+    .trim()
+    .toLowerCase()
+    .replace(/^:/, "")
+    .replace(/^(?:odea|otw)_/, "")
+    .replace(/:$/, "");
   if (!q) return [...ANIMATED_EMOJIS];
   return ANIMATED_EMOJIS.filter(
     (emoji) =>
@@ -248,7 +253,7 @@ function EmojiGlyph({ emoji, active }: { emoji: AnimatedEmoji; active: boolean }
     else player.stop();
   }, [active]);
 
-  return <span ref={hostRef} className="otw-ae otw-ae-picker" aria-hidden="true" />;
+  return <span ref={hostRef} className="odea-ae odea-ae-picker" aria-hidden="true" />;
 }
 
 export function EmojiPicker({
@@ -407,7 +412,7 @@ export function EmojiPicker({
       // overflow-clip 而不是 hidden：hidden 还是个滚动容器，展开途中键盘走到还没露出来的
       // 格子，scrollIntoView 会把整个面板的内容卷上去
       className={cn(
-        "otw-emoji-picker fixed z-50 flex w-[292px] flex-col overflow-clip rounded-xl bg-canvas",
+        "odea-emoji-picker fixed z-50 flex w-[292px] flex-col overflow-clip rounded-xl bg-canvas",
         "shadow-float ring-1 ring-line-strong",
         place.above && "justify-end",
       )}
@@ -423,8 +428,8 @@ export function EmojiPicker({
             aria-label="搜索动态表情"
             role="combobox"
             aria-expanded="true"
-            aria-controls="otw-emoji-grid"
-            aria-activedescendant={current ? `otw-emoji-${current.id}-${active}` : undefined}
+            aria-controls="odea-emoji-grid"
+            aria-activedescendant={current ? `odea-emoji-${current.id}-${active}` : undefined}
             spellCheck={false}
             className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none
                      placeholder:text-faint"
@@ -433,7 +438,7 @@ export function EmojiPicker({
 
         <div
           ref={gridRef}
-          id="otw-emoji-grid"
+          id="odea-emoji-grid"
           style={place.gridMax ? { maxHeight: place.gridMax } : undefined}
           role="listbox"
           aria-label="动态表情"
@@ -460,7 +465,7 @@ export function EmojiPicker({
                     return (
                       <button
                         key={`${section.id}-${emoji.id}`}
-                        id={`otw-emoji-${emoji.id}-${itemIndex}`}
+                        id={`odea-emoji-${emoji.id}-${itemIndex}`}
                         type="button"
                         role="option"
                         aria-selected={selected}

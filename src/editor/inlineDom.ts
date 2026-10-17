@@ -47,28 +47,28 @@ export function renderInline(text: string): Node[] {
     ] = match;
 
     if (code !== undefined) {
-      out.push(element("code", "cm-otw-code", [document.createTextNode(code.trim())]));
+      out.push(element("code", "cm-odea-code", [document.createTextNode(code.trim())]));
     } else if (strong !== undefined) {
-      out.push(element("strong", "cm-otw-strong", renderInline(strong)));
+      out.push(element("strong", "cm-odea-strong", renderInline(strong)));
     } else if (emphasis !== undefined) {
-      out.push(element("em", "cm-otw-emphasis", renderInline(emphasis)));
+      out.push(element("em", "cm-odea-emphasis", renderInline(emphasis)));
     } else if (strike !== undefined) {
-      out.push(element("del", "cm-otw-strike", renderInline(strike)));
+      out.push(element("del", "cm-odea-strike", renderInline(strike)));
     } else if (highlight !== undefined) {
-      out.push(element("mark", "cm-otw-highlight", renderInline(highlight)));
+      out.push(element("mark", "cm-odea-highlight", renderInline(highlight)));
     } else if (/^<br/i.test(whole)) {
       out.push(document.createElement("br"));
     } else if (htmlTag !== undefined) {
       out.push(renderHtmlTag(whole, htmlTag, htmlAttrs ?? "", htmlInner ?? ""));
     } else if (wiki !== undefined) {
       const [target, alias] = wiki.split("|");
-      const node = element("span", "cm-otw-wikilink", [
+      const node = element("span", "cm-odea-wikilink", [
         document.createTextNode((alias ?? target ?? "").trim()),
       ]);
       node.dataset.target = (target ?? "").trim();
       out.push(node);
     } else if (linkText !== undefined) {
-      const node = element("span", "cm-otw-link", renderInline(linkText));
+      const node = element("span", "cm-odea-link", renderInline(linkText));
       node.dataset.href = linkUrl ?? "";
       node.title = linkUrl ?? "";
       out.push(node);
@@ -109,8 +109,8 @@ function renderHtmlTag(whole: string, tagName: string, attrs: string, inner: str
     }
   }
   if (name === "abbr" && tag.attrs.title) {
-    node.dataset.otwTipLabel = node.textContent?.trim() ?? "";
-    node.dataset.otwTip = tag.attrs.title;
+    node.dataset.odeaTipLabel = node.textContent?.trim() ?? "";
+    node.dataset.odeaTip = tag.attrs.title;
   }
   return node;
 }

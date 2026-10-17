@@ -166,12 +166,12 @@ export class TaskWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const box = document.createElement("span");
-    box.className = `cm-otw-task${this.checked ? " is-checked" : ""}`;
+    box.className = `cm-odea-task${this.checked ? " is-checked" : ""}`;
     box.setAttribute("role", "checkbox");
     box.setAttribute("aria-checked", String(this.checked));
     // 对勾是一条 SVG 路径：勾上时从左到右描出来（stroke-dashoffset），
     // 比直接冒出一个 ✓ 字符有「动作」感。
-    box.append(svg("0 0 16 16", "M3.5 8.5l3 3 6-6.5", "cm-otw-task-check"));
+    box.append(svg("0 0 16 16", "M3.5 8.5l3 3 6-6.5", "cm-odea-task-check"));
     box.addEventListener("mousedown", (event) => {
       event.preventDefault();
       const from = positionOf(view, box) + this.offset;
@@ -203,7 +203,7 @@ export class ListMarkerWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const marker = document.createElement("span");
-    marker.className = "cm-otw-list-marker";
+    marker.className = "cm-odea-list-marker";
     marker.textContent = this.display;
     if (this.style) marker.setAttribute("style", this.style);
     marker.addEventListener("mousedown", (event) => {
@@ -227,7 +227,7 @@ export class CodeInfoWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const label = document.createElement("span");
-    label.className = "cm-otw-code-info";
+    label.className = "cm-odea-code-info";
     label.textContent = this.language;
     label.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -263,13 +263,13 @@ export class CodeFenceWidget extends OtwWidget {
   toDOM(view: EditorView) {
     // 外层只负责留白（padding，见文件头）。
     const block = document.createElement("div");
-    block.className = `cm-otw-fence-block is-${this.side}`;
+    block.className = `cm-odea-fence-block is-${this.side}`;
     const cap = document.createElement("div");
-    cap.className = `cm-otw-code-fence is-${this.side}`;
+    cap.className = `cm-odea-code-fence is-${this.side}`;
     if (this.side === "open") {
       if (this.language) {
         const label = document.createElement("span");
-        label.className = "cm-otw-code-lang";
+        label.className = "cm-odea-code-lang";
         label.textContent = this.language;
         cap.append(label);
       }
@@ -284,10 +284,10 @@ export class CodeFenceWidget extends OtwWidget {
 export function copyButton(view: EditorView, text: () => string, what: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "cm-otw-code-copy";
+  button.className = "cm-odea-code-copy";
   button.setAttribute("aria-label", what);
   button.title = what;
-  const icon = svg("0 0 20 20", COPY_ICON, "cm-otw-code-copy-icon");
+  const icon = svg("0 0 20 20", COPY_ICON, "cm-odea-code-copy-icon");
   const label = document.createElement("span");
   label.textContent = "复制";
   button.append(icon, label);
@@ -357,7 +357,7 @@ export class HorizontalRuleWidget extends OtwWidget {
 
   toDOM() {
     const rule = document.createElement("div");
-    rule.className = "cm-otw-hr";
+    rule.className = "cm-odea-hr";
     return this.settle(rule);
   }
 }
@@ -450,11 +450,11 @@ export class ImageWidget extends OtwWidget {
   toDOM(view: EditorView) {
     // 外层管留白（padding，见文件头），里层贴着图片的边，按钮和拖柄按它定位
     const frame = document.createElement("span");
-    frame.className = "cm-otw-image-frame";
+    frame.className = "cm-odea-image-frame";
     const box = document.createElement("span");
-    box.className = "cm-otw-image-box";
+    box.className = "cm-odea-image-box";
     const image = document.createElement("img");
-    image.className = "cm-otw-image";
+    image.className = "cm-odea-image";
     image.loading = "lazy";
     image.decoding = "async";
     image.draggable = false;
@@ -470,7 +470,7 @@ export class ImageWidget extends OtwWidget {
     image.addEventListener("error", () => settle("is-error"));
 
     const tools = document.createElement("span");
-    tools.className = "cm-otw-image-tools";
+    tools.className = "cm-odea-image-tools";
     const zoom = imageTool(ZOOM_ICON, "查看大图", () => openImageViewer(image));
     const source = imageTool(SOURCE_ICON, "编辑源码", () =>
       liveImages.get(frame)?.toggleSource(view, frame),
@@ -479,7 +479,7 @@ export class ImageWidget extends OtwWidget {
     tools.append(zoom, source);
 
     const handle = document.createElement("span");
-    handle.className = "cm-otw-image-handle";
+    handle.className = "cm-odea-image-handle";
     handle.title = "拖动改大小，双击还原";
     handle.addEventListener("pointerdown", (event) => startResize(view, frame, image, event));
     handle.addEventListener("dblclick", (event) => {
@@ -511,8 +511,8 @@ export class ImageWidget extends OtwWidget {
   }
 
   override updateDOM(dom: HTMLElement): boolean {
-    const image = dom.querySelector<HTMLImageElement>("img.cm-otw-image");
-    if (!dom.classList.contains("cm-otw-image-frame") || !image) return false;
+    const image = dom.querySelector<HTMLImageElement>("img.cm-odea-image");
+    if (!dom.classList.contains("cm-odea-image-frame") || !image) return false;
     liveImages.set(dom, this);
     this.paint(dom, image);
     return true;
@@ -522,7 +522,7 @@ export class ImageWidget extends OtwWidget {
   private paint(frame: HTMLElement, image: HTMLImageElement) {
     const { alt, title, width, height, source } = this.image;
     frame.classList.toggle("is-open", this.open);
-    frame.querySelector(".cm-otw-image-tool.is-source")?.classList.toggle("is-active", this.open);
+    frame.querySelector(".cm-odea-image-tool.is-source")?.classList.toggle("is-active", this.open);
     image.alt = alt;
     image.title = title;
     image.style.width = width ? `${width}px` : "";
@@ -589,10 +589,10 @@ export class ImageWidget extends OtwWidget {
 function imageTool(icon: string, label: string, run: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "cm-otw-image-tool";
+  button.className = "cm-odea-image-tool";
   button.title = label;
   button.setAttribute("aria-label", label);
-  button.append(svg("0 0 24 24", icon, "cm-otw-image-tool-icon"));
+  button.append(svg("0 0 24 24", icon, "cm-odea-image-tool-icon"));
   button.addEventListener("mousedown", (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -639,7 +639,7 @@ function startResize(
   const line = frame.closest(".cm-line") ?? view.contentDOM;
   const limit = Math.max(IMAGE_MIN_WIDTH, Math.floor(line.getBoundingClientRect().width));
   const badge = document.createElement("span");
-  badge.className = "cm-otw-image-size";
+  badge.className = "cm-odea-image-size";
   let width = startWidth;
   let frameRequest = 0;
 
@@ -707,7 +707,7 @@ export class GlyphWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const node = document.createElement("span");
-    node.className = `cm-otw-glyph is-${this.kind}`;
+    node.className = `cm-odea-glyph is-${this.kind}`;
     node.textContent = this.glyph;
     node.title = this.source;
     node.addEventListener("mousedown", (event) => {
@@ -730,7 +730,7 @@ export function emojiPlayerOf(dom: HTMLElement): EmojiPlayer | undefined {
 }
 
 /**
- * `:otw_fire:` 的替身。
+ * `:odea_fire:` 的替身。
  *
  * 和普通 Emoji 不同，它表现得像一个字符：光标停在它旁边时不展开源码
  * （否则刚插进去看到的就是一串短码），退格整个删掉，方向键一步跨过。
@@ -755,7 +755,7 @@ export class AnimatedEmojiWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const node = document.createElement("span");
-    node.className = "otw-ae cm-otw-ae";
+    node.className = "odea-ae cm-odea-ae";
     node.setAttribute("role", "img");
     node.setAttribute("aria-label", this.emoji.name);
     node.title = `${this.emoji.name}  ${this.emoji.shortcode}\n双击编辑`;
@@ -802,7 +802,7 @@ export class HardBreakWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const node = document.createElement("span");
-    node.className = "cm-otw-hard-break";
+    node.className = "cm-odea-hard-break";
     node.textContent = "↵";
     node.title = "硬换行";
     node.addEventListener("mousedown", (event) => {
@@ -850,7 +850,7 @@ export class CalloutBadgeWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const badge = document.createElement("span");
-    badge.className = `cm-otw-callout-badge is-${this.head.kind}`;
+    badge.className = `cm-odea-callout-badge is-${this.head.kind}`;
     const text = document.createElement("span");
     text.textContent = this.head.label;
     badge.append(calloutIcon(this.head.kind), text);
@@ -858,7 +858,7 @@ export class CalloutBadgeWidget extends OtwWidget {
     if (this.head.fold && foldOffset !== null) {
       badge.classList.add(this.head.fold === "-" ? "is-collapsed" : "is-expanded");
       badge.title = this.head.fold === "-" ? "展开" : "收起";
-      badge.append(svg("0 0 24 24", CHEVRON, "cm-otw-callout-chevron"));
+      badge.append(svg("0 0 24 24", CHEVRON, "cm-odea-callout-chevron"));
     }
     badge.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -895,10 +895,10 @@ export class CalloutFoldWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const block = document.createElement("div");
-    block.className = `cm-otw-callout-fold is-${this.kind}`;
+    block.className = `cm-odea-callout-fold is-${this.kind}`;
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "cm-otw-callout-fold-button";
+    button.className = "cm-odea-callout-fold-button";
     button.textContent = `… 展开 ${this.lineCount} 行`;
     button.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -947,16 +947,16 @@ export class FootnoteWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const node = document.createElement(this.role === "ref" ? "sup" : "span");
-    node.className = `cm-otw-footnote is-${this.role}`;
+    node.className = `cm-odea-footnote is-${this.role}`;
     node.textContent = this.id;
     // 悬停卡片（hoverCard.ts），不用原生 title：那个就压在鼠标底下，把正在读的字盖住
-    node.dataset.otwTipLabel = `脚注 ${this.id}`;
+    node.dataset.odeaTipLabel = `脚注 ${this.id}`;
     if (this.role === "ref") {
-      node.dataset.otwTip = this.preview || "还没有写这条脚注的内容";
-      node.dataset.otwTipHint = this.preview ? "点击跳到脚注" : "点击编辑";
+      node.dataset.odeaTip = this.preview || "还没有写这条脚注的内容";
+      node.dataset.odeaTipHint = this.preview ? "点击跳到脚注" : "点击编辑";
     } else {
-      node.dataset.otwTip = "";
-      node.dataset.otwTipHint = "点击回到正文引用处";
+      node.dataset.odeaTip = "";
+      node.dataset.odeaTipHint = "点击回到正文引用处";
     }
     node.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -1026,9 +1026,9 @@ export class TocWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const block = document.createElement("div");
-    block.className = "cm-otw-toc-block";
+    block.className = "cm-odea-toc-block";
     const nav = document.createElement("nav");
-    nav.className = "cm-otw-toc";
+    nav.className = "cm-odea-toc";
     nav.setAttribute("aria-label", "目录");
     nav.title = "点击空白处编辑";
     nav.addEventListener("mousedown", (event) => {
@@ -1038,23 +1038,23 @@ export class TocWidget extends OtwWidget {
     });
 
     const title = document.createElement("div");
-    title.className = "cm-otw-toc-title";
+    title.className = "cm-odea-toc-title";
     title.textContent = "目录";
     nav.append(title);
 
     if (this.entries.length === 0) {
       const empty = document.createElement("div");
-      empty.className = "cm-otw-toc-empty";
+      empty.className = "cm-odea-toc-empty";
       empty.textContent = "还没有标题";
       nav.append(empty);
     } else {
       const list = document.createElement("ol");
-      list.className = "cm-otw-toc-list";
+      list.className = "cm-odea-toc-list";
       // 最浅的标题顶格，其余按层级缩进 —— 全文只有 H2/H3 时不该空出 H1 那一档。
       const base = Math.min(...this.entries.map((entry) => entry.level));
       for (const entry of this.entries) {
         const item = document.createElement("li");
-        item.className = "cm-otw-toc-item";
+        item.className = "cm-odea-toc-item";
         item.style.setProperty("--depth", String(entry.level - base));
         const button = document.createElement("button");
         button.type = "button";
@@ -1095,12 +1095,12 @@ export class FrontMatterFenceWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const block = document.createElement("div");
-    block.className = `cm-otw-frontmatter-block is-${this.side}`;
+    block.className = `cm-odea-frontmatter-block is-${this.side}`;
     const cap = document.createElement("div");
-    cap.className = `cm-otw-frontmatter-fence is-${this.side}`;
+    cap.className = `cm-odea-frontmatter-fence is-${this.side}`;
     if (this.side === "open") {
       const label = document.createElement("span");
-      label.className = "cm-otw-frontmatter-label";
+      label.className = "cm-odea-frontmatter-label";
       label.textContent = "属性";
       cap.append(label);
     }
@@ -1124,9 +1124,9 @@ export class LineBreakWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const node = document.createElement("span");
-    node.className = "cm-otw-br";
+    node.className = "cm-odea-br";
     const hint = document.createElement("span");
-    hint.className = "cm-otw-hard-break";
+    hint.className = "cm-odea-hard-break";
     hint.textContent = "↵";
     hint.title = "<br>";
     hint.addEventListener("mousedown", (event) => {
@@ -1150,7 +1150,7 @@ export class CommentWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const pill = document.createElement("span");
-    pill.className = "cm-otw-comment";
+    pill.className = "cm-odea-comment";
     pill.textContent = "注释";
     pill.title = "HTML 注释 · 点击查看";
     const root = this.block ? document.createElement("div") : pill;
@@ -1159,7 +1159,7 @@ export class CommentWidget extends OtwWidget {
       jumpToSource(view, positionOf(view, root));
     });
     if (!this.block) return this.settle(pill);
-    root.className = "cm-otw-comment-block";
+    root.className = "cm-odea-comment-block";
     root.append(pill);
     return this.settle(root);
   }
@@ -1189,9 +1189,9 @@ export class HtmlBlockWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const block = document.createElement("div");
-    block.className = "cm-otw-html-widget-block";
+    block.className = "cm-odea-html-widget-block";
     const host = document.createElement("div");
-    host.className = "cm-otw-html-widget";
+    host.className = "cm-odea-html-widget";
     host.title = "点击空白处编辑 HTML";
     if (hasRenderableHtml(this.source)) host.append(sanitizeHtml(this.source));
     else host.textContent = this.source;

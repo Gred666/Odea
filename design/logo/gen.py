@@ -1,10 +1,10 @@
-"""OnTheWay 的 Logo：生成源文件，并（可选）重建 src-tauri/icons。
+"""Odea 的 Logo：生成源文件，并（可选）重建 src-tauri/icons。
 
     python design/logo/gen.py           # 只写 design/logo/*.svg 和 preview.html
     python design/logo/gen.py --apply   # 再用 tauri CLI 渲染整套应用图标
 
-图形：手写的一个「O」，没有合上；缺口里的蓝点是「你现在的位置」。
-一圈 = 一天 / 一周 / 一年，也是复盘的那一圈；没合上 = 还在路上。
+图形：起笔一点。Odea 是把 idea 的 i 写成了 O（ode，颂诗）—— i 上那一点留着，
+就是 O 右上缺口里的蓝点：先有一个想法，再从它旁边起笔，绕一圈写成字。
 
 笔画不是 stroke，是算出来的填充轮廓：中线按弧长取样，宽度 = 平头笔模型（顺着笔锋走最细）
 × 起笔 / 收笔的压力，沿法线外扩、两端补圆头，再用 Catmull-Rom 转成三次贝塞尔。
@@ -126,9 +126,8 @@ def superellipse(cx, cy, a, n=5.0, count=96):
 
 # ---------------------------------------------------------------- 图形
 
-# 三档给图标：标准（48px 以上）、中（32px）、小（16 / 24px）；light 给和字标的横排组合，配它的单线笔画
+# 三档给图标：标准（48px 以上）、中（32px）、小（16 / 24px）
 WEIGHTS = {
-    "light": dict(W=50, dot_r=40, nib_amt=0.3, entry=(0.7, 0.12), exit_=(0.6, 0.66), gaps=(21, 23)),
     "regular": dict(W=68, dot_r=46, nib_amt=0.28, entry=(0.72, 0.12), exit_=(0.6, 0.66), gaps=(22, 24)),
     "mid": dict(W=82, dot_r=54, nib_amt=0.12, entry=(0.9, 0.08), exit_=(0.8, 0.7), gaps=(24, 26), scale=1.1),
     "small": dict(W=96, dot_r=60, nib_amt=0.0, entry=(1, 0.01), exit_=(1, 0.99), gaps=(26, 28), scale=1.2),
@@ -245,33 +244,24 @@ def glyph_svg(weight="regular", favicon=False):
 """
 
 
-# 和 src/components/Logo.tsx 的 STROKES 同一组手写笔画
+# 和 src/components/logoGeometry.ts 的 STROKES、DOT 同一组：开口的 O、d 的碗和竖、e、a
 WORDMARK = [
-    "M43 25 C 39 15, 27 11, 18 19 C 9 27, 7 46, 15 55 C 23 64, 38 60, 43 47 C 46 39, 45 30, 42 24 C 40 20, 37 17, 34 15",
-    "M56 61 C 55 52, 55 41, 57 35 C 61 30, 69 30, 72 36 C 74 40, 74 47, 74 52 C 74 56, 74 59, 75 61",
-    "M83 18 C 93 14, 108 14, 117 17",
-    "M101 16 C 100 28, 99 43, 99 54 C 99 59, 102 60, 106 57",
-    "M123 12 C 120 26, 119 44, 119 61 C 119 51, 120 41, 122 36 C 126 31, 133 31, 136 37 C 138 41, 138 48, 138 53 C 138 57, 138 59, 139 61",
-    "M146 48 C 152 46, 160 44, 165 42 C 167 37, 163 33, 158 34 C 152 35, 147 41, 147 48 C 147 55, 152 62, 160 61 C 164 60, 167 57, 169 54",
-    "M176 15 C 179 30, 184 48, 189 59 C 193 48, 196 35, 199 26 C 202 36, 206 49, 210 59 C 214 47, 217 29, 219 15",
-    "M241 37 C 236 32, 227 32, 223 39 C 219 46, 221 56, 228 59 C 234 61, 239 55, 240 47 C 241 41, 241 37, 241 35 C 240 44, 240 53, 241 61",
-    "M247 35 C 247 43, 249 52, 253 57 C 256 60, 260 58, 262 52 C 264 45, 266 38, 267 35 C 265 46, 262 59, 259 68 C 256 76, 251 79, 246 75",
+    "M30.78 14.91 C 26.57 14.27, 21.99 15.45, 18 19 C 9 27, 7 46, 15 55 C 23 64, 38 60, 43 47 C 45.65 39.94, 45.18 32.1, 42.97 26.24",
+    "M74 37 C 69 32, 60 32, 56 39 C 52 46, 54 56, 61 59 C 67 61, 72 55, 73 47 C 74 41, 74 38, 74 36",
+    "M76 12 C 75 26, 74 41, 74 52 C 74 56, 74 59, 75 61",
+    "M82 48 C 88 46, 96 44, 101 42 C 103 37, 99 33, 94 34 C 88 35, 83 41, 83 48 C 83 55, 88 62, 96 61 C 100 60, 103 57, 105 54",
+    "M134 37 C 129 32, 120 32, 116 39 C 112 46, 114 56, 121 59 C 127 61, 132 55, 133 47 C 134 41, 134 37, 134 35 C 133 44, 133 53, 134 61",
 ]
+WORDMARK_DOT = (38.4, 18.8, 3.5)
 
 
 def lockup_svg():
-    """横排组合：标记 + 手写字标。标记高度约等于字标的大写高度 × 1.35。"""
-    stroke_d, (dx, dy, dr) = mark("light")
-    gx, gy, gw, gh = mark_box("light", pad=0)
-    s = 66 / gh  # 标记在字标坐标里高 66
-    tx, ty = -gw * s - 18, 36 - gh * s / 2  # 放在字标左边 18 个单位，竖直居中在字标中线上
+    """字标：手写的 Odea。它的 O 就是图标 —— 开口、缺口里一个蓝点，所以不用再在左边另摆一个标记。"""
     words = "".join(f'<path d="{d}"/>' for d in WORDMARK)
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="{fmt(tx - 4)} 0 {fmt(272 - tx + 4)} 82">
-<g transform="translate({fmt(tx)} {fmt(ty)}) scale({s:.5f}) translate({fmt(-gx)} {fmt(-gy)})">
-  <path fill="currentColor" d="{stroke_d}"/>
-  <circle fill="{ACCENT}" style="fill:var(--color-accent,{ACCENT})" cx="{fmt(dx)}" cy="{fmt(dy)}" r="{fmt(dr)}"/>
-</g>
+    dx, dy, dr = WORDMARK_DOT
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="4 6 136 62">
 <g fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">{words}</g>
+<circle fill="{ACCENT}" style="fill:var(--color-accent,{ACCENT})" cx="{fmt(dx)}" cy="{fmt(dy)}" r="{fmt(dr)}"/>
 </svg>
 """
 

@@ -224,7 +224,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
         "> [!今日主线]",
         `> ${CARET}`,
         "",
-        "## :otw_target: 最重要的三件事",
+        "## :odea_target: 最重要的三件事",
         "",
         "- [ ] ",
         "- [ ] ",
@@ -247,7 +247,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
     icon: Clock,
     build: () =>
       lines(
-        `## :otw_hourglass: 时间块${CARET}`,
+        `## :odea_hourglass: 时间块${CARET}`,
         "",
         "| 时间 | 计划 | 实际 |",
         "|:---|:---|:---|",
@@ -268,7 +268,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
     icon: Moon,
     build: () =>
       lines(
-        "## :otw_moon: 晚间复盘",
+        "## :odea_moon: 晚间复盘",
         "",
         "| 精力 /5 | 专注 /5 | 心情 /5 |",
         "|:---:|:---:|:---:|",
@@ -288,7 +288,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
     icon: PenLine,
     build: () =>
       lines(
-        "## :otw_write: 三行日记",
+        "## :odea_write: 三行日记",
         "",
         `1. **今天最不顺的事**：${CARET}`,
         "2. **今天最开心的事**：",
@@ -310,7 +310,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
         "> [!本周主题]",
         `> ${CARET}`,
         "",
-        "## :otw_target: 三个重点",
+        "## :odea_target: 三个重点",
         "",
         "- [ ] ",
         "- [ ] ",
@@ -340,7 +340,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
     icon: History,
     build: () =>
       lines(
-        "## :otw_flag: 本周复盘",
+        "## :odea_flag: 本周复盘",
         "",
         "### 先过一遍",
         "",
@@ -379,7 +379,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
       const header = days.map((day) => `${formatWeekdayCN(day)} ${fromISODate(day).getDate()}`);
       const row = (habit: string) => `| ${habit} |${"  |".repeat(7)}`;
       return lines(
-        `## :otw_sprout: 习惯打卡${CARET}`,
+        `## :odea_sprout: 习惯打卡${CARET}`,
         "",
         `| 习惯 | ${header.join(" | ")} |`,
         `|:---|${":---:|".repeat(7)}`,
@@ -404,7 +404,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
         `> [!${formatMonthCN(ctx.date)}的主题]`,
         `> ${CARET}`,
         "",
-        "## :otw_target: 目标",
+        "## :odea_target: 目标",
         "",
         "| 目标 | 怎样算完成 | 进度 |",
         "|:---|:---|:---:|",
@@ -433,7 +433,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
     icon: History,
     build: (ctx) =>
       lines(
-        `## :otw_flag: ${formatMonthCN(ctx.date)}复盘`,
+        `## :odea_flag: ${formatMonthCN(ctx.date)}复盘`,
         "",
         "### 目标对照",
         "",
@@ -479,7 +479,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
         `> [!${year} 年的关键词]`,
         `> ${CARET}`,
         "",
-        "## :otw_rocket: 六个方面",
+        "## :odea_rocket: 六个方面",
         "",
         "| 方面 | 年底想看到的样子 | 怎么衡量 |",
         "|:---|:---|:---|",
@@ -509,7 +509,7 @@ export const TEMPLATES: readonly DocTemplate[] = [
     icon: Sparkles,
     build: (ctx) =>
       lines(
-        `## :otw_star: ${formatYear(ctx.date)} 年复盘`,
+        `## :odea_star: ${formatYear(ctx.date)} 年复盘`,
         "",
         "### 用三个词形容这一年",
         "",

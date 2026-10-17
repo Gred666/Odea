@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * margin 不在边框盒里。所以 widget 上的 margin 会让高度图比真实布局短，
  * 点击坐标就会映射到错误的行 —— 表现为「点这一行，光标跳到下一行」。
  *
- * 实测：.cm-otw-table-widget 的 margin: 0.9em 0（font-size 14px）每个表格
+ * 实测：.cm-odea-table-widget 的 margin: 0.9em 0（font-size 14px）每个表格
  * 少算 25.2px，一篇有三个表格的文档累计偏 76px，标题行点下去落到下一行。
  *
  * 规则：widget 的间距一律用 padding（或外层容器的 padding），不许用 margin。
@@ -16,11 +16,11 @@ const CSS = readFileSync(path.join(process.cwd(), "src/styles/globals.css"), "ut
 
 /** 这些类会成为 widget 的最外层元素，它们的 margin 不会被计入高度图。 */
 const WIDGET_ROOT_CLASSES = [
-  "cm-otw-table-block",
-  "cm-otw-fence-block",
-  "cm-otw-hr",
-  "cm-otw-image-frame",
-  "cm-otw-image",
+  "cm-odea-table-block",
+  "cm-odea-fence-block",
+  "cm-odea-hr",
+  "cm-odea-image-frame",
+  "cm-odea-image",
 ];
 
 function declarationsFor(className: string): string[] {
@@ -62,25 +62,25 @@ describe("围栏的封口和源码行同高", () => {
     declarationsFor(className).some((d) => d.includes(`var(${variable})`));
 
   it("code fence caps and revealed fence lines share the fence geometry", () => {
-    expect(uses("cm-otw-code-fence.is-open", "--fence-open")).toBe(true);
-    expect(uses("cm-otw-code-fence", "--fence-close")).toBe(true);
-    expect(uses("cm-otw-fence-block.is-open", "--fence-gap")).toBe(true);
-    expect(uses("cm-otw-fence-block.is-close", "--fence-gap")).toBe(true);
+    expect(uses("cm-odea-code-fence.is-open", "--fence-open")).toBe(true);
+    expect(uses("cm-odea-code-fence", "--fence-close")).toBe(true);
+    expect(uses("cm-odea-fence-block.is-open", "--fence-gap")).toBe(true);
+    expect(uses("cm-odea-fence-block.is-close", "--fence-gap")).toBe(true);
     for (const variable of ["--fence-gap", "--fence-open", "--fence-line"]) {
-      expect(uses("cm-otw-fence-source.is-open", variable), variable).toBe(true);
+      expect(uses("cm-odea-fence-source.is-open", variable), variable).toBe(true);
     }
     for (const variable of ["--fence-gap", "--fence-close"]) {
-      expect(uses("cm-otw-fence-source.is-close", variable), variable).toBe(true);
+      expect(uses("cm-odea-fence-source.is-close", variable), variable).toBe(true);
     }
   });
 
   it("front matter caps and revealed fence lines share the front matter geometry", () => {
-    expect(uses("cm-otw-frontmatter-fence.is-open", "--frontmatter-open")).toBe(true);
-    expect(uses("cm-otw-frontmatter-fence", "--frontmatter-close")).toBe(true);
-    expect(uses("cm-otw-frontmatter-block.is-close", "--frontmatter-gap")).toBe(true);
-    expect(uses("cm-otw-frontmatter-fence-line.is-open", "--frontmatter-open")).toBe(true);
+    expect(uses("cm-odea-frontmatter-fence.is-open", "--frontmatter-open")).toBe(true);
+    expect(uses("cm-odea-frontmatter-fence", "--frontmatter-close")).toBe(true);
+    expect(uses("cm-odea-frontmatter-block.is-close", "--frontmatter-gap")).toBe(true);
+    expect(uses("cm-odea-frontmatter-fence-line.is-open", "--frontmatter-open")).toBe(true);
     for (const variable of ["--frontmatter-gap", "--frontmatter-close"]) {
-      expect(uses("cm-otw-frontmatter-fence-line.is-close", variable), variable).toBe(true);
+      expect(uses("cm-odea-frontmatter-fence-line.is-close", variable), variable).toBe(true);
     }
   });
 });
@@ -94,7 +94,7 @@ describe("围栏的封口和源码行同高", () => {
 describe("标题行的光标占位图片不撑高行", () => {
   it("aligns widget buffers to the top of heading lines", () => {
     const rule =
-      /:is\([^)]*\.cm-otw-h1[^)]*\.cm-otw-h6[^)]*\)\s*\.cm-widgetBuffer\s*\{([^}]*)\}/.exec(CSS);
+      /:is\([^)]*\.cm-odea-h1[^)]*\.cm-odea-h6[^)]*\)\s*\.cm-widgetBuffer\s*\{([^}]*)\}/.exec(CSS);
     expect(rule).not.toBeNull();
     expect(rule![1]).toMatch(/vertical-align:\s*top/);
   });
@@ -107,7 +107,7 @@ describe("标题行的光标占位图片不撑高行", () => {
  */
 describe("行内底色不越出这一行", () => {
   it("the wikilink chip has no vertical padding in the editor", () => {
-    const padding = declarationsFor("cm-otw-wikilink").find((d) => d.startsWith("padding"));
+    const padding = declarationsFor("cm-odea-wikilink").find((d) => d.startsWith("padding"));
     expect(padding).toBe("padding: 0 0.32em");
   });
 });

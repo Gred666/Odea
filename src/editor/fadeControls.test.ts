@@ -11,11 +11,13 @@ import { describe, expect, it } from "vitest";
 const CSS = readFileSync(path.join(process.cwd(), "src/styles/globals.css"), "utf8");
 
 const FADING_CONTROLS = [
-  "cm-otw-image-tools",
-  "cm-otw-image-handle",
-  "cm-otw-image-size",
-  "otw-image-viewer-bar",
-  "otw-image-viewer-close",
+  "cm-odea-image-tools",
+  "cm-odea-image-handle",
+  "cm-odea-image-size",
+  "odea-image-viewer-bar",
+  "odea-image-viewer-close",
+  "cm-odea-heading-level",
+  "cm-odea-heading-fold",
 ];
 
 /** 选择器里提到这个类的所有规则的声明（不含伪元素 ::after 这类里面画图标的） */

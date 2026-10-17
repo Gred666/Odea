@@ -22,7 +22,7 @@ interface IntroState {
 
 export const useIntro = create<IntroState>(() => ({ phase: "off", shown: false }));
 
-const PLAYED_KEY = "otw.introPlayed";
+const PLAYED_KEY = "odea.introPlayed";
 
 /** 挂载 React 之前调用：决定这一次要不要播 */
 export function armIntro() {

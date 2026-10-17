@@ -17,8 +17,8 @@ function sourceImage() {
   return image;
 }
 
-const viewer = () => document.querySelector<HTMLElement>(".otw-image-viewer");
-const big = () => document.querySelector<HTMLImageElement>(".otw-image-viewer-image")!;
+const viewer = () => document.querySelector<HTMLElement>(".odea-image-viewer");
+const big = () => document.querySelector<HTMLImageElement>(".odea-image-viewer-image")!;
 const px = (value: string) => Number.parseFloat(value);
 const box = () => {
   const { left, top, width, height } = big().style;
@@ -50,7 +50,7 @@ describe("查看大图", () => {
     expect(box().left).toBeCloseTo(48, 1);
     expect(source.classList.contains("is-viewing")).toBe(true);
     expect(document.activeElement).toBe(viewer());
-    expect(document.querySelector(".otw-image-viewer-button.is-zoom")?.textContent).toBe("77%");
+    expect(document.querySelector(".odea-image-viewer-button.is-zoom")?.textContent).toBe("77%");
   });
 
   it("zooms with the wheel around the pointer, keeping that spot still", async () => {

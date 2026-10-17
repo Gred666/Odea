@@ -8,9 +8,9 @@ import { type EditorView, ViewPlugin } from "@codemirror/view";
    放到下方），不挡当前这一行。
 
    用法：给元素挂 data 属性就行，替身的 DOM（toDOM）和装饰的 attributes 都可以。
-     data-otw-tip        正文（必填，空串表示只有标签和提示）
-     data-otw-tip-label  顶上的小标签，比如「脚注 1」
-     data-otw-tip-hint   底下的操作提示，比如「点击跳到定义」
+     data-odea-tip        正文（必填，空串表示只有标签和提示）
+     data-odea-tip-label  顶上的小标签，比如「脚注 1」
+     data-odea-tip-hint   底下的操作提示，比如「点击跳到定义」
 
    卡片挂在 document.body 上、position: fixed，完全在 CodeMirror 的 DOM 之外 ——
    不进高度图、不影响点击坐标。
@@ -23,7 +23,7 @@ const HIDE_GRACE = 80;
 const GAP = 8;
 const EDGE = 12;
 
-const TIP_SELECTOR = "[data-otw-tip]";
+const TIP_SELECTOR = "[data-odea-tip]";
 
 class HoverCard {
   private card: HTMLElement | null = null;
@@ -91,18 +91,18 @@ class HoverCard {
   private show(target: HTMLElement) {
     this.showTimer = null;
     if (!target.isConnected) return;
-    const body = target.dataset.otwTip ?? "";
-    const label = target.dataset.otwTipLabel ?? "";
-    const hint = target.dataset.otwTipHint ?? "";
+    const body = target.dataset.odeaTip ?? "";
+    const label = target.dataset.odeaTipLabel ?? "";
+    const hint = target.dataset.odeaTipHint ?? "";
     if (!body && !label && !hint) return;
 
     this.card?.remove();
     const card = document.createElement("div");
-    card.className = "otw-hovercard";
+    card.className = "odea-hovercard";
     card.setAttribute("role", "tooltip");
-    if (label) card.append(part("otw-hovercard-label", label));
-    if (body) card.append(part("otw-hovercard-body", body));
-    if (hint) card.append(part("otw-hovercard-hint", hint));
+    if (label) card.append(part("odea-hovercard-label", label));
+    if (body) card.append(part("odea-hovercard-body", body));
+    if (hint) card.append(part("odea-hovercard-hint", hint));
     document.body.append(card);
     this.card = card;
     place(card, target);
@@ -128,7 +128,7 @@ class HoverCard {
 
 /** 缩写的悬停卡片属性：标签是缩写本身，正文是全称。给装饰的 attributes 用。 */
 export function abbrTip(abbreviation: string, expansion: string): Record<string, string> {
-  return { "data-otw-tip-label": abbreviation.trim(), "data-otw-tip": expansion };
+  return { "data-odea-tip-label": abbreviation.trim(), "data-odea-tip": expansion };
 }
 
 function part(className: string, text: string): HTMLElement {

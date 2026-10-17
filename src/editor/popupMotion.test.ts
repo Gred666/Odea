@@ -112,7 +112,12 @@ describe("带字的元素不缩放", () => {
 
   it("dropdown menus and hover cards only fade", () => {
     const css = src("styles/globals.css");
-    for (const name of ["otw-menu-in", "otw-menu-out", "otw-hovercard-in", "otw-hovercard-out"]) {
+    for (const name of [
+      "odea-menu-in",
+      "odea-menu-out",
+      "odea-hovercard-in",
+      "odea-hovercard-out",
+    ]) {
       const start = css.indexOf(`@keyframes ${name} `);
       expect(start).toBeGreaterThan(-1);
       const body = css.slice(start, css.indexOf("\n}", start));

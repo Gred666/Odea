@@ -9,27 +9,30 @@ import {
 } from "./animatedEmojiSet";
 
 /* ============================================================
-   动态表情：`:otw_fire:` 这类短码 → 自己画的 SVG 动画。
+   动态表情：`:odea_fire:` 这类短码 → 自己画的 SVG 动画。
 
    为什么不是 GIF / Lottie：这套图是我们自己画的线稿，SVG + Web Animations
    API 就够了 —— 矢量、任意缩放都清晰、颜色跟主题变量走、能精确控制
    「看得见就循环、滚出去就停」、减少动效时停在静止帧，而且不用引 WASM、
    不用改 CSP。以后要接外部的彩色动画表情，再上 Lottie。
 
-   Markdown 源文里始终只是短码。别的编辑器打开看到的是 `:otw_fire:`，
-   摘要里换成对应的 Unicode 表情（lib/emojiText.ts）。
+   Markdown 源文里始终只是短码。别的编辑器打开看到的是 `:odea_fire:`，
+   摘要里换成对应的 Unicode 表情（lib/emojiText.ts）。改名（OnTheWay → Odea）之前插进去的
+   是 `:otw_fire:`，留在用户的笔记里，一样认（LEGACY_SHORTCODE_PREFIX），不去改用户的文件。
 
    这个文件不依赖 CodeMirror：选择器和编辑器替身（widgets.ts）共用它。
    ============================================================ */
 
 export type AnimatedEmoji = AnimatedEmojiDesign & {
-  /** 完整短码，带冒号：`:otw_fire:` */
+  /** 完整短码，带冒号：`:odea_fire:` */
   readonly shortcode: string;
   /** 对应的 Unicode 表情：摘要、纯文本、复制到别处时用它 */
   readonly fallback: string;
 };
 
-export const SHORTCODE_PREFIX = "otw_";
+export const SHORTCODE_PREFIX = "odea_";
+/** 改名前插进去的短码前缀，读的时候照样认 */
+export const LEGACY_SHORTCODE_PREFIX = "otw_";
 
 export const ANIMATED_EMOJIS: readonly AnimatedEmoji[] = ANIMATED_EMOJI_DESIGNS.map((design) => ({
   ...design,
@@ -37,9 +40,16 @@ export const ANIMATED_EMOJIS: readonly AnimatedEmoji[] = ANIMATED_EMOJI_DESIGNS.
   fallback: ANIMATED_EMOJI_FALLBACK[design.id] ?? "",
 }));
 
-const byName = new Map(ANIMATED_EMOJIS.map((emoji) => [`${SHORTCODE_PREFIX}${emoji.id}`, emoji]));
+const byName = new Map(
+  ANIMATED_EMOJIS.flatMap((emoji) =>
+    [SHORTCODE_PREFIX, LEGACY_SHORTCODE_PREFIX].map(
+      (prefix) => [`${prefix}${emoji.id}`, emoji] as const,
+    ),
+  ),
+);
 
-/** `:otw_fire:` / `otw_fire` → 表情；不是这套里的返回 null。大小写不敏感，和 emojiFor 一致。 */
+/** `:odea_fire:` / `odea_fire`（改名前的 `:otw_fire:` 也算）→ 表情；不是这套里的返回 null。
+ *  大小写不敏感，和 emojiFor 一致。 */
 export function animatedEmojiFor(shortcode: string): AnimatedEmoji | null {
   const name = shortcode.replace(/^:|:$/g, "").toLowerCase();
   return byName.get(name) ?? null;
@@ -117,31 +127,31 @@ export function motionLength(emoji: AnimatedEmojiDesign): number {
    色相变量 --ae-* 和纸色、墨色仍然是 globals.css 里的主题 token。 */
 
 export const EMOJI_PART_CSS = [
-  ".otw-ae-svg{--h:var(--ae-amber)}",
+  ".odea-ae-svg{--h:var(--ae-amber)}",
   ...EMOJI_HUES.map(
-    (hue) => `.otw-ae-svg.hue-${hue},.otw-ae-svg .hue-${hue}{--h:var(--ae-${hue})}`,
+    (hue) => `.odea-ae-svg.hue-${hue},.odea-ae-svg .hue-${hue}{--h:var(--ae-${hue})}`,
   ),
-  ".otw-ae-svg .o{fill:none;stroke:var(--h)}",
-  ".otw-ae-svg .t{fill:color-mix(in srgb,var(--h) 22%,var(--ae-paper));stroke:var(--h)}",
+  ".odea-ae-svg .o{fill:none;stroke:var(--h)}",
+  ".odea-ae-svg .t{fill:color-mix(in srgb,var(--h) 22%,var(--ae-paper));stroke:var(--h)}",
   // 笑脸的底色要更「黄」一点，不然看着是米色
-  ".otw-ae-svg .t.face{fill:color-mix(in srgb,var(--h) 34%,var(--ae-paper))}",
+  ".odea-ae-svg .t.face{fill:color-mix(in srgb,var(--h) 34%,var(--ae-paper))}",
   // 更浓的一档：西瓜瓤、柠檬这种本身颜色就饱满的东西
-  ".otw-ae-svg .t.rich{fill:color-mix(in srgb,var(--h) 48%,var(--ae-paper))}",
-  ".otw-ae-svg .k{fill:var(--h);stroke:none}",
-  ".otw-ae-svg .p{fill:var(--ae-paper);stroke:var(--h)}",
+  ".odea-ae-svg .t.rich{fill:color-mix(in srgb,var(--h) 48%,var(--ae-paper))}",
+  ".odea-ae-svg .k{fill:var(--h);stroke:none}",
+  ".odea-ae-svg .p{fill:var(--ae-paper);stroke:var(--h)}",
   // 五官：色相混进墨色，亮色下偏深、暗色下偏亮
-  ".otw-ae-svg .i{fill:none;stroke:color-mix(in srgb,var(--h) 45%,var(--color-ink))}",
-  ".otw-ae-svg .ik{fill:color-mix(in srgb,var(--h) 45%,var(--color-ink));stroke:none}",
-  ".otw-ae-svg .blush{fill:var(--ae-pink);stroke:none;opacity:.32}",
-  ".otw-ae-svg .shine{fill:none;stroke:var(--ae-paper);stroke-width:1.4;opacity:.85}",
-  ".otw-ae-svg .shade{fill:var(--h);stroke:none;opacity:.28}",
-  ".otw-ae-svg .road{fill:none;stroke:color-mix(in srgb,var(--h) 22%,var(--ae-paper));stroke-width:4.2}",
-  ".otw-ae-svg .bold{stroke-width:2.1}",
-  ".otw-ae-svg .thin{stroke-width:1.3}",
-  ".otw-ae-svg .draw{stroke-dasharray:1 1}",
-  ".otw-ae-svg .dash{stroke-dasharray:.1 .08}",
-  ".otw-ae-svg .fx{opacity:0}",
-  ".otw-ae-svg [data-a],.otw-ae-svg .otw-ae-body{transform-box:fill-box;transform-origin:center}",
+  ".odea-ae-svg .i{fill:none;stroke:color-mix(in srgb,var(--h) 45%,var(--color-ink))}",
+  ".odea-ae-svg .ik{fill:color-mix(in srgb,var(--h) 45%,var(--color-ink));stroke:none}",
+  ".odea-ae-svg .blush{fill:var(--ae-pink);stroke:none;opacity:.32}",
+  ".odea-ae-svg .shine{fill:none;stroke:var(--ae-paper);stroke-width:1.4;opacity:.85}",
+  ".odea-ae-svg .shade{fill:var(--h);stroke:none;opacity:.28}",
+  ".odea-ae-svg .road{fill:none;stroke:color-mix(in srgb,var(--h) 22%,var(--ae-paper));stroke-width:4.2}",
+  ".odea-ae-svg .bold{stroke-width:2.1}",
+  ".odea-ae-svg .thin{stroke-width:1.3}",
+  ".odea-ae-svg .draw{stroke-dasharray:1 1}",
+  ".odea-ae-svg .dash{stroke-dasharray:.1 .08}",
+  ".odea-ae-svg .fx{opacity:0}",
+  ".odea-ae-svg [data-a],.odea-ae-svg .odea-ae-body{transform-box:fill-box;transform-origin:center}",
 ].join("\n");
 
 let stylesInjected = false;
@@ -150,7 +160,7 @@ function injectStyles(): void {
   if (stylesInjected) return;
   stylesInjected = true;
   const style = document.createElement("style");
-  style.dataset.otwAnimatedEmoji = "";
+  style.dataset.odeaAnimatedEmoji = "";
   style.textContent = EMOJI_PART_CSS;
   document.head.append(style);
 }
@@ -180,7 +190,7 @@ function templateFor(emoji: AnimatedEmoji): SVGSVGElement {
   ).documentElement;
   const root = document.createElementNS(SVG_NS, "svg");
   root.setAttribute("viewBox", EMOJI_VIEWBOX);
-  root.setAttribute("class", `otw-ae-svg otw-ae-live hue-${emoji.hue}`);
+  root.setAttribute("class", `odea-ae-svg odea-ae-live hue-${emoji.hue}`);
   root.setAttribute("aria-hidden", "true");
   root.setAttribute("focusable", "false");
   root.setAttribute("fill", "none");
@@ -189,7 +199,7 @@ function templateFor(emoji: AnimatedEmoji): SVGSVGElement {
   root.setAttribute("stroke-linejoin", "round");
   // 外面再包一层：插入时整个表情「啵」地弹出来，动的是这一层
   const body = document.createElementNS(SVG_NS, "g");
-  body.setAttribute("class", "otw-ae-body");
+  body.setAttribute("class", "odea-ae-body");
   for (const child of Array.from(parsed.childNodes)) body.append(document.importNode(child, true));
   root.append(body);
   for (const part of root.querySelectorAll<SVGElement>("[data-a]")) {
@@ -251,9 +261,9 @@ function watchTheme(): void {
     palette = null;
     if (currentPalette() === before) return;
     stillUrls.clear();
-    for (const still of document.querySelectorAll<SVGSVGElement>("svg.otw-ae-still")) {
+    for (const still of document.querySelectorAll<SVGSVGElement>("svg.odea-ae-still")) {
       // 换主题时盖在上面的旧主题副本（lib/themeTransition.ts）：留着旧颜色
-      if (still.closest(".otw-theme-ghost")) continue;
+      if (still.closest(".odea-theme-ghost")) continue;
       const emoji = byName.get(`${SHORTCODE_PREFIX}${still.dataset.emoji}`);
       const url = emoji && stillUrl(emoji);
       if (url) still.firstElementChild?.setAttribute("href", url);
@@ -286,7 +296,7 @@ function stillUrl(emoji: AnimatedEmoji): string | null {
 function stillElement(emoji: AnimatedEmoji, url: string): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", EMOJI_VIEWBOX);
-  svg.setAttribute("class", "otw-ae-still");
+  svg.setAttribute("class", "odea-ae-still");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
   svg.dataset.emoji = emoji.id;
@@ -358,7 +368,7 @@ export class EmojiPlayer {
   constructor(readonly emoji: AnimatedEmoji) {}
 
   /**
-   * 放进宿主（一个 .otw-ae 框）。
+   * 放进宿主（一个 .odea-ae 框）。
    *
    * image: false —— 静止帧也用活的 SVG，不用图。图省的是「同一个表情画很多遍」：同一张
    * 图全页只解析一次。可每张不同的 data: SVG 图，浏览器都要为它单独建一个隔离的 SVG
@@ -423,7 +433,7 @@ export class EmojiPlayer {
     }
     const lead = intro ? INTRO_LEAD : 0;
     if (intro) {
-      const body = svg.querySelector<SVGGElement>(".otw-ae-body");
+      const body = svg.querySelector<SVGGElement>(".odea-ae-body");
       if (body) this.running.push(body.animate(INTRO_FRAMES, { duration: 420, fill: "backwards" }));
     }
     const frames = keyframesFor(this.emoji);
@@ -678,13 +688,13 @@ export function takeIntro(emoji: AnimatedEmoji): boolean {
  */
 export function inlineAnimatedEmoji(emoji: AnimatedEmoji): HTMLElement {
   const node = document.createElement("span");
-  node.className = "otw-ae";
+  node.className = "odea-ae";
   node.setAttribute("role", "img");
   node.setAttribute("aria-label", emoji.name);
   node.title = emoji.name;
   const player = new EmojiPlayer(emoji);
   const alt = document.createElement("span");
-  alt.className = "otw-ae-alt";
+  alt.className = "odea-ae-alt";
   alt.textContent = emoji.fallback;
   node.append(alt);
   player.mount(node);

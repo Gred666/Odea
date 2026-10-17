@@ -23,4 +23,6 @@ pub struct AppState {
     pub update: Arc<UpdateHub>,
     /// 后台读文件进索引读到哪了（第一次打开大文件夹、索引升级重建时，见 Vault::open_quick）
     pub indexing: Arc<Mutex<Indexing>>,
+    /// 新装第一次打开（放了示例内容）时仓库在哪。前端取一次就清掉（commands::vault_first_run）
+    pub first_run: Mutex<Option<String>>,
 }

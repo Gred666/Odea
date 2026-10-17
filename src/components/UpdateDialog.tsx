@@ -195,9 +195,7 @@ function UpdateBody({
   return (
     <>
       <div className="scroll-thin max-h-[56vh] overflow-y-auto px-5 pb-5 pt-4">
-        <p className="text-[19px] font-semibold leading-[1.4] text-ink">
-          OnTheWay {update.version}
-        </p>
+        <p className="text-[19px] font-semibold leading-[1.4] text-ink">Odea {update.version}</p>
         <p className="mt-0.5 text-[13px] text-muted">
           {released}现在用的是 {update.current}
         </p>
@@ -248,7 +246,7 @@ function NotesBody({ releases, onDone }: { releases: Release[]; onDone: () => vo
         {latest ? (
           <>
             <p className="text-[19px] font-semibold leading-[1.4] text-ink">
-              {latest.version === APP_VERSION ? "已更新到" : "OnTheWay"} {latest.version}
+              {latest.version === APP_VERSION ? "已更新到" : "Odea"} {latest.version}
             </p>
             {latest.date && (
               <p className="mt-0.5 text-[13px] text-muted">{dateLabel(latest.date)}发布</p>

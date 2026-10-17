@@ -13,6 +13,7 @@ mod domain;
 mod error;
 #[cfg(feature = "desktop-runtime")]
 mod memory;
+mod old_name;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod state;
 mod sync;
@@ -210,6 +211,7 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::vault_attach,
         commands::vault_attach_path,
         commands::vault_change_root::<tauri::Wry>,
+        commands::vault_first_run,
         commands::sync_status,
         commands::sync_now,
         commands::sync_accounts,
@@ -288,6 +290,7 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::vault_attach,
         commands::vault_attach_path,
         commands::vault_change_root::<tauri::test::MockRuntime>,
+        commands::vault_first_run,
         commands::sync_status,
         commands::sync_now,
         commands::sync_accounts,
@@ -340,6 +343,10 @@ pub fn run() {
     #[cfg(debug_assertions)]
     export_typescript_bindings("../src/lib/bindings.ts");
 
+    // 改名前（OnTheWay）的数据目录挪到新标识下：要赶在插件读窗口位置、Tauri 建窗口之前
+    let context = tauri::generate_context!();
+    old_name::move_app_dirs(&context.config().identifier);
+
     let mut builder = tauri::Builder::default();
 
     #[cfg(desktop)]
@@ -385,12 +392,15 @@ pub fn run() {
 
             // 第一次启动：旧库有东西就搬进文件夹，否则放示例内容。搬家失败时不能带着
             // 一个空仓库启动 —— 用户会以为笔记全没了，还可能在空仓库里接着写。
+            // 新装第一次打开（放了示例内容）：前端提示一次笔记放在哪、要不要换个位置（技术方案 §5.7）
+            let mut first_run = None;
             match boot::prepare(&root, &data_dir, &mut config, true) {
                 Ok(boot::Prepared::Imported(report)) => eprintln!("旧数据已搬进 {}: {report:?}", root.display()),
+                Ok(boot::Prepared::Seeded) => first_run = Some(root.display().to_string()),
                 Ok(_) => {}
                 Err(error) => panic!("准备笔记文件夹 {} 失败: {error}", root.display()),
             }
-            if std::env::var_os("ONTHEWAY_VAULT").is_none() {
+            if std::env::var_os("ODEA_VAULT").is_none() {
                 config.vault_root = Some(root.clone());
             }
             if let Err(error) = config.save(&data_dir) {
@@ -430,10 +440,11 @@ pub fn run() {
                 sync_login: Mutex::new(sync::account::LoginSlot::default()),
                 update: Arc::new(update::UpdateHub::new(upgrade)),
                 indexing,
+                first_run: Mutex::new(first_run),
             });
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running OnTheWay");
+        .run(context)
+        .expect("error while running Odea");
 }

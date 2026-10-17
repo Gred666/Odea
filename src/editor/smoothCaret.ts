@@ -40,7 +40,7 @@ class CaretMarker implements LayerMarker {
 
   draw(): HTMLElement {
     const dom = document.createElement("div");
-    dom.className = this.primary ? "otw-caret" : "otw-caret is-secondary";
+    dom.className = this.primary ? "odea-caret" : "odea-caret is-secondary";
     this.place(dom);
     land(dom);
     return dom;
@@ -73,12 +73,12 @@ class CaretMarker implements LayerMarker {
 /** 落地动画：换个名字重新触发（同名动画改了也不会重播） */
 function land(dom: HTMLElement) {
   dom.style.animationName =
-    dom.style.animationName === "otw-caret-land" ? "otw-caret-land-2" : "otw-caret-land";
+    dom.style.animationName === "odea-caret-land" ? "odea-caret-land-2" : "odea-caret-land";
 }
 
 const caretLayer = layer({
   above: true,
-  class: "otw-caret-layer",
+  class: "odea-caret-layer",
   markers(view: EditorView) {
     const markers: CaretMarker[] = [];
     const { main, ranges } = view.state.selection;
@@ -95,7 +95,7 @@ const caretLayer = layer({
     // 光标动了：闪烁从「常亮」那一段重新开始，打字、移动时不会正好碰上灭的那一下
     if (update.transactions.some((transaction) => transaction.selection)) {
       dom.style.animationName =
-        dom.style.animationName === "otw-caret-blink" ? "otw-caret-blink-2" : "otw-caret-blink";
+        dom.style.animationName === "odea-caret-blink" ? "odea-caret-blink-2" : "odea-caret-blink";
     }
     return update.docChanged || update.selectionSet || update.focusChanged;
   },

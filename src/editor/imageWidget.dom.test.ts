@@ -26,8 +26,9 @@ function mount(doc: string, anchor: number) {
 }
 
 const text = (parent: HTMLElement) => parent.querySelector(".cm-content")?.textContent;
-const imageOf = (parent: HTMLElement) => parent.querySelector<HTMLImageElement>("img.cm-otw-image");
-const frameOf = (parent: HTMLElement) => parent.querySelector<HTMLElement>(".cm-otw-image-frame");
+const imageOf = (parent: HTMLElement) =>
+  parent.querySelector<HTMLImageElement>("img.cm-odea-image");
+const frameOf = (parent: HTMLElement) => parent.querySelector<HTMLElement>(".cm-odea-image-frame");
 
 afterEach(() => {
   for (const view of views.splice(0)) view.destroy();
@@ -49,7 +50,7 @@ describe("图片一直画着，源码露在下面", () => {
     expect(imageOf(parent)).toBe(image);
     expect(frameOf(parent)?.classList.contains("is-open")).toBe(true);
     expect(text(parent)).toContain("![图](a.png)");
-    expect(parent.querySelector(".cm-otw-image-source")?.textContent).toBe("![图](a.png)");
+    expect(parent.querySelector(".cm-odea-image-source")?.textContent).toBe("![图](a.png)");
 
     view.dispatch({ selection: { anchor: 0 } });
     expect(imageOf(parent)).toBe(image);
@@ -116,7 +117,7 @@ describe("改图片大小", () => {
     expect(image?.style.width).toBe("300px");
 
     parent
-      .querySelector(".cm-otw-image-handle")
+      .querySelector(".cm-odea-image-handle")
       ?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     expect(view.state.doc.toString()).toBe("前\n\n![图](a.png)\n\n后");
     // 同一个 <img> 就地改了尺寸，没有重新加载

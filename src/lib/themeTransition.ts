@@ -84,10 +84,10 @@ export function transitionTheme(toDark: boolean, apply: () => void): boolean {
 /** 换掉主题的这一下不让任何元素自己做颜色过渡：整页在同一帧里就是新主题 */
 function switchInstantly(apply: () => void) {
   const root = document.documentElement;
-  root.classList.add("otw-theme-instant");
+  root.classList.add("odea-theme-instant");
   apply();
   void document.body.offsetHeight;
-  requestAnimationFrame(() => root.classList.remove("otw-theme-instant"));
+  requestAnimationFrame(() => root.classList.remove("odea-theme-instant"));
 }
 
 /* ---------------- 旧主题的副本 ---------------- */
@@ -96,7 +96,7 @@ function switchInstantly(apply: () => void) {
 function buildGhost(fixups: (() => void)[]): HTMLElement {
   const root = document.documentElement;
   const ghost = document.createElement("div");
-  ghost.className = "otw-theme-ghost";
+  ghost.className = "odea-theme-ghost";
   ghost.dataset.ghostTheme = root.dataset.theme === "dark" ? "dark" : "light";
   ghost.setAttribute("aria-hidden", "true");
   ghost.inert = true;
@@ -106,7 +106,10 @@ function buildGhost(fixups: (() => void)[]): HTMLElement {
   const playing = runningAnimations();
   for (const child of document.body.children) {
     if (child.tagName === "SCRIPT" || child.hasAttribute("data-ghost-skip")) continue;
-    if (child.classList.contains("otw-theme-ghost") || child.classList.contains("otw-theme-sky")) {
+    if (
+      child.classList.contains("odea-theme-ghost") ||
+      child.classList.contains("odea-theme-sky")
+    ) {
       continue;
     }
     const copy = child.cloneNode(true) as HTMLElement;
@@ -170,8 +173,8 @@ function pairUp(
     if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
       (twin as HTMLInputElement | HTMLTextAreaElement).value = element.value;
     }
-    // 语法高亮的颜色写在 .otw-editor 自己身上（按 <html> 的主题选），也得钉住
-    if (element.classList.contains("otw-editor") && twin instanceof HTMLElement) {
+    // 语法高亮的颜色写在 .odea-editor 自己身上（按 <html> 的主题选），也得钉住
+    if (element.classList.contains("odea-editor") && twin instanceof HTMLElement) {
       pinVariables(getComputedStyle(element), twin.style, "--code-");
     }
     if (twin.id) twin.removeAttribute("id");
@@ -224,25 +227,25 @@ const DAWN = `linear-gradient(to top,
 
 function buildSky(toDark: boolean): Sky {
   const layer = document.createElement("div");
-  layer.className = "otw-theme-sky";
+  layer.className = "odea-theme-sky";
   layer.setAttribute("aria-hidden", "true");
   // 日出是光：用 screen 叠上去，暗处被照亮、发出光来（普通叠加在暗底上只是一层发灰的褐色）；
   // 亮处本来就亮，几乎不变。日落是暮色，普通叠加，暖色铺在还亮着的页面上
   if (!toDark) layer.style.mixBlendMode = "screen";
 
   const band = document.createElement("div");
-  band.className = "otw-theme-sky-band";
+  band.className = "odea-theme-sky-band";
   band.style.background = toDark ? DUSK : DAWN;
 
   const sun = document.createElement("div");
-  sun.className = "otw-theme-sky-sun";
+  sun.className = "odea-theme-sky-sun";
   sun.style.background = toDark
     ? "radial-gradient(closest-side, rgb(255 138 76 / 0.26), rgb(255 120 90 / 0.1) 55%, rgb(255 120 90 / 0))"
     : "radial-gradient(closest-side, rgb(255 210 130 / 0.5), rgb(255 180 110 / 0.2) 55%, rgb(255 180 110 / 0))";
 
   const stars = Array.from({ length: STAR_COUNT }, () => {
     const node = document.createElement("div");
-    node.className = "otw-theme-star";
+    node.className = "odea-theme-star";
     const size = 1.4 + Math.random() * 1.6;
     node.style.width = node.style.height = `${size}px`;
     node.style.left = `${3 + Math.random() * 94}%`;

@@ -50,7 +50,7 @@ describe("Markdown style registry", () => {
     expect(markdownSourceStyleRules).toContainEqual({
       open: "==",
       close: "==",
-      className: "cm-otw-highlight",
+      className: "cm-odea-highlight",
     });
   });
 

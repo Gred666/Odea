@@ -37,6 +37,8 @@ const api = {
   onUpdateReady: vi.fn(),
   updateStatus: vi.fn(),
   appUpgrade: vi.fn(),
+  vaultFirstRun: vi.fn(),
+  vaultChangeRoot: vi.fn(),
   indexProgress: vi.fn(),
   onIndexProgress: vi.fn(),
 };
@@ -412,6 +414,28 @@ describe("initialize", () => {
     expect(api.noteGet).toHaveBeenCalledTimes(1);
     expect(useData.getState().notes.map((item) => item.id)).toEqual(["n-1", "n-2", "n-3"]);
     expect(useData.getState().bodies).toEqual({ "n-1": "正文1" });
+  });
+
+  it("says once where a fresh install keeps the notes, until told to keep them there", async () => {
+    api.noteList.mockResolvedValue([]);
+    api.calendarMarks.mockResolvedValue({ written: new Set(), open: new Set() });
+    api.vaultFirstRun.mockResolvedValue("C:\\Users\\你\\Documents\\Odea");
+    await useData.getState().initialize();
+    await vi.waitFor(() =>
+      expect(useData.getState().firstRunVault).toBe("C:\\Users\\你\\Documents\\Odea"),
+    );
+    useData.getState().dismissFirstRun();
+    expect(useData.getState().firstRunVault).toBeNull();
+  });
+});
+
+describe("changeVaultRoot", () => {
+  it("asks by default and moves straight away from the first-run banner", async () => {
+    // 取消了（null）：不重载
+    api.vaultChangeRoot.mockResolvedValue(null);
+    await useData.getState().changeVaultRoot();
+    await useData.getState().changeVaultRoot("move");
+    expect(api.vaultChangeRoot.mock.calls).toEqual([["ask"], ["move"]]);
   });
 });
 
@@ -931,7 +955,7 @@ describe("使用指南有新版、用户改过那一篇", () => {
   const guide = (contentMd: string): Note => ({
     ...note(contentMd),
     id: "guide-welcome-1",
-    title: "欢迎使用 OnTheWay",
+    title: "欢迎使用 Odea",
   });
   const update = { id: "guide-welcome-1", name: "welcome", body: "新版的指南" };
 
@@ -945,7 +969,7 @@ describe("使用指南有新版、用户改过那一篇", () => {
 
     expect(api.noteUpsert).toHaveBeenLastCalledWith({
       id: "guide-welcome-1",
-      title: "欢迎使用 OnTheWay",
+      title: "欢迎使用 Odea",
       contentMd: "新版的指南",
     });
     // 正文存好了才记下这一版：记下的指纹和正文对得上
@@ -959,7 +983,7 @@ describe("使用指南有新版、用户改过那一篇", () => {
     await useData.getState().undoable?.undo();
     expect(api.noteUpsert).toHaveBeenLastCalledWith({
       id: "guide-welcome-1",
-      title: "欢迎使用 OnTheWay",
+      title: "欢迎使用 Odea",
       contentMd: "我改过的指南",
     });
   });

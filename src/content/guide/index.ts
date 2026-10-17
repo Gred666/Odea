@@ -18,7 +18,7 @@ export interface Guide {
 }
 
 export const GUIDES: readonly Guide[] = [
-  { name: "welcome", title: "欢迎使用 OnTheWay", pinned: true, body: welcome },
+  { name: "welcome", title: "欢迎使用 Odea", pinned: true, body: welcome },
   { name: "syntax", title: "语法全览", pinned: false, body: syntax },
 ];
 

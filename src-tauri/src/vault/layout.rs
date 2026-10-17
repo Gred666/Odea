@@ -6,7 +6,7 @@
     日记/2026/2026-09-26.md       某一天（今日TODO 就是今天这一篇）
     目标/2026/2026-W39.md          周目标；2026-09.md 月目标；2026.md 年目标
     附件/                          图片等，正文里用相对路径引用
-    .ontheway/                     应用自己的东西（回收站、行为日志、仓库标记）
+    .odea/                         应用自己的东西（回收站、行为日志、仓库标记）
 
 路径在程序里一律是正斜杠分隔的相对路径字符串，落到磁盘时再按组件拼。
 ============================================================ */
@@ -21,9 +21,11 @@ pub const DAYS_DIR: &str = "日记";
 pub const GOALS_DIR: &str = "目标";
 /// 粘贴 / 拖进来的图片，正文里用相对路径引用（见 Vault::attach）
 pub const ATTACHMENTS_DIR: &str = "附件";
-pub const TRASH_DIR: &str = ".ontheway/trash";
-pub const ACTIVITY_DIR: &str = ".ontheway/activity";
-pub const VAULT_MARKER: &str = ".ontheway/vault.json";
+/// 应用自己的文件夹。改名前叫 .ontheway，打开仓库时搬过来（old_name::move_vault_dir）
+pub const APP_DIR: &str = ".odea";
+pub const TRASH_DIR: &str = ".odea/trash";
+pub const ACTIVITY_DIR: &str = ".odea/activity";
+pub const VAULT_MARKER: &str = ".odea/vault.json";
 
 /// 新笔记 / 空标题的占位，和前端 NEW_NOTE_TITLE 一致
 pub const UNTITLED: &str = "无标题笔记";

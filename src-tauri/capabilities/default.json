@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "OnTheWay 主窗口的基础桌面权限",
+  "description": "Odea 主窗口的基础桌面权限",
   "windows": ["main"],
   "permissions": [
     "core:default",

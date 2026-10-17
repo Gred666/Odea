@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "OnTheWay",
-  "identifier": "dev.ontheway.app",
+  "productName": "Odea",
+  "identifier": "dev.odea.editor",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "OnTheWay",
+        "title": "Odea",
         "width": 1440,
         "height": 900,
         "minWidth": 940,
@@ -48,7 +48,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkyMTNBM0M4MDBBNTYwQTgKUldTb1lLVUF5S01Ua3RSZDkrSmg4N29wTEZoTDZyM2UyNm1aR2d6RjdEaEFzZkJvUC9rTXRmckcK",
       "endpoints": [
-        "https://github.com/Gred666/OnTheWay/releases/latest/download/latest.json"
+        "https://github.com/Gred666/Odea/releases/latest/download/latest.json"
       ],
       "windows": { "installMode": "passive" }
     }
@@ -64,14 +64,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "copyright": "© 2026 OnTheWay",
+    "copyright": "© 2026 Odea",
     "category": "Productivity",
     "shortDescription": "笔记、待办、目标与日历一体的个人效率工具",
-    "longDescription": "OnTheWay 把笔记、今日待办、目标与日历整合在一条数据链上，并以复盘收口。本地优先，数据全部保存在本机。",
+    "longDescription": "Odea 把笔记、今日待办、目标与日历整合在一条数据链上，并以复盘收口。本地优先，数据全部保存在本机。",
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["SimpChinese", "English"]
+        "languages": ["SimpChinese", "English"],
+        "installerHooks": "./windows/hooks.nsh"
       },
       "webviewInstallMode": { "type": "downloadBootstrapper" }
     },

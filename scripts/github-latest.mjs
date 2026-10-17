@@ -27,7 +27,7 @@ export async function resolveNames(latest) {
       names.set(url, asset.name);
       continue;
     }
-    const headers = { Accept: "application/vnd.github+json", "User-Agent": "ontheway-release" };
+    const headers = { Accept: "application/vnd.github+json", "User-Agent": "odea-release" };
     if (process.env.GH_TOKEN) headers.Authorization = `Bearer ${process.env.GH_TOKEN}`;
     const response = await fetch(url, { headers });
     if (!response.ok) throw new Error(`问 GitHub ${url} 是哪个文件 → ${response.status}`);

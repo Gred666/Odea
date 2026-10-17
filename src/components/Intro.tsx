@@ -8,8 +8,6 @@ import {
   DOT_IN,
   LOGO_VIEWBOX,
   MARK_SHIFT,
-  OPEN_HEAD,
-  OPEN_TAIL,
   O_CENTER,
   O_HEIGHT,
   STROKES,
@@ -17,14 +15,15 @@ import {
 } from "./logoGeometry";
 
 /* ============================================================
-   开场：落笔，然后归位。
+   开场：起笔一点，然后归位。
 
    双击的是任务栏上那个「O」，开场就从它开始：
-   1. 窗口出来是一张纸（导航栏的底色）。正中一支笔写出手写的「O」—— 从缺口这头起笔，
-      逆时针绕一圈，停在缺口另一头（和字标同一条路径、同一条书写曲线）
-   2. 笔一提，缺口里落下那滴蓝（和应用图标、收起后的导航栏同一个点）
+   1. 窗口出来是一张纸（导航栏的底色）。正中先落下一滴蓝 —— 一个想法
+      （和应用图标、收起后的导航栏同一个点）
+   2. 笔从它旁边起笔，逆时针绕一圈写出手写的「O」，停在缺口另一头
+      （和字标同一条路径、同一条书写曲线）
    3. 带着蓝点滑向左上角、一路缩小，落在侧栏字标的「O」上；纸同时淡开，露出早就排好的界面
-   4. 落地那一帧交给侧栏的 Logo（Logo.tsx）：展开着就把蓝点吞掉、O 合上，从 n 接着写；
+   4. 落地那一帧交给侧栏的 Logo（Logo.tsx）：展开着就从 d 接着写；
       收起着就停成收起时的样子
 
    界面本身一下都不动：字不缩放、不位移，只是盖在上面的纸在淡（技术方案 §10.1）。
@@ -42,15 +41,15 @@ import {
 const QUIET_FRAME = 24;
 const QUIET_FRAMES = 4;
 const QUIET_MAX = 500;
-/** 静下来以后再停一小下才落笔 */
-const WRITE_AT = 0.04;
-/** 写那一圈：和字标每一笔同一条曲线（globals.css 的 otw-logo-write） */
+/** 静下来以后再停一小下，蓝点先落下来 */
+const DOT_AT = 0.04;
+/** 蓝点快落定了，笔从它旁边起笔 */
+const WRITE_AT = 0.3;
+/** 写那一圈：和字标每一笔同一条曲线（globals.css 的 odea-logo-write） */
 const WRITE = 0.5;
 const WRITE_EASE = [0.45, 0.05, 0.35, 1] as const;
-/** 收笔前一点点，蓝点落下 */
-const DOT_LANDS_AT = WRITE_AT + WRITE - 0.06;
-/** 停一拍，再走 */
-const GLIDE_AT = 0.72;
+/** 写完停一拍，再走 */
+const GLIDE_AT = WRITE_AT + WRITE + 0.18;
 const GLIDE = 0.52;
 /**
  * 三个方向各一条曲线，走出一道弧：先抬起来（y 领先），再横着滑过去（x），
@@ -60,7 +59,7 @@ const GLIDE_EASE_Y = [0.35, 0, 0.1, 1] as const;
 const GLIDE_EASE_X = [0.5, 0, 0.12, 1] as const;
 const GLIDE_EASE_SCALE = [0.6, 0, 0.12, 1] as const;
 /** 纸淡开：在「O」落地之前就淡完，它是落在已经露出来的界面上 */
-const FADE_AT = 0.78;
+const FADE_AT = GLIDE_AT + 0.06;
 const FADE = 0.38;
 const FADE_EASE = [0.4, 0, 0.2, 1] as const;
 /** 快进（中途点了 / 按了键）：剩下的一口气走完 */
@@ -71,11 +70,11 @@ const startHeight = () => Math.min(96, Math.max(64, window.innerHeight * 0.085))
 const START_Y = 0.46;
 /**
  * 侧栏 Logo 的比例（每个 viewBox 单位多少 px），出发时按实际量到的覆盖。
- * Logo 的 svg 是 131×38 的盒子装 268×78 的 viewBox，默认等比适配（meet）：起作用的是
- * 高（38/78），不是宽（131/268），横向还居中留了 0.22px。以前按宽算，落点差 0.2px，
+ * Logo 的 svg 是 68×38 的盒子装 138.68×78 的 viewBox，默认等比适配（meet）：起作用的是
+ * 高（38/78），不是宽（68/138.68），横向还居中留了 0.22px。以前按宽算，落点差 0.2px，
  * 交接那一帧笔画边缘闪一下
  */
-const LOGO_SCALE = Math.min(131 / LOGO_VIEWBOX.w, 38 / LOGO_VIEWBOX.h);
+const LOGO_SCALE = Math.min(68 / LOGO_VIEWBOX.w, 38 / LOGO_VIEWBOX.h);
 /**
  * 光学尺寸：大的时候笔画相对细一点、蓝点相对小一点（照字标原样放大，72px 高时笔画 8px，
  * 太笨），一路缩回去一路加粗，落地时正好是字标的 5 个单位 —— 和字体在大字号用细一点的字重一个道理
@@ -93,7 +92,7 @@ export function Intro() {
   const [shiftU] = useState(() => (useApp.getState().navCollapsed ? MARK_SHIFT : 0));
 
   const [startScale] = useState(() => startHeight() / O_HEIGHT);
-  const tail = useMotionValue(OPEN_HEAD);
+  const tail = useMotionValue(0);
   const dot = useMotionValue(0);
   const scale = useMotionValue(startScale);
   const cx = useMotionValue(window.innerWidth / 2);
@@ -116,9 +115,9 @@ export function Intro() {
   useMotionValueEvent(placement, "change", (value) =>
     placed.current?.setAttribute("transform", value),
   );
-  const dasharray = useTransform(() => `${Math.max(tail.get() - OPEN_HEAD, 0)} 2`);
+  const dasharray = useTransform(() => `${Math.max(tail.get(), 0)} 2`);
   // 长度为 0 的一段，圆头笔帽会画出一个点：落笔之前整条藏起来
-  const inkOpacity = useTransform(() => (tail.get() - OPEN_HEAD > 0.002 ? 1 : 0));
+  const inkOpacity = useTransform(() => (tail.get() > 0.002 ? 1 : 0));
   // 缩回去走了几成：0 = 开场那么大，1 = 侧栏那么大。笔画和蓝点照它从「光学尺寸」过渡回原样
   const shrunk = useTransform(() =>
     Math.min(1, Math.max(0, (startScale - scale.get()) / (startScale - endScale.get()))),
@@ -126,8 +125,12 @@ export function Intro() {
   const strokeWidth = useTransform(
     () => `${START_STROKE + (STROKE_WIDTH - START_STROKE) * shrunk.get()}px`,
   );
-  const dotScale = useTransform(
-    () => dot.get() * (START_DOT_R / DOT.r + (1 - START_DOT_R / DOT.r) * shrunk.get()),
+  // 蓝点长出来、缩回原样都改半径，不用 transform: scale —— 圆是矢量，每一帧按当时的大小重画
+  //（CLAUDE.md 动效规矩 5）
+  const dotR = useTransform(() => dot.get() * (START_DOT_R + (DOT.r - START_DOT_R) * shrunk.get()));
+  const dotEl = useRef<SVGCircleElement>(null);
+  useMotionValueEvent(dotR, "change", (value) =>
+    dotEl.current?.setAttribute("r", `${Math.max(value, 0)}`),
   );
 
   const running = useRef<AnimationPlaybackControls[]>([]);
@@ -138,7 +141,7 @@ export function Intro() {
 
     /** 落点：侧栏 Logo 的 svg（和这里同一个 viewBox） */
     const target = () => {
-      const logo = document.querySelector("[data-otw-logo]");
+      const logo = document.querySelector("[data-odea-logo]");
       const rect = logo?.getBoundingClientRect();
       if (!rect || rect.width === 0) return null;
       // 和浏览器画 Logo 一样：等比适配（取小的那个比例），多出来的那一边居中
@@ -165,16 +168,16 @@ export function Intro() {
 
     let landed = false;
     const play = () => {
-      const write = animate(tail, OPEN_TAIL, {
+      const drop = animate(dot, 1, { ...DOT_IN, delay: DOT_AT });
+      const write = animate(tail, 1, {
         duration: WRITE,
         delay: WRITE_AT,
         ease: WRITE_EASE,
       });
-      const drop = animate(dot, 1, { ...DOT_IN, delay: DOT_LANDS_AT });
       const fade = animate(paper, 0, { duration: FADE, delay: FADE_AT, ease: FADE_EASE });
       // 落点要等到出发那一刻再量：那时候排版早就稳了
       const depart = animate(0, 1, { duration: GLIDE_AT });
-      running.current = [write, drop, fade, depart];
+      running.current = [drop, write, fade, depart];
       depart.then(() => {
         if (skipped.current) return;
         const moves = glide(GLIDE, 0);
@@ -210,8 +213,8 @@ export function Intro() {
       for (const c of running.current) c.stop();
       const quick = { duration: SKIP * 0.5, ease: "easeOut" } as const;
       const moves = [
-        animate(tail, OPEN_TAIL, quick),
         animate(dot, 1, quick),
+        animate(tail, 1, quick),
         animate(paper, 0, { duration: SKIP * 0.8, ease: FADE_EASE }),
         ...glide(SKIP, 0),
       ];
@@ -273,17 +276,11 @@ export function Intro() {
               style={{
                 strokeWidth,
                 strokeDasharray: dasharray,
-                strokeDashoffset: -OPEN_HEAD,
+                strokeDashoffset: 0,
                 opacity: inkOpacity,
               }}
             />
-            <motion.circle
-              cx={DOT.cx}
-              cy={DOT.cy}
-              r={DOT.r}
-              className="fill-accent"
-              style={{ scale: dotScale, transformBox: "fill-box", transformOrigin: "50% 50%" }}
-            />
+            <circle ref={dotEl} cx={DOT.cx} cy={DOT.cy} r={0} className="fill-accent" />
           </g>
         </g>
       </motion.svg>

@@ -106,7 +106,7 @@ describe("模板选择器", () => {
 
     expect(picker()).toBeNull();
     const doc = view.state.doc.toString();
-    expect(doc.startsWith("## :otw_moon: 晚间复盘\n")).toBe(true);
+    expect(doc.startsWith("## :odea_moon: 晚间复盘\n")).toBe(true);
     expect(doc).not.toContain("/模板");
     // 光标停在「做成了」后面
     const head = view.state.selection.main.head;

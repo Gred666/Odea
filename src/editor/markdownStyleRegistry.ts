@@ -6,24 +6,24 @@ export interface MarkdownStyleRule {
 }
 
 export const markdownStyleRules: readonly MarkdownStyleRule[] = [
-  { nodes: ["StrongEmphasis"], className: "cm-otw-strong", kind: "mark" },
-  { nodes: ["Emphasis"], className: "cm-otw-emphasis", kind: "mark" },
-  { nodes: ["Strikethrough"], className: "cm-otw-strike", kind: "mark" },
-  { nodes: ["Superscript"], className: "cm-otw-sup", kind: "mark" },
-  { nodes: ["InlineCode"], className: "cm-otw-code", kind: "mark" },
-  { nodes: ["Link", "Autolink", "URL"], className: "cm-otw-link", kind: "mark" },
-  { nodes: ["CodeText", "CodeInfo"], className: "cm-otw-code-text", kind: "mark" },
-  { nodes: ["HTMLTag"], className: "cm-otw-html", kind: "mark" },
-  { nodes: ["LinkReference"], className: "cm-otw-reference", kind: "mark" },
-  { nodes: ["Blockquote"], className: "cm-otw-quote", kind: "line" },
-  { nodes: ["FencedCode", "CodeBlock"], className: "cm-otw-code-block", kind: "line" },
+  { nodes: ["StrongEmphasis"], className: "cm-odea-strong", kind: "mark" },
+  { nodes: ["Emphasis"], className: "cm-odea-emphasis", kind: "mark" },
+  { nodes: ["Strikethrough"], className: "cm-odea-strike", kind: "mark" },
+  { nodes: ["Superscript"], className: "cm-odea-sup", kind: "mark" },
+  { nodes: ["InlineCode"], className: "cm-odea-code", kind: "mark" },
+  { nodes: ["Link", "Autolink", "URL"], className: "cm-odea-link", kind: "mark" },
+  { nodes: ["CodeText", "CodeInfo"], className: "cm-odea-code-text", kind: "mark" },
+  { nodes: ["HTMLTag"], className: "cm-odea-html", kind: "mark" },
+  { nodes: ["LinkReference"], className: "cm-odea-reference", kind: "mark" },
+  { nodes: ["Blockquote"], className: "cm-odea-quote", kind: "line" },
+  { nodes: ["FencedCode", "CodeBlock"], className: "cm-odea-code-block", kind: "line" },
   {
     nodes: ["HTMLBlock", "CommentBlock", "ProcessingInstructionBlock"],
-    className: "cm-otw-html-block",
+    className: "cm-odea-html-block",
     kind: "line",
   },
-  { nodes: ["Table", "TableHeader", "TableRow"], className: "cm-otw-table", kind: "line" },
-  { nodes: ["ListItem"], className: "cm-otw-list-item", kind: "line" },
+  { nodes: ["Table", "TableHeader", "TableRow"], className: "cm-odea-table", kind: "line" },
+  { nodes: ["ListItem"], className: "cm-odea-list-item", kind: "line" },
 ] as const;
 
 export const hiddenMarkerNodes = new Set([
@@ -80,7 +80,7 @@ export interface MarkdownSourceStyleRule {
  * （`<u>` 以前也在这里；现在所有行内 HTML 标签统一走语法树里的 HTMLTag 配对。）
  */
 export const markdownSourceStyleRules: readonly MarkdownSourceStyleRule[] = [
-  { open: "==", close: "==", className: "cm-otw-highlight" },
+  { open: "==", close: "==", className: "cm-odea-highlight" },
 ] as const;
 
 export interface SelectionRangeLike {

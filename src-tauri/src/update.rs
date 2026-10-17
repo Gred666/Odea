@@ -17,8 +17,8 @@
 下载完先验签，对不上的不装。公钥没填（还没生成密钥）就不查。
 
 开发时（debug 构建）默认不查。两个环境变量用来在本机把整条路走一遍：
-    ONTHEWAY_UPDATER_ENDPOINT  换成这几个 latest.json 的地址（逗号隔开，按顺序试；可以是 http://127.0.0.1）
-    ONTHEWAY_UPDATER_PUBKEY    换一个公钥（配合自己生成的测试密钥）
+    ODEA_UPDATER_ENDPOINT  换成这几个 latest.json 的地址（逗号隔开，按顺序试；可以是 http://127.0.0.1）
+    ODEA_UPDATER_PUBKEY    换一个公钥（配合自己生成的测试密钥）
 ============================================================ */
 
 use std::path::Path;
@@ -37,7 +37,7 @@ use crate::state::AppState;
 use crate::sync::proxy;
 
 /// 在应用里装不了的（deb / rpm）点「去下载」打开这里
-const DOWNLOAD_PAGE: &str = "https://github.com/Gred666/OnTheWay/releases/latest";
+const DOWNLOAD_PAGE: &str = "https://github.com/Gred666/Odea/releases/latest";
 /// 窗口出来以后等多久查第一次：别和启动、第一轮同步抢网
 const FIRST_CHECK: Duration = Duration::from_secs(20);
 const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
@@ -144,11 +144,11 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
 
 /// 发布的版本自己定时查；开发时只有指定了测试地址才查（不然每次 tauri dev 都去问 GitHub）
 fn auto_check() -> bool {
-    !cfg!(debug_assertions) || std::env::var_os("ONTHEWAY_UPDATER_ENDPOINT").is_some()
+    !cfg!(debug_assertions) || std::env::var_os("ODEA_UPDATER_ENDPOINT").is_some()
 }
 
 /// 查一次。latest.json 的地址一个一个试（tauri.conf.json 里的顺序；现在只有 GitHub，
-/// 测试时 ONTHEWAY_UPDATER_ENDPOINT 可以给好几个）。
+/// 测试时 ODEA_UPDATER_ENDPOINT 可以给好几个）。
 /// 一个地址查到了新版、安装包却下不下来或者签名对不上，就换下一个地址整条再走一遍 ——
 /// latest.json 拿得到不代表安装包也下得动。插件自己的多地址只管「latest.json 取不到就换」，管不到这一层。
 ///
@@ -237,14 +237,14 @@ fn source<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Source>> {
         .unwrap_or_default();
     #[cfg(debug_assertions)]
     {
-        if let Ok(list) = std::env::var("ONTHEWAY_UPDATER_ENDPOINT") {
+        if let Ok(list) = std::env::var("ODEA_UPDATER_ENDPOINT") {
             endpoints = list
                 .split(',')
                 .map(|url| url.trim().parse())
                 .collect::<std::result::Result<_, _>>()
-                .map_err(|e| AppError::Invalid(format!("ONTHEWAY_UPDATER_ENDPOINT: {e}")))?;
+                .map_err(|e| AppError::Invalid(format!("ODEA_UPDATER_ENDPOINT: {e}")))?;
         }
-        if let Ok(key) = std::env::var("ONTHEWAY_UPDATER_PUBKEY") {
+        if let Ok(key) = std::env::var("ODEA_UPDATER_PUBKEY") {
             pubkey = key;
         }
     }

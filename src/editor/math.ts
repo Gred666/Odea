@@ -146,7 +146,7 @@ function observeWidth(block: Element) {
  */
 if (typeof document !== "undefined" && "fonts" in document) {
   document.fonts.addEventListener("loadingdone", () => {
-    fitToWidth(document.querySelectorAll(".cm-otw-math-block"));
+    fitToWidth(document.querySelectorAll(".cm-odea-math-block"));
   });
 }
 
@@ -176,7 +176,7 @@ export class MathWidget extends OtwWidget {
   toDOM(view: EditorView) {
     // 块级公式外面再套一层，留白用 padding（见 widgets.ts 文件头的规矩）
     const node = document.createElement(this.display ? "div" : "span");
-    node.className = `cm-otw-math is-${this.display ? "block" : "inline"}`;
+    node.className = `cm-odea-math is-${this.display ? "block" : "inline"}`;
     node.title = "点击编辑公式";
     node.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -201,7 +201,7 @@ export class MathWidget extends OtwWidget {
     }
 
     if (!block) return this.settle(node);
-    block.className = "cm-otw-math-block";
+    block.className = "cm-odea-math-block";
     block.append(node);
     fitting.set(block, { node, view });
     observeWidth(block);

@@ -851,7 +851,7 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
             : menuOpen
               ? "bg-raised/40"
               : "group-hover:bg-raised/40",
-          flashing && !dropOn && "otw-folder-flash",
+          flashing && !dropOn && "odea-folder-flash",
         )}
       />
       {expandable ? (
@@ -908,11 +908,11 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
       <ChevronRight
         size={12}
         strokeWidth={2}
-        className="otw-row-actions relative z-10 -mr-1 shrink-0 text-faint opacity-0 transition-opacity duration-[150ms] group-hover:opacity-100"
+        className="odea-row-actions relative z-10 -mr-1 shrink-0 text-faint opacity-0 transition-opacity duration-[150ms] group-hover:opacity-100"
       />
       {/* 「…」叠在数字的位置：静止时看到数字，悬停时换成菜单 */}
       <div
-        className="otw-row-actions absolute top-[calc(50%-10px)] right-[30px] z-20"
+        className="odea-row-actions absolute top-[calc(50%-10px)] right-[30px] z-20"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
       >
@@ -1146,7 +1146,7 @@ function NoteDragGhost() {
     <div
       // left / top 走主线程：影子里的字不会先糊后清
       style={{ left: Math.round(x + 14), top: Math.round(y + 12) }}
-      className="otw-drag-ghost pointer-events-none fixed z-[60] max-w-[230px] rounded-lg bg-canvas px-[11px] pt-[7px] pb-2
+      className="odea-drag-ghost pointer-events-none fixed z-[60] max-w-[230px] rounded-lg bg-canvas px-[11px] pt-[7px] pb-2
                  shadow-float ring-1 ring-line-strong"
     >
       <span className="block truncate text-[13px] font-semibold text-ink">{title}</span>

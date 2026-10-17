@@ -1,23 +1,42 @@
 // 淡入有没有「结束那一帧闪一下」：逐帧截图和最终帧比（CLAUDE.md「动效：先对齐再动」）
 //
-//   pnpm dev                                   # 先把开发服务器开着
-//   node scripts/perf/fade-frames.mjs [地址]   # 默认 http://localhost:1420/
+//   pnpm dev                                          # 先把开发服务器开着
+//   node scripts/perf/fade-frames.mjs [地址] [场景]   # 默认 http://localhost:1420/、image
 //
-// 1.5 倍屏无头 Chrome，往当前笔记里放一张图，鼠标移上去让右上角的悬停按钮淡入，
-// 动画放慢 10 倍，每 ~100ms 截一张按钮那一块，和最终帧逐像素比。
+// 1.5 倍屏无头 Chrome，往当前笔记里放一段正文，鼠标移上去让悬停控件淡入，
+// 动画放慢 10 倍，每 ~100ms 截一张控件那一块，和最终帧逐像素比。
 // 正常的淡入：差异一路降到 0。有问题的：中途画面已经不动了、却和最终帧不一样，动画
 // 结束那一帧才突然归零 —— 那一下就是用户看到的「闪一下 / 重新渲染了一下」。
-// 要查别的控件，改 SCENE 里放进去的正文、要截的选择器和触发方式。
+// 要查别的控件，在 SCENES 里加一个：放进去的正文、要截的选择器和鼠标移到哪。
 import { launch, sleep } from "./cdp.mjs";
 
 const URL = process.argv[2] ?? "http://localhost:1420/";
-const SCENE = {
-  markdown: "正文一行。\n\n![图](/src-tauri/icons/Square310x310Logo.png)\n\n后面一行。\n",
-  /** 要截的那一块 */
-  target: ".cm-otw-image-tools",
-  /** 鼠标移到哪里触发 */
-  hover: "img.cm-otw-image",
+const SCENES = {
+  /** 图片右上角的悬停按钮 */
+  image: {
+    markdown: "正文一行。\n\n![图](/src-tauri/icons/Square310x310Logo.png)\n\n后面一行。\n",
+    /** 要截的那一块 */
+    target: ".cm-odea-image-tools",
+    /** 鼠标移到哪里触发 */
+    hover: "img.cm-odea-image",
+  },
+  /** 标题左边的层级提示和收起箭头（editor/headingFold.ts） */
+  heading: {
+    markdown: "正文一行。\n\n## 一个二级标题\n\n这一节的正文。\n\n后面一行。\n",
+    target: ".cm-odea-heading-gutter",
+    hover: ".cm-line.cm-odea-h2",
+  },
+  /** 右侧目录树的收起箭头：鼠标移进目录树时淡入（components/Outline.tsx，要 1280px 以上才有目录树） */
+  outline: {
+    markdown: "## 第一节\n\n正文。\n\n### 小节\n\n正文。\n\n## 第二节\n\n正文。\n",
+    target: "aside nav [data-outline-control]",
+    hover: "aside nav",
+  },
 };
+const SCENE = SCENES[process.argv[3] ?? "image"];
+if (!SCENE) {
+  throw new Error(`没有这个场景：${process.argv[3]}（有 ${Object.keys(SCENES).join(" / ")}）`);
+}
 
 const page = await launch(9345);
 const { send, evaluate } = page;
@@ -39,7 +58,7 @@ try {
     const view = EditorView.findFromDOM(document.querySelector('.cm-editor'));
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: ${JSON.stringify(SCENE.markdown)} } });
     document.querySelector('[data-doc-scroller]').scrollTop = 0;
-    await document.querySelector('img.cm-otw-image')?.decode().catch(() => {});
+    await document.querySelector('img.cm-odea-image')?.decode().catch(() => {});
   })()`);
   await sleep(800);
   const rect = (selector) =>

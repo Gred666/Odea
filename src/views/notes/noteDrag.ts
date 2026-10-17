@@ -69,7 +69,7 @@ export function beginNoteDrag(
     if (!dragging) {
       if (Math.hypot(e.clientX - startX, e.clientY - startY) < START_DISTANCE) return;
       dragging = true;
-      document.body.classList.add("otw-dragging");
+      document.body.classList.add("odea-dragging");
       // 拖动时别把文字选上一大片
       window.getSelection()?.removeAllRanges();
       useNoteDrag.setState({ noteId: note.id, title: note.title, target: null });
@@ -97,7 +97,7 @@ export function beginNoteDrag(
     if (!dragging) return;
     const { target } = useNoteDrag.getState();
     useNoteDrag.setState({ noteId: null, target: null });
-    document.body.classList.remove("otw-dragging");
+    document.body.classList.remove("odea-dragging");
     // 松手那一下浏览器还会在起点那一行上补一个 click
     swallowClick = true;
     setTimeout(() => {

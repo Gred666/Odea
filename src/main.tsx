@@ -1,3 +1,5 @@
+// 第一个：改名前 otw. 开头的存储键先换成 odea.，后面的模块一加载就会读它们
+import "@/lib/legacyStorage";
 import { Shell } from "@/app/Shell";
 import { armIntro, markShown } from "@/app/intro";
 import { initPreferences } from "@/app/store";

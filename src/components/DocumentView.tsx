@@ -33,11 +33,12 @@ import { Outline } from "./Outline";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { Segmented } from "./Segmented";
 import { SwapFade } from "./SwapFade";
+import { VaultPlaceBanner } from "./VaultPlaceBanner";
 
 /** 目录树的指纹：标题文字或行号变了才需要重新渲染文档视图。 */
 const outlineKeyOf = (markdown: string) =>
   buildOutline(markdown)
-    .map((item) => `${item.id}@${item.line}`)
+    .map((item) => `${item.id}@${item.line}:${item.depth}`)
     .join("|");
 
 /* 编辑器分包在模块求值时就开始下载。DocumentView 是 Shell 的静态依赖，
@@ -242,6 +243,8 @@ export function DocumentView({
   const guideUpdate = useData((s) =>
     noteId ? s.guideUpdates.find((update) => update.id === noteId) : undefined,
   );
+  // 新装第一次打开：笔记存在哪、要不要换个位置（技术方案 §5.7）
+  const firstRunVault = useData((s) => s.firstRunVault);
 
   // 新建完光标该去哪（app/store 的 FocusRequest）。标题的那种由标题框自己接（见下面）；
   // 正文开头的要等这一篇的编辑器挂上
@@ -316,6 +319,9 @@ export function DocumentView({
                   {doc.conflict && (
                     <ConflictBanner key={doc.conflict.copyId} conflict={doc.conflict} />
                   )}
+
+                  {/* ---------- 新装第一次打开：笔记存在哪 ---------- */}
+                  {firstRunVault && <VaultPlaceBanner root={firstRunVault} />}
 
                   {/* ---------- 使用指南有新版（用户改过这一篇） ---------- */}
                   {guideUpdate && <GuideUpdateBanner key={guideUpdate.id} update={guideUpdate} />}
@@ -495,6 +501,7 @@ export function DocumentView({
         items={outline}
         scrollRef={scrollRef}
         resetKey={doc.key}
+        memoryKey={saveKey(doc)}
         editorHandle={editorOutline}
         zen={zen}
       />

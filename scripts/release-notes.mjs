@@ -37,7 +37,7 @@ export function problems(version, files) {
   const found = [];
   const pkg = JSON.parse(files.packageJson).version;
   const cargo = /^\[package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(files.cargoToml)?.[1];
-  const lock = /^name = "ontheway"\r?\nversion = "([^"]+)"/m.exec(files.cargoLock)?.[1];
+  const lock = /^name = "odea"\r?\nversion = "([^"]+)"/m.exec(files.cargoLock)?.[1];
   for (const [file, value] of [
     ["package.json", pkg],
     ["src-tauri/Cargo.toml", cargo],

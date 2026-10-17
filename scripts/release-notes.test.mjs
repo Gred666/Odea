@@ -19,9 +19,9 @@ const SAMPLE = `<!--
 `;
 
 const files = (version, changelog = SAMPLE) => ({
-  packageJson: JSON.stringify({ name: "ontheway", version }),
-  cargoToml: `[package]\nname = "ontheway"\nversion = "${version}"\n\n[dependencies]\nserde = { version = "1" }\n`,
-  cargoLock: `[[package]]\nname = "ontheway"\nversion = "${version}"\n`,
+  packageJson: JSON.stringify({ name: "odea", version }),
+  cargoToml: `[package]\nname = "odea"\nversion = "${version}"\n\n[dependencies]\nserde = { version = "1" }\n`,
+  cargoLock: `[[package]]\nname = "odea"\nversion = "${version}"\n`,
   changelog,
 });
 

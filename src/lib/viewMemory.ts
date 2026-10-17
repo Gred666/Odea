@@ -22,9 +22,13 @@ export interface ViewSpot {
   offset: number;
   /** 光标位置 */
   head: number;
+  /** 收起的标题：第几行（一基）、这一行的原文（editor/headingFold.ts 认回来） */
+  folds?: { line: number; text: string }[];
+  /** 目录树里收起的条目（components/outlineTree.ts 的键：层级 + 标题字 + 第几个同名的） */
+  outline?: string[];
 }
 
-const STORAGE_KEY = "otw.view-memory";
+const STORAGE_KEY = "odea.view-memory";
 const LIMIT = 150;
 
 function load(): Map<string, ViewSpot> {

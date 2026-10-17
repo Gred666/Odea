@@ -102,7 +102,7 @@ async noteRestore(id: string) : Promise<Result<null, AppError>> {
 }
 },
 /**
- * 删除 = 挪进仓库的回收站（.ontheway/trash/，30 天后清掉）
+ * 删除 = 挪进仓库的回收站（.odea/trash/，30 天后清掉）
  */
 async noteDelete(id: string) : Promise<Result<null, AppError>> {
     try {
@@ -464,12 +464,25 @@ async vaultAttachPath(target: DocTarget, path: string) : Promise<Result<Attachme
 }
 },
 /**
- * 换一个文件夹当仓库。弹系统的选择文件夹对话框；新文件夹是空的就问要不要把
- * 现在的笔记一起复制过去（原来的不动）。取消了返回 null。前端拿到结果后整页重载。
+ * 换一个文件夹当仓库。弹系统的选择文件夹对话框；新文件夹里没有笔记的话，现在的笔记
+ * 搬过去（原来的进回收站）、复制过去（原来的不动）还是不带（`mode` 决定问不问）。
+ * 取消了返回 null。前端拿到结果后整页重载。
  */
-async vaultChangeRoot() : Promise<Result<VaultInfo | null, AppError>> {
+async vaultChangeRoot(mode: ChangeRootMode) : Promise<Result<VaultInfo | null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("vault_change_root") };
+    return { status: "ok", data: await TAURI_INVOKE("vault_change_root", { mode }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 新装第一次打开（放了示例内容的那一次）：笔记文件夹在哪。只给一次 —— 前端拿去提示
+ * 「笔记存在这里，要不要换个位置」，换完整页重载后不会再出（技术方案 §5.7）
+ */
+async vaultFirstRun() : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_first_run") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -783,6 +796,18 @@ written: string[];
  * 还有没做完的任务的日子
  */
 open: string[] }
+/**
+ * 换位置的时候，现在的笔记怎么办
+ */
+export type ChangeRootMode = 
+/**
+ * 新文件夹里没有笔记就问：搬过去 / 复制过去 / 只换文件夹（命令面板「更换笔记文件夹…」）
+ */
+"ask" | 
+/**
+ * 不问，直接搬过去（新装第一次打开时的「换个位置…」）
+ */
+"move"
 export type DayDoc = { date: string; title: string; tasks: Task[]; noteMd: string; updatedAt: number; 
 /**
  * 这一天还没写过、内容是从之前最近一天延续来的：那一天的日期。
@@ -827,7 +852,7 @@ blob: string;
  */
 time: number; 
 /**
- * 哪台设备改的：同步提交署名「OnTheWay (设备名)」里的设备名；别的 git 工具提交的就是署名
+ * 哪台设备改的：同步提交署名「Odea (设备名)」（改名前是「OnTheWay (设备名)」）里的设备名；别的 git 工具提交的就是署名
  */
 device: string; 
 /**
@@ -1085,7 +1110,7 @@ export type SyncState =
 "error"
 export type SyncStatus = { state: SyncState; 
 /**
- * 给人看的云端仓库：`github.com/xxx/ontheway-notes`
+ * 给人看的云端仓库：`github.com/xxx/odea-notes`
  */
 remote: string | null; 
 /**

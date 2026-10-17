@@ -413,7 +413,7 @@ function RepoStep({
   onPick: (repo: SyncRemoteRepo, plan: SyncPlan) => void;
 }) {
   const [repos, setRepos] = useState<SyncRemoteRepo[] | null>(null);
-  const [name, setName] = useState("ontheway-notes");
+  const [name, setName] = useState("odea-notes");
   const label = PROVIDERS[account.provider].label;
 
   useEffect(() => {

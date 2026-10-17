@@ -209,24 +209,30 @@ describe("关键帧", () => {
 
 describe("短码", () => {
   it("resolves case-insensitively, with or without colons", () => {
-    expect(animatedEmojiFor(":otw_fire:")?.id).toBe("fire");
-    expect(animatedEmojiFor("OTW_Fire")?.id).toBe("fire");
+    expect(animatedEmojiFor(":odea_fire:")?.id).toBe("fire");
+    expect(animatedEmojiFor("ODEA_Fire")?.id).toBe("fire");
     expect(animatedEmojiFor(":fire:")).toBeNull();
-    expect(animatedEmojiFor(":otw_nope:")).toBeNull();
+    expect(animatedEmojiFor(":odea_nope:")).toBeNull();
     // 纯数字的短码也是合法的 lezer Emoji 语法
-    expect(animatedEmojiFor(":otw_666:")?.id).toBe("666");
+    expect(animatedEmojiFor(":odea_666:")?.id).toBe("666");
   });
 
   it("turns short codes into Unicode for plain-text surfaces", () => {
-    expect(animatedEmojiText("冲 :otw_fire: 好 :OTW_DONE:")).toBe("冲 🔥 好 ✅");
-    expect(animatedEmojiText("留着 :otw_nope: 和 :smile:")).toBe("留着 :otw_nope: 和 :smile:");
+    expect(animatedEmojiText("冲 :odea_fire: 好 :ODEA_DONE:")).toBe("冲 🔥 好 ✅");
+    expect(animatedEmojiText("留着 :odea_nope: 和 :smile:")).toBe("留着 :odea_nope: 和 :smile:");
     expect(animatedEmojiText("没有短码")).toBe("没有短码");
-    expect(animatedEmojiText("太强了 :otw_666: 摸鱼:otw_fish:")).toBe("太强了 666 摸鱼🐟");
+    expect(animatedEmojiText("太强了 :odea_666: 摸鱼:odea_fish:")).toBe("太强了 666 摸鱼🐟");
+  });
+
+  it("still knows the :otw_ codes written before the rename", () => {
+    expect(animatedEmojiFor(":otw_fire:")?.id).toBe("fire");
+    expect(animatedEmojiFor(":otw_fire:")?.shortcode).toBe(":odea_fire:");
+    expect(animatedEmojiText("旧的 :otw_fire: 新的 :odea_done:")).toBe("旧的 🔥 新的 ✅");
   });
 });
 
 describe("播放器", () => {
-  const fire = animatedEmojiFor(":otw_fire:")!;
+  const fire = animatedEmojiFor(":odea_fire:")!;
   const parts = Object.keys(fire.motion).sort();
 
   /** 让 animate 返回可控的假动画：finish() 让这一轮播完 */
@@ -272,7 +278,7 @@ describe("播放器", () => {
 
   const mounted = (emoji = fire) => {
     const host = document.createElement("span");
-    host.className = "otw-ae";
+    host.className = "odea-ae";
     document.body.append(host);
     const player = new EmojiPlayer(emoji);
     player.mount(host);
@@ -281,7 +287,7 @@ describe("播放器", () => {
 
   it("falls back to a live SVG when the theme colours are not available", () => {
     const { host } = mounted();
-    const svg = host.querySelector("svg.otw-ae-svg")!;
+    const svg = host.querySelector("svg.odea-ae-svg")!;
     expect(svg).not.toBeNull();
     expect(host.querySelector("img")).toBeNull();
     expect(svg.getAttribute("viewBox")).toBe(EMOJI_VIEWBOX);
@@ -292,7 +298,7 @@ describe("播放器", () => {
   it("injects the part styles once", () => {
     mounted();
     mounted();
-    const styles = document.head.querySelectorAll("style[data-otw-animated-emoji]");
+    const styles = document.head.querySelectorAll("style[data-odea-animated-emoji]");
     expect(styles).toHaveLength(1);
     expect(styles[0]!.textContent).toBe(EMOJI_PART_CSS);
   });
@@ -484,7 +490,7 @@ describe("播放器", () => {
 
   it("renders a static inline copy whose text is the Unicode fallback", () => {
     const node = inlineAnimatedEmoji(fire);
-    expect(node.querySelector(".otw-ae-live, .otw-ae-still")).not.toBeNull();
+    expect(node.querySelector(".odea-ae-live, .odea-ae-still")).not.toBeNull();
     expect(node.textContent).toBe("🔥");
     expect(node.getAttribute("aria-label")).toBe(fire.name);
   });
@@ -509,8 +515,8 @@ describe("播放器", () => {
         document.documentElement.style.setProperty(name, value);
       }
     };
-    /** 静止帧：<svg class="otw-ae-still"><image href="data:…"/></svg> */
-    const stillOf = (host: Element) => host.querySelector<SVGSVGElement>("svg.otw-ae-still")!;
+    /** 静止帧：<svg class="odea-ae-still"><image href="data:…"/></svg> */
+    const stillOf = (host: Element) => host.querySelector<SVGSVGElement>("svg.odea-ae-still")!;
     const decode = (still: SVGSVGElement) =>
       decodeURIComponent(
         (still.querySelector("image")?.getAttribute("href") ?? "").replace(
@@ -551,12 +557,12 @@ describe("播放器", () => {
       const still = stillOf(host);
       player.loop();
       expect(player.liveSvg).not.toBeNull();
-      expect(host.querySelector("svg.otw-ae-live")).toBe(player.liveSvg);
+      expect(host.querySelector("svg.odea-ae-live")).toBe(player.liveSvg);
       expect(still.style.display).toBe("none");
       expect(still.isConnected).toBe(true);
       player.stop();
       expect(player.liveSvg).toBeNull();
-      expect(host.querySelector("svg.otw-ae-live")).toBeNull();
+      expect(host.querySelector("svg.odea-ae-live")).toBeNull();
       expect(still.style.display).toBe("");
     });
 

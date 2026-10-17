@@ -264,7 +264,7 @@ export interface SyncOversized {
 /** 由 Rust 的 sync-status-changed 事件送来 */
 export interface SyncStatus {
   state: SyncState;
-  /** 给人看的云端仓库：`github.com/xxx/ontheway-notes` */
+  /** 给人看的云端仓库：`github.com/xxx/odea-notes` */
   remote: string | null;
   /** 上一次同步成功的时间（UTC 毫秒） */
   lastSyncedAt: number | null;
@@ -397,7 +397,7 @@ export interface LinkRewrite {
 }
 
 /* ---------------- 使用指南 ----------------
-   新仓库里放的「欢迎使用 OnTheWay」「语法全览」，之后由应用管着新旧（src-tauri/src/vault/guide.rs）。
+   新仓库里放的「欢迎使用 Odea」「语法全览」，之后由应用管着新旧（src-tauri/src/vault/guide.rs）。
    用户没改过的，升级时直接换成新版；改过的不动，在那一篇上问换不换。
 */
 
@@ -468,12 +468,24 @@ export interface VaultInfo {
   tasks: number;
 }
 
+/**
+ * 换笔记文件夹时现在的笔记怎么办：`ask` 新文件夹里没有笔记就问（搬过去 / 复制过去 / 只换文件夹），
+ * `move` 直接搬过去（第一次打开时的「换个位置…」）
+ */
+export type ChangeRootMode = "ask" | "move";
+
 /* ---------------- 目录树 ---------------- */
 
 export interface OutlineItem {
   id: string;
   text: string;
-  level: 1 | 2;
+  /**
+   * 树里的层级：标题级别 - 全文最浅的那一级 + 1；callout 是它所在那一节的下一层；
+   * 「概览」是 0（技术方案 §12.9）
+   */
+  depth: number;
+  /** 缩进几档：跟着 depth，最多三档 */
+  level: 1 | 2 | 3;
   /** Markdown 源文中的一基行号，用于编辑器精确跳转。 */
   line: number;
 }

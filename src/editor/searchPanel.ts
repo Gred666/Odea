@@ -67,7 +67,7 @@ const HOLD_MS = 4000;
 
 /** 找到的匹配项该待在的竖向区间（窗口坐标）：面板下面、窗口底边上面 */
 function comfortBand(view: EditorView): { top: number; bottom: number } {
-  const panel = view.dom.querySelector(".otw-search");
+  const panel = view.dom.querySelector(".odea-search");
   const top = Math.max(0, panel?.getBoundingClientRect().bottom ?? 0) + 8;
   const bottom = view.dom.ownerDocument.documentElement.clientHeight - 24;
   return { top, bottom };
@@ -270,7 +270,7 @@ function button(
 
 function field(placeholder: string, value: string): HTMLInputElement {
   const input = document.createElement("input");
-  input.className = "otw-search-input";
+  input.className = "odea-search-input";
   input.type = "text";
   input.value = value;
   input.placeholder = placeholder;
@@ -305,7 +305,7 @@ class SearchPanel implements Panel {
    */
   private pin: { pos: number; y: number | null; until: number } | null = null;
   private readonly pinRequest = {
-    key: "otw-search-pin",
+    key: "odea-search-pin",
     read: (view: EditorView) => {
       const pin = this.pin;
       if (!pin) return null;
@@ -362,7 +362,7 @@ class SearchPanel implements Panel {
     }
 
     this.count = document.createElement("span");
-    this.count.className = "otw-search-count";
+    this.count.className = "odea-search-count";
     this.count.setAttribute("aria-live", "polite");
 
     const toggle = (
@@ -370,7 +370,7 @@ class SearchPanel implements Panel {
       phrase: string,
       text: string,
     ) => {
-      const node = button("otw-search-toggle", `${state.phrase(phrase)}`, text, () => {
+      const node = button("odea-search-toggle", `${state.phrase(phrase)}`, text, () => {
         this.flip(key);
       });
       node.dataset.option = key;
@@ -383,9 +383,9 @@ class SearchPanel implements Panel {
     };
 
     this.searchBox = document.createElement("div");
-    this.searchBox.className = "otw-search-box";
+    this.searchBox.className = "odea-search-box";
     const lens = icon(ICONS.search);
-    lens.classList.add("otw-search-lens");
+    lens.classList.add("odea-search-lens");
     this.searchBox.append(
       lens,
       this.searchField,
@@ -397,7 +397,7 @@ class SearchPanel implements Panel {
 
     const readOnly = state.readOnly;
     this.replaceToggle = button(
-      "otw-search-icon otw-search-expand",
+      "odea-search-icon odea-search-expand",
       state.phrase("Toggle replace"),
       icon(ICONS.chevron),
       () => this.showReplace(this.replaceRow.hidden),
@@ -405,36 +405,39 @@ class SearchPanel implements Panel {
     this.replaceToggle.hidden = readOnly;
 
     const findRow = document.createElement("div");
-    findRow.className = "otw-search-row";
+    findRow.className = "odea-search-row";
     findRow.append(
       this.replaceToggle,
       this.searchBox,
-      button("otw-search-icon", `${state.phrase("previous")} (Shift+Enter)`, icon(ICONS.up), () =>
+      button("odea-search-icon", `${state.phrase("previous")} (Shift+Enter)`, icon(ICONS.up), () =>
         this.go(findPrevious),
       ),
-      button("otw-search-icon", `${state.phrase("next")} (Enter)`, icon(ICONS.down), () =>
+      button("odea-search-icon", `${state.phrase("next")} (Enter)`, icon(ICONS.down), () =>
         this.go(findNext),
       ),
-      button("otw-search-icon", `${state.phrase("close")} (Esc)`, icon(ICONS.close), () =>
+      button("odea-search-icon", `${state.phrase("close")} (Esc)`, icon(ICONS.close), () =>
         closeSearchPanel(view),
       ),
     );
 
     const replaceBox = document.createElement("div");
-    replaceBox.className = "otw-search-box";
+    replaceBox.className = "odea-search-box";
     replaceBox.append(this.replaceField);
     // 外面一层负责按高度展开 / 收起（里面那一行的内容一直钉在原位，只是被一点点露出来）
     this.replaceRow = document.createElement("div");
-    this.replaceRow.className = "otw-search-replace";
+    this.replaceRow.className = "odea-search-replace";
     const replaceInner = document.createElement("div");
-    replaceInner.className = "otw-search-row otw-search-replace-row";
+    replaceInner.className = "odea-search-row odea-search-replace-row";
     this.replaceRow.append(replaceInner);
     replaceInner.append(
       replaceBox,
-      button("otw-search-text", `${state.phrase("replace")} (Enter)`, state.phrase("replace"), () =>
-        this.go(replaceNext),
+      button(
+        "odea-search-text",
+        `${state.phrase("replace")} (Enter)`,
+        state.phrase("replace"),
+        () => this.go(replaceNext),
       ),
-      button("otw-search-text", state.phrase("replace all"), state.phrase("replace all"), () =>
+      button("odea-search-text", state.phrase("replace all"), state.phrase("replace all"), () =>
         replaceAll(view),
       ),
     );
@@ -442,7 +445,7 @@ class SearchPanel implements Panel {
     this.replaceRow.hidden = readOnly || !this.query.replace;
 
     this.dom = document.createElement("div");
-    this.dom.className = "otw-search";
+    this.dom.className = "odea-search";
     this.dom.setAttribute("role", "search");
     this.dom.addEventListener("keydown", (event) => this.keydown(event));
     this.dom.append(findRow, this.replaceRow);
@@ -456,7 +459,7 @@ class SearchPanel implements Panel {
 
   /** 所有匹配项在文档区右边那一列刻度上的位置：要量布局，放在 CodeMirror 的测量阶段 */
   private readonly marksRequest = {
-    key: "otw-search-marks",
+    key: "odea-search-marks",
     read: (view: EditorView) => {
       const scroller = this.frame();
       const total = scroller.scrollHeight;
@@ -821,7 +824,7 @@ class MatchMarks {
 
   constructor(host: HTMLElement, scroller: HTMLElement) {
     this.dom = document.createElement("div");
-    this.dom.className = "otw-search-marks";
+    this.dom.className = "odea-search-marks";
     this.dom.setAttribute("aria-hidden", "true");
     this.current = document.createElement("i");
     this.current.className = "is-current";

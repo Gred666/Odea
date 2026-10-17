@@ -20,6 +20,7 @@ import {
 import {
   type AppUpgrade,
   type CalendarMarks,
+  type ChangeRootMode,
   type DayDoc,
   type DocumentSaveTarget,
   type FolderDeletion,
@@ -118,8 +119,14 @@ interface DataState {
   /** 在系统的文件管理器里定位这篇文档的文件 */
   revealDocument: (target: DocumentSaveTarget) => Promise<void>;
   openVaultFolder: () => Promise<void>;
-  /** 换一个文件夹当仓库。先把编辑器里的都存掉；换成功就整页重载 */
-  changeVaultRoot: () => Promise<void>;
+  /**
+   * 换一个文件夹当仓库。先把编辑器里的都存掉；换成功就整页重载。`move`：不问，现在的笔记直接
+   * 搬过去（第一次打开时的「换个位置…」）
+   */
+  changeVaultRoot: (mode?: ChangeRootMode) => Promise<void>;
+  /** 新装第一次打开：笔记文件夹在哪（启动时取一次），正文顶上提示一次；点了「就放这里」清掉 */
+  firstRunVault: string | null;
+  dismissFirstRun: () => void;
   /** 正在保存的文档，键为 `kind:id`。界面据此显示「保存中」。 */
   savingDocs: Set<string>;
   /**
@@ -480,6 +487,8 @@ export const useData = create<DataState>((set, get) => ({
   update: null,
   upgrade: null,
   clearUpgrade: () => set({ upgrade: null }),
+  firstRunVault: null,
+  dismissFirstRun: () => set({ firstRunVault: null }),
   checkUpdate: async () => {
     try {
       const update = await (await backend()).updateCheck();
@@ -630,14 +639,14 @@ export const useData = create<DataState>((set, get) => ({
     }
   },
 
-  changeVaultRoot: async () => {
+  changeVaultRoot: async (mode = "ask") => {
     try {
       // 先把编辑器里没存的都落进现在的仓库，换过去之后就回不来了。
       // 动态引入：saveBus 自己引用了这个 store，静态引入会成环
       const { flushAllEditors } = await import("@/editor/saveBus");
       await flushAllEditors();
       await get().flushDrafts();
-      const info = await (await backend()).vaultChangeRoot();
+      const info = await (await backend()).vaultChangeRoot(mode);
       if (info) window.location.reload();
     } catch (error) {
       set({ error: messageOf(error) });
@@ -738,6 +747,11 @@ export const useData = create<DataState>((set, get) => ({
         void Promise.resolve()
           .then(() => Promise.all([api.updateStatus(), api.appUpgrade()]))
           .then(([update, upgrade]) => set({ update, upgrade }))
+          .catch(() => {});
+        // 新装第一次打开：提示一次笔记放在哪（技术方案 §5.7）。取不到就不提示
+        void Promise.resolve()
+          .then(() => api.vaultFirstRun())
+          .then((firstRunVault) => set({ firstRunVault }))
           .catch(() => {});
         void Promise.resolve()
           .then(() => api.guidePending())

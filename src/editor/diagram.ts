@@ -87,9 +87,9 @@ export class DiagramWidget extends OtwWidget {
 
   toDOM(view: EditorView) {
     const block = document.createElement("div");
-    block.className = "cm-otw-diagram-block";
+    block.className = "cm-odea-diagram-block";
     const host = document.createElement("div");
-    host.className = "cm-otw-diagram is-loading";
+    host.className = "cm-odea-diagram is-loading";
     host.title = "点击编辑图表";
     host.textContent = "渲染图表…";
     host.addEventListener("mousedown", (event) => {
@@ -107,7 +107,7 @@ export class DiagramWidget extends OtwWidget {
     }
 
     sequence += 1;
-    const id = `otw-diagram-${sequence}`;
+    const id = `odea-diagram-${sequence}`;
     void diagramEngine
       .get()
       .then((mermaid) => mermaid.render(id, this.code))

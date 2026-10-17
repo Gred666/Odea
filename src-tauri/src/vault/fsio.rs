@@ -212,7 +212,7 @@ mod tests {
             "笔记/a.md",
             "笔记/子目录/b.MD",
             "随手.md",
-            ".ontheway/trash/x.md",
+            ".odea/trash/x.md",
             ".obsidian/workspace.md",
             "笔记/.草稿.md",
             "附件/图.png",

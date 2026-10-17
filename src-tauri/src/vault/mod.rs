@@ -811,7 +811,7 @@ impl Vault {
         Ok(())
     }
 
-    /// 删除 = 挪进 `.ontheway/trash/<id>.md`，记下原来的位置，撤销时放回去。
+    /// 删除 = 挪进 `.odea/trash/<id>.md`，记下原来的位置，撤销时放回去。
     pub fn note_delete(&mut self, id: &str) -> Result<()> {
         let row = self.note_row(id)?;
         let mut change = VaultChange::default();
@@ -1298,7 +1298,7 @@ impl Vault {
 
     /// 同步合并完之后调（技术方案 §5.9.5）。`theirs` 是两边都改了的文件：原处已经是本机的
     /// 版本，把对方的版本另存在旁边 —— Markdown 走冲突副本（去掉 id 和属性块里的标题），
-    /// 附件按原字节存成「名字 (冲突 时间).扩展名」，以点开头的路径（.ontheway、.gitignore）
+    /// 附件按原字节存成「名字 (冲突 时间).扩展名」，以点开头的路径（.odea、.gitignore）
     /// 不另存，留本机的就行。然后整个仓库增量扫一遍（合并改了哪些文件、多了哪些文件夹），
     /// 通知前端。返回另存的副本的名字（笔记是标题，附件是文件名），提示由同步那边发。
     pub fn absorb_merge(&mut self, theirs: &[(String, Vec<u8>)]) -> Result<Vec<String>> {

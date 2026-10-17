@@ -115,14 +115,14 @@ export class TableWidget extends OtwWidget {
   toDOM(view: EditorView) {
     // 外层只负责留白（padding，见 widgets.ts 文件头）；工具栏绝对定位浮在表格右上角
     const block = document.createElement("div");
-    block.className = "cm-otw-table-block";
+    block.className = "cm-odea-table-block";
     const frame = document.createElement("div");
-    frame.className = `cm-otw-table-frame is-${this.format}`;
+    frame.className = `cm-odea-table-frame is-${this.format}`;
     if (this.format !== "markdown") frame.append(this.bar(view, block));
     const scroller = document.createElement("div");
-    scroller.className = "cm-otw-table-scroll";
+    scroller.className = "cm-odea-table-scroll";
     const table = document.createElement("table");
-    table.className = "cm-otw-table-widget";
+    table.className = "cm-odea-table-widget";
     const head = document.createElement("thead");
     head.append(document.createElement("tr"));
     table.append(head, document.createElement("tbody"));
@@ -152,7 +152,7 @@ export class TableWidget extends OtwWidget {
     state.widget = this;
     fill(dom, this);
     syncToolbar(dom);
-    const meta = dom.querySelector(".cm-otw-table-meta");
+    const meta = dom.querySelector(".cm-odea-table-meta");
     if (meta) meta.textContent = metaText(this);
     this.trackHeight(dom);
     return true;
@@ -169,18 +169,18 @@ export class TableWidget extends OtwWidget {
 
   private bar(view: EditorView, block: HTMLElement): HTMLElement {
     const bar = document.createElement("div");
-    bar.className = "cm-otw-table-bar";
+    bar.className = "cm-odea-table-bar";
     const label = document.createElement("span");
-    label.className = "cm-otw-table-format";
+    label.className = "cm-odea-table-format";
     label.textContent = this.format.toUpperCase();
     const meta = document.createElement("span");
-    meta.className = "cm-otw-table-meta";
+    meta.className = "cm-odea-table-meta";
     meta.textContent = metaText(this);
     const spacer = document.createElement("span");
-    spacer.className = "cm-otw-table-spacer";
+    spacer.className = "cm-odea-table-spacer";
     const source = document.createElement("button");
     source.type = "button";
-    source.className = "cm-otw-code-copy";
+    source.className = "cm-odea-code-copy";
     source.textContent = "源码";
     source.title = "编辑源码";
     source.addEventListener("mousedown", (event) => event.preventDefault());
@@ -294,7 +294,7 @@ function toolIcon(action: ToolAction): SVGSVGElement {
  */
 function toolbar(view: EditorView, block: HTMLElement, format: TableFormat): HTMLElement {
   const bar = document.createElement("div");
-  bar.className = "cm-otw-table-tools";
+  bar.className = "cm-odea-table-tools";
   bar.setAttribute("role", "toolbar");
   bar.setAttribute("aria-label", "表格");
   // 点工具栏（包括按钮之间的空隙）不抢格子的焦点
@@ -322,7 +322,7 @@ function toolbar(view: EditorView, block: HTMLElement, format: TableFormat): HTM
   };
   const group = (...buttons: HTMLElement[]) => {
     const node = document.createElement("div");
-    node.className = "cm-otw-table-tools-group";
+    node.className = "cm-odea-table-tools-group";
     node.append(...buttons);
     return node;
   };
@@ -361,7 +361,7 @@ function toolbar(view: EditorView, block: HTMLElement, format: TableFormat): HTM
 function syncToolbar(block: HTMLElement) {
   const state = states.get(block);
   const cell = state?.editing;
-  const bar = block.querySelector(".cm-otw-table-tools");
+  const bar = block.querySelector(".cm-odea-table-tools");
   if (!state || !cell || !bar) return;
   const { row, col } = cellIndex(cell);
   const button = (action: ToolAction) =>
@@ -731,7 +731,7 @@ function setAlignment(
  */
 function liveBlock(view: EditorView, block: HTMLElement, start: number): HTMLElement | null {
   if (block.isConnected) return block;
-  for (const candidate of view.contentDOM.querySelectorAll<HTMLElement>(".cm-otw-table-block")) {
+  for (const candidate of view.contentDOM.querySelectorAll<HTMLElement>(".cm-odea-table-block")) {
     if (states.has(candidate) && positionOf(view, candidate) === start) return candidate;
   }
   return null;

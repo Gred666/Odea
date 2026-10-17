@@ -32,7 +32,7 @@ export interface ExtensionCatalogProvider {
   download(extension: CatalogExtension): Promise<void>;
 }
 
-const STORAGE_KEY = "otw.extension-catalog.v1";
+const STORAGE_KEY = "odea.extension-catalog.v1";
 const MAX_PACKAGE_BYTES = 2 * 1024 * 1024;
 const ID_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 
@@ -42,7 +42,7 @@ const officialExtensions: CatalogExtension[] = [
     id: "official.math",
     name: "数学公式",
     version: "0.1.0",
-    author: "OnTheWay",
+    author: "Odea",
     summary: "在 Markdown 中渲染行内公式与公式块。",
     description: "计划支持 $...$ 与 $$...$$，并提供可替换的公式渲染器。",
     category: "editor",
@@ -57,7 +57,7 @@ const officialExtensions: CatalogExtension[] = [
     id: "official.mermaid",
     name: "Mermaid 图表",
     version: "0.1.0",
-    author: "OnTheWay",
+    author: "Odea",
     summary: "把 Mermaid 代码块渲染为流程图、时序图与关系图。",
     category: "editor",
     permissions: [],
@@ -71,7 +71,7 @@ const officialExtensions: CatalogExtension[] = [
     id: "official.callouts",
     name: "增强 Callout",
     version: "0.1.0",
-    author: "OnTheWay",
+    author: "Odea",
     summary: "注册自定义提示块类型、图标和配色。",
     category: "appearance",
     permissions: [],
@@ -200,6 +200,6 @@ export const localExtensionCatalog: ExtensionCatalogProvider = {
 
   async download(extension) {
     const text = extension.packageText ?? serializeExtensionPackage(extension);
-    downloadText(`${extension.id}-${extension.version}.otwx.json`, text);
+    downloadText(`${extension.id}-${extension.version}.odeax.json`, text);
   },
 };

@@ -73,7 +73,7 @@ import {
 // v3：「今日TODO」从笔记 n-today 变成带标题的 day_doc，GOAL 改成一个周期一篇
 // v4：笔记带上 relPath / conflictOf，多一篇冲突副本的演示
 // v5：原型的示例笔记、日记、目标都去掉了，新仓库里只有使用指南
-const LS_KEY = "otw.mock.v5";
+const LS_KEY = "odea.mock.v5";
 
 /**
  * 使用指南那几篇多一个记号（桌面版写在文件的属性块里）：上一次给它的是哪个版本带的指南、
@@ -1099,6 +1099,16 @@ export const mockBackend: Backend = {
     desktopOnly();
   },
 
+  async vaultFirstRun() {
+    const root = readMock(MOCK_FIRST_RUN_KEY);
+    if (root === null) return null;
+    // 只给一次，和桌面版一样
+    try {
+      localStorage.removeItem(MOCK_FIRST_RUN_KEY);
+    } catch {}
+    return root || "C:\\Users\\你\\Documents\\Odea";
+  },
+
   // 浏览器里没有仓库文件夹：粘贴的图片直接写成 data: 地址插进正文
   async vaultAttach(_target, name, dataBase64) {
     await tick();
@@ -1217,11 +1227,13 @@ export const mockBackend: Backend = {
 
 /* ---------------- 新版本 ----------------
    调界面用：
-     localStorage["otw.mock.update"] = "0.2.0"       有一个下好了的新版本（写 "0.2.0 manual" 是只能手动装的）
-     localStorage["otw.mock.upgradeFrom"] = "0.0.9"  这一次是从 0.0.9 升上来的（空串 = 不知道从哪一版），取一次就清掉 */
+     localStorage["odea.mock.update"] = "0.2.0"       有一个下好了的新版本（写 "0.2.0 manual" 是只能手动装的）
+     localStorage["odea.mock.upgradeFrom"] = "0.0.9"  这一次是从 0.0.9 升上来的（空串 = 不知道从哪一版），取一次就清掉
+     localStorage["odea.mock.firstRun"] = ""           新装第一次打开，提示笔记放在哪（写路径就显示那个路径），取一次就清掉 */
 
-const MOCK_UPDATE_KEY = "otw.mock.update";
-const MOCK_UPGRADE_KEY = "otw.mock.upgradeFrom";
+const MOCK_UPDATE_KEY = "odea.mock.update";
+const MOCK_UPGRADE_KEY = "odea.mock.upgradeFrom";
+const MOCK_FIRST_RUN_KEY = "odea.mock.firstRun";
 
 function readMock(key: string): string | null {
   try {
@@ -1243,6 +1255,6 @@ function mockUpdate(): UpdateInfo | null {
       "- 修了暗色模式下没勾的任务圈看不见的问题",
     ].join("\n"),
     date: "2026-10-20",
-    manual: manual ? "https://github.com/Gred666/OnTheWay/releases/latest" : null,
+    manual: manual ? "https://github.com/Gred666/Odea/releases/latest" : null,
   };
 }

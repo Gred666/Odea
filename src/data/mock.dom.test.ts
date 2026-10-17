@@ -11,7 +11,7 @@ import { fileStemFor, folderOf } from "./folders";
  * - 新仓库里只有使用指南，升级时没改过的换新、改过的留给用户（vault/guide.rs）
  */
 
-const LS_KEY = "otw.mock.v5";
+const LS_KEY = "odea.mock.v5";
 
 beforeEach(() => {
   localStorage.clear();
@@ -50,7 +50,7 @@ describe("mock backend：使用指南", () => {
   it("a new vault holds only the guides, the welcome one pinned on top", async () => {
     const api = await reopen();
     const notes = await api.noteList(false);
-    expect(notes.map((note) => note.title)).toEqual(["欢迎使用 OnTheWay", "语法全览"]);
+    expect(notes.map((note) => note.title)).toEqual(["欢迎使用 Odea", "语法全览"]);
     expect(notes[0]!.isPinned).toBe(true);
     expect(await api.noteList(true)).toEqual([]);
     expect(await api.journalList()).toEqual([]);

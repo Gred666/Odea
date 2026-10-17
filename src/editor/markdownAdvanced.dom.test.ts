@@ -33,7 +33,7 @@ const lines = (parent: HTMLElement) =>
   [...parent.querySelectorAll(".cm-line")].map((line) => line.textContent);
 const text = (parent: HTMLElement) => parent.querySelector(".cm-content")?.textContent;
 const markers = (parent: HTMLElement) =>
-  [...parent.querySelectorAll(".cm-otw-list-marker")].map((n) => n.textContent);
+  [...parent.querySelectorAll(".cm-odea-list-marker")].map((n) => n.textContent);
 const click = (node: Element | null) =>
   node?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -51,16 +51,16 @@ describe("行内 HTML", () => {
   it("maps whitelisted tags to the same classes as markdown and hides the tags", () => {
     const source = '<b>粗</b> <mark>亮</mark> <span style="color:red;position:fixed">红</span> 完';
     const { parent, view } = mount(source, 999);
-    expect(parent.querySelector(".cm-otw-strong")?.textContent).toBe("粗");
-    expect(parent.querySelector(".cm-otw-highlight")?.textContent).toBe("亮");
-    const span = parent.querySelector(".cm-otw-span") as HTMLElement;
+    expect(parent.querySelector(".cm-odea-strong")?.textContent).toBe("粗");
+    expect(parent.querySelector(".cm-odea-highlight")?.textContent).toBe("亮");
+    const span = parent.querySelector(".cm-odea-span") as HTMLElement;
     expect(span.textContent).toBe("红");
     expect(styleOf(span)).toBe("color: red");
     expect(text(parent)).toBe("粗 亮 红 完");
 
     view.dispatch({ selection: { anchor: 2 } });
     expect(text(parent)).toBe("<b>粗</b> 亮 红 完");
-    expect(parent.querySelectorAll(".cm-otw-syntax-marker")).toHaveLength(2);
+    expect(parent.querySelectorAll(".cm-odea-syntax-marker")).toHaveLength(2);
   });
 
   it("renders <sub>, <sup>, <kbd> and <font>", () => {
@@ -68,17 +68,17 @@ describe("行内 HTML", () => {
       'H<sub>2</sub>O x<sup>2</sup> <kbd>Ctrl</kbd> <font color="blue" size="5">大</font> 完',
       999,
     );
-    expect(parent.querySelector(".cm-otw-sub")?.textContent).toBe("2");
-    expect(parent.querySelector(".cm-otw-sup")?.textContent).toBe("2");
-    expect(parent.querySelector(".cm-otw-kbd")?.textContent).toBe("Ctrl");
-    expect(styleOf(parent.querySelector(".cm-otw-span"))).toBe("color: blue; font-size: 1.5em");
+    expect(parent.querySelector(".cm-odea-sub")?.textContent).toBe("2");
+    expect(parent.querySelector(".cm-odea-sup")?.textContent).toBe("2");
+    expect(parent.querySelector(".cm-odea-kbd")?.textContent).toBe("Ctrl");
+    expect(styleOf(parent.querySelector(".cm-odea-span"))).toBe("color: blue; font-size: 1.5em");
     expect(text(parent)).toBe("H2O x2 Ctrl 大 完");
   });
 
   it("leaves unpaired and unknown tags as source", () => {
     const { parent } = mount("<b>没闭合 和 <blink>x</blink> 完", 999);
-    expect(parent.querySelector(".cm-otw-strong")).toBeNull();
-    expect(parent.querySelectorAll(".cm-otw-html").length).toBeGreaterThan(0);
+    expect(parent.querySelector(".cm-odea-strong")).toBeNull();
+    expect(parent.querySelectorAll(".cm-odea-html").length).toBeGreaterThan(0);
     expect(text(parent)).toBe("<b>没闭合 和 <blink>x</blink> 完");
   });
 
@@ -87,14 +87,14 @@ describe("行内 HTML", () => {
       '一<br>二 <img src="https://x.dev/a.png" alt="图" width="80"> 完',
       999,
     );
-    expect(parent.querySelector(".cm-otw-br br")).not.toBeNull();
-    const image = parent.querySelector(".cm-otw-image") as HTMLImageElement;
+    expect(parent.querySelector(".cm-odea-br br")).not.toBeNull();
+    const image = parent.querySelector(".cm-odea-image") as HTMLImageElement;
     expect(image.alt).toBe("图");
     expect(image.style.width).toBe("80px");
     expect(text(parent)).toBe("一↵二  完");
 
     view.dispatch({ selection: { anchor: 3 } });
-    expect(parent.querySelector(".cm-otw-br")).toBeNull();
+    expect(parent.querySelector(".cm-odea-br")).toBeNull();
     expect(lines(parent)[0]).toContain("<br>");
   });
 
@@ -103,8 +103,8 @@ describe("行内 HTML", () => {
       '<img src="javascript:alert(1)"> <a href="javascript:x">坏</a> <a href="https://x.dev">好</a> 完',
       999,
     );
-    expect(parent.querySelector(".cm-otw-image")).toBeNull();
-    const links = [...parent.querySelectorAll(".cm-otw-link")] as HTMLElement[];
+    expect(parent.querySelector(".cm-odea-image")).toBeNull();
+    const links = [...parent.querySelectorAll(".cm-odea-link")] as HTMLElement[];
     expect(links.map((n) => [n.textContent, n.dataset.href ?? null])).toEqual([
       ["坏", null],
       ["好", "https://x.dev"],
@@ -113,7 +113,7 @@ describe("行内 HTML", () => {
 
   it("collapses html comments into a pill until the cursor is on that line", () => {
     const { parent, view } = mount("前 <!-- 备注 --> 后\n\n<!-- 整块注释 -->\n\n尾", 999);
-    expect(parent.querySelectorAll(".cm-otw-comment")).toHaveLength(2);
+    expect(parent.querySelectorAll(".cm-odea-comment")).toHaveLength(2);
     expect(lines(parent)).toEqual(["前 注释 后", "", "", "尾"]);
 
     view.dispatch({ selection: { anchor: 1 } });
@@ -126,7 +126,7 @@ describe("块级 HTML", () => {
     const source =
       '<h2 onclick="x()">标题</h2>\n<table><tr><td style="color:red;background:url(x)">格</td></tr></table>\n<script>alert(1)</script>\n<details open><summary>更多</summary>内容</details>';
     const { parent } = mount(`${source}\n\n后`, 999);
-    const widget = parent.querySelector(".cm-otw-html-widget") as HTMLElement;
+    const widget = parent.querySelector(".cm-odea-html-widget") as HTMLElement;
     expect(widget.querySelector("h2")?.textContent).toBe("标题");
     expect(widget.querySelector("h2")?.hasAttribute("onclick")).toBe(false);
     expect(styleOf(widget.querySelector("td"))).toBe("color: red");
@@ -154,32 +154,34 @@ describe("块级 HTML", () => {
 describe("Callout 变体", () => {
   it("shows the custom title next to the badge", () => {
     const { parent } = mount("> [!tip] 自定义标题\n> 正文\n\n后", 999);
-    expect(parent.querySelector(".cm-otw-callout-badge.is-tip")?.textContent).toBe("tip");
-    expect(parent.querySelector(".cm-otw-callout-title")?.textContent).toBe("自定义标题");
+    expect(parent.querySelector(".cm-odea-callout-badge.is-tip")?.textContent).toBe("tip");
+    expect(parent.querySelector(".cm-odea-callout-title")?.textContent).toBe("自定义标题");
     expect(lines(parent)[0]).toBe("tip 自定义标题");
   });
 
   it("folds `[!x]-` bodies and toggles the sign in the source on click", () => {
     const source = "> [!note]- 收起\n> 第一行\n> 第二行\n\n后";
     const { parent, view } = mount(source, source.length);
-    expect(parent.querySelector(".cm-otw-callout-badge.is-collapsed")).not.toBeNull();
-    expect(parent.querySelector(".cm-otw-callout-fold-button")?.textContent).toBe("… 展开 2 行");
+    expect(parent.querySelector(".cm-odea-callout-badge.is-collapsed")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-callout-fold-button")?.textContent).toBe("… 展开 2 行");
     expect(lines(parent)).toEqual(["note 收起", "", "后"]);
-    expect(parent.querySelector(".cm-line.cm-otw-callout-head.cm-otw-callout-tail")).not.toBeNull();
+    expect(
+      parent.querySelector(".cm-line.cm-odea-callout-head.cm-odea-callout-tail"),
+    ).not.toBeNull();
 
-    click(parent.querySelector(".cm-otw-callout-fold-button"));
+    click(parent.querySelector(".cm-odea-callout-fold-button"));
     expect(view.state.doc.toString()).toBe("> [!note]+ 收起\n> 第一行\n> 第二行\n\n后");
-    expect(parent.querySelector(".cm-otw-callout-fold-button")).toBeNull();
-    expect(parent.querySelector(".cm-otw-callout-badge.is-expanded")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-callout-fold-button")).toBeNull();
+    expect(parent.querySelector(".cm-odea-callout-badge.is-expanded")).not.toBeNull();
     expect(lines(parent)).toEqual(["note 收起", "第一行", "第二行", "", "后"]);
 
-    click(parent.querySelector(".cm-otw-callout-badge"));
+    click(parent.querySelector(".cm-odea-callout-badge"));
     expect(view.state.doc.toString()).toBe(source);
   });
 
   it("keeps the body visible while the cursor is inside a collapsed callout", () => {
     const { parent } = mount("> [!note]-\n> 第一行\n\n后", 12);
-    expect(parent.querySelector(".cm-otw-callout-fold-button")).toBeNull();
+    expect(parent.querySelector(".cm-odea-callout-fold-button")).toBeNull();
     // 光标在正文行的 `>` 后面：徽章照常显示，只有光标碰到的那一个 `>` 露出来
     expect(lines(parent)).toEqual(["note", "> 第一行", "", "后"]);
   });
@@ -206,32 +208,32 @@ describe("列表符号", () => {
 describe("数学公式", () => {
   it("replaces inline math with a KaTeX widget and keeps emphasis out", async () => {
     const { parent, view } = mount("看 $a*b$ 和 $c*d$ 完", 999);
-    expect(parent.querySelectorAll(".cm-otw-math.is-inline")).toHaveLength(2);
-    expect(parent.querySelector(".cm-otw-emphasis")).toBeNull();
+    expect(parent.querySelectorAll(".cm-odea-math.is-inline")).toHaveLength(2);
+    expect(parent.querySelector(".cm-odea-emphasis")).toBeNull();
     await loadKatex();
     await tick();
-    expect(parent.querySelector(".cm-otw-math .katex")).not.toBeNull();
-    expect(parent.querySelector(".cm-otw-math.is-loading")).toBeNull();
+    expect(parent.querySelector(".cm-odea-math .katex")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-math.is-loading")).toBeNull();
 
     view.dispatch({ selection: { anchor: 4 } });
-    expect(parent.querySelector(".cm-otw-math-source")?.textContent).toBe("$a*b$");
-    expect(parent.querySelectorAll(".cm-otw-math.is-inline")).toHaveLength(1);
+    expect(parent.querySelector(".cm-odea-math-source")?.textContent).toBe("$a*b$");
+    expect(parent.querySelectorAll(".cm-odea-math.is-inline")).toHaveLength(1);
   });
 
   it("folds $$ blocks into a display widget and shows the source when active", () => {
     const source = "上\n$$\n\\sum_i x_i\n$$\n下";
     const { parent, view } = mount(source, source.length);
-    expect(parent.querySelector(".cm-otw-math-block .cm-otw-math.is-block")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-math-block .cm-odea-math.is-block")).not.toBeNull();
     expect(lines(parent)).toEqual(["上", "下"]);
 
     view.dispatch({ selection: { anchor: 5 } });
-    expect(parent.querySelectorAll(".cm-line.cm-otw-math-source")).toHaveLength(3);
+    expect(parent.querySelectorAll(".cm-line.cm-odea-math-source")).toHaveLength(3);
     expect(lines(parent)).toEqual(["上", "$$", "\\sum_i x_i", "$$", "下"]);
   });
 
   it("does not mistake prices for math", () => {
     const { parent } = mount("花了 $5 和 $10 完", 999);
-    expect(parent.querySelector(".cm-otw-math")).toBeNull();
+    expect(parent.querySelector(".cm-odea-math")).toBeNull();
     expect(text(parent)).toBe("花了 $5 和 $10 完");
   });
 });
@@ -245,15 +247,15 @@ describe("图表与 CSV 围栏", () => {
     vi.spyOn(diagramEngine, "load").mockResolvedValue({ render } as never);
     const source = "```mermaid\ngraph TD; A-->B\n```\n\n后";
     const { parent, view } = mount(source, source.length);
-    expect(parent.querySelector(".cm-otw-diagram.is-loading")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-diagram.is-loading")).not.toBeNull();
     expect(lines(parent)).toEqual(["", "后"]);
     await tick();
     await tick();
-    expect(render).toHaveBeenCalledWith(expect.stringMatching(/^otw-diagram-/), "graph TD; A-->B");
-    expect(parent.querySelector(".cm-otw-diagram svg #ok")).not.toBeNull();
+    expect(render).toHaveBeenCalledWith(expect.stringMatching(/^odea-diagram-/), "graph TD; A-->B");
+    expect(parent.querySelector(".cm-odea-diagram svg #ok")).not.toBeNull();
 
     view.dispatch({ selection: { anchor: 3 } });
-    expect(parent.querySelector(".cm-otw-diagram")).toBeNull();
+    expect(parent.querySelector(".cm-odea-diagram")).toBeNull();
     expect(lines(parent)[0]).toBe("```mermaid");
   });
 
@@ -266,7 +268,7 @@ describe("图表与 CSV 围栏", () => {
     const { parent } = mount("```mermaid\nnonsense\n```\n\n后", 999);
     await tick();
     await tick();
-    expect(parent.querySelector(".cm-otw-diagram.is-error")?.textContent).toBe(
+    expect(parent.querySelector(".cm-odea-diagram.is-error")?.textContent).toBe(
       "图表无法渲染：Parse error on line 1",
     );
   });
@@ -274,13 +276,15 @@ describe("图表与 CSV 围栏", () => {
   it("renders csv fences as tables with quoted fields", () => {
     const source = '```csv\n名字,值\n甲,"1, 2"\n乙,3\n```\n\n后';
     const { parent, view } = mount(source, source.length);
-    const cells = [...parent.querySelectorAll(".cm-otw-table-widget td")].map((n) => n.textContent);
+    const cells = [...parent.querySelectorAll(".cm-odea-table-widget td")].map(
+      (n) => n.textContent,
+    );
     expect(cells).toEqual(["甲", "1, 2", "乙", "3"]);
     expect(lines(parent)).toEqual(["", "后"]);
 
     view.dispatch({ selection: { anchor: 8 } });
-    expect(parent.querySelector(".cm-otw-table-widget")).toBeNull();
-    expect(parent.querySelectorAll(".cm-line.cm-otw-code-block").length).toBeGreaterThan(0);
+    expect(parent.querySelector(".cm-odea-table-widget")).toBeNull();
+    expect(parent.querySelectorAll(".cm-line.cm-odea-code-block").length).toBeGreaterThan(0);
   });
 
   it("parses tsv and rfc4180 quotes", () => {
@@ -294,18 +298,18 @@ describe("图表与 CSV 围栏", () => {
 
   it("breaks lines inside table cells on <br>", () => {
     const { parent } = mount("| a | b |\n|---|---|\n| 一<br>二 | <b>粗</b> |\n\n后", 999);
-    const cell = parent.querySelector(".cm-otw-table-widget td");
+    const cell = parent.querySelector(".cm-odea-table-widget td");
     expect(cell?.querySelector("br")).not.toBeNull();
     expect(cell?.textContent).toBe("一二");
-    expect(parent.querySelector(".cm-otw-table-widget .cm-otw-strong")?.textContent).toBe("粗");
+    expect(parent.querySelector(".cm-odea-table-widget .cm-odea-strong")?.textContent).toBe("粗");
   });
 });
 
 describe("定义列表、缩写、智能标点", () => {
   it("styles `term / : definition` pairs and hides the colon", () => {
     const { parent, view } = mount("术语\n: 释义一\n: 释义二\n\n后", 999);
-    expect(parent.querySelectorAll(".cm-line.cm-otw-dt")).toHaveLength(1);
-    expect(parent.querySelectorAll(".cm-line.cm-otw-dd")).toHaveLength(2);
+    expect(parent.querySelectorAll(".cm-line.cm-odea-dt")).toHaveLength(1);
+    expect(parent.querySelectorAll(".cm-line.cm-odea-dd")).toHaveLength(2);
     expect(lines(parent)).toEqual(["术语", "释义一", "释义二", "", "后"]);
 
     view.dispatch({ selection: { anchor: 5 } });
@@ -314,23 +318,23 @@ describe("定义列表、缩写、智能标点", () => {
 
   it("does not turn a heading into a term", () => {
     const { parent } = mount("## 标题\n\n: 不是释义\n\n后", 999);
-    expect(parent.querySelector(".cm-line.cm-otw-dt")).toBeNull();
+    expect(parent.querySelector(".cm-line.cm-odea-dt")).toBeNull();
   });
 
   it("annotates abbreviations defined with *[X]: …", () => {
     const { parent } = mount("HTML 很好，HTML5 不算\n\n*[HTML]: 超文本标记语言\n\n后", 999);
-    const abbr = parent.querySelectorAll(".cm-otw-abbr");
+    const abbr = parent.querySelectorAll(".cm-odea-abbr");
     expect(abbr).toHaveLength(1);
-    expect(abbr[0]?.getAttribute("data-otw-tip")).toBe("超文本标记语言");
-    expect(abbr[0]?.getAttribute("data-otw-tip-label")).toBe("HTML");
-    expect(parent.querySelector(".cm-line.cm-otw-abbr-def")).not.toBeNull();
+    expect(abbr[0]?.getAttribute("data-odea-tip")).toBe("超文本标记语言");
+    expect(abbr[0]?.getAttribute("data-odea-tip-label")).toBe("HTML");
+    expect(parent.querySelector(".cm-line.cm-odea-abbr-def")).not.toBeNull();
   });
 
   it("swaps dashes, ellipses and marks for typographic glyphs on display only", () => {
     const source = "a -- b --- c ... (c) (tm)\n\n---\n\n`--` 后";
     const { parent, view } = mount(source, source.length);
     expect(lines(parent)[0]).toBe("a – b — c … © ™");
-    expect(parent.querySelector(".cm-otw-hr")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-hr")).not.toBeNull();
     expect(lines(parent).at(-1)).toBe("-- 后");
     expect(view.state.doc.toString()).toBe(source);
 
@@ -350,19 +354,19 @@ describe("脚注与双链", () => {
   it("previews the definition on the reference and jumps between the two", () => {
     const source = "正文[^a] 完\n\n[^a]: 这是 多个 词 的脚注";
     const { parent, view } = mount(source, 0);
-    const ref = parent.querySelector(".cm-otw-footnote.is-ref") as HTMLElement;
+    const ref = parent.querySelector(".cm-odea-footnote.is-ref") as HTMLElement;
     // 预览走悬停卡片（hoverCard.ts）的 data 属性，不再用原生 title
-    expect(ref.dataset.otwTip).toBe("这是 多个 词 的脚注");
-    expect(ref.dataset.otwTipLabel).toBe("脚注 a");
+    expect(ref.dataset.odeaTip).toBe("这是 多个 词 的脚注");
+    expect(ref.dataset.odeaTipLabel).toBe("脚注 a");
     expect(ref.hasAttribute("title")).toBe(false);
-    expect(parent.querySelector(".cm-otw-footnote.is-def")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-footnote.is-def")).not.toBeNull();
     expect(lines(parent)).toEqual(["正文a 完", "", "a这是 多个 词 的脚注"]);
 
     click(ref);
     expect(view.state.selection.main.head).toBe(source.indexOf("[^a]:"));
     // 光标落在定义上时定义徽章会让位给源码，先挪开再点它
     view.dispatch({ selection: { anchor: source.length } });
-    click(parent.querySelector(".cm-otw-footnote.is-def"));
+    click(parent.querySelector(".cm-odea-footnote.is-def"));
     expect(view.state.selection.main.head).toBe(2);
   });
 
@@ -371,7 +375,7 @@ describe("脚注与双链", () => {
     expect(splitWikiTarget("笔记#小节")).toEqual({ title: "笔记", heading: "小节" });
     expect(splitWikiTarget("笔记^abc")).toEqual({ title: "笔记", block: "abc" });
     const { parent, view } = mount("看 [[笔记#小节|别名]] 完", 999);
-    expect(parent.querySelector(".cm-otw-wikilink")?.getAttribute("title")).toContain(
+    expect(parent.querySelector(".cm-odea-wikilink")?.getAttribute("title")).toContain(
       "笔记 › 小节",
     );
     expect(wikiTargetAt(view.state, 4)).toBe("笔记#小节");
@@ -413,18 +417,18 @@ describe("悬停卡片", () => {
     vi.useFakeTimers();
     try {
       const { parent } = mountWithCard("正文[^a] 完\n\n[^a]: 脚注的内容\n\n后");
-      const ref = parent.querySelector(".cm-otw-footnote.is-ref")!;
+      const ref = parent.querySelector(".cm-odea-footnote.is-ref")!;
       over(ref);
-      expect(document.querySelector(".otw-hovercard")).toBeNull();
+      expect(document.querySelector(".odea-hovercard")).toBeNull();
       vi.advanceTimersByTime(400);
-      const card = document.querySelector(".otw-hovercard")!;
-      expect(card.querySelector(".otw-hovercard-label")?.textContent).toBe("脚注 a");
-      expect(card.querySelector(".otw-hovercard-body")?.textContent).toBe("脚注的内容");
-      expect(card.querySelector(".otw-hovercard-hint")?.textContent).toBe("点击跳到脚注");
+      const card = document.querySelector(".odea-hovercard")!;
+      expect(card.querySelector(".odea-hovercard-label")?.textContent).toBe("脚注 a");
+      expect(card.querySelector(".odea-hovercard-body")?.textContent).toBe("脚注的内容");
+      expect(card.querySelector(".odea-hovercard-hint")?.textContent).toBe("点击跳到脚注");
 
       out(ref);
       vi.advanceTimersByTime(400);
-      expect(document.querySelector(".otw-hovercard")).toBeNull();
+      expect(document.querySelector(".odea-hovercard")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -434,13 +438,13 @@ describe("悬停卡片", () => {
     vi.useFakeTimers();
     try {
       const { parent } = mountWithCard("HTML 很好\n\n*[HTML]: 超文本标记语言\n\n后");
-      const abbr = parent.querySelector(".cm-otw-abbr")!;
+      const abbr = parent.querySelector(".cm-odea-abbr")!;
       over(abbr);
       vi.advanceTimersByTime(400);
-      expect(document.querySelector(".otw-hovercard-body")?.textContent).toBe("超文本标记语言");
+      expect(document.querySelector(".odea-hovercard-body")?.textContent).toBe("超文本标记语言");
       window.dispatchEvent(new Event("scroll"));
       vi.advanceTimersByTime(400);
-      expect(document.querySelector(".otw-hovercard")).toBeNull();
+      expect(document.querySelector(".odea-hovercard")).toBeNull();
     } finally {
       vi.useRealTimers();
     }

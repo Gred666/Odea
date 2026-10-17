@@ -159,7 +159,7 @@ fn delete_goes_to_the_trash_and_undo_puts_it_back() {
     assert!(f.files().is_empty());
     assert!(matches!(f.vault.note_get(&id), Err(AppError::NotFound(_))));
     assert!(f.exists("笔记/工作"), "「笔记」底下的文件夹是用户的，删空了也留着");
-    assert!(f.exists(&format!(".ontheway/trash/{id}.md")));
+    assert!(f.exists(&format!(".odea/trash/{id}.md")));
 
     f.vault.note_undelete(&id).unwrap();
     assert_eq!(f.files(), vec!["笔记/工作/周报.md"], "放回原来的文件夹");
@@ -176,7 +176,7 @@ fn old_trash_is_purged() {
     let mut f = fixture();
     let id = f.vault.note_create("临时", "x").unwrap();
     f.vault.note_delete(&id).unwrap();
-    let trashed = fsio::abs(&f.root, &format!(".ontheway/trash/{id}.md"));
+    let trashed = fsio::abs(&f.root, &format!(".odea/trash/{id}.md"));
     fsio::set_mtime(&trashed, now_ms() - 31 * 86_400_000).unwrap();
     f.vault.purge_trash(30 * 86_400_000);
     assert!(!trashed.exists());
@@ -1342,7 +1342,7 @@ fn large_vault_timings() {
     let titles: Vec<String> = (0..NOTES)
         .map(|i| format!("{}{} {i}", words[i % words.len()], words[(i * 7) % words.len()]))
         .collect();
-    let folders = ["", "工作", "工作/周报", "读书", "生活", "项目/OnTheWay"];
+    let folders = ["", "工作", "工作/周报", "读书", "生活", "项目/Odea"];
     let mut bytes = 0usize;
     for (i, title) in titles.iter().enumerate() {
         let mut body = String::new();

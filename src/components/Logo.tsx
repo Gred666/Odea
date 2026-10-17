@@ -1,35 +1,24 @@
 import { useIntro } from "@/app/intro";
-import { animate, cubicBezier, motion, useMotionValue, useTransform } from "motion/react";
+import { animate, motion, useMotionValue, useTransform } from "motion/react";
 import type { MotionValue } from "motion/react";
 import { useLayoutEffect, useRef } from "react";
-import {
-  DOT,
-  DOT_AT,
-  DOT_IN,
-  LOGO_VIEWBOX_ATTR,
-  MARK_SHIFT,
-  OPEN_HEAD,
-  OPEN_TAIL,
-  STROKES,
-  STROKE_WIDTH,
-} from "./logoGeometry";
+import { DOT, LOGO_VIEWBOX_ATTR, MARK_SHIFT, STROKES, STROKE_WIDTH } from "./logoGeometry";
 
 /**
- * 手写 Logo。
+ * 手写 Logo：起笔一点（design/logo/）。
  *
- * 展开时：九段笔画按真实书写顺序一段段描出来（stroke-dashoffset 1 → 0），整词停一拍，
- * 再沿同方向收回去，无限循环 —— 像有人一直在把这个词重新写一遍。
+ * 缺口里那个蓝点一直在 —— 想法先有，字围着它写。展开时五段笔画按真实书写顺序一段段描出来
+ * （stroke-dashoffset 1 → 0），整词停一拍，再沿同方向收回去，只剩蓝点停一会儿，再从头写，
+ * 无限循环：字来了又走，那一点留着。
  *
- * 收起时只剩「O」，变成应用图标的样子：O 的两头各收回去一截，右上角留出缺口，
- * 缺口里一个蓝点（design/logo/）。这个「O」从头到尾不消失、只变形：
- * - 收起：其余字母淡出；O 从字标此刻的笔迹接手（写到一半就从一半开始），两头沿路径收开，
- *   右上角起笔和收笔交叉的那个结散开。收笔那头退过结的时候，原地留下一滴蓝 —— 蓝点长出来
- * - 展开：倒过来。收笔那头往前伸，伸到蓝点那里正好把它吞掉，O 合上，再交还给字标接着写
- * - 开场（Intro.tsx）：冷启动时这里先空着，开场那个写好的「O」从窗口中间滑过来、落在这里，
- *   落地那一帧交给这里：收起着就停在那儿；展开着就和「展开」一样把蓝点吞掉、O 合上，
- *   字母从 n 开始接着写
+ * 收起时只剩开口的「O」和蓝点，就是应用图标的样子。字标里的 O 本来就是开口的，所以不用变形：
+ * - 收起：其余字母淡出；O 从字标此刻的笔迹接手（写到一半就从一半开始），写满，和蓝点一起
+ *   往左挪到窄栏图标那一列的中线上
+ * - 展开：挪回来，交还给字标，从「写好了」那一刻接着走
+ * - 开场（Intro.tsx）：冷启动时这里先空着，开场写好的「O」和蓝点从窗口中间滑过来、落在这里，
+ *   落地那一帧交给这里：收起着就停在那儿；展开着就接着写 d、e、a
  *
- * 两个 O 是两条 path：字标里那条跟着 CSS 循环，另一条（变形用）由 motion value 驱动。
+ * 两个 O 是两条 path：字标里那条跟着 CSS 循环，另一条（收起、开场落地用）由 motion value 驱动。
  * 同一时刻只显示一条，交接的那一帧两条的笔迹完全一样，所以没有交叉淡化 —— 交叉淡化两个
  * 一样的形状，中间那一下墨色会掉到七成五。
  *
@@ -37,6 +26,7 @@ import {
  * - pathLength="1" 把每段路径的长度归一化成 1，dasharray / dashoffset 就能直接写常数，
  *   省掉 JS 量 getTotalLength() 那一步，也不用等布局
  * - 描边走 currentColor，蓝点走 accent，暗色模式跟着 token 走
+ * - 动的只有描边和 svg 里一层 <g> 的位移（矢量重画），没有不透明度、缩放的过渡
  *
  * 停止态（减少动效时）是「写完」而不是「没写」，见 globals.css 里的兜底。
  */
@@ -44,35 +34,21 @@ import {
 /** 单段笔画的描出时长占整轮的 9%，起笔间隔 0.22s，节奏见 globals.css。 */
 const STEP = 0.22;
 /**
- * 从这一刻接着写：整轮 6.6s 里，最后一笔 1.76s 起笔、2.35s 写完，第一笔 3.63s 开始收 ——
- * 2.4s 时九笔都在。导航栏展开时从这里开始，淡进来的是一个写好的完整 Logo，
- * 而不是停在收起那一刻、写到一半的样子。O 要到 1.2s 之后才开始收，变形用的 O 在那之前合上、交回来
+ * 从这一刻接着写：整轮 6.6s 里，最后一笔 0.88s 起笔、1.47s 写完，第一笔 3.63s 开始收 ——
+ * 2.4s 时五笔都在。导航栏展开时从这里开始，淡进来的是一个写好的完整 Logo，
+ * 而不是停在收起那一刻、写到一半的样子
  */
 const WRITTEN_AT = 2.4;
-/** 开场落地时字标从这一刻接着写：n 正好起笔（O 的那一笔由落下来的那个「O」代替） */
+/** 开场落地时字标从这一刻接着写：d 正好起笔（O 的那一笔由落下来的那个「O」代替） */
 const INTRO_LOOP_AT = STEP;
 /** 字标自己的 O 写完的时刻（9% × 6.6s），开场落地后交回它不能早于这一刻 */
 const O_WRITTEN_AT = 0.6;
 
 /** 收起：和导航栏底板同一条缓入缓出，略早一点停 */
-const OPEN_EASE = [0.4, 0, 0.2, 1] as const;
+const MOTION_EASE = [0.4, 0, 0.2, 1] as const;
 const OPEN_DURATION = 0.46;
-/** 展开：要赶在字母淡进来（LABEL_IN 0.2s 起）前后合上，交还给字标 */
+/** 展开：要赶在字母淡进来（LABEL_IN 0.2s 起）前后挪回去，交还给字标 */
 const CLOSE_DURATION = 0.3;
-
-const openEase = cubicBezier(...OPEN_EASE);
-
-/** 缓动曲线走到 progress 时，时间过去了几成（二分） */
-function timeAt(progress: number) {
-  let lo = 0;
-  let hi = 1;
-  for (let i = 0; i < 24; i++) {
-    const mid = (lo + hi) / 2;
-    if (openEase(mid) < progress) lo = mid;
-    else hi = mid;
-  }
-  return hi;
-}
 
 /**
  * 字标里那条 O 此刻画出来的区间 [起, 止]。它的 dasharray 是「1 3」：
@@ -93,16 +69,16 @@ export function Logo({
 }: {
   collapsed: boolean;
   reduce: boolean;
-  /** O 以外那八笔的不透明度（和导航文字同一个值） */
+  /** O 以外那几笔的不透明度（和导航文字同一个值） */
   fade: MotionValue<number>;
 }) {
-  // 开场还盖着的时候这里先空着：字标停在一笔没写的那一刻，变形用的 O 和蓝点都藏着
+  // 开场还盖着的时候这里先空着：字标停在一笔没写的那一刻，接手用的 O 和蓝点都藏着
   const intro = useIntro((s) => s.phase);
   const covered = intro === "cover";
   const paused = collapsed || covered;
 
   // 停过一次之后再放开：笔画重新挂上，接着写 —— 展开时从「写好了」那一刻（淡进来的是完整的 Logo），
-  // 开场落地时从 n 起笔那一刻。在渲染里算，不放进 effect：展开那一下不为它再多提交一次
+  // 开场落地时从 d 起笔那一刻。在渲染里算，不放进 effect：展开那一下不为它再多提交一次
   const resumes = useRef(0);
   const resumeAt = useRef(0);
   const wasPaused = useRef(paused);
@@ -115,10 +91,10 @@ export function Logo({
   wasCovered.current = covered;
   const offset = resumes.current > 0 ? resumeAt.current : 0;
 
-  // 变形用的 O 画出的区间、蓝点的大小、现在是不是字标自己的 O 在显示
-  const head = useMotionValue(collapsed || covered ? OPEN_HEAD : 0);
-  const tail = useMotionValue(covered ? OPEN_HEAD : collapsed ? OPEN_TAIL : 1);
-  const dot = useMotionValue(collapsed && !covered ? 1 : 0);
+  // 接手用的 O 画出的区间、蓝点在不在、现在是不是字标自己的 O 在显示、往左挪了多少
+  const head = useMotionValue(0);
+  const tail = useMotionValue(collapsed && !covered ? 1 : 0);
+  const dot = useMotionValue(covered ? 0 : 1);
   const live = useMotionValue(collapsed || covered ? 0 : 1);
   const shift = useMotionValue(collapsed ? MARK_SHIFT : 0);
   const dasharray = useTransform(() => `${Math.max(tail.get() - head.get(), 0)} 2`);
@@ -126,7 +102,7 @@ export function Logo({
   // 长度为 0 的一段，圆头笔帽会画出一个点：没东西可画时整条藏起来。
   // 三个值都要先读出来：这种写法只在第一次运行时收集依赖，用 && 短路的话
   // head / tail 就没订阅上（从一片空白开始写的那种收起，O 会一直不出来）
-  const morphOpacity = useTransform(() => {
+  const takeoverOpacity = useTransform(() => {
     const length = tail.get() - head.get();
     return live.get() === 0 && length > 0.002 ? 1 : 0;
   });
@@ -144,17 +120,14 @@ export function Logo({
     }
     if (intro === "cover") return;
 
-    /** 合上：收笔那头伸到蓝点圆心时蓝点正好缩没；合上以后（不早于 handoffAt 秒）交还给字标 */
-    const close = (handoffAt: number) => {
-      const from = tail.get();
-      const tween = { duration: CLOSE_DURATION, ease: OPEN_EASE };
-      const swallowAt = from < DOT_AT ? CLOSE_DURATION * timeAt((DOT_AT - from) / (1 - from)) : 0;
+    /** 挪回来、写满；不早于 handoffAt 秒交还给字标（它这时是写好的完整 O） */
+    const handBack = (handoffAt: number) => {
+      const tween = { duration: CLOSE_DURATION, ease: MOTION_EASE };
       let cancelled = false;
       const controls = [
         animate(head, 0, tween),
         animate(tail, 1, tween),
         animate(shift, 0, tween),
-        animate(dot, 0, { duration: Math.max(swallowAt, 0.08), ease: [0.4, 0, 1, 1] }),
         // 只是等：走 motion 的时钟，和上面几条在同一条时间线上
         animate(0, 1, { duration: Math.max(handoffAt, CLOSE_DURATION) }),
       ];
@@ -168,64 +141,55 @@ export function Logo({
     };
 
     if (landing) {
-      // 开场那个「O」落在这里了：先摆成它落地时的样子（缺口 + 蓝点，和开场那份逐像素一样），
+      // 开场那个「O」和蓝点落在这里了：先摆成它落地时的样子（和开场那份逐像素一样），
       // 这一帧开场那份撤掉，看不出换了人
-      head.set(OPEN_HEAD);
-      tail.set(OPEN_TAIL);
+      head.set(0);
+      tail.set(1);
       dot.set(1);
       live.set(0);
       shift.set(collapsed ? MARK_SHIFT : 0);
       if (collapsed || reduce) return;
-      // 展开着：和「展开」一样合上。字标刚从 INTRO_LOOP_AT 开始走，它自己的 O 要到
-      // O_WRITTEN_AT 才写完 —— 交回去不能早于那一刻，不然换上去的是写到一半的 O
-      return close(O_WRITTEN_AT - INTRO_LOOP_AT);
+      // 展开着：字标刚从 INTRO_LOOP_AT 开始走，它自己的 O 要到 O_WRITTEN_AT 才写完 ——
+      // 交回去不能早于那一刻，不然换上去的是写到一半的 O
+      return handBack(O_WRITTEN_AT - INTRO_LOOP_AT);
     }
 
     if (reduce) {
-      head.set(collapsed ? OPEN_HEAD : 0);
-      tail.set(collapsed ? OPEN_TAIL : 1);
-      dot.set(collapsed ? 1 : 0);
+      head.set(0);
+      tail.set(1);
+      dot.set(1);
       live.set(collapsed ? 0 : 1);
       shift.set(collapsed ? MARK_SHIFT : 0);
       return;
     }
 
     if (collapsed) {
-      // 从字标此刻的笔迹接手（交接这一帧两条 O 一模一样）；上一次展开还没交回去就接着变
+      // 从字标此刻的笔迹接手（交接这一帧两条 O 一模一样）；上一次展开还没交回去就接着动
       if (live.get() === 1) {
-        const written = writtenInterval(writtenO.current);
-        // 那一刻一笔都没有：从缺口这头起笔，顺着书写方向写出来
-        const [start, end] = written ?? [OPEN_HEAD, OPEN_HEAD];
+        // 那一刻一笔都没有：从起笔那头顺着书写方向写出来
+        const [start, end] = writtenInterval(writtenO.current) ?? [0, 0];
         head.set(start);
         tail.set(end);
-        dot.set(0);
         live.set(0);
       }
-      const from = tail.get();
-      // 收笔那头退过结的那一刻，蓝点开始长；收笔本来就没到结那里，就等 O 快成形了再出来
-      const dotDelay =
-        from > DOT_AT
-          ? OPEN_DURATION * timeAt((from - DOT_AT) / (from - OPEN_TAIL))
-          : OPEN_DURATION * 0.6;
-      const tween = { duration: OPEN_DURATION, ease: OPEN_EASE };
+      const tween = { duration: OPEN_DURATION, ease: MOTION_EASE };
       const controls = [
-        animate(head, OPEN_HEAD, tween),
-        animate(tail, OPEN_TAIL, tween),
+        animate(head, 0, tween),
+        animate(tail, 1, tween),
         animate(shift, MARK_SHIFT, tween),
-        animate(dot, 1, { ...DOT_IN, delay: dotDelay }),
       ];
       return () => {
         for (const c of controls) c.stop();
       };
     }
 
-    // 展开：合上了就交还给字标（它这时是写好的完整 O，见 WRITTEN_AT）
-    return close(0);
+    // 展开：挪回去就交还给字标（它这时是写好的完整 O，见 WRITTEN_AT）
+    return handBack(0);
   }, [collapsed, reduce, intro, head, tail, dot, live, shift]);
 
   const strokeTiming = (i: number) => ({
     animationDelay: `${(i * STEP - offset).toFixed(2)}s`,
-    // 导航栏收起时停在那一帧（字母已经淡没了，O 交给了变形用的那条）；
+    // 导航栏收起时停在那一帧（字母已经淡没了，O 交给了接手的那条）；
     // 开场盖着的时候停在一笔没写的那一刻
     animationPlayState: paused ? ("paused" as const) : undefined,
   });
@@ -233,11 +197,11 @@ export function Logo({
   return (
     <svg
       viewBox={LOGO_VIEWBOX_ATTR}
-      className="h-[38px] w-[131px] shrink-0 overflow-visible text-ink"
+      className="h-[38px] w-[68px] shrink-0 overflow-visible text-ink"
       role="img"
-      aria-label="OnTheWay"
+      aria-label="Odea"
       // 开场动画量这里的位置，让它的「O」落在这儿
-      data-otw-logo=""
+      data-odea-logo=""
     >
       <g
         key={resumes.current}
@@ -247,12 +211,12 @@ export function Logo({
         strokeLinecap="round"
         strokeLinejoin="round"
       >
-        {/* 字标的 O：只有它不跟着字母淡出 —— 收起时直接交给下面变形用的那条 */}
+        {/* 字标的 O：只有它不跟着字母淡出 —— 收起时直接交给下面接手的那条 */}
         <motion.path
           ref={writtenO}
           d={STROKES[0]}
           pathLength="1"
-          className="otw-logo-stroke"
+          className="odea-logo-stroke"
           style={{ ...strokeTiming(0), opacity: live }}
         />
         <motion.g style={{ opacity: fade }}>
@@ -263,13 +227,13 @@ export function Logo({
               key={i}
               d={d}
               pathLength="1"
-              className="otw-logo-stroke"
+              className="odea-logo-stroke"
               style={strokeTiming(i + 1)}
             />
           ))}
         </motion.g>
       </g>
-      {/* 变形用的 O 和蓝点：收起后整体往左挪一点，对上窄栏图标的中线 */}
+      {/* 接手用的 O 和蓝点：收起后整体往左挪一点，对上窄栏图标的中线 */}
       <motion.g style={{ x: shift }}>
         <motion.path
           d={STROKES[0]}
@@ -281,7 +245,7 @@ export function Logo({
           style={{
             strokeDasharray: dasharray,
             strokeDashoffset: dashoffset,
-            opacity: morphOpacity,
+            opacity: takeoverOpacity,
           }}
         />
         <motion.circle
@@ -289,7 +253,7 @@ export function Logo({
           cy={DOT.cy}
           r={DOT.r}
           className="fill-accent"
-          style={{ scale: dot, transformBox: "fill-box", transformOrigin: "50% 50%" }}
+          style={{ opacity: dot }}
         />
       </motion.g>
     </svg>

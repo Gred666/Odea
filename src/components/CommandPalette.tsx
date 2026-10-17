@@ -14,6 +14,7 @@ import type {
 } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
+import { runEditorCommand } from "@/lib/editorCommands";
 import { popoverCard, spring, tween } from "@/lib/motion";
 import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/paletteSearch";
 import { isMac } from "@/lib/platform";
@@ -32,6 +33,8 @@ import {
   FolderSearch,
   History,
   Keyboard,
+  ListCollapse,
+  ListTree,
   Monitor,
   Moon,
   NotebookPen,
@@ -88,6 +91,17 @@ const LIST_MAX = 304;
 const RECENT_COUNT = 5;
 /** 搜笔记时最多列多少篇：再多就该换个更准的词了 */
 const NOTE_RESULTS = 40;
+/**
+ * 长路径留头尾，中间省掉：说明文字放不下时从末尾截断，最要紧的那个文件夹名就看不见了。
+ * `C:\Users\Gred\Documents\Odea` → `C:\…\Documents\Odea`
+ */
+function shortPath(path: string): string {
+  const parts = path.split(/[\\/]/);
+  if (path.length <= 24 || parts.length <= 3) return path;
+  const separator = path.includes("\\") ? "\\" : "/";
+  return [parts[0], "…", ...parts.slice(-2)].join(separator);
+}
+
 /** 全局搜索（FindDialog）的快捷键。写字不写 ⇧⌘：正文字体里没有（见 editor/popupGlyphs.test.ts） */
 const FIND_SHORTCUT = isMac ? "Cmd+Shift+F" : "Ctrl+Shift+F";
 
@@ -132,6 +146,7 @@ export function CommandPalette({
   const revealDocument = useData((s) => s.revealDocument);
   const openVaultFolder = useData((s) => s.openVaultFolder);
   const changeVaultRoot = useData((s) => s.changeVaultRoot);
+  const vaultRoot = useData((s) => s.vaultRoot);
   const openGuide = useData((s) => s.openGuide);
   const syncState = useData((s) => s.syncStatus.state);
   const setSyncOpen = useApp((s) => s.setSyncOpen);
@@ -231,6 +246,23 @@ export function CommandPalette({
               run: () => void revealDocument(docTarget),
             } satisfies Item,
             {
+              id: "fold-all",
+              group: "操作",
+              icon: ListCollapse,
+              label: "收起所有标题",
+              hint: "每一节只留标题",
+              keywords: "fold collapse 折叠 收起 标题 大纲 全部",
+              run: () => runEditorCommand("fold-all"),
+            } satisfies Item,
+            {
+              id: "unfold-all",
+              group: "操作",
+              icon: ListTree,
+              label: "展开所有标题",
+              keywords: "unfold expand 展开 标题 全部",
+              run: () => runEditorCommand("unfold-all"),
+            } satisfies Item,
+            {
               id: "history-current",
               group: "操作",
               icon: History,
@@ -284,8 +316,9 @@ export function CommandPalette({
         group: "文件",
         icon: FolderInput,
         label: "更换笔记文件夹…",
-        hint: "换一个位置存笔记",
-        keywords: "vault 仓库 位置 网盘 迁移",
+        // 写上现在在哪：不少人是因为想知道笔记存在哪（默认在 C 盘的「文档」里）才来找的
+        hint: vaultRoot ? `现在在 ${shortPath(vaultRoot)}` : "换一个位置存笔记",
+        keywords: "vault 仓库 位置 网盘 迁移 搬 移动 C盘 D盘 换盘 存在哪",
         run: () => void changeVaultRoot(),
       },
       // 同步（技术方案 §5.9.9）：没开时是开启的入口，开了是状态 + 立即同步
@@ -393,6 +426,7 @@ export function CommandPalette({
     setSyncOpen,
     setHistoryFor,
     changeVaultRoot,
+    vaultRoot,
   ]);
 
   const currentNote = docTarget?.kind === "note" ? docTarget.id : null;

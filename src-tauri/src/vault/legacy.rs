@@ -376,7 +376,7 @@ mod tests {
         assert!(!fsio::abs(&root, "日记/2026/2026-08-30.md").exists(), "空的那一天不该建文件");
         assert_eq!(read("目标/2026/2026-W35.md"), "本周重点");
         assert!(!fsio::abs(&root, "目标/2026/2026-09.md").exists());
-        assert!(read(".ontheway/activity/2026-08.jsonl").contains("\"completed\""));
+        assert!(read(".odea/activity/2026-08.jsonl").contains("\"completed\""));
 
         // 修改时间 = 旧库里的更新时间
         let mtime = fsio::stat(&fsio::abs(&root, "笔记/秋季项目复盘.md")).unwrap().0;

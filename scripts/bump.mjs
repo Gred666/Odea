@@ -1,7 +1,7 @@
 // 改版本号：pnpm bump 0.2.0
 //
 // 版本号写在三个地方，得一起改：package.json（前端）、src-tauri/Cargo.toml（Rust 和安装包，
-// tauri.conf.json 不写版本就用它）、src-tauri/Cargo.lock 里 ontheway 那一条。
+// tauri.conf.json 不写版本就用它）、src-tauri/Cargo.lock 里 odea 那一条。
 // 对不上的话 src/content/changelog.test.ts 会挂。
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,6 @@ const edit = (file, pattern) => {
 
 edit("package.json", /("version":\s*")[^"]+(")/);
 edit("src-tauri/Cargo.toml", /(\[package\][^[]*?\nversion\s*=\s*")[^"]+(")/);
-edit("src-tauri/Cargo.lock", /(name = "ontheway"\r?\nversion = ")[^"]+(")/);
+edit("src-tauri/Cargo.lock", /(name = "odea"\r?\nversion = ")[^"]+(")/);
 
 console.log(`版本号改成了 ${version}。别忘了在 src/content/changelog.md 最上面写这一版的更新说明`);

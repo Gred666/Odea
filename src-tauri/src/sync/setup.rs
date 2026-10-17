@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use super::engine::{AUTOSYNC_KEY, LOGIN_KEY, PROVIDER_KEY};
 use super::provider::Provider;
 use super::repo::{SyncError, SyncRepo, SyncResult};
+use crate::old_name;
+use crate::vault::layout;
 
 /// 这个文件夹在哪家网盘的同步目录里；不在返回 None
 pub fn cloud_drive_of(path: &Path) -> Option<&'static str> {
@@ -54,12 +56,12 @@ fn cloud_drive_by_name(path: &Path) -> Option<&'static str> {
     })
 }
 
-/// 第二台设备 clone 到哪：现在仓库旁边的「OnTheWay (同步)」，有了就「OnTheWay (同步) 2」……
+/// 第二台设备 clone 到哪：现在仓库旁边的「Odea (同步)」，有了就「Odea (同步) 2」……
 pub fn clone_target(current_root: &Path) -> PathBuf {
     let parent = current_root.parent().unwrap_or(current_root);
     let name = current_root
         .file_name()
-        .map_or_else(|| "OnTheWay".to_string(), |name| name.to_string_lossy().into_owned());
+        .map_or_else(|| "Odea".to_string(), |name| name.to_string_lossy().into_owned());
     (1..)
         .map(|n| {
             if n == 1 {
@@ -121,11 +123,11 @@ pub fn same_remote(a: &str, b: &str) -> bool {
 }
 
 /// 把原来仓库里的东西拷进 clone 下来的新仓库（用户选了「也合并进来」）。
-/// 根上的 .git、.ontheway（仓库标记、回收站、行为日志）、.gitignore / .gitattributes 不拷 ——
+/// 根上的 .git、.odea（仓库标记、回收站、行为日志；改名前叫 .ontheway）、.gitignore / .gitattributes 不拷 ——
 /// 新仓库有自己的；写到一半的临时文件不拷。同一个位置已经有了：内容一样就跳过，
 /// 不一样就起个新名字「名字 (本机).扩展名」。返回拷了几个文件
 pub fn bring_local(from: &Path, to: &Path) -> std::io::Result<usize> {
-    const ROOT_SKIP: [&str; 4] = [".git", ".ontheway", ".gitignore", ".gitattributes"];
+    const ROOT_SKIP: [&str; 5] = [".git", layout::APP_DIR, old_name::VAULT_DIR, ".gitignore", ".gitattributes"];
     let mut copied = 0;
     let mut stack = vec![PathBuf::new()];
     while let Some(rel) = stack.pop() {
@@ -180,22 +182,22 @@ mod tests {
     #[test]
     fn spots_cloud_drive_folders_by_name() {
         let drive = |path: &str| cloud_drive_by_name(Path::new(path));
-        assert_eq!(drive(r"C:\Users\me\OneDrive\文档\OnTheWay"), Some("OneDrive"));
-        assert_eq!(drive(r"C:\Users\me\OneDrive - 公司\OnTheWay"), Some("OneDrive"));
-        assert_eq!(drive("/Users/me/Library/Mobile Documents/com~apple~CloudDocs/OnTheWay"), Some("iCloud Drive"));
-        assert_eq!(drive(r"D:\Nutstore Files\OnTheWay"), Some("坚果云"));
-        assert_eq!(drive(r"D:\百度网盘同步\OnTheWay"), Some("百度网盘"));
-        assert_eq!(drive(r"C:\Users\me\Documents\OnTheWay"), None);
+        assert_eq!(drive(r"C:\Users\me\OneDrive\文档\Odea"), Some("OneDrive"));
+        assert_eq!(drive(r"C:\Users\me\OneDrive - 公司\Odea"), Some("OneDrive"));
+        assert_eq!(drive("/Users/me/Library/Mobile Documents/com~apple~CloudDocs/Odea"), Some("iCloud Drive"));
+        assert_eq!(drive(r"D:\Nutstore Files\Odea"), Some("坚果云"));
+        assert_eq!(drive(r"D:\百度网盘同步\Odea"), Some("百度网盘"));
+        assert_eq!(drive(r"C:\Users\me\Documents\Odea"), None);
     }
 
     #[test]
     fn clones_next_to_the_current_vault_without_clobbering() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("OnTheWay");
+        let root = dir.path().join("Odea");
         std::fs::create_dir_all(&root).unwrap();
-        assert_eq!(clone_target(&root), dir.path().join("OnTheWay (同步)"));
-        std::fs::create_dir_all(dir.path().join("OnTheWay (同步)")).unwrap();
-        assert_eq!(clone_target(&root), dir.path().join("OnTheWay (同步) 2"));
+        assert_eq!(clone_target(&root), dir.path().join("Odea (同步)"));
+        std::fs::create_dir_all(dir.path().join("Odea (同步)")).unwrap();
+        assert_eq!(clone_target(&root), dir.path().join("Odea (同步) 2"));
     }
 
     #[test]
@@ -235,11 +237,12 @@ mod tests {
         write(&from, "笔记/两边都有.md", "本机的版本");
         write(&from, "笔记/一样的.md", "同样的内容");
         write(&from, ".git/config", "[core]");
-        write(&from, ".ontheway/trash/x.md", "回收站");
-        write(&from, ".ontheway/vault.json", "{\"本机\":1}");
+        write(&from, ".odea/trash/x.md", "回收站");
+        write(&from, ".odea/vault.json", "{\"本机\":1}");
+        write(&from, ".ontheway/activity/2026-10.jsonl", "改名前的");
         write(&from, ".gitignore", "本机的");
         write(&from, "笔记/.写到一半.md.1-0.tmp", "临时");
-        write(&to, ".ontheway/vault.json", "{\"云端\":1}");
+        write(&to, ".odea/vault.json", "{\"云端\":1}");
         write(&to, "笔记/两边都有.md", "云端的版本");
         write(&to, "笔记/一样的.md", "同样的内容");
 
@@ -249,9 +252,10 @@ mod tests {
         assert_eq!(read("笔记/两边都有.md").as_deref(), Some("云端的版本"));
         assert_eq!(read("笔记/两边都有 (本机).md").as_deref(), Some("本机的版本"));
         assert!(read(".git/config").is_none());
-        assert!(read(".ontheway/trash/x.md").is_none());
-        assert_eq!(read(".ontheway/vault.json").as_deref(), Some("{\"云端\":1}"));
-        assert!(!to.join(".ontheway").read_dir().unwrap().any(|e| e.unwrap().file_name() != "vault.json"));
+        assert!(read(".odea/trash/x.md").is_none());
+        assert_eq!(read(".odea/vault.json").as_deref(), Some("{\"云端\":1}"));
+        assert!(!to.join(".odea").read_dir().unwrap().any(|e| e.unwrap().file_name() != "vault.json"));
+        assert!(!to.join(".ontheway").exists());
         assert!(read(".gitignore").is_none());
         assert!(read("笔记/.写到一半.md.1-0.tmp").is_none());
     }

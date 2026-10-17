@@ -1,4 +1,4 @@
-# OnTheWay 开发进度
+# Odea 开发进度
 
 > 每次开工先看这里，收工更新这里。
 > 技术基准见 [技术方案.md](./技术方案.md)（v2.0，已按代码现状重写）。
@@ -53,7 +53,7 @@ pnpm lint
 pnpm test
 ```
 
-性能回归（量生产构建：先 `pnpm build`，再起 `pnpm exec vite preview --port 1432` 或 launch.json 的 `ontheway-preview`；改之前、改之后各跑一次再对比，参数见脚本开头）：
+性能回归（量生产构建：先 `pnpm build`，再起 `pnpm exec vite preview --port 1432` 或 launch.json 的 `odea-preview`；改之前、改之后各跑一次再对比，参数见脚本开头）：
 
 ```bash
 node scripts/perf/perf.mjs http://localhost:1432 --out after.json
@@ -72,7 +72,7 @@ cd src-tauri; cargo test --no-default-features --lib
 不碰真实笔记跑桌面端（换一个应用数据目录和仓库文件夹；想试搬家就先把 `ontheway.db` 拷一份进这个数据目录）：
 
 ```powershell
-$env:ONTHEWAY_DATA_DIR="D:\tmp\otw-data"; $env:ONTHEWAY_VAULT="D:\tmp\otw-vault"; pnpm tauri dev
+$env:ODEA_DATA_DIR="D:\tmp\odea-data"; $env:ODEA_VAULT="D:\tmp\odea-vault"; pnpm tauri dev
 ```
 
 不起 app 重新生成 `src/lib/bindings.ts`（debug 启动也会自动生成）。注意这条命令导出的文件里没有 `ready` / `win_*` 这几个窗口命令（它们只在 desktop-runtime 下注册），提交前以 debug 启动生成的为准：
@@ -185,7 +185,7 @@ cd src-tauri; cargo run --example export_bindings --features typegen --no-defaul
 - 笔记 / 任务变更与 append-only `activity` 同一事务
 - 双链保存时同步 `link(kind='ref')`，不存在的目标保留 Markdown
 - 首次启动 `seed::ensure` 播种示例内容，`setting.seeded_v1` 标记只播一次
-- 浏览器 mock backend（`otw.mock.v3`）语义贴近 Rust
+- 浏览器 mock backend（`odea.mock.v3`）语义贴近 Rust
 
 ### P6 编辑器 ✅（CodeMirror 6）
 
@@ -207,7 +207,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 ### P6.7 动态表情 ✅
 
 - 自己画的 48 个线稿动画表情（心情 / 干劲 / 在路上 / 日常 / 打工人 / 吃瓜 / 表态 / 小动物），SVG + Web Animations，亮暗主题都跟着变
-- 源文是 `:otw_<id>:` 短码；编辑器里像一个字符（贴着不展开、退格整删、方向键跨过），看得见就一直循环，单击从头再来、双击改源码
+- 源文是 `:odea_<id>:` 短码；编辑器里像一个字符（贴着不展开、退格整删、方向键跨过），看得见就一直循环，单击从头再来、双击改源码
 - `Mod-e` 选择器：贴光标、最近使用、中文 / 拼音 / 英文搜索、方向键 + 回车、输入法组字不误触
 - 列表摘要、目录、表格单元格里换成 Unicode；主包只带一张「短码 → Unicode」的小表
 - 行高零变化、在前面打字不重播、滚出视口就停、同时循环最多 48 个；细节见技术方案 §11.4.2
@@ -256,7 +256,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - [x] 切换笔记不再「闪一下」：以前正文硬切、标题先消失再弹上来、分隔线缩回再展开、目录逐条错峰，各块到场时间不一；现在 `SwapFade` 整块交叉淡化（见技术方案 §10.3）
 - [x] 长标题折行：正文大标题从 `input` 换成随内容长高的 `textarea`（`field-sizing: content`，不支持的内核 JS 量高），目录树（常规 / 专注两种形态）里的长标题也完整折行、不截断；笔记 / 归档列表的标题单行，超出用省略号
 - [x] 按文档缓存编辑器状态：切回来不再解析全文，撤销历史也在。生产包里 66KB 的「语法全览」切回来 160–220ms → 约 58ms（第一次打开仍约 124ms，见技术方案 §11.6）
-- [x] **文件是真相**：每篇文档是仓库文件夹（默认「文档/OnTheWay」）里的一个 .md，SQLite 只做可重建的索引；旧库第一次启动时自动搬进来（旧库原样留着）；文件监听 + 冲突副本；日历当日安排改成来自正文里带日期的 `- [ ]`；行菜单 / 状态栏 / 命令面板「在文件夹中显示」；命令面板可以更换笔记文件夹（见技术方案 §5）
+- [x] **文件是真相**：每篇文档是仓库文件夹（默认「文档/Odea」）里的一个 .md，SQLite 只做可重建的索引；旧库第一次启动时自动搬进来（旧库原样留着）；文件监听 + 冲突副本；日历当日安排改成来自正文里带日期的 `- [ ]`；行菜单 / 状态栏 / 命令面板「在文件夹中显示」；命令面板可以更换笔记文件夹（见技术方案 §5）
 - [x] 今日TODO / GOAL 模板：一行里输入 `/模板`（`/model` `/mb` `、模板` 也行）弹出这篇能用的模板 + 缩略预览，回车插入、Shift+回车替换全文（没勾的任务收进「待续」）；11 个模板按日期现算，周计划的每天一件事、各级复盘节点写成带日期的任务进日历；只有日期没写事情的任务不再进日历（见技术方案 §11.4.3）
 - [x] 反向链接面板：笔记正文后面列出写了 `[[这篇]]` 的笔记 / 某一天 / 目标，带上下文行，点一行跳过去滚到那一行（技术方案 §12.1）
 - [x] 改标题时顺手改别处的 `[[旧标题]]`（2026-10-07）：标题写完存好后，笔记 / 某一天 / 目标里链到旧标题的都改，别名、小节照留，代码里的不动；提示条可撤销（改完又被改过的那篇不撤）。新标题写不进双链、撞名、还有别的笔记叫旧标题时不改，提示原因（技术方案 §12.1）
@@ -270,7 +270,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - 新建笔记光标直接在标题里；标题里回车 / ↓ 进正文开头，正文第一行 ↑ 回标题（命令面板「新建笔记「…」」直接进正文）
   - `[[` 弹笔记标题补全（`【【` 自动换成 `[[`）；链到还没有的笔记画成虚线，Ctrl+点击就地新建，提示条可撤销
   - 行首 `/`（或 `、`）弹插入菜单：标题、待办、列表、引用、提示块、表格、代码、公式、流程图、分隔线、目录、链接、动态表情；某一天 / 某个周期的文档多一项「模板」；筛选认中文、英文、拼音首字母，右边写着快捷键。笔记空白正文有占位提示（`editor/suggest.ts`、`SuggestMenu.tsx`）
-  - 记住上次停在哪：重开应用回到上次的区、那一篇、那个文件夹（`otw.session`）；每篇文档的滚动位置和光标，切回来、重开都回到原处（`lib/viewMemory.ts`，按「视口顶上是哪一行」记，不按 scrollTop）；去掉了写死的种子 id
+  - 记住上次停在哪：重开应用回到上次的区、那一篇、那个文件夹（`odea.session`）；每篇文档的滚动位置和光标，切回来、重开都回到原处（`lib/viewMemory.ts`，按「视口顶上是哪一行」记，不按 scrollTop）；去掉了写死的种子 id
   - 删除 / 归档 / 恢复正在看的那篇，选中落到列表里的下一篇（没有就上一篇），不再甩回第一篇（`selectNeighbor`）
   - 归档：能直接删（列表行和状态栏都有），归档 / 恢复都有撤销提示条；归档横幅从红色换成中性色
   - 窄窗口：正文区按容器宽度收左右留白、大标题 38 → 30px，日历分段控件换成「日 周 月 年」，标题上方那行日期不再被挤没；导航栏可以收成 64px 的图标栏（左下角按钮或命令面板，记在本机）。收起 / 展开的动画见 `app/navMotion.ts`：排版一帧到位（正文只折一次行），看得见的是导航底板的右边缘在滑、列表栏用 transform 贴着它走、正文那一列 layout 滑到新的居中位置；图标两种宽度下 x 不变，文字只淡入淡出，Logo 收成一个「O」，展开时从写好的那一刻接着走；左下角展开时是一行（主题 / 命令面板 / 收起），收起时先原地错开成三层、再跟着边缘收成一列，展开倒过来（先跟着边缘往右走、再落成一行），逐帧检查过不重叠、不被裁。底板用标准缓入缓出（0.5s），专注模式仍是自己那条前段快的曲线。只让正文那一列（`CenteredColumn`）订阅 navCollapsed —— 以前整个 DocumentView 订阅，长文档切换一下 dev 构建里 68ms、4 倍降速 370ms
@@ -280,7 +280,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - 标题栏：Win+↑、拖到顶上吸附之后最大化图标也跟着对；关闭按钮能点到窗口右上角
   - 状态栏：折行后行首不再挂一个「·」；新笔记不再「创建时间」「上次更新」各写一遍；「保存中…」超过 600ms 才显示；删除按钮有提示
   - 提示条在正文区居中；命令面板也搜日记和目标的正文（Rust `journal_list`）；导航图标：笔记换成本子、今日TODO 换成勾选框；当日安排的勾选动画改用 `usePrefersReducedMotion`
-- [x] 新用户的使用指南（2026-10-13）：新仓库里只放「欢迎使用 OnTheWay」（置顶，一张能勾的上手清单）和「语法全览」两篇，原型那套示例笔记 / 归档 / 日记 / 目标去掉了。正文在 `src/content/guide/`，Rust 编进程序（`vault/guide.rs`），浏览器 mock 读同一份。升级时：没改过的直接换成新版（勾过的照勾），改过的在那一篇上出横幅（看差异 / 换成新版，可撤销 / 留着我的），删了不再放回；命令面板「帮助」组的「使用指南」「语法全览」随时打开（删了就重新放一篇）。`guide.test.ts` 把指南里写到的快捷键、命令面板项、`/` 菜单项、双链和代码对一遍，改了代码忘了改指南会挂
+- [x] 新用户的使用指南（2026-10-13）：新仓库里只放「欢迎使用 Odea」（置顶，一张能勾的上手清单）和「语法全览」两篇，原型那套示例笔记 / 归档 / 日记 / 目标去掉了。正文在 `src/content/guide/`，Rust 编进程序（`vault/guide.rs`），浏览器 mock 读同一份。升级时：没改过的直接换成新版（勾过的照勾），改过的在那一篇上出横幅（看差异 / 换成新版，可撤销 / 留着我的），删了不再放回；命令面板「帮助」组的「使用指南」「语法全览」随时打开（删了就重新放一篇）。`guide.test.ts` 把指南里写到的快捷键、命令面板项、`/` 菜单项、双链和代码对一遍，改了代码忘了改指南会挂
 - [x] 性能体检和第一轮优化（2026-10-13）。量法：生产构建 + 浏览器 mock 后端，造 400 篇笔记（一成长文）+ 归档 + 90 天日记 + 语法全览，无头 Chrome 4 倍 CPU 降速 + 2x 屏（下面都是这个条件，改前 → 改后）
   - 笔记列表（`views/NotesView.tsx`）：卡片 `memo`，`tree` context 拆成身份不变的操作 + 会变的数据，选中与否每行自己订阅 —— 以前切一篇、自动保存一次，整列几百张卡片（每张带 Motion 和 Radix 菜单）全部重渲染。卡片的 layout 动画靠「列表样子变了」的计数（`shapeTick` → Motion 的 `layoutDependency`）照旧播，逐帧对过置顶时挪位的卡片数和改前一样
   - 列表分批画（`CARD_BATCH` 40 张，后面按卡片高度占位，滚到 600px 以内再画下一批；选中的那篇和后面几张总画着）：每张卡片都是 Motion 投影树上的节点，几百张时任何 layout 动画每帧都要把它们过几遍
@@ -319,6 +319,28 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - [ ] **需要你**：GitHub 仓库 Settings → Secrets 里的 `GITEE_TOKEN` 用不上了，可以删
   - [ ] 代码签名（Windows Authenticode、macOS 公证），以后再说
 - [x] 清理旧代码：没用的依赖（`@dnd-kit/*`、`fractional-indexing`、`marked`、Radix dialog / popover / tooltip，Rust 的 `r2d2`、`rrule`、`chrono-tz`）；旧数据模型留下的字段（笔记的 `icon`、恒为空的 `actionGroup`、任务的 `priority` / `goalId` / `sortKey` / `completedAt`）、没人调的 `note_list`、用不上的 `NoteIcon` 组件；日历当日安排从 `ActionGroup` 简化成 `DayTasks`
+- [x] 标题收起（2026-10-17 用户要的，像 Obsidian：悬停标题出箭头，点了这一节收成一行；技术方案 §11.4.5）
+  - [x] `editor/headingFold.ts`：`headingFolds` 状态（收起的标题 + 按语法树算的每一节范围）、改动时映射、自动展开、跨过收起的一节的光标规则（`transactionFilter`）
+  - [x] 块级层：收起的范围整段藏掉、里面不生成别的块级装饰、标题行尾「… N 行」；`headingFolds` 不只是平移时才整篇重建，打字的快速路径照旧
+  - [x] 行内层：标题行首的替身（层级提示 + 箭头），替掉行上的 `::before`（它淡入时带 4px 位移）；只淡 opacity、`will-change`、换行时对齐物理像素
+  - [x] `Ctrl+Alt+[` / `]`、命令面板「收起所有标题」「展开所有标题」（`lib/editorCommands.ts`）；语法全览的标题一节和快捷键表里写上
+  - [x] 记住每篇收起了哪些（`viewMemory` 的 `folds`，按行号 + 原文认）
+  - [x] 测试（`headingFold.dom.test.ts` 31 条 + 收着几节时和整篇重建的比对）；逐帧验淡入：`fade-frames.mjs` 改成按名字选场景，`heading` 一路收敛、没有平台
+  - [ ] 在桌面应用（WebView2）里亲手点一遍
+- [x] 目录树能收起（2026-10-17 用户要的：「丝滑、优雅、高级一点」；技术方案 §12.9）
+  - [x] `buildOutline` 按真实层级给 `depth`，缩进最多三档；callout 跟着所在的那一节；跳过围栏代码和开头的属性块（`components/outlineTree.ts` 建树）
+  - [x] 箭头（悬停淡入、收起的常亮、Alt 连下面各层、← →、不抢焦点）、标题栏「全部收起 / 全部展开」（紧跟在「目录树」后面：右上角压着专注模式的按钮，放右边点不到）；当前小节被收起时高亮落到收起的那一条
+  - [x] 只动子树高度，箭头同一条曲线转；字不动不淡
+  - [x] 「感觉帧数不高」（用户反馈）：弹簧换成 ease-out cubic、时长跟着子树高度走（起步不再迟钝，末尾不再一顿一顿）；只重画有变化的那一枝；箭头改成淡颜色、转 SVG 里的 path，不进合成层（技术方案 §12.9 有量出来的数）
+  - [x] 每篇收起了哪些记在本机（`viewMemory` 的 `outline`）
+  - [x] 测试：`outlineTree.test.ts`（层级、键、高亮落在哪）、`Outline.dom.test.tsx`（点、Alt、← →、全部、换篇记着）；逐帧量过收起展开（单向、不过冲、行上没有 transform、没有平台）、箭头淡入（`fade-frames.mjs … outline`）
+  - [ ] 在桌面应用（WebView2）里亲手点一遍
+- [x] 笔记文件夹放在哪、怎么换到别的盘（2026-10-17 用户反馈「默认只能放在 C 盘」；其实能换，入口只在命令面板里，而且只能复制、原来的留在 C 盘。技术方案 §5.7）
+  - [x] 「搬过去」（`boot::move_vault`）：同盘直接改名；跨盘复制 → 逐个核对 → 原来的进回收站（`trash`，多带了一份 `windows` 0.62）；核对不上就停、原来的不动；进不了回收站照样换过去并弹窗说。单测：同盘改名、新文件夹里有别的东西时复制 + 核对 + 进回收站、进不了回收站、核对出缺的和大小不一样的
+  - [x] 换的时候三选一「搬过去 / 复制过去 / 只换文件夹」，关掉对话框 = 不换（以前关掉等于「只换文件夹」）
+  - [x] 新装第一次打开：正文顶上提示放在哪 +「换个位置…」（直接搬过去）「就放这里」，只出一次（`vault_first_run`；浏览器里 `localStorage["odea.mock.firstRun"] = ""` 能看到）
+  - [x] 命令面板那一项写上现在的位置（长路径从中间省略）；「欢迎使用」里本来就有「你的笔记在哪」一节；不放常驻入口
+  - [ ] 在桌面应用里真的搬一次：同盘（文档 → 文档下别的文件夹）、跨盘（C → D）、开着同步的仓库；看三按钮对话框、回收站里是不是原来的文件夹、搬完同步照常
 
 ---
 
@@ -339,18 +361,18 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - [x] 同步线程（`SyncHub` 放在 AppState 里）；联网不持 `Mutex<Vault>`，提交 / 合并持锁；合并后 `Vault::absorb_merge` 整库增量扫一遍、发 `vault-changed`；换了仓库线程自己退出
 - [x] 冲突副本：`.md` 走 `write_conflict_copy`（列表里认得出原文），附件按原字节另存，以点开头的路径不另存；提示走 `sync-notice` → 提示条
 - [x] 触发：文件监听每批戳一下（`watch::start` 多了 `on_batch`）、停笔 1 分钟（最多 10 分钟）、窗口获得焦点、每 10 分钟、关窗口（藏起窗口、最多等 3 秒）、立即同步；断网 1/2/5/10 分钟退避；第一轮等前端 `ready`
-- [x] `sync-status-changed` 事件和 `sync_status` / `sync_now` 命令；超限文件每个只提示一次（记在 `.git/ontheway.json`）；仓库体积到 Gitee 400 MB / GitHub 1 GB 提醒；零散对象过千、一天一次打包
+- [x] `sync-status-changed` 事件和 `sync_status` / `sync_now` 命令；超限文件每个只提示一次（记在 `.git/odea.json`）；仓库体积到 Gitee 400 MB / GitHub 1 GB 提醒；零散对象过千、一天一次打包
 - [x] 真实应用验证（临时仓库 + 本机裸仓库当云端）：启动自动同步、两边改同一行 → 冲突副本 + 提示条、关窗口时把最后的改动推上去。修了一个：窗口一建出来就有一次「获得焦点」，第一轮在前端订阅事件之前就跑了，提示丢了
 - [x] 「某一天 / 目标」的冲突副本也有冲突横幅（2026-10-07）：两台设备都改了今日TODO 是同步里最常见的冲突，以前副本以「2026-10-07 (冲突 …)」混在全部笔记里，没标签、不能对比、不能替换。`conflict_of` 按名字认原文时不再只认笔记，`Note.conflictOf` 是 `day:日期` / `goal:周期:起点`；前端 `data/conflicts.ts` 认原文，列表标题「10月7日」，横幅按需取原文正文、替换时先取回再写。真实应用里走过一遍：提示条 → 列表里的副本 → 横幅 → 差异 → 用这一版替换 → 跳到今日TODO、副本进回收站、关窗口时推上去
 
 **P8.3 账号与网络**（`sync/provider.rs` / `account.rs` / `secret.rs` / `proxy.rs`）✅ 2026-10-07
 - [x] 代理：应用里填的 > 环境变量 > 系统代理（Windows 注册表 / macOS scutil）> 直连；交给 libgit2 和 ureq（真实应用里认出了 Clash 的 127.0.0.1:7897）
-- [x] 令牌存钥匙串（keyring-core + windows-native / apple-native 存储，单测用 mock）；同步配置写在 `.git/config`（`ontheway.provider / login / autosync`），登录过的账号记在应用配置里
+- [x] 令牌存钥匙串（keyring-core + windows-native / apple-native 存储，单测用 mock）；同步配置写在 `.git/config`（`odea.provider / login / autosync`），登录过的账号记在应用配置里
 - [x] GitHub：设备码登录（领码 → 等确认 → 可取消）、列仓库、建私有仓库；令牌快过期或推拉被拒时用刷新令牌续，续不了才是「登录失效」
 - [x] Gitee：私人令牌登录（错令牌说「令牌不对」）、列仓库、建私有仓库
 - [x] GitHub OAuth App 已注册（2026-10-07），client_id 在 `sync/provider.rs`
 - [x] 联网冒烟测试（`#[ignore]`）：领 GitHub 设备码、两家错令牌都是「要登录」
-- [ ] **需要你**：用真实账号走一遍 —— GitHub 登录 → 新建仓库 → 第一次推送；另一台电脑（或另一个 `ONTHEWAY_VAULT`）选同一个仓库 → clone → 两边改同一篇；Gitee 同样一遍；8 小时后看令牌续期
+- [ ] **需要你**：用真实账号走一遍 —— GitHub 登录 → 新建仓库 → 第一次推送；另一台电脑（或另一个 `ODEA_VAULT`）选同一个仓库 → clone → 两边改同一篇；Gitee 同样一遍；8 小时后看令牌续期
 - [ ] **需要你**：Gitee 的 OAuth 要先注册「第三方应用」，再用真实账号验证 OAuth 令牌能不能当 git 密码，验证过才做
 
 **P8.4 界面** ✅ 2026-10-07
@@ -360,7 +382,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - [x] 真实应用里验证：状态页、立即同步、断开（一轮跑到一半时断开，状态不会被改回「已同步」—— 修了：停掉的同步线程不再发状态）、GitHub 设备码、Gitee 错令牌；浏览器预览里看过亮 / 暗两种配色
 
 **P8.5 第二台设备与边界情况**
-- [x] 云端已有内容：clone 到旁边的「OnTheWay (同步)」，走换仓库流程切过去（`switch_vault`，和「更换笔记文件夹」共用）；可选把本机的笔记也合并进去（同名两份都留，`.git` / `.ontheway` 不拷）
+- [x] 云端已有内容：clone 到旁边的「Odea (同步)」，走换仓库流程切过去（`switch_vault`，和「更换笔记文件夹」共用）；可选把本机的笔记也合并进去（同名两份都留，`.git` / `.odea` 不拷）
 - [x] 以前连过同一个云端（断开后重连）：就在原地接上
 - [x] 断开同步（.git 留着、账号不退出）；网盘目录检测（OneDrive / iCloud / Dropbox / Google Drive / 坚果云 / 百度网盘），不让开启
 - [x] 第一次全量提交提速（2026-10-07）：`SyncRepo::stage_bulk` 在锁外把要进库的小文件（≤ 1 MB，200 个起）成批放进索引 —— 用 status 找文件，8 个线程各自开一个 Repository + 空的内存索引 + mempack，算出对象落成包，libgit2 量好的索引项交回主线程；然后 commit_all 只剩大文件和提交。真实应用（debug 构建）2000 篇 + 附件：锁外 1.4 s，持锁 0.23 s（以前整个提交都持锁，十几秒）；单测里逐个写 13.9 s → 成批 2.0 s
@@ -369,10 +391,26 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - [x] 单篇历史版本（2026-10-07，技术方案 §5.9.11）：`sync/history.rs` 从 HEAD 倒着走提交，改过这篇的才算一版；改名、挪文件夹靠属性块 id 认出原来的路径（git2 没有 `--follow`，相似度识别在改名同时大改正文时也会断）。状态栏时钟按钮 / 命令面板「历史版本…」打开对话框：版本列表（时间、哪台设备、当时的标题）、和现在的差异 / 全文、恢复这一版（可撤销）。真实应用里（临时仓库，三次提交含一次改名）走过：列表、当时叫「…」、设备名、差异；改标题 → 两篇里的链接改了 → 撤销
 - [ ] 移动端（libgit2 iOS 走 SecureTransport，Android 要带 OpenSSL）
 
+## P9 改名 Odea
+
+- [x] 改名 OnTheWay → Odea（2026-10-17；技术方案 §5.10）
+  - [x] 全仓库换名：产品名、窗口标题、包名（`odea` / `odea_lib`）、环境变量 `ODEA_*`、提交署名、默认笔记文件夹「文档/Odea」、使用指南、文档、CI；新标识 `dev.odea.editor`（旧的以 `.app` 结尾，打包时 Tauri 会警告和 macOS 的程序包后缀撞）
+  - [x] 旧名留下的东西新版认、读到就换（`old_name.rs`）：数据目录、WebView 数据、仓库里的 `.ontheway/`、`.git/config` 的键、`.gitignore` 那一段、钥匙串、提交署名、指南的记号和标题；单测各一条
+  - [x] Windows 安装包装完清掉旧的安装（`src-tauri/windows/hooks.nsh`）
+  - [x] Logo 重做：「起笔一点」—— 字标的 O 本来就开口、带蓝点（就是图标），蓝点一直在，笔画照旧循环；开场先落蓝点再写 O；蓝点改半径不用 scale
+  - [ ] **需要你**：GitHub 上把仓库 `Gred666/OnTheWay` 改名成 `Odea`，**在发 0.3.0 之前**：新版的更新地址已经指向新名字，旧版靠 GitHub 的跳转拿到新版（以后别再建一个叫 OnTheWay 的仓库，跳转会断）
+  - [ ] **需要你**：GitHub 的 OAuth App 改名成 Odea（用户授权同步时看到的名字；client_id 不变，不用改代码）
+  - [ ] 发 0.3.0 时在 `changelog.md` 写一条改名（更新说明卡片里用户会看到）
+  - [ ] 在 Windows 上真的升级一次：装 0.2.0、登录同步 → 自动更新到 0.3.0 → 开始菜单 / 桌面只剩 Odea，「应用和功能」里没有 OnTheWay；主题、侧栏收起这些设置还在，同步不用重新登录，笔记文件夹还是原来那个
+  - [ ] 所有设备都升级上来以后（0.4 前后）：删 `old_name.rs` 和各处引用它的地方、`lib/legacyStorage.ts`、`index.html` 里的 `otw.theme`、`.gitignore` / `.gitattributes` 那一段里的 `.ontheway` 两行、`hooks.nsh`
+  - [x] 内部前缀 `otw` 换成 `odea`（CSS 类名、`data-` 属性、存储键、表情短码、扩展文件后缀）：存储键启动时搬（`lib/legacyStorage.ts`），旧短码 `:otw_fire:` 和旧的 `.otwx` 扩展文件照样认
+  - [ ] 本机的项目文件夹 `D:\OnTheWay` 要不要跟着改名（`.claude/launch.json` 里有一条绝对路径）
+
 ---
 
 ## 决策记录
 
+- **改名 Odea、旧数据原地认**（2026-10-17）：以后要做成通用编辑器，OnTheWay 像个待办应用。新标识下数据目录是空的，不搬的话老用户一升级就成了新装：配置没了、在「文档/Odea」放一个新仓库，看着像笔记全没了。所以旧名的东西一律「新版认旧的、读到就换成新的」，集中在 `old_name.rs`，以后整个删掉；用户的笔记文件夹不动
 - **文件是真相，SQLite 只是索引**（2026-09-27）：v2.0 的 SQLite 为真相让「一切皆文档」只在界面上成立 —— 数据锁在库里，没法在文件夹里找到一篇笔记、没法用别的编辑器打开、没法放进网盘。现在每篇文档是仓库里的一个 .md；索引存在应用数据目录（不在仓库里：网盘来回拷一个正在写的 SQLite 迟早出冲突），表结构改了升版本号、清空重建，不写迁移。event / review / key_result / tag 这些建了没用的表连同 rrule 一起删掉了（git 历史里有）。
 - **任务只有 Markdown 一个来源**：日历「当日安排」来自任何文档里带日期的 `- [ ] … @2026-09-30`，勾选改原文件那一行。独立的 task 表没了。
 - **外部改动不静默覆盖**：保存前发现磁盘比索引新、或者外部改动撞上编辑器里没存的修改，都先把磁盘那一版另存成「(冲突 时间)」副本。
@@ -382,11 +420,11 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - **没有「只读预览模式」**：`renderMarkdown` 只在数据还没到 / 空状态时当占位。技术方案 v1 里「大文档降级为只读」没有做，CodeMirror 按视口渲染，1800 行文档挂载 5ms，不需要。
 - **行动项就是 Markdown 的 `- [ ]`**：原来的独立 task 实体 + link 表方案让文档有两个编辑面，已迁回正文。`task` 表现在只服务日历「当日安排」（按 `due_date`）。
 - **今日TODO = 今天的 `day_doc`**，未写过时延续最近一天。原来是一篇藏起来的特殊笔记，和日历里的今天是两份数据。
-- **内置指南是普通笔记，但由应用管新旧**（2026-10-13）：id 以 `guide-<名字>-` 开头（启动时只读这几篇的文件），属性块里一行 `ontheway-guide: <名字> <应用版本> <指纹>`。指纹按勾选框都没勾算，所以勾清单不算改过；新旧按写它的应用版本认，只升不降；两台设备各自升级写出的字节一样，同步不撞车。改了正文不用改版本号。
+- **内置指南是普通笔记，但由应用管新旧**（2026-10-13）：id 以 `guide-<名字>-` 开头（启动时只读这几篇的文件），属性块里一行 `odea-guide: <名字> <应用版本> <指纹>`。指纹按勾选框都没勾算，所以勾清单不算改过；新旧按写它的应用版本认，只升不降；两台设备各自升级写出的字节一样，同步不撞车。改了正文不用改版本号。
 - **GOAL 一个周期一篇**，键是 `(horizon, period_start)`，由前端算周期起点、后端校验。「本周目标」是今天所在那一周，不是最新一条。
 - **笔记列表只按标题筛**：全文匹配的结果和标题栏对不上，异步回填还会闪一次。全文搜索留给专门的入口（Ctrl+Shift+F 的全局搜索）。
 - **自动保存不重排列表**：每 400ms 刷新 `updatedAt`，按它排序会让正在编辑的笔记当着用户的面往上跳。「按更新时间」排序直接用 store 的顺序，不在 `NotesView` 里再按 `updatedAt` 排。
-- **删除 = 挪进回收站 + 6 秒撤销**：不弹确认框（多数删除是有意的），删完底部给「撤销」，走 `note_undelete` 从 `.ontheway/trash/` 挪回原来的位置。回收站 30 天后清掉，没有回收站界面。
+- **删除 = 挪进回收站 + 6 秒撤销**：不弹确认框（多数删除是有意的），删完底部给「撤销」，走 `note_undelete` 从 `.odea/trash/` 挪回原来的位置。回收站 30 天后清掉，没有回收站界面。
 - **保存失败的正文留作草稿**：`drafts` 按 `saveKeyOf` 的键存，切走再切回来还在（adapter 优先用它），下一次保存成功就清掉，关窗时编辑器 flush 之后再试一次（`flushDrafts`）。状态栏只显示这一篇自己的保存失败。
 - **其它操作失败走 ErrorToast**：置顶 / 归档 / 恢复 / 删除 / 勾选 / 新建 / 加载失败写进 `error`，底部提示条显示；启动加载失败时常驻并带「重试」。保存失败不走这里。
 - **同一篇文档的写入排队**（store 里的 `serialized`）：标题和正文两条路保存、各自写整篇，并发时后到的会把另一半覆盖回旧值。
@@ -408,6 +446,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 
 **工程**
 
+- Tauri 在调 `setup` 之前就把配置里的窗口建好了（tauri 2.11 `app.rs` 的 `setup()`：先 `WebviewWindowBuilder::from_config`，再调用户的 setup），窗口位置插件更早，在 `Builder::build` 时就读了文件。要在它们之前动数据目录（改名时搬 WebView 数据），只能放在 `run()` 开头、建 Builder 之前。WebView 的数据目录：Windows / Linux 是「本地数据目录/标识」（`manager/webview.rs`），macOS 是系统按 bundle id 放的 `~/Library/WebKit/<标识>`
 - `pnpm 10` 拦 postinstall，esbuild 不放行则 vite 起不来。
 - `pnpm tauri dev` 会占 1420 端口，和已经在跑的 `pnpm dev` 冲突，先停一个。
 - Python 脚本在 Windows 上写文件会把换行转成 CRLF，Biome 会报格式错。批量改文件后跑一次 LF 归一化。
@@ -462,19 +501,19 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - libgit2 的 mempack 自己的 `dump` 只收**提交**和提交能走到的对象：只放进索引、还没提交时导出来是个 32 字节的空包，`reset` 之后对象就丢了，索引指着不存在的 blob。`stage_bulk` 自己建 packbuilder，按索引项的 id 一个个放进去（2026-10-07）。
 - `Index::add_all` 会给每个新文件生成一份 diff（打开、读完、判断是不是二进制）：2000 个新文件、回调全返回「跳过」也要 5 s；`statuses()` 只比 stat，7 ms。要先知道有哪些文件就用 status。
 - libgit2 每把一个文件写成 blob 都要从头查一遍属性（`.gitattributes`、info/attributes、全局的……，没有 session 缓存），Windows 上一次约 2 ms，一个文件两次；纯读文件 + 算哈希只要 0.05 ms。慢在等文件系统，不在 CPU：依赖开 -O3 没用，清空系统 / 全局配置的搜索路径也没用，多开线程一起等才有用。
-- 想看真实应用里的同步：临时仓库 `git init -b main`，`git config ontheway.autosync true`，远端设成本机的一个裸仓库，用 `ONTHEWAY_VAULT` / `ONTHEWAY_DATA_DIR` 指过去再 `pnpm tauri dev`。
+- 想看真实应用里的同步：临时仓库 `git init -b main`，`git config odea.autosync true`，远端设成本机的一个裸仓库，用 `ODEA_VAULT` / `ODEA_DATA_DIR` 指过去再 `pnpm tauri dev`。
 
 **附件 / 冲突副本 / 反向链接**
 
 - 拖文件进桌面端窗口，WebView 收不到 HTML5 的 drop（`dragDropEnabled` 开着时系统拖放被 Tauri 接走），要听 `getCurrentWebview().onDragDropEvent`：给的是路径和**物理像素**坐标，除以 `devicePixelRatio` 才是页面坐标。没法从自动化里真的从资源管理器拖，验证时用 `plugin:event|emit` 发一个 `tauri://drag-drop` 走同一条路
 - 粘贴的图片插进去以后光标要落到下一行：光标挨着图片时图片显示成源码（Typora 式），插完看到的是一串 `![](…)`
-- 光标进到链接 / 图片里时 `(…)` 里的地址也是 `.cm-otw-syntax-marker`；它以前是 `white-space: nowrap`，长地址把整栏撑宽、右边的字被裁掉。改成 `overflow-wrap: anywhere`
+- 光标进到链接 / 图片里时 `(…)` 里的地址也是 `.cm-odea-syntax-marker`；它以前是 `white-space: nowrap`，长地址把整栏撑宽、右边的字被裁掉。改成 `overflow-wrap: anywhere`
 - 网盘拷出来的副本带着原文属性块里的 id；扫描按字节序，「周报 (1).md」排在「周报.md」前面，先被索引就抢走了原文的 id —— 名字像副本的要排到最后
-- `cargo run --example export_bindings` 在这台机器上跑不起来（dialog 插件要的 comctl32 v6 清单示例程序没有，STATUS_ENTRYPOINT_NOT_FOUND）。重新生成 `bindings.ts`：`cargo build` 后用一个临时的 `ONTHEWAY_DATA_DIR` / `ONTHEWAY_VAULT` 直接跑一下 `target/debug/ontheway.exe`（debug 启动时就写绑定，窗口在前端没起来时不会显示），写完杀掉
+- `cargo run --example export_bindings` 在这台机器上跑不起来（dialog 插件要的 comctl32 v6 清单示例程序没有，STATUS_ENTRYPOINT_NOT_FOUND）。重新生成 `bindings.ts`：`cargo build` 后用一个临时的 `ODEA_DATA_DIR` / `ODEA_VAULT` 直接跑一下 `target/debug/odea.exe`（debug 启动时就写绑定，窗口在前端没起来时不会显示），写完杀掉
 
 **CodeMirror**
 
-- **编辑器正文行高是 1.4**：以前 `.cm-editor` 上写着 1.82，但 CodeMirror 自带主题给 `.cm-scroller` 写了 `line-height: 1.4` 把它盖住了，正文从第一版起其实一直是 1.4。2026-10-06 确认保持 1.4，`globals.css` 改成在 `.otw-editor .cm-scroller` 上明写 1.4。17px 字一行只有 23.8px，字体框就占 22px，所以行内带底色的样式上下不能加 padding：`[[双链]]` 小块原来上下各 0.08em，底色冒出这一行 1.36px，把上一行链接的下划线盖掉了（每行 `position: relative`，后面的行整个画在前面的行上面）。`widgetSpacing.test.ts` 守着。
+- **编辑器正文行高是 1.4**：以前 `.cm-editor` 上写着 1.82，但 CodeMirror 自带主题给 `.cm-scroller` 写了 `line-height: 1.4` 把它盖住了，正文从第一版起其实一直是 1.4。2026-10-06 确认保持 1.4，`globals.css` 改成在 `.odea-editor .cm-scroller` 上明写 1.4。17px 字一行只有 23.8px，字体框就占 22px，所以行内带底色的样式上下不能加 padding：`[[双链]]` 小块原来上下各 0.08em，底色冒出这一行 1.36px，把上一行链接的下划线盖掉了（每行 `position: relative`，后面的行整个画在前面的行上面）。`widgetSpacing.test.ts` 守着。
 - 块级 widget 的留白只能用 padding，**不能用 margin**：CodeMirror 用 `getBoundingClientRect` 量 widget 高度，margin 不在边框盒里，高度图比真实布局短，点击会定位到错误的行。`widgetSpacing.test.ts` 用正则守着。
 - 行内 `<img>` widget 同理：块级子元素的上下 margin 会穿透 `.cm-line` 折叠出去。
 - 改变行结构的装饰（折叠整行、块级 widget）必须来自 `StateField`，视口是在 ViewPlugin 更新之前算出来的。
