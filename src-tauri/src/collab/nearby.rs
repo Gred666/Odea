@@ -137,17 +137,3 @@ fn hosts_of(found: &BTreeMap<String, Found>) -> Vec<NearbyHost> {
     hosts.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
     hosts
 }
-
-/// 单测：不靠组播，直接放一位进列表
-#[cfg(test)]
-impl Nearby {
-    pub fn insert_for_test(&self, id: &iroh::PublicKey, name: &str, addrs: Vec<SocketAddr>) {
-        self.found.lock().unwrap().insert(
-            endpoint::id_text(id.as_bytes()),
-            Found {
-                name: name.to_string(),
-                addrs,
-            },
-        );
-    }
-}

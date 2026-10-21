@@ -15,7 +15,6 @@ mod error;
 #[cfg(feature = "desktop-runtime")]
 mod memory;
 mod old_name;
-mod share;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod state;
 mod sync;
@@ -201,10 +200,7 @@ fn collab_raw_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
     tauri::generate_handler![
         commands::collab_send,
         commands::collab_pipe,
-        commands::collab_resume_state,
-        commands::share_send,
-        commands::share_pipe,
-        commands::share_doc_open
+        commands::collab_resume_state
     ]
 }
 
@@ -323,19 +319,6 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::collab_take_copy,
         commands::collab_callback,
         commands::collab_forward_link,
-        commands::share_info,
-        commands::share_create::<tauri::Wry>,
-        commands::share_invite_link,
-        commands::share_reset_invite,
-        commands::share_answer,
-        commands::share_set_role,
-        commands::share_check_link,
-        commands::share_join::<tauri::Wry>,
-        commands::share_leave,
-        commands::share_history,
-        commands::share_version_text,
-        commands::share_restore,
-        commands::share_doc_close,
         commands::collab_dial_back,
         commands::collab_relays,
         commands::collab_relay_inspect,
@@ -362,7 +345,6 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::CollabEvent,
         commands::CollabLink,
         commands::CollabCopyReady,
-        commands::ShareChanged,
         update::UpdateReady
     ])
 }
@@ -480,19 +462,6 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::collab_take_copy,
         commands::collab_callback,
         commands::collab_forward_link,
-        commands::share_info,
-        commands::share_create::<tauri::test::MockRuntime>,
-        commands::share_invite_link,
-        commands::share_reset_invite,
-        commands::share_answer,
-        commands::share_set_role,
-        commands::share_check_link,
-        commands::share_join::<tauri::test::MockRuntime>,
-        commands::share_leave,
-        commands::share_history,
-        commands::share_version_text,
-        commands::share_restore,
-        commands::share_doc_close,
         commands::collab_dial_back,
         commands::collab_relays,
         commands::collab_relay_inspect,
@@ -519,7 +488,6 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::CollabEvent,
         commands::CollabLink,
         commands::CollabCopyReady,
-        commands::ShareChanged,
         update::UpdateReady
     ]);
 
@@ -585,8 +553,7 @@ pub fn run() {
             let typed = specta_builder.invoke_handler();
             let raw = collab_raw_handler();
             move |invoke: tauri::ipc::Invoke<tauri::Wry>| match invoke.message.command() {
-                "collab_send" | "collab_pipe" | "collab_resume_state" | "share_send" | "share_pipe"
-                | "share_doc_open" => raw(invoke),
+                "collab_send" | "collab_pipe" | "collab_resume_state" => raw(invoke),
                 _ => typed(invoke),
             }
         })

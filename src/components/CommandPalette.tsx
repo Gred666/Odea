@@ -20,7 +20,6 @@ import { runEditorCommand } from "@/lib/editorCommands";
 import { popoverCard, spring, tween } from "@/lib/motion";
 import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/paletteSearch";
 import { isMac } from "@/lib/platform";
-import { useShare } from "@/share/store";
 import {
   Archive,
   ArrowDown,
@@ -36,7 +35,6 @@ import {
   FolderInput,
   FolderOpen,
   FolderOutput,
-  FolderPlus,
   FolderSearch,
   FolderTree,
   History,
@@ -179,7 +177,6 @@ export function CommandPalette({
   const collabPhase = useCollab((s) => s.phase);
   // 共享仓库（docs/协同编辑.md §20）：这个仓库共享了的话，会话式的「邀请协作」不给（一篇不能同时
   // 绑两个 CRDT），换成「共享仓库…」
-  const shared = useShare((s) => s.info !== null);
 
   const [query, setQuery] = useState("");
   const searched = useTextSearch(open ? query : "", NOTE_RESULTS * 2);
@@ -407,7 +404,7 @@ export function CommandPalette({
       // 协作（docs/协同编辑.md §8）：没在协作时是邀请 / 加入，协作中是打开对话框、停止
       ...(collabPhase === "idle"
         ? [
-            ...(docTarget?.kind === "note" && !shared
+            ...(docTarget?.kind === "note"
               ? [
                   {
                     id: "collab-invite",
@@ -462,25 +459,6 @@ export function CommandPalette({
               run: () => void useCollab.getState().stop(),
             } satisfies Item,
           ]),
-      // 共享仓库（docs/协同编辑.md §20）：整个仓库和别人、和自己的别的设备一直同步
-      {
-        id: "share-vault",
-        group: "协作",
-        icon: Users,
-        label: shared ? "共享仓库…" : "共享这个仓库…",
-        hint: shared ? "成员、邀请链接、谁在线" : "整个仓库和别人一直同步，不经过服务器",
-        keywords: "share vault team 共享 仓库 团队 成员 邀请 多设备 同步 一起",
-        run: () => useShare.getState().openDialog(),
-      } satisfies Item,
-      {
-        id: "share-join",
-        group: "协作",
-        icon: FolderPlus,
-        label: "加入共享仓库…",
-        hint: "粘贴别人发来的共享仓库链接",
-        keywords: "share join vault 共享 仓库 加入 团队 链接 odea",
-        run: () => useShare.getState().openJoin(),
-      } satisfies Item,
       // 自己配的中继（docs/协同编辑.md §6.4）：不在同一个网络的人靠它连上。不做设置页（技术方案 §16）
       {
         id: "collab-relays",
@@ -601,7 +579,6 @@ export function CommandPalette({
     syncState,
     setSyncOpen,
     collabPhase,
-    shared,
     setHistoryFor,
     changeVaultRoot,
     vaultRoot,

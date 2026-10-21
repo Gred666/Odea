@@ -29,7 +29,6 @@ mod import;
 mod logical;
 pub mod query;
 pub mod seed;
-pub mod shared;
 pub mod tasks;
 pub mod tree;
 pub mod watch;
@@ -105,14 +104,6 @@ pub struct Vault {
     tree_build: bool,
     /// 索引和磁盘对齐过一遍了（后台那批读完了）。没读完的时候，索引里找不到的笔记不一定是没了
     indexed_all: bool,
-    /// 共享仓库（shared.rs）：正文只由 Rust 写，编辑器存盘时交来的正文不用
-    shared: bool,
-    /// 共享仓库：上次对账以来进了 / 离开了索引的文档（索引里的 id）、清单变没变
-    touched: Vec<String>,
-    tree_touched: bool,
-    on_touch: Option<shared::OnTouch>,
-    /// 共享仓库：这一篇（索引里的 id）的正文现在归前端的 Loro 副本（编辑器绑着它），编辑器存盘时交来的不用
-    body_owner: Option<shared::BodyOwner>,
 }
 
 impl VaultChange {
@@ -232,6 +223,7 @@ impl Vault {
     /// 还没和磁盘对齐过的仓库。摆法和建索引时不一样了（别的设备开关了日程、同步过来）就清空索引重新认
     fn bare(root: &Path, db: Connection) -> Result<Self> {
         std::fs::create_dir_all(root)?;
+        retire_share(root);
         let layout = layout::Layout::load(root);
         index::sync_layout(&db, &layout.fingerprint(), &layout::Layout::odea().fingerprint())?;
         let mut vault = Self {
@@ -247,11 +239,6 @@ impl Vault {
             tree_text: String::new(),
             tree_build: false,
             indexed_all: false,
-            shared: false,
-            touched: Vec::new(),
-            tree_touched: false,
-            on_touch: None,
-            body_owner: None,
         };
         vault.load_tree();
         Ok(vault)
@@ -259,10 +246,6 @@ impl Vault {
 
     pub fn root(&self) -> &Path {
         &self.root
-    }
-
-    pub fn layout(&self) -> &layout::Layout {
-        &self.layout
     }
 
     /// 开 / 关日程（docs/仓库与启动器.md §6）：改仓库标记，按新的摆法把每个文件重新认一遍 ——
@@ -513,7 +496,6 @@ impl Vault {
         }
         index::remove(&self.db, &row.id)?;
         change.record(row);
-        self.touch(&row.id);
         Ok(())
     }
 
@@ -647,11 +629,9 @@ impl Vault {
         if let Some(previous) = &previous {
             if previous.id != row.id {
                 change.record(previous);
-                self.touch(&previous.id);
             }
         }
         change.record(&row);
-        self.touch(&row.id);
         // 新出现的冲突副本（网盘同步时两边都改过）：让前端提示一声
         if previous.is_none() && row.kind == "note" && self.conflict_of(&row)?.is_some() {
             change.found_copies.push(row.title.clone());
@@ -880,17 +860,12 @@ impl Vault {
     }
 
     /// 改正文和标题。标题变了文件跟着改名（同一个文件夹里）。
-    /// 共享仓库里编辑器绑着 Loro 副本的那一篇，正文由 Rust 写（shared.rs）：这里只改标题，正文用磁盘上的
     pub fn note_update(&mut self, id: &str, title: &str, content: &str) -> Result<()> {
         let row = self.note_row(id)?;
         let mut change = VaultChange::default();
-        let owned = self.body_owned(id);
-        if !owned {
-            self.keep_external_edits(&row, &mut change)?;
-        }
+        self.keep_external_edits(&row, &mut change)?;
 
-        let (mut meta, on_disk) = frontmatter::split(&self.read(&row.rel_path)?.unwrap_or_default());
-        let content = if owned { on_disk.as_str() } else { content };
+        let (mut meta, _) = frontmatter::split(&self.read(&row.rel_path)?.unwrap_or_default());
         let rel = if title != row.title {
             let stem = layout::file_stem_for_title(title);
             let rel = fsio::unique_rel(
@@ -1229,10 +1204,9 @@ impl Vault {
                 rel_path: row.rel_path,
             });
         }
-        // 还没写过：给它将来的位置（延续来的内容也是以今天的身份写到这里）。
-        // 共享仓库不延续：两台设备同时打开今天、各自把昨天的内容抄进来，合并后就是两份
+        // 还没写过：给它将来的位置（延续来的内容也是以今天的身份写到这里）
         let rel_path = self.layout.day_path(date)?;
-        if carry && !self.shared {
+        if carry {
             if let Some(previous) = index::latest_day_before(&self.db, date)? {
                 return Ok(DayDoc {
                     date: date.to_string(),
@@ -1259,9 +1233,6 @@ impl Vault {
     /// 写某一天。标题和正文都清空了就删掉这个文件 —— 空文件留在文件夹里只是杂物。
     pub fn save_day(&mut self, date: &str, title: &str, body: &str) -> Result<DayDoc> {
         self.layout.require_journal()?;
-        if self.body_owned(&format!("day:{date}")) {
-            return self.save_day_title(date, title);
-        }
         if index::day(&self.db, date)?.is_none() {
             self.index_if_unseen(&self.layout.day_path(date)?)?;
         }
@@ -1355,10 +1326,6 @@ impl Vault {
 
     pub fn save_goal(&mut self, horizon: &str, period_start: &str, body: &str) -> Result<Goal> {
         self.layout.require_journal()?;
-        // 共享仓库：正文经前端的 Loro 副本交给 Rust 写（shared.rs），这里没什么可存的
-        if self.body_owned(&format!("goal:{horizon}:{period_start}")) {
-            return self.goal(horizon, period_start);
-        }
         layout::validate_period_start(horizon, period_start)?;
         if index::goal(&self.db, horizon, period_start)?.is_none() {
             self.index_if_unseen(&self.layout.goal_path(horizon, period_start)?)?;
@@ -1844,6 +1811,22 @@ fn split_name(name: &str) -> (&str, &str) {
     match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && ext.len() <= 8 => (stem, ext),
         _ => (name, ""),
+    }
+}
+
+/// 0.3.0 的共享仓库退役了（docs/协同编辑.md §22.7）：它留在仓库里的 `.odea/share/`（每篇的 CRDT、
+/// 成员表）挪进回收站。正文本来就是 .md，什么都不丢。所有设备都升上来以后（0.5 前后）整段删掉
+fn retire_share(root: &Path) {
+    let dir = fsio::abs(root, ".odea/share");
+    if !dir.is_dir() {
+        return;
+    }
+    let target = fsio::abs(root, &format!("{}/share-{}", layout::TRASH_DIR, now_ms()));
+    if let Some(parent) = target.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(error) = std::fs::rename(&dir, &target) {
+        eprintln!("共享仓库留下的 .odea/share 没能挪进回收站: {error}");
     }
 }
 

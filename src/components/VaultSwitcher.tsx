@@ -3,7 +3,6 @@ import { useData } from "@/data/store";
 import { type VaultEntry, launcherApi } from "@/launcher/api";
 import { cn } from "@/lib/cn";
 import { isTauri } from "@/lib/tauri";
-import { useShare } from "@/share/store";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   CalendarCheck,
@@ -11,11 +10,9 @@ import {
   ChevronsUpDown,
   FolderOpen,
   FolderOutput,
-  FolderPlus,
   FolderSearch,
   FolderTree,
   type LucideIcon,
-  Users,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -50,8 +47,6 @@ export function VaultSwitcher() {
   const exportTree = useData((s) => s.exportTree);
   const openVaultFolder = useData((s) => s.openVaultFolder);
   const [others, setOthers] = useState<VaultEntry[] | null>(null);
-  const share = useShare((s) => s.info);
-  const online = share ? share.members.filter((member) => member.online && !member.me).length : 0;
   // 浏览器预览里没有仓库文件夹
   const name = root ? folderName(root) : "Odea";
 
@@ -94,23 +89,6 @@ export function VaultSwitcher() {
             <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink/90">
               {name}
             </span>
-            {share && (
-              <span
-                data-share-badge
-                title={
-                  share.state.state === "ready"
-                    ? `共享仓库 · ${online ? `${online} 人在线` : "现在没有别人在线"}`
-                    : "共享仓库 · 还没加入好"
-                }
-                className={cn(
-                  "flex shrink-0 items-center gap-0.5 text-[12px] tabular-nums",
-                  online ? "text-accent" : "text-faint",
-                )}
-              >
-                <Users size={12} strokeWidth={2} />
-                {online > 0 && online}
-              </span>
-            )}
             <ChevronsUpDown
               size={13}
               strokeWidth={1.9}
@@ -185,17 +163,6 @@ export function VaultSwitcher() {
                 onSelect={() => void makeLogical()}
               />
             )}
-            <MenuItem
-              icon={Users}
-              label={share ? "共享仓库…" : "共享这个仓库…"}
-              hint={share ? "成员、邀请链接、谁在线" : "和别人、和自己的别的设备一直同步"}
-              onSelect={() => useShare.getState().openDialog()}
-            />
-            <MenuItem
-              icon={FolderPlus}
-              label="加入共享仓库…"
-              onSelect={() => useShare.getState().openJoin()}
-            />
             {isTauri && (
               <MenuItem
                 icon={FolderOpen}

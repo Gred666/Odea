@@ -8,8 +8,6 @@ import { formatRelativeTime, formatTimestampFull } from "@/lib/date";
 import { diffLines, diffStats } from "@/lib/lineDiff";
 import { popoverCard, tween } from "@/lib/motion";
 import { isTauri } from "@/lib/tauri";
-import { shareNet } from "@/share/net";
-import { shareDocId, shareReady, useShare } from "@/share/store";
 import { History, LoaderCircle, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -25,9 +23,6 @@ import { Segmented } from "./Segmented";
    底部提示条可以撤销。
 
    没开同步时没有历史，说明一下、给开启同步的入口。
-
-   共享仓库（docs/协同编辑.md §20.1、P10.3.4）：历史在 CRDT 里，不看 git。同一台设备、停顿不超过
-   5 分钟的改动是一版，写着是谁改的；恢复是一次新的改动（别人那里也恢复），不走撤销提示条。
    外壳和同步对话框一样：模糊遮罩 + 从标题栏往下展开的实心卡片（popoverCard）。
 
    先取历史、再打开：popoverCard 按第一帧的内容量好高度往下展开，以前第一帧是一行「正在翻历史…」，
@@ -47,54 +42,21 @@ const BODY_HEIGHT = "h-[min(560px,66vh)]";
 type Loaded = { history: DocHistory; texts: Record<string, string>; selected: number };
 type Result = { loaded: Loaded } | { error: string };
 
-/** 共享仓库的版本：blob 是 `share:` + 那一版的样子（交给 Rust 取全文、恢复） */
-const SHARE_BLOB = "share:";
-
-/** 这一篇的历史在共享仓库的 CRDT 里（不是 git） */
-const sharedHistory = () => shareReady(useShare.getState().info);
-
-async function historyOf(target: DocumentSaveTarget): Promise<DocHistory> {
-  if (!sharedHistory()) return (await backend()).docHistory(target);
-  const me = useShare.getState().info?.me;
-  const versions = await (await shareNet()).history(shareDocId(target));
-  return {
-    unavailable: null,
-    more: false,
-    // Rust 给的旧的在前；这里新的在前
-    versions: versions
-      .slice()
-      .reverse()
-      .map((version) => ({
-        blob: SHARE_BLOB + version.version,
-        time: version.to,
-        device: version.name ?? "认不出的设备",
-        mine: !!me && version.device === me,
-        title: "",
-      })),
-  };
-}
-
-async function versionText(target: DocumentSaveTarget, blob: string): Promise<string> {
-  if (blob.startsWith(SHARE_BLOB)) {
-    return (await shareNet()).versionText(shareDocId(target), blob.slice(SHARE_BLOB.length));
-  }
-  return (await backend()).docVersionText(blob);
-}
-
 /** 取历史；第一版（最近一次同步）一般就是现在的正文，那就先选中上一版 —— 打开是想看以前的。选中那一版的正文也先读好 */
 async function loadHistory(target: DocumentSaveTarget): Promise<Result> {
   try {
-    const history = await historyOf(target);
+    const api = await backend();
+    const history = await api.docHistory(target);
     const texts: Record<string, string> = {};
     let selected = 0;
     const first = history.versions[0];
     if (first && history.versions.length > 1) {
-      texts[first.blob] = await versionText(target, first.blob);
+      texts[first.blob] = await api.docVersionText(first.blob);
       if (texts[first.blob] === conflictOriginalContent(target, useData.getState())) selected = 1;
     }
     const pick = history.versions[selected];
     if (pick && texts[pick.blob] === undefined) {
-      texts[pick.blob] = await versionText(target, pick.blob);
+      texts[pick.blob] = await api.docVersionText(pick.blob);
     }
     return { loaded: { history, texts, selected } };
   } catch (cause) {
@@ -261,7 +223,8 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
   useEffect(() => {
     if (!version || texts[version.blob] !== undefined) return;
     let alive = true;
-    void versionText(target, version.blob)
+    void backend()
+      .then((api) => api.docVersionText(version.blob))
       .then((body) => {
         if (alive) setTexts((known) => ({ ...known, [version.blob]: body }));
       })
@@ -271,7 +234,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
     return () => {
       alive = false;
     };
-  }, [version, texts, target]);
+  }, [version, texts]);
 
   // 换一版就收起确认
   // biome-ignore lint/correctness/useExhaustiveDependencies: 跟着选中的那一版重置
@@ -288,15 +251,8 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
     if (!version || text === undefined || busy) return;
     setBusy(true);
     try {
-      if (version.blob.startsWith(SHARE_BLOB)) {
-        // 共享仓库：在 CRDT 里退回那一版（一次新的改动，别人那里也恢复），Rust 写盘、推给编辑器
-        await (await shareNet()).restore(shareDocId(target), version.blob.slice(SHARE_BLOB.length));
-      } else {
-        await restoreVersion(target, text, formatRelativeTime(version.time));
-      }
+      await restoreVersion(target, text, formatRelativeTime(version.time));
       onDone();
-    } catch (cause) {
-      setError(messageOf(cause));
     } finally {
       setBusy(false);
     }
@@ -348,9 +304,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
   if (!versions.length) {
     return (
       <Message tall={tall}>
-        {sharedHistory()
-          ? "这一篇在共享仓库里还没有改动记录。改过以后这里就有了：同一个人停笔五分钟以内的改动算一版。"
-          : "这一篇还没有同步过。停笔一分钟会自动同步一次，之后这里就有第一版了。"}
+        这一篇还没有同步过。停笔一分钟会自动同步一次，之后这里就有第一版了。
       </Message>
     );
   }
@@ -443,11 +397,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
           />
           {confirming ? (
             <span className="flex items-center gap-1.5 rounded-lg bg-warning/10 py-1 pl-2.5 pr-1">
-              <span className="text-[12px] text-body">
-                {version?.blob.startsWith(SHARE_BLOB)
-                  ? "大家那里的正文都会换成这一版（想回来再从历史里恢复）"
-                  : "现在的正文会换成这一版，可以撤销"}
-              </span>
+              <span className="text-[12px] text-body">现在的正文会换成这一版，可以撤销</span>
               <button
                 type="button"
                 disabled={busy}

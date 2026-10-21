@@ -1627,11 +1627,11 @@ fn journal_toggled_on_another_device_is_offered_then_applied() {
     fsio::write_atomic(&marker_path, &serde_json::to_string_pretty(&marker).unwrap()).unwrap();
     let change = vault.rescan().unwrap();
     assert!(change.layout);
-    assert!(!vault.layout().journal, "用户点之前照旧按原来的摆法");
+    assert!(!vault.layout.journal, "用户点之前照旧按原来的摆法");
     assert!(!vault.rescan().unwrap().layout, "同一次变化只报一回");
     // 点了「切换过去」
     vault.relayout().unwrap();
-    assert!(vault.layout().journal);
+    assert!(vault.layout.journal);
     assert_eq!(vault.day("2026-10-20", false).unwrap().note_md, "今天");
     assert!(!vault.rescan().unwrap().layout);
     // 只改了附件放哪：直接换上，不打扰
@@ -1639,7 +1639,7 @@ fn journal_toggled_on_another_device_is_offered_then_applied() {
     marker["folders"]["attachments"] = "图".into();
     fsio::write_atomic(&marker_path, &marker.to_string()).unwrap();
     assert!(!vault.rescan().unwrap().layout);
-    assert_eq!(vault.layout().attachment_dir("工作/周报.md"), "图");
+    assert_eq!(vault.layout.attachment_dir("工作/周报.md"), "图");
 }
 
 #[test]
@@ -2044,4 +2044,24 @@ fn importing_a_folder_copies_it_and_keeps_its_structure() {
     // 同名的加序号
     assert_eq!(vault.import_folder(&outside, "").unwrap().folder, "读书笔记");
     assert!(vault.import_folder(&outside, "工作").unwrap().folder.starts_with("工作/读书笔记 2"));
+}
+
+#[test]
+fn a_retired_share_folder_goes_to_the_trash_and_the_notes_stay() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    std::fs::create_dir_all(root.join(".odea/share/docs")).unwrap();
+    std::fs::write(root.join(".odea/share/share.json"), "{}").unwrap();
+    std::fs::write(root.join("周报.md"), "照常在").unwrap();
+
+    let vault = Vault::open_in_memory(&root);
+    assert!(!root.join(".odea/share").exists());
+    let trashed: Vec<_> = std::fs::read_dir(root.join(".odea/trash"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(trashed.iter().any(|name| name.starts_with("share-")), "{trashed:?}");
+    assert!(root.join(".odea/trash").join(&trashed[0]).join("share.json").exists());
+    assert_eq!(vault.note_list(false).unwrap().len(), 1);
 }

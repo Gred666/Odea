@@ -428,16 +428,6 @@ function patchTask(state: DataState, id: string, task: Task): Partial<DataState>
   };
 }
 
-/**
- * 正文不归这里写的文档（共享仓库：编辑器上挂着 Loro 副本，正文由 Rust 写盘，share/store.ts 登记）。
- * 不 import 共享仓库那边：免得互相引用
- */
-let bodyOwner: ((target: DocumentSaveTarget) => boolean) | null = null;
-
-export function setBodyOwner(owner: ((target: DocumentSaveTarget) => boolean) | null): void {
-  bodyOwner = owner;
-}
-
 let initializePromise: Promise<void> | null = null;
 /** 仓库变化的订阅只装一次（initialize 失败重试时不重复装） */
 let vaultSubscription: Promise<() => void> | null = null;
@@ -998,13 +988,6 @@ export const useData = create<DataState>((set, get) => ({
      * 什么都没做；true 表示库里已经是这一版了（刚写的，或者本来就一样）。
      */
     const write = async (): Promise<boolean> => {
-      // 共享仓库：正文经编辑器上的 Loro 副本交给 Rust 写盘（docs/协同编辑.md §20.5），这里不写。
-      // 写完 Rust 照常通知变化，列表、摘要跟着刷新
-      if (bodyOwner?.(target)) {
-        if (target.kind === "note")
-          set((state) => ({ bodies: withBody(state.bodies, target.id, contentMd) }));
-        return true;
-      }
       if (target.kind === "goal") {
         const { horizon, periodStart } = target;
         const source = get().goals[goalKey(horizon, periodStart)];

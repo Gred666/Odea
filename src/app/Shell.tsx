@@ -9,7 +9,6 @@ import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
 import { RelayDialog } from "@/components/RelayDialog";
-import { ShareDialog, ShareJoinDialog, ShareRequests } from "@/components/ShareDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SyncDialog } from "@/components/SyncDialog";
 import { TitleBar } from "@/components/TitleBar";
@@ -273,7 +272,6 @@ export function Shell() {
             <NoticeToast />
             <LayoutChangeToast />
             <CollabRequests />
-            <ShareRequests />
             <CollabResume />
             <UndoToast />
           </div>
@@ -284,8 +282,6 @@ export function Shell() {
         <CollabDialog />
         {/* 在协作对话框之上：连不上时从协作对话框里「配中继…」打开 */}
         <RelayDialog />
-        <ShareDialog />
-        <ShareJoinDialog />
         <HistoryDialog />
         <UpdateDialog />
         {/* 开场：冷启动时盖在最上面，写一个「O」再把它送回侧栏（components/Intro.tsx） */}

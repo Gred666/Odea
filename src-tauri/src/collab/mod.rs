@@ -40,14 +40,15 @@ pub mod ticket;
 use serde::{Deserialize, Serialize};
 
 pub use diagnose::Diagnosis;
+#[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 pub use endpoint::id_text;
-/// 系统随机数（共享仓库的 peer、邀请密钥也用它）
-pub use endpoint::random as random_bytes;
 pub use guest::{Guest, GuestOptions};
 pub use host::{Decision, Host, HostOptions};
 pub use protocol::{Permission, RejectReason};
 pub use reach::Reach;
-pub use relays::{Relay, RelayCheck};
+pub use relays::Relay;
+#[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
+pub use relays::RelayCheck;
 #[cfg(test)]
 pub use ticket::LinkError;
 pub use ticket::{Callback, Invite};

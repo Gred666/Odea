@@ -220,6 +220,10 @@ const initial = {
 };
 
 /** 链接是哪一种（聊天软件里加的尖括号、引号、大小写都不管）。只粘了票据那一截的当邀请链接 */
+/** 0.3.0 的共享仓库邀请链接（odea://share/）打开时说的话 */
+const SHARE_RETIRED =
+  "这是共享仓库的邀请链接。共享仓库这个功能已经去掉了：请对方改用「邀请协作…」发一个协作链接";
+
 export function linkKind(text: string): "join" | "back" | "relay" | "share" | null {
   const clean = text.trim().replace(/^[<"']+|[>"']+$/g, "");
   const match = /^odea:(?:\/\/)?(join|back|relay|share)\//i.exec(clean);
@@ -365,9 +369,9 @@ export const useCollab = create<CollabState>((set, get) => ({
       void import("./relayStore").then(({ useRelays }) => useRelays.getState().openRelays(link));
       return;
     }
-    // 共享仓库的邀请（docs/协同编辑.md §20.8）：加入共享仓库的对话框
+    // 0.3.0 共享仓库的邀请：共享仓库退役了（docs/协同编辑.md §22.7）
     if (kind === "share") {
-      void import("@/share/store").then(({ useShare }) => useShare.getState().openJoin(link));
+      useData.setState({ error: SHARE_RETIRED });
       return;
     }
     if (kind === "back") {
@@ -448,10 +452,8 @@ export const useCollab = create<CollabState>((set, get) => ({
   join: async (raw) => {
     const linkText = raw.trim();
     const kind = linkKind(linkText);
-    // 粘的是共享仓库的邀请：换到加入共享仓库
     if (kind === "share") {
-      get().closeDialog();
-      void import("@/share/store").then(({ useShare }) => useShare.getState().openJoin(linkText));
+      set({ error: SHARE_RETIRED });
       return;
     }
     if (kind === "back" || kind === "relay") {

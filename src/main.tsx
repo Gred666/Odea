@@ -9,7 +9,6 @@ import { backend } from "@/data/backend";
 import { useData } from "@/data/store";
 import { installCloseGuard } from "@/editor/saveBus";
 import { isTauri, signalReady, thisWindow, windowKind } from "@/lib/tauri";
-import { initShare } from "@/share/store";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@/styles/globals.css";
@@ -78,8 +77,6 @@ async function bootstrap() {
 
   // 协作：订阅成员、加入请求，接住 odea:// 链接（冷启动带进来的要等界面起来再弹对话框）
   initCollab().catch((error) => console.error("协作初始化失败", error));
-  // 共享仓库（docs/协同编辑.md §20）：不是共享仓库的话就是取一次状态（null）
-  initShare().catch((error) => console.error("共享仓库初始化失败", error));
 
   createRoot(document.getElementById("root")!).render(
     <StrictMode>

@@ -96,9 +96,6 @@ impl Vault {
         self.tree = Some(parsed);
         self.tree_text = rendered;
         self.tree_build = false;
-        if changed {
-            self.touch_tree();
-        }
         changed
     }
 
@@ -131,7 +128,6 @@ impl Vault {
         if text != self.tree_text {
             fsio::write_atomic(&fsio::abs(&self.root, tree::TREE_FILE), &text)?;
             self.tree_text = text;
-            self.touch_tree();
         }
         Ok(())
     }

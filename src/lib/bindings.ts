@@ -1180,151 +1180,6 @@ async collabForwardLink() : Promise<Result<CollabCallback, AppError>> {
 }
 },
 /**
- * 这个仓库的共享状态（不是共享仓库是 null）
- */
-async shareInfo() : Promise<Result<ShareInfo | null, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_info") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 把这个仓库共享出去（设计 §20.8 最后一条）：逻辑目录、没开同步、不在网盘里
- */
-async shareCreate() : Promise<Result<ShareInfo, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_create") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 邀请链接（管理员）
- */
-async shareInviteLink() : Promise<Result<string, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_invite_link") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 重置邀请链接（以前发出去的作废），顺便定进来以后默认的角色
- */
-async shareResetInvite(role: Role) : Promise<Result<string, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_reset_invite", { role }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 回答加入请求：role 是 null 就是拒绝
- */
-async shareAnswer(request: number, role: Role | null) : Promise<Result<boolean, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_answer", { request, role }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 改成员的角色；role 是 null 就是移出
- */
-async shareSetRole(member: string, role: Role | null) : Promise<Result<null, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_set_role", { member, role }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 看一眼邀请链接：是哪个仓库、进去以后是什么角色
- */
-async shareCheckLink(link: string) : Promise<Result<SharePreview, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_check_link", { link }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 加入一个共享仓库：选一个文件夹，在里面新建一个以仓库名命名的空文件夹，摆好、在新窗口里打开。
- * 之后那个窗口的后台服务拿着链接去拨邀请人、等他同意。取消选文件夹返回 null，否则返回窗口标签
- */
-async shareJoin(link: string) : Promise<Result<string | null, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_join", { link }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 这台设备不再共享：停掉服务、删掉 .odea/share。文件都留着，成了一个普通的逻辑目录。
- * 别人那里我还在成员表里（管理员可以把我移出）
- */
-async shareLeave() : Promise<Result<null, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_leave") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 共享仓库里一篇的历史（P10.3.4）：同一台设备、停顿不超过 5 分钟的改动并成一版，旧的在前
- */
-async shareHistory(doc: string) : Promise<Result<ShareVersion[], AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_history", { doc }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 某一版时的全文
- */
-async shareVersionText(doc: string, version: string) : Promise<Result<string, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_version_text", { doc, version }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 恢复到某一版（一次新的改动，别人那里也恢复）
- */
-async shareRestore(doc: string, version: string) : Promise<Result<null, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_restore", { doc, version }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 关掉一篇（前端那份扔了）
- */
-async shareDocClose(doc: string) : Promise<Result<null, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("share_doc_close", { doc }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * 主持人打开了回连链接：往访客那边拨。拨的结果从 CollabEvent 的 dialBack 里出来
  */
 async collabDialBack(link: string) : Promise<Result<null, AppError>> {
@@ -1512,7 +1367,6 @@ collabCopyReady: CollabCopyReady,
 collabEvent: CollabEvent,
 collabLink: CollabLink,
 indexProgress: IndexProgress,
-shareChanged: ShareChanged,
 syncNotice: SyncNotice,
 syncStatusChanged: SyncStatusChanged,
 updateReady: UpdateReady,
@@ -1522,7 +1376,6 @@ collabCopyReady: "collab-copy-ready",
 collabEvent: "collab-event",
 collabLink: "collab-link",
 indexProgress: "index-progress",
-shareChanged: "share-changed",
 syncNotice: "sync-notice",
 syncStatusChanged: "sync-status-changed",
 updateReady: "update-ready",
@@ -2091,27 +1944,6 @@ publicV4: string[]; portmap: Portmap; relays: RelayReach[];
  * Windows 防火墙在当前网络上放不放行（主持人；别的系统、访客是 Unknown）
  */
 firewall: Firewall }
-export type Refusal = 
-/**
- * 不是成员、也没拿邀请链接（或者链接作废了）
- */
-"notMember" | 
-/**
- * 管理员拒绝了
- */
-"declined" | 
-/**
- * 被移出了
- */
-"removed" | 
-/**
- * 对面没有这个共享（开着的不是这个仓库）
- */
-"unknownShare" | 
-/**
- * 协议版本对不上
- */
-{ version: { theirs: number } }
 export type RejectReason = 
 /**
  * 主持人拒绝了
@@ -2205,71 +2037,6 @@ skipped: string | null;
  * 每篇改之前、之后的全文，原样交给 note_relink_undo 就能撤销
  */
 rewrites: LinkRewrite[] }
-/**
- * 成员的角色
- */
-export type Role = "read" | "edit" | "admin"
-/**
- * 共享仓库的成员、连接、加入请求、状态变了
- */
-export type ShareChanged = null
-export type ShareInfo = { 
-/**
- * 共享 id
- */
-id: string; 
-/**
- * 仓库名
- */
-name: string; 
-/**
- * 我（这台设备在这个共享里的公钥）
- */
-me: string; role: Role | null; state: ShareState; members: ShareMember[]; 
-/**
- * 等管理员确认的加入请求
- */
-requests: ShareRequest[]; 
-/**
- * 我手里有邀请链接（管理员）
- */
-canInvite: boolean }
-export type ShareMember = { id: string; name: string; role: Role; 
-/**
- * 现在连着（自己算连着）
- */
-online: boolean; me: boolean }
-export type SharePreview = { 
-/**
- * 仓库名
- */
-name: string; role: Role }
-export type ShareRequest = { request: number; id: string; name: string }
-export type ShareState = 
-/**
- * 正在加入：waiting = 连上了邀请人，等他同意
- */
-{ state: "joining"; waiting: boolean } | { state: "rejected"; reason: Refusal } | 
-/**
- * 被移出了
- */
-{ state: "removed" } | { state: "ready" }
-/**
- * 共享仓库里一篇的一版（P10.3.4）
- */
-export type ShareVersion = { 
-/**
- * 这一版第一次、最后一次改动的时间（毫秒）
- */
-from: number; to: number; 
-/**
- * 谁改的（成员表里的名字；认不出的是 None）
- */
-name: string | null; device: string | null; 
-/**
- * 这一版的样子（base64），看全文、恢复时交回来
- */
-version: string }
 /**
  * 访客窗口里共享的那一篇，存一份到仓库里
  */

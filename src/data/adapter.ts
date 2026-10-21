@@ -12,7 +12,6 @@ import {
   periodStartOf,
   toISODate,
 } from "@/lib/date";
-import { shareDocId, shareReady, useShare } from "@/share/store";
 import { useEffect, useRef } from "react";
 import { conflictOriginalTitle, conflictTarget } from "./conflicts";
 import { folderOf } from "./folders";
@@ -42,35 +41,6 @@ import {
    ============================================================ */
 
 export function useCurrentDocument(): DocumentModel {
-  return useSharedDocument(useBaseDocument());
-}
-
-/**
- * 共享仓库（docs/协同编辑.md §20.5）：笔记、某一天、目标的编辑器绑上这一篇的 Loro 副本 —— 正文以副本为准，
- * 由 Rust 写盘。副本还在打开（向 Rust 要快照，一般几毫秒）时先给只读预览：空着挂上的话一输入就和
- * 副本对不上了。只读成员的编辑器是只读的
- */
-function useSharedDocument(doc: DocumentModel): DocumentModel {
-  const info = useShare((s) => s.info);
-  const current = useShare((s) => s.current);
-  const focus = useShare((s) => s.focus);
-  const target = doc.editor?.target;
-  const ready = shareReady(info);
-  const docId = ready && target && target.kind !== "shared" ? shareDocId(target) : null;
-  useEffect(() => {
-    focus(docId);
-  }, [docId, focus]);
-  if (!docId || doc.collab) return doc;
-  const session = current?.doc === docId ? current.session : null;
-  if (!session) return { ...doc, editor: undefined };
-  return {
-    ...doc,
-    bodyMd: session.toString(),
-    collab: { session, readOnly: info?.role === "read" },
-  };
-}
-
-function useBaseDocument(): DocumentModel {
   const workspace = useApp((s) => s.workspace);
   const selectedNoteId = useApp((s) => s.selectedNoteId);
   const selectedArchiveId = useApp((s) => s.selectedArchiveId);

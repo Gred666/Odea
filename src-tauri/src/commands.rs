@@ -17,7 +17,6 @@ use crate::collab::{
 use crate::domain::model::*;
 use crate::domain::validate_date;
 use crate::error::{AppError, Result};
-use crate::share;
 use crate::state::{AppState, Caller, Workspace, Ws};
 use crate::sync::account::{self, PendingLogin};
 use crate::sync::engine::{Hooks, SyncHub, LOGIN_KEY, PROVIDER_KEY};
@@ -1035,7 +1034,6 @@ async fn move_vault_to<R: Runtime>(
 pub fn stop_services(ws: &Workspace) -> Result<()> {
     *ws.watcher.lock().map_err(|_| AppError::Internal("监听锁坏了".into()))? = None;
     ws.sync.stop();
-    stop_share(ws);
     Ok(())
 }
 
@@ -1043,15 +1041,8 @@ pub fn stop_services(ws: &Workspace) -> Result<()> {
 /// 同步线程第一轮要等前端 ready（技术方案 §5.9.6），这里只是起线程
 pub fn start_services<R: Runtime>(app: &AppHandle<R>, data_dir: &std::path::Path, ws: &Arc<Workspace>, backlog: Backlog) {
     spawn_backlog(app.clone(), ws.label.clone(), ws.vault.clone(), ws.indexing.clone(), backlog);
-    // 文件监听处理完一批：戳一下同步（停笔一会儿后提交）和共享仓库（附件可能变了）
-    let poke_sync = sync_poke(&ws.sync);
-    let workspace = Arc::downgrade(ws);
-    let on_batch: watch::OnBatch = Arc::new(move || {
-        poke_sync();
-        if let Some(service) = workspace.upgrade().and_then(|ws| ws.share()) {
-            service.poke();
-        }
-    });
+    // 文件监听处理完一批：戳一下同步（停笔一会儿后提交）
+    let on_batch: watch::OnBatch = sync_poke(&ws.sync);
     match watch::start(ws.vault.clone(), Some(on_batch)) {
         Ok(watcher) => {
             if let Ok(mut slot) = ws.watcher.lock() {
@@ -1066,7 +1057,6 @@ pub fn start_services<R: Runtime>(app: &AppHandle<R>, data_dir: &std::path::Path
     if let Err(error) = ws.sync.start(ws.vault.clone(), hooks) {
         eprintln!("同步没能启动: {error}");
     }
-    start_share(app, data_dir, ws);
 }
 
 /// 这个窗口换到另一个仓库文件夹：准备好、打开、停旧的监听和同步、换上新的、起新的、记进仓库列表。
@@ -1452,11 +1442,6 @@ pub async fn sync_enable<R: Runtime>(
     let provider = provider_of(&provider)?;
     let data_dir = state.data_dir.clone();
     let root = with_vault(&ws, |v| Ok(v.root().to_path_buf())).await?;
-    if share::is_shared(&root) {
-        return Err(AppError::Invalid(
-            "这是一个共享仓库，改动已经在成员之间同步了。共享和同步二选一：自己的别的设备也加进共享里".into(),
-        ));
-    }
     if let Some(drive) = setup::cloud_drive_of(&root) {
         return Err(AppError::Invalid(format!(
             "笔记文件夹在{drive}的同步目录里。网盘和同步二选一：网盘会来回拷 .git，迟早把它弄坏。先把笔记文件夹换到网盘外面（命令面板「更换笔记文件夹…」）"
@@ -2073,12 +2058,6 @@ pub async fn collab_set_name(state: State<'_, AppState>, name: String) -> Result
         Some(Active::Host(host)) => host.set_name(&name),
         Some(Active::Guest(guest)) => guest.set_name(&name),
         None => {}
-    }
-    // 共享仓库：下次握手带新名字；我是管理员的话成员表里的也改掉（设计 §20.6）
-    for workspace in state.all_workspaces() {
-        if let Some(service) = workspace.share() {
-            service.set_name(&name);
-        }
     }
     Ok(())
 }
@@ -2765,391 +2744,4 @@ pub fn collab_send(state: State<'_, AppState>, request: Request<'_>) -> std::res
         _ => {}
     }
     Ok(())
-}
-
-/* ---------------- 共享仓库（docs/协同编辑.md §20） ----------------
-后台服务在 share/（Share），这里接到前端：
-- 成员、加入请求、状态变了：事件 ShareChanged（没有内容），前端重新取 share_info
-- 前端那份 Loro 副本的增量、光标：和协作一样不走 JSON —— Rust → 前端走前端登记的二进制 Channel
-  （share_pipe），前端 → Rust 走原始请求体（share_send），打开一篇时的快照是原始字节（share_doc_open）。
-  帧：1 字节类型 + 1 字节文档 id 长度 + 文档 id + 内容；光标帧的内容前面还有 64 字节对方的公钥（十六进制）
-- 每个共享仓库在这台设备上一把自己的密钥，存在应用数据目录的 share/<共享 id>.key（不在仓库里：
-  仓库可能被拷走、放进网盘）
-- 共享仓库不开 git 同步（设计 §20.1）：开着同步不让共享，共享着不让开同步 */
-
-const SHARE_PIPE_UPDATE: u8 = 1;
-const SHARE_PIPE_CURSOR: u8 = 2;
-
-/// 共享仓库的成员、连接、加入请求、状态变了
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
-pub struct ShareChanged;
-
-/// 共享仓库里一篇的一版（P10.3.4）
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct ShareVersion {
-    /// 这一版第一次、最后一次改动的时间（毫秒）
-    pub from: i64,
-    pub to: i64,
-    /// 谁改的（成员表里的名字；认不出的是 None）
-    pub name: Option<String>,
-    pub device: Option<String>,
-    /// 这一版的样子（base64），看全文、恢复时交回来
-    pub version: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct SharePreview {
-    /// 仓库名
-    pub name: String,
-    pub role: share::Role,
-}
-
-struct ShareSink<R: Runtime> {
-    app: AppHandle<R>,
-    label: String,
-    pipe: Arc<Mutex<Option<Channel<InvokeResponseBody>>>>,
-}
-
-fn share_frame(kind: u8, doc: &str, head: &[u8], payload: &[u8]) -> Vec<u8> {
-    let doc = &doc.as_bytes()[..doc.len().min(255)];
-    let mut frame = Vec::with_capacity(2 + doc.len() + head.len() + payload.len());
-    frame.push(kind);
-    frame.push(doc.len() as u8);
-    frame.extend_from_slice(doc);
-    frame.extend_from_slice(head);
-    frame.extend_from_slice(payload);
-    frame
-}
-
-impl<R: Runtime> share::Sink for ShareSink<R> {
-    fn doc_update(&self, doc: &str, bytes: &[u8]) {
-        if let Some(pipe) = self.pipe.lock().unwrap().as_ref() {
-            let _ = pipe.send(InvokeResponseBody::Raw(share_frame(SHARE_PIPE_UPDATE, doc, &[], bytes)));
-        }
-    }
-
-    fn cursor(&self, doc: &str, from: &str, payload: &[u8]) {
-        if let Some(pipe) = self.pipe.lock().unwrap().as_ref() {
-            let _ = pipe.send(InvokeResponseBody::Raw(share_frame(SHARE_PIPE_CURSOR, doc, from.as_bytes(), payload)));
-        }
-    }
-
-    fn changed(&self) {
-        if let Err(error) = ShareChanged.emit_to(&self.app, self.label.as_str()) {
-            eprintln!("通知前端失败: {error}");
-        }
-    }
-}
-
-fn share_key_file(data_dir: &std::path::Path, share_id: &str) -> PathBuf {
-    data_dir.join("share").join(format!("{share_id}.key"))
-}
-
-/// 这个共享仓库在这台设备上的密钥：有就读，没有就生成一把存下
-fn share_key(data_dir: &std::path::Path, share_id: &str) -> iroh::SecretKey {
-    let file = share_key_file(data_dir, share_id);
-    if let Ok(text) = std::fs::read_to_string(&file) {
-        if let Ok(bytes) = data_encoding::HEXLOWER.decode(text.trim().as_bytes()) {
-            if let Ok(bytes) = <[u8; 32]>::try_from(bytes.as_slice()) {
-                return iroh::SecretKey::from_bytes(&bytes);
-            }
-        }
-    }
-    let key = iroh::SecretKey::generate();
-    let _ = collab_record::write_atomic(&file, data_encoding::HEXLOWER.encode(&key.to_bytes()).as_bytes());
-    key
-}
-
-fn share_sink<R: Runtime>(app: &AppHandle<R>, ws: &Workspace) -> Arc<dyn share::Sink> {
-    Arc::new(ShareSink {
-        app: app.clone(),
-        label: ws.label.clone(),
-        pipe: ws.share_pipe.clone(),
-    })
-}
-
-/// 仓库窗口打开（换上）一个仓库：是共享仓库就把后台服务起来
-pub fn start_share<R: Runtime>(app: &AppHandle<R>, data_dir: &std::path::Path, ws: &Arc<Workspace>) {
-    let root = ws.root();
-    let Some(share_id) = share::service::share_key_name(&root) else { return };
-    let (app, data_dir, ws) = (app.clone(), data_dir.to_path_buf(), ws.clone());
-    tauri::async_runtime::spawn(async move {
-        let options = share::ShareOptions {
-            key: share_key(&data_dir, &share_id),
-            name: collab_name(&data_dir),
-            relays: load_relays(&data_dir),
-            mdns: true,
-        };
-        match share::Share::open(ws.vault.clone(), &root, options, share_sink(&app, &ws)).await {
-            Ok(service) => {
-                // 起来之前窗口已经换了仓库：不要了
-                if ws.root() != root {
-                    service.close().await;
-                    return;
-                }
-                *ws.share.lock().unwrap() = Some(Arc::new(service));
-                let _ = ShareChanged.emit_to(&app, ws.label.as_str());
-            }
-            Err(error) => eprintln!("共享仓库没能启动：{error}"),
-        }
-    });
-}
-
-/// 停掉这个窗口的共享仓库服务（落盘、断开）
-pub fn stop_share(ws: &Workspace) {
-    let service = ws.share.lock().ok().and_then(|mut slot| slot.take());
-    if let Some(service) = service {
-        tauri::async_runtime::spawn(async move { service.close().await });
-    }
-}
-
-fn need_share(ws: &Workspace) -> Result<Arc<share::Share>> {
-    ws.share().ok_or_else(|| AppError::Invalid("这个仓库没有共享".into()))
-}
-
-fn share_err(error: String) -> AppError {
-    AppError::Invalid(error)
-}
-
-/// 这个仓库的共享状态（不是共享仓库是 null）
-#[tauri::command]
-#[specta::specta]
-pub async fn share_info(ws: Ws) -> Result<Option<share::ShareInfo>> {
-    Ok(ws.share().map(|service| service.info()))
-}
-
-/// 把这个仓库共享出去（设计 §20.8 最后一条）：逻辑目录、没开同步、不在网盘里
-#[tauri::command]
-#[specta::specta]
-pub async fn share_create<R: Runtime>(app: AppHandle<R>, ws: Ws, state: State<'_, AppState>) -> Result<share::ShareInfo> {
-    if ws.share().is_some() {
-        return Err(AppError::Invalid("这个仓库已经共享了".into()));
-    }
-    let root = ws.root();
-    if let Some(drive) = setup::cloud_drive_of(&root) {
-        return Err(AppError::Invalid(format!(
-            "仓库在{drive}的同步目录里。网盘和共享二选一：网盘会把 .odea/share 里的文件来回拷，两边对不上。先把仓库换到网盘外面"
-        )));
-    }
-    if !matches!(ws.sync.status().state, SyncState::Off) {
-        return Err(AppError::Invalid("这个仓库开着同步。共享和同步二选一：先在同步设置里断开同步".into()));
-    }
-    let name = root
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "共享仓库".into());
-    // 密钥按共享 id 存：共享 id 建的时候才有，先生成、建好以后存下来
-    let key = iroh::SecretKey::generate();
-    let options = share::ShareOptions {
-        key: key.clone(),
-        name: collab_name(&state.data_dir),
-        relays: load_relays(&state.data_dir),
-        mdns: true,
-    };
-    let service = share::Share::create(ws.vault.clone(), &root, &name, options, share_sink(&app, &ws))
-        .await
-        .map_err(share_err)?;
-    let info = service.info();
-    collab_record::write_atomic(
-        &share_key_file(&state.data_dir, &info.id),
-        data_encoding::HEXLOWER.encode(&key.to_bytes()).as_bytes(),
-    )
-    .map_err(|error| AppError::Io(error.to_string()))?;
-    *ws.share.lock().unwrap() = Some(Arc::new(service));
-    // 这个窗口里别处订阅着的（侧栏的小标记）跟着刷新
-    let _ = ShareChanged.emit_to(&app, ws.label.as_str());
-    Ok(info)
-}
-
-/// 邀请链接（管理员）
-#[tauri::command]
-#[specta::specta]
-pub async fn share_invite_link(ws: Ws) -> Result<String> {
-    need_share(&ws)?.invite_link().map_err(share_err)
-}
-
-/// 重置邀请链接（以前发出去的作废），顺便定进来以后默认的角色
-#[tauri::command]
-#[specta::specta]
-pub async fn share_reset_invite(ws: Ws, role: share::Role) -> Result<String> {
-    need_share(&ws)?.reset_invite(role).map_err(share_err)
-}
-
-/// 回答加入请求：role 是 null 就是拒绝
-#[tauri::command]
-#[specta::specta]
-pub async fn share_answer(ws: Ws, request: u32, role: Option<share::Role>) -> Result<bool> {
-    Ok(need_share(&ws)?.answer(request, role))
-}
-
-/// 改成员的角色；role 是 null 就是移出
-#[tauri::command]
-#[specta::specta]
-pub async fn share_set_role(ws: Ws, member: String, role: Option<share::Role>) -> Result<()> {
-    need_share(&ws)?.set_role(&member, role).map_err(share_err)
-}
-
-/// 看一眼邀请链接：是哪个仓库、进去以后是什么角色
-#[tauri::command]
-#[specta::specta]
-pub async fn share_check_link(link: String) -> Result<SharePreview> {
-    let invite = share::ShareInvite::parse(&link).map_err(|error| AppError::Invalid(error.to_string()))?;
-    Ok(SharePreview {
-        name: invite.name,
-        role: invite.role,
-    })
-}
-
-/// 加入一个共享仓库：选一个文件夹，在里面新建一个以仓库名命名的空文件夹，摆好、在新窗口里打开。
-/// 之后那个窗口的后台服务拿着链接去拨邀请人、等他同意。取消选文件夹返回 null，否则返回窗口标签
-#[tauri::command]
-#[specta::specta]
-pub async fn share_join<R: Runtime>(app: AppHandle<R>, link: String) -> Result<Option<String>> {
-    let invite = share::ShareInvite::parse(&link).map_err(|error| AppError::Invalid(error.to_string()))?;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("把共享仓库放在哪个文件夹里")
-        .pick_folder(move |folder| {
-            let _ = tx.send(folder);
-        });
-    let Some(folder) = rx.await.ok().flatten() else { return Ok(None) };
-    let parent = folder.into_path().map_err(|error| AppError::Invalid(error.to_string()))?;
-    let name = layout::folder_name(&invite.name).unwrap_or_else(|| "共享仓库".into());
-    let root = (1..)
-        .map(|n| if n == 1 { parent.join(&name) } else { parent.join(format!("{name} {n}")) })
-        .find(|path| !path.exists())
-        .expect("总有一个没被占的名字");
-    if let Some(drive) = setup::cloud_drive_of(&root) {
-        return Err(AppError::Invalid(format!("{drive}的同步目录里不能放共享仓库，换一个文件夹")));
-    }
-    let app_handle = app.clone();
-    blocking(move || {
-        share::prepare_join(&root, &invite, &link)?;
-        let (label, _) = crate::workspace::open_vault(
-            &app_handle,
-            &root,
-            crate::workspace::Open {
-                seed: false,
-                remember: true,
-                quiet: true,
-                logical: true,
-            },
-        )?;
-        Ok(Some(label))
-    })
-    .await
-}
-
-/// 这台设备不再共享：停掉服务、删掉 .odea/share。文件都留着，成了一个普通的逻辑目录。
-/// 别人那里我还在成员表里（管理员可以把我移出）
-#[tauri::command]
-#[specta::specta]
-pub async fn share_leave(ws: Ws) -> Result<()> {
-    let service = ws.share.lock().unwrap().take();
-    if let Some(service) = service {
-        service.close().await;
-    }
-    let root = ws.root();
-    blocking(move || {
-        let dir = share::share_dir(&root);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
-        }
-        Ok(())
-    })
-    .await
-}
-
-/// 共享仓库里一篇的历史（P10.3.4）：同一台设备、停顿不超过 5 分钟的改动并成一版，旧的在前
-#[tauri::command]
-#[specta::specta]
-pub async fn share_history(ws: Ws, doc: String) -> Result<Vec<ShareVersion>> {
-    use base64::Engine;
-    let service = need_share(&ws)?;
-    let names = service.member_names();
-    Ok(service
-        .history(&doc)
-        .into_iter()
-        .map(|version| ShareVersion {
-            from: version.from,
-            to: version.to,
-            name: version.device.as_ref().and_then(|device| names.get(device).cloned()),
-            device: version.device,
-            version: base64::engine::general_purpose::STANDARD.encode(&version.frontiers),
-        })
-        .collect())
-}
-
-fn decode_version(version: &str) -> Result<Vec<u8>> {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(version)
-        .map_err(|_| AppError::Invalid("版本不对".into()))
-}
-
-/// 某一版时的全文
-#[tauri::command]
-#[specta::specta]
-pub async fn share_version_text(ws: Ws, doc: String, version: String) -> Result<String> {
-    let frontiers = decode_version(&version)?;
-    need_share(&ws)?.text_at(&doc, &frontiers).map_err(share_err)
-}
-
-/// 恢复到某一版（一次新的改动，别人那里也恢复）
-#[tauri::command]
-#[specta::specta]
-pub async fn share_restore(ws: Ws, doc: String, version: String) -> Result<()> {
-    let frontiers = decode_version(&version)?;
-    need_share(&ws)?.restore(&doc, &frontiers).map_err(share_err)
-}
-
-/// 关掉一篇（前端那份扔了）
-#[tauri::command]
-#[specta::specta]
-pub async fn share_doc_close(ws: Ws, doc: String) -> Result<()> {
-    if let Some(service) = ws.share() {
-        service.close_doc(&doc);
-    }
-    Ok(())
-}
-
-/// 打开共享仓库里的一篇（不经 tauri-specta：原始字节）：8 字节给前端用的 peer（小端）+ 快照
-#[tauri::command]
-pub async fn share_doc_open(ws: Ws, doc: String) -> std::result::Result<tauri::ipc::Response, String> {
-    let service = ws.share().ok_or("这个仓库没有共享")?;
-    let (snapshot, peer) = service.open_doc(&doc).await?;
-    let mut out = Vec::with_capacity(8 + snapshot.len());
-    out.extend_from_slice(&peer.to_le_bytes());
-    out.extend_from_slice(&snapshot);
-    Ok(tauri::ipc::Response::new(out))
-}
-
-/// 前端登记接收共享仓库字节的 Channel（不经 tauri-specta）
-#[tauri::command]
-pub fn share_pipe(ws: Ws, channel: Channel<InvokeResponseBody>) {
-    *ws.share_pipe.lock().unwrap() = Some(channel);
-}
-
-/// 前端发出来的字节（不经 tauri-specta：原始请求体）。帧同 share_pipe
-#[tauri::command]
-pub fn share_send(ws: Ws, request: Request<'_>) -> std::result::Result<(), String> {
-    let InvokeBody::Raw(frame) = request.body() else {
-        return Err("share_send 要原始字节".into());
-    };
-    let (&kind, rest) = frame.split_first().ok_or("空帧")?;
-    let (&len, rest) = rest.split_first().ok_or("帧太短")?;
-    let (doc, payload) = rest.split_at_checked(len as usize).ok_or("帧太短")?;
-    let doc = std::str::from_utf8(doc).map_err(|_| "文档 id 不对")?;
-    let service = ws.share().ok_or("这个仓库没有共享")?;
-    match kind {
-        SHARE_PIPE_UPDATE => service.push(doc, payload),
-        SHARE_PIPE_CURSOR => {
-            service.send_cursor(doc, payload);
-            Ok(())
-        }
-        _ => Ok(()),
-    }
 }

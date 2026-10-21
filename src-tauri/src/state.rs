@@ -28,20 +28,11 @@ pub struct Workspace {
     pub sync: Arc<SyncHub>,
     /// 后台读文件进索引读到哪了（第一次打开大文件夹、索引升级重建时，见 Vault::open_quick）
     pub indexing: Arc<Mutex<Indexing>>,
-    /// 共享仓库在这台设备上跑着的服务（docs/协同编辑.md §20）。不是共享仓库时是空的
-    pub share: Mutex<Option<Arc<crate::share::Share>>>,
-    /// 前端登记的、接收共享仓库字节的 Channel（commands::share_pipe）
-    pub share_pipe: Arc<Mutex<Option<tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>>>>,
 }
 
 impl Workspace {
     pub fn root(&self) -> PathBuf {
         self.root.lock().map(|root| root.clone()).unwrap_or_default()
-    }
-
-    /// 这个窗口的共享仓库服务（不是共享仓库、还没起来是 None）
-    pub fn share(&self) -> Option<Arc<crate::share::Share>> {
-        self.share.lock().ok()?.clone()
     }
 }
 
