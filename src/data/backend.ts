@@ -19,6 +19,8 @@ import type {
   ImportReport,
   IndexProgress,
   JournalDoc,
+  JournalPage,
+  JournalVault,
   LinkRewrite,
   Note,
   NoteInput,
@@ -32,6 +34,8 @@ import type {
   SyncRemoteRepo,
   SyncStatus,
   Task,
+  TeamInfo,
+  TeamInvite,
   TextSearch,
   TreeFile,
   TreeNode,
@@ -199,6 +203,22 @@ export interface Backend {
   syncEnable(provider: SyncProviderKey, cloneUrl: string, bringLocal: boolean): Promise<boolean>;
   /** 断开同步（.git 留着，账号不退出） */
   syncDisable(): Promise<SyncStatus>;
+  /* ---- 团队仓库（docs/协同编辑.md §22.3） ---- */
+  /** 这个仓库的成员：名单里的设备按账号合起来，对上托管方那边谁有权限（要联网，慢一点） */
+  teamInfo(): Promise<TeamInfo>;
+  /** 邀请成员：托管方那边拉他当协作者，标成团队仓库，返回发给他的链接 */
+  teamInvite(login: string): Promise<TeamInvite>;
+  /** 移出成员：托管方那边去掉权限（没接受的邀请撤回），名单里他的设备也去掉 */
+  teamRemove(login: string): Promise<void>;
+  /** 点开的团队仓库链接（odea://vault/）交给启动器：在那里拉一份 */
+  openVaultLink(link: string): Promise<void>;
+  /* ---- 日程切换器（§22.6） ---- */
+  /** 这台电脑上开着日程的仓库：个人的在前 */
+  journalVaults(): Promise<JournalVault[]>;
+  /** 跳到那个仓库的日程：它的窗口摆在这个窗口的位置上、停在同一页同一天 */
+  journalSwitch(path: string, page: JournalPage, date: string): Promise<void>;
+  /** 订阅「跳过来了，翻到这一页」（日程切换器从别的窗口跳过来时） */
+  onJournalGoto(listener: (page: JournalPage, date: string) => void): Promise<() => void>;
   /** 下好了、等着装的新版本；没有为 null */
   updateStatus(): Promise<UpdateInfo | null>;
   /** 现在就查一次；有新版的话下好再返回，已经是最新的返回 null */
@@ -345,6 +365,22 @@ const tauriBackend: Backend = {
   syncEnable: (provider, cloneUrl, bringLocal) =>
     unwrap(commands.syncEnable(provider, cloneUrl, bringLocal)),
   syncDisable: () => unwrap(commands.syncDisable()) as Promise<SyncStatus>,
+  teamInfo: () => unwrap(commands.teamInfo()) as Promise<TeamInfo>,
+  teamInvite: (login) => unwrap(commands.teamInvite(login)),
+  teamRemove: async (login) => {
+    await unwrap(commands.teamRemove(login));
+  },
+  openVaultLink: async (link) => {
+    await unwrap(commands.launcherOpenLink(link));
+  },
+  journalVaults: () => unwrap(commands.journalVaults()),
+  journalSwitch: async (path, page, date) => {
+    await unwrap(commands.journalSwitch(path, page, date));
+  },
+  onJournalGoto: (listener) =>
+    events
+      .journalGoto(thisWindow())
+      .listen((event) => listener(event.payload.page as JournalPage, event.payload.date)),
   updateStatus: () => unwrap(commands.updateStatus()),
   updateCheck: () => unwrap(commands.updateCheck()),
   updateInstall: async () => {

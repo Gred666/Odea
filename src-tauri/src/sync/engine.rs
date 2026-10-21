@@ -44,21 +44,26 @@ const MB: u64 = 1024 * 1024;
 /// 改名前的 `ontheway.*` 打开仓库时换成新的（SyncRepo::open）
 pub const AUTOSYNC_KEY: &str = "odea.autosync";
 
-/// 这台设备叫什么：提交署名是「Odea (设备名)」，历史版本里据此说是哪台设备改的
+/// 这台设备叫什么：提交署名是「账号 (设备名)」（没登录的是「Odea (设备名)」），历史版本里据此说是哪台设备改的
 pub fn this_device() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "本机".into())
 }
 
-/// 提交署名里的设备名：「Odea (书房的电脑)」→「书房的电脑」；改名前的提交是「OnTheWay (…)」，
-/// 一样认；别的 git 工具提交的原样返回
-pub fn device_of(author: &str) -> &str {
-    [APP_NAME, crate::old_name::NAME]
-        .iter()
-        .find_map(|name| author.strip_prefix(*name)?.strip_prefix(" (")?.strip_suffix(')'))
-        .unwrap_or(author)
+/// 提交署名拆成（谁, 哪台设备）：「Gred666 (书房的电脑)」→ (Gred666, 书房的电脑)。
+/// 「Odea (…)」（P10.4 以前、没登录时）和改名前的「OnTheWay (…)」只有设备；别的 git 工具提交的整个当设备。
+/// 从第一个「 (」拆：账号里没有空格和括号，设备名里可能有
+pub fn author_parts(author: &str) -> (Option<&str>, &str) {
+    match author.strip_suffix(')').and_then(|rest| rest.split_once(" (")) {
+        Some((who, device)) if !device.is_empty() && !who.is_empty() => {
+            let app = who == APP_NAME || who == crate::old_name::NAME;
+            ((!app).then_some(who), device)
+        }
+        _ => (None, author),
+    }
 }
+
 
 /// 提交署名里的应用名
 const APP_NAME: &str = "Odea";
@@ -366,7 +371,11 @@ impl Engine {
     /// 一轮。返回联没联网（本地轮没东西要推时不联网）
     fn try_round(&mut self, kind: Kind) -> Result<bool, Halt> {
         let limits = limits(self.repo.config_get(PROVIDER_KEY).as_deref());
-        let name = format!("{APP_NAME} ({})", self.device);
+        // 「账号 (设备名)」：团队仓库的历史里看得出是谁改的（docs/协同编辑.md §22.3）
+        let name = match self.repo.config_get(LOGIN_KEY).filter(|login| !login.is_empty()) {
+            Some(login) => format!("{login} ({})", self.device),
+            None => format!("{APP_NAME} ({})", self.device),
+        };
         let author = Author { name: &name, email: AUTHOR_EMAIL };
 
         // 一下子要进库很多文件（第一次开启同步之类）：先在锁外成批放进包里，

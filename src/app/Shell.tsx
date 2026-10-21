@@ -8,14 +8,17 @@ import { ErrorToast, LayoutChangeToast, NoticeToast } from "@/components/ErrorTo
 import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
+import { journalSwitchNext } from "@/components/JournalSwitcher";
 import { RelayDialog } from "@/components/RelayDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SyncDialog } from "@/components/SyncDialog";
+import { TeamDialog } from "@/components/TeamDialog";
 import { TitleBar } from "@/components/TitleBar";
 import { UndoToast } from "@/components/UndoToast";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { VaultSwitcher } from "@/components/VaultSwitcher";
 import { labelToHorizon, labelToScope, useCurrentDocument } from "@/data/adapter";
+import { backend } from "@/data/backend";
 import { useData } from "@/data/store";
 import { cn } from "@/lib/cn";
 import { periodStartOf } from "@/lib/date";
@@ -105,6 +108,29 @@ export function Shell() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // 日程切换器（docs/协同编辑.md §22.6）：从别的仓库的窗口跳过来，翻到那一页那一天；Ctrl+Alt+J 轮着切。
+  // 按 code 认 J：macOS 上按着 Option 时 key 是别的字
+  useEffect(() => {
+    const unlisten = backend().then((api) =>
+      api.onJournalGoto((page, date) => {
+        const app = useApp.getState();
+        app.setWorkspace(page);
+        if (page === "calendar") app.selectDate(date);
+      }),
+    );
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.code !== "KeyJ" || !e.altKey || !(e.ctrlKey || e.metaKey)) return;
+      if (!useData.getState().layout.journal) return;
+      e.preventDefault();
+      void journalSwitchNext();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      void unlisten.then((stop) => stop());
+    };
   }, []);
 
   const handleSegment = (v: string) => {
@@ -282,6 +308,7 @@ export function Shell() {
         <CollabDialog />
         {/* 在协作对话框之上：连不上时从协作对话框里「配中继…」打开 */}
         <RelayDialog />
+        <TeamDialog />
         <HistoryDialog />
         <UpdateDialog />
         {/* 开场：冷启动时盖在最上面，写一个「O」再把它送回侧栏（components/Intro.tsx） */}

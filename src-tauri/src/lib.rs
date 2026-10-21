@@ -47,6 +47,7 @@ use state::AppState;
 fn ready(window: WebviewWindow) {
     #[cfg(windows)]
     use_app_icon_resource(&window);
+    workspace::place_pending(&window);
     let _ = window.show();
     let _ = window.set_focus();
     if let Some(workspace) = window.try_state::<AppState>().and_then(|state| state.workspace(window.label())) {
@@ -281,6 +282,15 @@ fn command_builder() -> Builder<tauri::Wry> {
         workspace::launcher_reveal,
         workspace::launcher_join::<tauri::Wry>,
         workspace::launcher_show::<tauri::Wry>,
+        workspace::launcher_take_link,
+        workspace::launcher_open_link::<tauri::Wry>,
+        workspace::journal_vaults,
+        workspace::journal_switch::<tauri::Wry>,
+        commands::team_info,
+        commands::team_invite,
+        commands::team_remove,
+        commands::sync_invitations,
+        commands::sync_accept_invitation,
         commands::sync_status,
         commands::sync_now,
         commands::sync_accounts,
@@ -344,6 +354,8 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::SyncNotice,
         commands::CollabEvent,
         commands::CollabLink,
+        workspace::JournalGoto,
+        workspace::LauncherLink,
         commands::CollabCopyReady,
         update::UpdateReady
     ])
@@ -424,6 +436,15 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         workspace::launcher_reveal,
         workspace::launcher_join::<tauri::test::MockRuntime>,
         workspace::launcher_show::<tauri::test::MockRuntime>,
+        workspace::launcher_take_link,
+        workspace::launcher_open_link::<tauri::test::MockRuntime>,
+        workspace::journal_vaults,
+        workspace::journal_switch::<tauri::test::MockRuntime>,
+        commands::team_info,
+        commands::team_invite,
+        commands::team_remove,
+        commands::sync_invitations,
+        commands::sync_accept_invitation,
         commands::sync_status,
         commands::sync_now,
         commands::sync_accounts,
@@ -487,6 +508,8 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::SyncNotice,
         commands::CollabEvent,
         commands::CollabLink,
+        workspace::JournalGoto,
+        workspace::LauncherLink,
         commands::CollabCopyReady,
         update::UpdateReady
     ]);
@@ -605,6 +628,8 @@ pub fn run() {
                 workspaces: Mutex::new(std::collections::HashMap::new()),
                 focused: Mutex::new(None),
                 launcher_waits_for: Mutex::new(None),
+                launcher_link: Mutex::new(None),
+                journal_jumps: Mutex::new(std::collections::HashMap::new()),
                 data_dir,
                 sync_login: Mutex::new(sync::account::LoginSlot::default()),
                 update: Arc::new(update::UpdateHub::new(upgrade)),

@@ -1,18 +1,35 @@
 import {
+  events,
   type SyncAccount,
   type SyncDeviceCode,
+  type SyncInvitation,
   type SyncRemoteRepo,
   type VaultEntry,
   commands,
 } from "@/lib/bindings";
-import { isTauri } from "@/lib/tauri";
+import { isTauri, thisWindow } from "@/lib/tauri";
 
 /* ============================================================
    启动器（docs/仓库与启动器.md §3）要的后端。
    桌面端走 IPC；浏览器预览（`/?launcher`）里是一份假的列表，调界面用。
    ============================================================ */
 
-export type { SyncAccount, SyncDeviceCode, SyncRemoteRepo, VaultEntry };
+export type { SyncAccount, SyncDeviceCode, SyncInvitation, SyncRemoteRepo, VaultEntry };
+
+/** 团队仓库的链接 `odea://vault/<托管方>/<owner>/<repo>`（docs/协同编辑.md §22.3）：邀请成员时发的 */
+export interface VaultLink {
+  provider: Provider;
+  /** `owner/repo` */
+  fullName: string;
+}
+
+export function parseVaultLink(text: string): VaultLink | null {
+  const match = /^odea:(?:\/\/)?vault\/(github|gitee)\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(
+    text.trim().replace(/^<|>$/g, ""),
+  );
+  if (!match) return null;
+  return { provider: match[1]!.toLowerCase() as Provider, fullName: `${match[2]}/${match[3]}` };
+}
 
 /** 同步的托管方（和仓库窗口里的同步对话框一样） */
 export type Provider = "github" | "gitee";
@@ -44,8 +61,16 @@ export interface LauncherApi {
   githubLoginWait(): Promise<SyncAccount>;
   loginCancel(): Promise<void>;
   giteeLogin(token: string): Promise<SyncAccount>;
-  /** 这个账号的仓库，最近更新的在前 */
+  /** 这个账号能推的仓库（自己的、别人拉我当协作者的），最近更新的在前 */
   repos(provider: Provider): Promise<SyncRemoteRepo[]>;
+  /** 别人发给我、还没接受的仓库邀请（GitHub） */
+  invitations(provider: Provider): Promise<SyncInvitation[]>;
+  /** 接受了才拉得下来 */
+  acceptInvitation(provider: Provider, id: string): Promise<void>;
+  /** 打开启动器的那个团队仓库链接（点 odea://vault/ 打开的），取一次就没了 */
+  takeLink(): Promise<string | null>;
+  /** 启动器开着时又点了一个团队仓库链接 */
+  onLink(listener: (link: string) => void): Promise<() => void>;
   /** clone 到 parent 下面叫 name 的新文件夹，打开（同步跟着开着）。新窗口画出来以后启动器自己关掉 */
   clone(provider: Provider, cloneUrl: string, parent: string, name: string): Promise<void>;
 }
@@ -89,6 +114,13 @@ const tauriApi: LauncherApi = {
   },
   giteeLogin: async (token) => unwrap(await commands.syncGiteeLogin(token)),
   repos: async (provider) => unwrap(await commands.syncRepos(provider)),
+  invitations: async (provider) => unwrap(await commands.syncInvitations(provider)),
+  acceptInvitation: async (provider, id) => {
+    unwrap(await commands.syncAcceptInvitation(provider, id));
+  },
+  takeLink: async () => unwrap(await commands.launcherTakeLink()),
+  onLink: (listener) =>
+    events.launcherLink(thisWindow()).listen((event) => listener(event.payload)),
   clone: async (provider, cloneUrl, parent, name) => {
     unwrap(await commands.launcherClone(provider, cloneUrl, parent, name));
   },
@@ -190,25 +222,51 @@ const mockApi: LauncherApi = {
   repos: async () => {
     await wait();
     return [
+      ...mockTeamRepos,
       {
         fullName: "you/odea-notes",
         cloneUrl: "https://github.com/you/odea-notes.git",
         private: true,
         updatedAt: null,
+        owner: "you",
       },
       {
         fullName: "you/blog",
         cloneUrl: "https://github.com/you/blog.git",
         private: false,
         updatedAt: null,
+        owner: "you",
       },
     ];
   },
+  invitations: async () => {
+    await wait();
+    return mockInvitations;
+  },
+  acceptInvitation: async (_provider, id) => {
+    await wait();
+    const accepted = mockInvitations.find((invitation) => invitation.id === id);
+    mockInvitations = mockInvitations.filter((invitation) => invitation.id !== id);
+    if (accepted) mockTeamRepos = [accepted.repo, ...mockTeamRepos];
+  },
+  // 预览里 `/?launcher&vault=odea://vault/github/xiaowang/team-notes` 就是点那个链接打开的
+  takeLink: async () => new URLSearchParams(location.search).get("vault"),
+  onLink: async () => () => {},
   clone: async () => {
     await wait();
     throw new Error("浏览器预览里拉不了仓库，要在桌面端里试");
   },
 };
+
+const TEAM_REPO: SyncRemoteRepo = {
+  fullName: "xiaowang/team-notes",
+  cloneUrl: "https://github.com/xiaowang/team-notes.git",
+  private: true,
+  updatedAt: null,
+  owner: "xiaowang",
+};
+let mockInvitations: SyncInvitation[] = [{ id: "7", repo: TEAM_REPO, inviter: "xiaowang" }];
+let mockTeamRepos: SyncRemoteRepo[] = [];
 
 let mockAccounts: SyncAccount[] = [];
 

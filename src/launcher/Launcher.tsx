@@ -9,7 +9,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { version as APP_VERSION } from "../../package.json";
 import { ClonePanel } from "./ClonePanel";
-import { type VaultEntry, launcherApi as api } from "./api";
+import { type VaultEntry, type VaultLink, launcherApi as api, parseVaultLink } from "./api";
 import { Button, FIELD, PanelHeader } from "./parts";
 
 /* ============================================================
@@ -28,6 +28,8 @@ export function Launcher() {
   const [panel, setPanel] = useState<Panel>("home");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 点团队仓库的链接（odea://vault/）打开的：直接到「从同步仓库拉一份」、停在那个仓库
+  const [vaultLink, setVaultLink] = useState<VaultLink | null>(null);
 
   const refresh = useCallback(() => {
     api
@@ -36,6 +38,21 @@ export function Launcher() {
       .catch(() => setVaults([]));
   }, []);
   useEffect(refresh, []);
+  useEffect(() => {
+    const take = (text: string | null) => {
+      const link = text ? parseVaultLink(text) : null;
+      if (!link) return;
+      setVaultLink(link);
+      setError(null);
+      setPanel("clone");
+    };
+    void api
+      .takeLink()
+      .then(take)
+      .catch(() => {});
+    const unlisten = api.onLink(take);
+    return () => void unlisten.then((stop) => stop());
+  }, []);
   // 别的窗口开了、关了仓库：回到这个窗口时列表上的「已打开」要对
   useEffect(() => {
     window.addEventListener("focus", refresh);
@@ -153,6 +170,8 @@ export function Launcher() {
               )}
               {panel === "clone" && (
                 <ClonePanel
+                  key={vaultLink?.fullName ?? ""}
+                  target={vaultLink}
                   busy={busy}
                   onBack={() => go("home")}
                   onClone={(provider, url, parent, name) =>

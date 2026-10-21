@@ -18,11 +18,12 @@ use tauri_specta::Event;
 use crate::boot::{self, SavedVault};
 use crate::commands::{self, CollabLink, Indexing};
 use crate::error::{AppError, Result};
-use crate::state::{AppState, Workspace};
+use crate::domain::model::JournalVault;
+use crate::state::{AppState, Caller, Workspace};
 use crate::sync::engine::SyncHub;
 use crate::sync::repo::{Net, SyncRepo};
 use crate::sync::{account, proxy, setup};
-use crate::vault::{layout, Vault};
+use crate::vault::{layout, team, Vault};
 
 /// 启动器窗口的标签
 pub const LAUNCHER: &str = "launcher";
@@ -161,6 +162,11 @@ pub fn startup<R: Runtime>(app: &AppHandle<R>, plan: boot::Startup) {
             }
         }
     }
+    // 点团队仓库的链接冷启动的：在启动器里拉一份（仓库窗口照常打开）
+    if let Some(link) = app.state::<AppState>().collab.take_pending_vault_link() {
+        show_launcher_link(app, link);
+        return;
+    }
     if opened == 0 {
         // 一个仓库都没打开、点的是邀请链接：开访客窗口去加入，不用先建仓库
         let shown = if app.state::<AppState>().collab.has_pending_invite() {
@@ -228,6 +234,7 @@ pub fn on_ready<R: Runtime>(app: &AppHandle<R>, label: &str) {
     if waited {
         close_launcher(app);
     }
+    deliver_jump(app, label);
 }
 
 fn close_launcher<R: Runtime>(app: &AppHandle<R>) {
@@ -239,6 +246,11 @@ fn close_launcher<R: Runtime>(app: &AppHandle<R>) {
 /// 点开了一个 odea:// 链接（协作邀请、回连、中继码）：交给最近用过的仓库窗口。一个都没开着就先打开
 /// 最近的仓库，链接存着等它起来取（collab_pending_link）；一个仓库都没有就弹启动器
 pub fn deliver_link<R: Runtime>(app: &AppHandle<R>, link: String) {
+    // 团队仓库的链接：在启动器里拉一份
+    if is_vault_link(&link) {
+        show_launcher_link(app, link);
+        return;
+    }
     let state = app.state::<AppState>();
     let focused = state.focused.lock().ok().and_then(|focused| focused.clone());
     let target = focused
@@ -612,4 +624,192 @@ pub async fn launcher_join<R: Runtime>(app: AppHandle<R>, state: State<'_, AppSt
 #[specta::specta]
 pub async fn launcher_show<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     show_launcher(&app)
+}
+
+/* ---------------- 日程切换器（docs/协同编辑.md §22.6） ----------------
+团队仓库的日程是团队的，个人的日程在个人仓库：今日TODO、目标、日历那一行日期后面能在这台电脑上
+开着日程的几个仓库之间跳。一个窗口一个仓库，跳 = 那个仓库的窗口提到前面、停在同一页同一天；
+它摆在当前窗口的位置和大小上，看着就像同一个窗口里换了内容 */
+
+/// 跳过去之后那个窗口停在哪一页（前端收到 JournalGoto 再翻过去）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalGoto {
+    /// `today` / `goal` / `calendar`
+    pub page: String,
+    /// 日历选中的那一天（YYYY-MM-DD）
+    pub date: String,
+}
+
+/// 窗口的位置和大小
+#[derive(Debug, Clone, Copy)]
+pub struct Place {
+    position: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    maximized: bool,
+}
+
+/// 刚打开、前端还没起来的窗口：起来以后（ready）摆到这里、翻到这一页
+pub struct Jump {
+    place: Option<Place>,
+    goto: JournalGoto,
+}
+
+fn place_of<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Option<Place> {
+    Some(Place {
+        position: window.outer_position().ok()?,
+        size: window.inner_size().ok()?,
+        maximized: window.is_maximized().unwrap_or(false),
+    })
+}
+
+fn apply_place<R: Runtime>(window: &tauri::WebviewWindow<R>, place: Place) {
+    if place.maximized {
+        let _ = window.maximize();
+        return;
+    }
+    let _ = window.unmaximize();
+    let _ = window.set_size(tauri::Size::Physical(place.size));
+    let _ = window.set_position(tauri::Position::Physical(place.position));
+}
+
+/// lib.rs 的 ready 在显示窗口之前调：日程切换器打开的窗口先摆好位置
+pub fn place_pending<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    let state = window.state::<AppState>();
+    let place = state
+        .journal_jumps
+        .lock()
+        .ok()
+        .and_then(|jumps| jumps.get(window.label()).and_then(|jump| jump.place));
+    if let Some(place) = place {
+        apply_place(window, place);
+    }
+}
+
+/// 窗口起来了：日程切换器在等它的话，翻到那一页
+fn deliver_jump<R: Runtime>(app: &AppHandle<R>, label: &str) {
+    let state = app.state::<AppState>();
+    let jump = state.journal_jumps.lock().ok().and_then(|mut jumps| jumps.remove(label));
+    if let Some(jump) = jump {
+        if let Err(error) = jump.goto.emit_to(app, label) {
+            eprintln!("通知前端失败: {error}");
+        }
+    }
+}
+
+/// 这台电脑上开着日程的仓库：个人的在前，再按名字
+#[tauri::command]
+#[specta::specta]
+pub async fn journal_vaults(caller: Caller, state: State<'_, AppState>) -> Result<Vec<JournalVault>> {
+    let current = caller.workspace.map(|workspace| workspace.root());
+    let data_dir = state.data_dir.clone();
+    blocking(move || {
+        let mut paths: Vec<PathBuf> = boot::Config::load(&data_dir)
+            .recent_vaults()
+            .into_iter()
+            .map(|saved| saved.path)
+            .collect();
+        // ODEA_VAULT 打开的不在列表里
+        if let Some(current) = &current {
+            if !paths.iter().any(|path| boot::same_vault(path, current)) {
+                paths.push(current.clone());
+            }
+        }
+        let mut vaults: Vec<JournalVault> = paths
+            .into_iter()
+            .filter(|path| path.is_dir() && layout::Layout::load(path).journal)
+            .map(|path| JournalVault {
+                name: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned()),
+                team: team::team_id(&path).is_some(),
+                current: current.as_deref().is_some_and(|current| boot::same_vault(current, &path)),
+                path: path.to_string_lossy().into_owned(),
+            })
+            .collect();
+        vaults.sort_by(|a, b| a.team.cmp(&b.team).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        Ok(vaults)
+    })
+    .await
+}
+
+/// 跳到另一个仓库的日程：它的窗口提到前面（没开着就打开），摆在当前窗口的位置和大小上，停在同一页
+#[tauri::command]
+#[specta::specta]
+pub async fn journal_switch<R: Runtime>(
+    app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
+    path: String,
+    page: String,
+    date: String,
+) -> Result<()> {
+    let root = PathBuf::from(&path);
+    if !root.is_dir() {
+        return Err(AppError::Invalid("找不到这个仓库的文件夹了（移动硬盘没插、被改名了）".into()));
+    }
+    let place = place_of(&window);
+    let goto = JournalGoto { page, date };
+    let handle = app.clone();
+    let (label, existed) = blocking(move || {
+        open_vault(&handle, &root, Open { seed: false, remember: true, quiet: true, logical: false })
+    })
+    .await?;
+    if existed {
+        if let (Some(target), Some(place)) = (app.get_webview_window(&label), place) {
+            apply_place(&target, place);
+        }
+        if let Err(error) = goto.emit_to(&app, label.as_str()) {
+            eprintln!("通知前端失败: {error}");
+        }
+    } else if let Ok(mut jumps) = app.state::<AppState>().journal_jumps.lock() {
+        jumps.insert(label, Jump { place, goto });
+    }
+    Ok(())
+}
+
+/* ---------------- 团队仓库的链接（docs/协同编辑.md §22.3） ----------------
+`odea://vault/<托管方>/<owner>/<repo>`：邀请成员时发给对方，点开在启动器里拉一份 */
+
+/// 启动器收到一个团队仓库的链接（它已经开着时）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct LauncherLink(pub String);
+
+pub fn is_vault_link(link: &str) -> bool {
+    link.trim().to_ascii_lowercase().starts_with("odea://vault/")
+}
+
+/// 交给启动器：开着就直接给，没开着先存着（launcher_take_link）、把它打开
+pub fn show_launcher_link<R: Runtime>(app: &AppHandle<R>, link: String) {
+    if app.get_webview_window(LAUNCHER).is_some() {
+        focus(app, LAUNCHER);
+        if let Err(error) = LauncherLink(link).emit_to(app, LAUNCHER) {
+            eprintln!("通知前端失败: {error}");
+        }
+        return;
+    }
+    if let Ok(mut slot) = app.state::<AppState>().launcher_link.lock() {
+        *slot = Some(link);
+    }
+    if let Err(error) = show_launcher(app) {
+        eprintln!("打开启动器失败: {error}");
+    }
+}
+
+/// 启动器起来时取：打开它的那个团队仓库链接
+#[tauri::command]
+#[specta::specta]
+pub async fn launcher_take_link(state: State<'_, AppState>) -> Result<Option<String>> {
+    Ok(lock(&state.launcher_link)?.take())
+}
+
+/// 仓库窗口里点了团队仓库的链接（冷启动时它先被交给了最近的仓库窗口）：交给启动器
+#[tauri::command]
+#[specta::specta]
+pub async fn launcher_open_link<R: Runtime>(app: AppHandle<R>, link: String) -> Result<()> {
+    if !is_vault_link(&link) {
+        return Err(AppError::Invalid("这不是团队仓库的链接".into()));
+    }
+    show_launcher_link(&app, link);
+    Ok(())
 }

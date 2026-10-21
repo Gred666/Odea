@@ -55,6 +55,7 @@ import {
   type GuideName,
   type GuideUpdate,
   type JournalDoc,
+  type JournalVault,
   type LinkRewrite,
   type Note,
   type NoteInput,
@@ -63,6 +64,8 @@ import {
   type Relink,
   SYNC_OFF,
   type Task,
+  type TeamInfo,
+  type TeamInvite,
   type TextHit,
   type TreeFile,
   type TreeNode,
@@ -321,6 +324,37 @@ function matchesQuery(query: string, note: MockNote, folder: string, now: number
 
 const JOURNAL_KEY = "odea.mock.journal";
 
+/* ---------------- 团队仓库 ----------------
+   浏览器预览里：邀请过谁就算团队仓库，邀请的人是「等他接受」。
+   `localStorage["odea.mock.team"] = '{"team":true,"members":["xiaowang"],"invited":[]}'` 能直接看有成员的样子 */
+
+const TEAM_KEY = "odea.mock.team";
+
+interface MockTeam {
+  team: boolean;
+  members: string[];
+  invited: string[];
+}
+
+function mockTeam(): MockTeam {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TEAM_KEY) ?? "null") as Partial<MockTeam> | null;
+    if (saved)
+      return { team: !!saved.team, members: saved.members ?? [], invited: saved.invited ?? [] };
+  } catch {
+    /* 隐私模式、写坏了：当没邀请过 */
+  }
+  return { team: false, members: [], invited: [] };
+}
+
+function saveMockTeam(team: MockTeam) {
+  try {
+    localStorage.setItem(TEAM_KEY, JSON.stringify(team));
+  } catch {
+    /* 存不下就只在这一次里 */
+  }
+}
+
 function mockLayout() {
   let journal = true;
   try {
@@ -454,6 +488,7 @@ interface MockVersion {
   blob: string;
   time: number;
   device: string;
+  person: string | null;
   mine: boolean;
   title: string;
   body: string;
@@ -471,6 +506,7 @@ function recordVersion(key: string, body: string, title = "") {
     blob: `mock-${++blobSeq}`,
     time: now,
     device: "这台电脑",
+    person: null,
     mine: true,
     title,
     body,
@@ -498,6 +534,7 @@ function historyOf(key: string, body: string, title: string): MockVersion[] {
         blob: `mock-${++blobSeq}`,
         time: now - 2 * hour,
         device: "这台电脑",
+        person: null,
         mine: true,
         title,
         body,
@@ -506,6 +543,7 @@ function historyOf(key: string, body: string, title: string): MockVersion[] {
         blob: `mock-${++blobSeq}`,
         time: now - 29 * hour,
         device: "书房的电脑",
+        person: null,
         mine: false,
         title,
         body: earlier(1),
@@ -514,6 +552,7 @@ function historyOf(key: string, body: string, title: string): MockVersion[] {
         blob: `mock-${++blobSeq}`,
         time: now - 74 * hour,
         device: "这台电脑",
+        person: null,
         mine: true,
         title,
         body: `${earlier(2)}\n\n（草稿，还没想好）`,
@@ -1371,6 +1410,7 @@ export const mockBackend: Backend = {
       goals: Object.keys(state.goals).length,
       tasks: Object.values(state.tasks).filter((t) => t.dueDate).length,
       layout: { ...mockLayout(), logical: !!state.tree },
+      team: mockTeam().team,
     };
   },
 
@@ -1503,6 +1543,80 @@ export const mockBackend: Backend = {
   },
   async syncDisable() {
     return SYNC_OFF;
+  },
+
+  // 团队仓库：邀请过人就算团队仓库；成员表照邀请的样子摆（mockTeam）
+  async teamInfo(): Promise<TeamInfo> {
+    await tick();
+    const team = mockTeam();
+    return {
+      team: team.team,
+      provider: "github",
+      repo: "you/odea-notes",
+      me: "you",
+      remoteError: null,
+      people: [
+        {
+          login: "you",
+          me: true,
+          access: "member",
+          devices: [{ name: "这台电脑", updated: Date.now() - 60_000, this: true }],
+        },
+        ...team.members.map((login) => ({
+          login,
+          me: false,
+          access: "member" as const,
+          devices: [{ name: `${login} 的笔记本`, updated: Date.now() - 3_600_000, this: false }],
+        })),
+        ...team.invited.map((login) => ({
+          login,
+          me: false,
+          access: "invited" as const,
+          devices: [],
+        })),
+      ],
+    };
+  },
+  async teamInvite(login): Promise<TeamInvite> {
+    await tick();
+    const team = mockTeam();
+    const name = login.trim().replace(/^@/, "");
+    if (!name) throw new Error("填对方在 GitHub 上的用户名");
+    if (name === "you") throw new Error("这是你自己的账号。填对方的用户名");
+    const already = team.members.includes(name);
+    saveMockTeam({
+      team: true,
+      members: team.members,
+      invited: already || team.invited.includes(name) ? team.invited : [...team.invited, name],
+    });
+    return { link: "odea://vault/github/you/odea-notes", already };
+  },
+  async teamRemove(login) {
+    await tick();
+    const team = mockTeam();
+    saveMockTeam({
+      ...team,
+      members: team.members.filter((m) => m !== login),
+      invited: team.invited.filter((m) => m !== login),
+    });
+  },
+  async openVaultLink() {
+    desktopOnly();
+  },
+  // 日程切换器：预览里另外假装有一个团队仓库开着日程，跳不过去
+  async journalVaults(): Promise<JournalVault[]> {
+    await tick();
+    if (!mockLayout().journal) return [];
+    return [
+      { path: "mock", name: "Odea", team: mockTeam().team, current: true },
+      { path: "mock-team", name: "产品组", team: true, current: false },
+    ];
+  },
+  async journalSwitch() {
+    desktopOnly();
+  },
+  async onJournalGoto() {
+    return () => {};
   },
 
   // 浏览器里没有安装包，也就没有更新。调界面时用 localStorage 假装一下（见 mockUpdate）

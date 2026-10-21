@@ -388,8 +388,11 @@ pub struct DocVersion {
     pub blob: String,
     /// 提交时间，UTC 毫秒
     pub time: i64,
-    /// 哪台设备改的：同步提交署名「Odea (设备名)」（改名前是「OnTheWay (设备名)」）里的设备名；别的 git 工具提交的就是署名
+    /// 哪台设备改的：同步提交署名「账号 (设备名)」（以前是「Odea (设备名)」、改名前「OnTheWay (设备名)」）里的设备名；
+    /// 别的 git 工具提交的就是署名
     pub device: String,
+    /// 谁改的：团队仓库里别人的账号。自己的（这个仓库同步用的账号）、以前没带账号的是 None
+    pub person: Option<String>,
     /// 这台设备自己改的
     pub mine: bool,
     /// 这一版时的标题（笔记改过标题才和现在不一样；某一天、目标是空串）
@@ -418,6 +421,8 @@ pub struct VaultInfo {
     pub goals: i64,
     pub tasks: i64,
     pub layout: VaultLayout,
+    /// 团队仓库（仓库标记里写着 team，docs/协同编辑.md §22.3）
+    pub team: bool,
 }
 
 /// 这个仓库怎么摆（vault/layout.rs 的 Layout）：前端据此决定窄栏上有哪几项、一篇笔记在树上哪个文件夹
@@ -509,6 +514,91 @@ pub struct SyncRemoteRepo {
     pub private: bool,
     /// 最近一次推送 / 更新（云端给的时间字符串）
     pub updated_at: Option<String>,
+    /// 主人的账号：不是我的话，这是别人拉我进来的团队仓库
+    pub owner: String,
+}
+
+/// 别人发给我、还没接受的仓库邀请（GitHub，docs/协同编辑.md §22.3）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncInvitation {
+    /// 邀请的 id（数字，写成字符串：前端的 number 装不下大的）
+    pub id: String,
+    pub repo: SyncRemoteRepo,
+    /// 谁邀请的
+    pub inviter: String,
+}
+
+/// 团队仓库（docs/协同编辑.md §22.3）：这个仓库的成员，按账号合起来
+#[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamInfo {
+    /// 是团队仓库（仓库标记里写着 team）
+    pub team: bool,
+    /// 同步的托管方（`github` / `gitee`）和仓库（`owner/name`）；没开同步是 None —— 那就还邀请不了人
+    pub provider: Option<String>,
+    pub repo: Option<String>,
+    /// 我同步用的账号
+    pub me: Option<String>,
+    pub people: Vec<TeamPerson>,
+    /// 托管方那边问不到（没网、登录失效、Gitee）：为什么。这时 people 只有名单里的
+    pub remote_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamPerson {
+    /// 账号（login）
+    pub login: String,
+    pub me: bool,
+    /// 名单（.odea/devices）里他的设备，最近更新的在前
+    pub devices: Vec<TeamDevice>,
+    pub access: TeamAccess,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamDevice {
+    pub name: String,
+    /// 名单里这一行上次改的时间（毫秒）
+    pub updated: i64,
+    /// 就是这台设备
+    pub this: bool,
+}
+
+/// 托管方那边他有没有这个仓库的权限
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TeamAccess {
+    /// 能推这个仓库
+    Member,
+    /// 邀请发出去了，他还没接受
+    Invited,
+    /// 名单里还有他的设备，可托管方那边已经没有他了（被移出了）
+    Gone,
+    /// 问不到托管方
+    Unknown,
+}
+
+/// 邀请成员的结果
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamInvite {
+    /// 发给他的链接：`odea://vault/github/owner/name`，点开在启动器里拉一份
+    pub link: String,
+    /// 他本来就有这个仓库的权限（不用等他接受邀请）
+    pub already: bool,
+}
+
+/// 这台电脑上开着日程的一个仓库（日程切换器，docs/协同编辑.md §22.6）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalVault {
+    pub path: String,
+    pub name: String,
+    pub team: bool,
+    /// 就是这个窗口的仓库
+    pub current: bool,
 }
 
 /// 同步用的代理：用户填的，和实际在用的（填的 > 环境变量 > 系统代理）

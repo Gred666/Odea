@@ -417,6 +417,7 @@ pub async fn doc_history(ws: Ws, target: DocTarget) -> Result<DocHistory> {
         }
         let history = crate::sync::history::versions(&root, &rel, id.as_deref(), HISTORY_LIMIT)?;
         let me = crate::sync::engine::this_device();
+        let login = SyncRepo::open(&root).ok().flatten().and_then(|repo| repo.config_get(LOGIN_KEY));
         let versions = history
             .versions
             .into_iter()
@@ -428,12 +429,14 @@ pub async fn doc_history(ws: Ws, target: DocTarget) -> Result<DocHistory> {
                 } else {
                     String::new()
                 };
-                let device = crate::sync::engine::device_of(&version.author).to_string();
+                let (person, device) = crate::sync::engine::author_parts(&version.author);
+                let person = person.filter(|person| Some(*person) != login.as_deref()).map(str::to_string);
                 DocVersion {
                     blob: version.blob.to_string(),
                     time: version.time,
-                    mine: device == me,
-                    device,
+                    mine: device == me && person.is_none(),
+                    device: device.to_string(),
+                    person,
                     title,
                 }
             })
@@ -1057,6 +1060,8 @@ pub fn start_services<R: Runtime>(app: &AppHandle<R>, data_dir: &std::path::Path
     if let Err(error) = ws.sync.start(ws.vault.clone(), hooks) {
         eprintln!("同步没能启动: {error}");
     }
+    // 团队仓库：这台设备写进设备名单（docs/协同编辑.md §22.3）
+    spawn_register_device(data_dir, ws);
 }
 
 /// 这个窗口换到另一个仓库文件夹：准备好、打开、停旧的监听和同步、换上新的、起新的、记进仓库列表。
@@ -1214,6 +1219,7 @@ fn remote_info(repo: RemoteRepo) -> SyncRemoteRepo {
         clone_url: repo.clone_url,
         private: repo.private,
         updated_at: repo.updated_at,
+        owner: repo.owner,
     }
 }
 
@@ -1532,6 +1538,7 @@ const PIPE_SAVE: u8 = 5;
 
 /// 设备密钥在钥匙串里的名字（ed25519，第一次协作时生成。设计 §8.6）
 const DEVICE_KEY: &str = "collab-device-key";
+const TEAM_KEY: &str = "team-device-key";
 /// 中继令牌在钥匙串里的名字：这个前缀 + 中继地址
 const RELAY_TOKEN: &str = "collab-relay:";
 
@@ -1605,6 +1612,12 @@ impl CollabHub {
     /// 冷启动带进来的是一个邀请链接（还没被取走）：一个仓库都打不开的话开访客窗口去加入
     pub fn has_pending_invite(&self) -> bool {
         self.pending_link.lock().unwrap().as_deref().is_some_and(crate::workspace::is_invite)
+    }
+
+    /// 冷启动带进来的是团队仓库的链接（odea://vault/）：取走，交给启动器
+    pub fn take_pending_vault_link(&self) -> Option<String> {
+        let mut slot = self.pending_link.lock().unwrap();
+        slot.take_if(|link| crate::workspace::is_vault_link(link))
     }
 
     /// 要在这个窗口开始一次会话：另一个窗口正在协作就不行（一次只有一个会话）。
@@ -1866,11 +1879,22 @@ async fn store_attachment(
 /// 设备密钥：钥匙串里有就用，没有就生成一把存进去。钥匙串用不了时用一把临时的
 /// （这次能协作，只是下次别人认不出是同一台设备）
 fn device_key(data_dir: &std::path::Path) -> iroh::SecretKey {
+    stored_key(data_dir, DEVICE_KEY, "device-key")
+}
+
+/// 团队仓库用的设备密钥（docs/协同编辑.md §22.3）：一台设备一把，几个团队仓库共用；和会话式协作那把分开
+/// （两个端点同时开着，同一把密钥在中继那边会互相顶掉）
+pub(crate) fn team_key(data_dir: &std::path::Path) -> iroh::SecretKey {
+    stored_key(data_dir, TEAM_KEY, "team-key")
+}
+
+/// 钥匙串里叫 keychain 的那把密钥；设了 ODEA_DATA_DIR 时是数据目录里叫 file 的文件
+fn stored_key(data_dir: &std::path::Path, keychain: &str, file: &str) -> iroh::SecretKey {
     use crate::sync::secret;
     // 换了数据目录（开发、测试，boot.rs 的 ODEA_DATA_DIR）：密钥放在那个目录里，不碰系统钥匙串。
     // 同一台电脑上开两个实例互相连（docs/协同编辑.md §19.2）也靠这个：钥匙串里只有一把，两边就成了同一台
     if std::env::var_os("ODEA_DATA_DIR").is_some() {
-        let file = collab_dir(data_dir).join("device-key");
+        let file = collab_dir(data_dir).join(file);
         if let Ok(text) = std::fs::read_to_string(&file) {
             if let Ok(bytes) = data_encoding::HEXLOWER.decode(text.trim().as_bytes()) {
                 if let Ok(bytes) = <[u8; 32]>::try_from(bytes.as_slice()) {
@@ -1882,7 +1906,7 @@ fn device_key(data_dir: &std::path::Path) -> iroh::SecretKey {
         let _ = collab_record::write_atomic(&file, data_encoding::HEXLOWER.encode(&key.to_bytes()).as_bytes());
         return key;
     }
-    if let Ok(Some(text)) = secret::load_text(DEVICE_KEY) {
+    if let Ok(Some(text)) = secret::load_text(keychain) {
         if let Ok(bytes) = data_encoding::HEXLOWER.decode(text.trim().as_bytes()) {
             if let Ok(bytes) = <[u8; 32]>::try_from(bytes.as_slice()) {
                 return iroh::SecretKey::from_bytes(&bytes);
@@ -1890,7 +1914,7 @@ fn device_key(data_dir: &std::path::Path) -> iroh::SecretKey {
         }
     }
     let key = iroh::SecretKey::generate();
-    if let Err(error) = secret::save_text(DEVICE_KEY, &data_encoding::HEXLOWER.encode(&key.to_bytes())) {
+    if let Err(error) = secret::save_text(keychain, &data_encoding::HEXLOWER.encode(&key.to_bytes())) {
         eprintln!("协作：设备密钥存不进钥匙串，这次用临时的：{error}");
     }
     key
@@ -2744,4 +2768,227 @@ pub fn collab_send(state: State<'_, AppState>, request: Request<'_>) -> std::res
         _ => {}
     }
     Ok(())
+}
+
+/* ---------------- 团队仓库（docs/协同编辑.md §22.3） ----------------
+团队仓库 = 开了 git 同步、几个账号都有权限的仓库。仓库标记里的 team、设备名单 .odea/devices
+在 vault/team.rs；托管方的协作者接口在 sync/provider.rs。这里接起来：
+- 打开团队仓库时把这台设备写进名单（register_device，随下一轮同步推上去）
+- 邀请成员：标成团队仓库、在托管方那边拉他当协作者、给一个 odea://vault/ 链接
+- 成员：名单里的设备按账号合起来，再对上托管方那边谁有权限
+- 启动器里接受别人发来的邀请 */
+
+/// 这个仓库同步的托管方、账号和仓库（`owner/name`）。没开同步是 None
+fn sync_target(root: &std::path::Path) -> Option<(Provider, String, String)> {
+    let repo = SyncRepo::open(root).ok().flatten()?;
+    let provider = Provider::parse(&repo.config_get(PROVIDER_KEY)?)?;
+    let login = repo.config_get(LOGIN_KEY).filter(|login| !login.is_empty())?;
+    let remote = crate::sync::engine::display_remote(&repo.remote_url()?);
+    let full_name = remote.split_once('/')?.1.to_string();
+    Some((provider, login, full_name))
+}
+
+/// 团队仓库：把这台设备写进名单（自己那一行没有、名字变了才写）。随下一轮同步推上去
+fn register_device(data_dir: &std::path::Path, root: &std::path::Path) -> Result<bool> {
+    if crate::vault::team::team_id(root).is_none() {
+        return Ok(false);
+    }
+    let Some((provider, login, _)) = sync_target(root) else {
+        return Ok(false);
+    };
+    let own = crate::vault::team::Device {
+        key: collab::id_text(team_key(data_dir).public().as_bytes()),
+        account: provider.account_key(&login),
+        updated: crate::db::now_ms(),
+        name: crate::sync::engine::this_device(),
+    };
+    crate::vault::team::put_own(root, &own)
+}
+
+/// 打开仓库时（start_services）在后台做：读钥匙串、读写名单都不该挡着窗口
+fn spawn_register_device(data_dir: &std::path::Path, ws: &Arc<Workspace>) {
+    let (data_dir, root, sync) = (data_dir.to_path_buf(), ws.root(), ws.sync.clone());
+    tauri::async_runtime::spawn_blocking(move || match register_device(&data_dir, &root) {
+        Ok(true) => sync.poke(),
+        Ok(false) => {}
+        Err(error) => eprintln!("团队仓库：设备名单写不进去：{error}"),
+    });
+}
+
+/// 发给成员的链接：点开在启动器里拉一份（workspace.rs 的 vault_link）
+fn vault_link(provider: Provider, full_name: &str) -> String {
+    format!("odea://vault/{}/{full_name}", provider.key())
+}
+
+/// 这个仓库的成员：名单里的设备按账号合起来，对上托管方那边谁有权限
+#[tauri::command]
+#[specta::specta]
+pub async fn team_info(ws: Ws, state: State<'_, AppState>) -> Result<TeamInfo> {
+    let root = ws.root();
+    let data_dir = state.data_dir.clone();
+    blocking(move || {
+        let team = crate::vault::team::team_id(&root).is_some();
+        let target = sync_target(&root);
+        let devices = crate::vault::team::read(&root);
+        let mine = collab::id_text(team_key(&data_dir).public().as_bytes());
+        let mut info = TeamInfo {
+            team,
+            provider: target.as_ref().map(|(provider, ..)| provider.key().to_string()),
+            repo: target.as_ref().map(|(.., full_name)| full_name.clone()),
+            me: target.as_ref().map(|(_, login, _)| login.clone()),
+            ..TeamInfo::default()
+        };
+        let Some((provider, login, full_name)) = target else {
+            return Ok(info);
+        };
+        // 托管方那边：谁能推、谁的邀请还没接受。问不到也照样给名单里的
+        let remote = with_token(&data_dir, provider, |http, token| {
+            Ok((
+                provider.collaborators(http, token, &full_name)?,
+                provider.pending_invites(http, token, &full_name)?,
+            ))
+        });
+        let (members, invited) = match remote {
+            Ok((members, invited)) => (Some(members), invited.into_iter().map(|(_, login)| login).collect()),
+            Err(error) => {
+                info.remote_error = Some(error.to_string());
+                (None, Vec::new())
+            }
+        };
+        let mut people: Vec<TeamPerson> = Vec::new();
+        for device in &devices {
+            let Some((host, who)) = crate::vault::team::split_account(&device.account) else { continue };
+            if host != provider.key() {
+                continue;
+            }
+            let index = person_index(&mut people, who, &login);
+            people[index].devices.push(TeamDevice {
+                name: device.name.clone(),
+                updated: device.updated,
+                this: device.key == mine,
+            });
+        }
+        for who in members.iter().flatten() {
+            let index = person_index(&mut people, who, &login);
+            people[index].access = TeamAccess::Member;
+        }
+        for who in &invited {
+            let index = person_index(&mut people, who, &login);
+            people[index].access = TeamAccess::Invited;
+        }
+        if members.is_some() {
+            for p in people.iter_mut().filter(|p| p.access == TeamAccess::Unknown) {
+                p.access = TeamAccess::Gone;
+            }
+        }
+        for p in &mut people {
+            p.devices.sort_by(|a, b| b.updated.cmp(&a.updated));
+        }
+        // 我在最前，接着是有权限的、等接受的、移出了的
+        let rank = |p: &TeamPerson| (!p.me, p.access != TeamAccess::Member, p.access != TeamAccess::Invited);
+        people.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| a.login.to_lowercase().cmp(&b.login.to_lowercase())));
+        info.people = people;
+        Ok(info)
+    })
+    .await
+}
+
+/// people 里这个账号的那一位，没有就加上
+fn person_index(people: &mut Vec<TeamPerson>, who: &str, me: &str) -> usize {
+    if let Some(index) = people.iter().position(|person| person.login.eq_ignore_ascii_case(who)) {
+        return index;
+    }
+    people.push(TeamPerson {
+        login: who.to_string(),
+        me: who.eq_ignore_ascii_case(me),
+        devices: Vec::new(),
+        access: TeamAccess::Unknown,
+    });
+    people.len() - 1
+}
+
+/// 邀请成员：在托管方那边拉他当协作者（GitHub 发一封邀请），标成团队仓库、把这台设备写进名单，
+/// 返回发给他的链接
+#[tauri::command]
+#[specta::specta]
+pub async fn team_invite(ws: Ws, state: State<'_, AppState>, login: String) -> Result<TeamInvite> {
+    let root = ws.root();
+    let data_dir = state.data_dir.clone();
+    let sync = ws.sync.clone();
+    let login = login.trim().trim_start_matches('@').to_string();
+    if login.is_empty() {
+        return Err(AppError::Invalid("填对方在 GitHub 上的用户名".into()));
+    }
+    blocking(move || {
+        let Some((provider, me, full_name)) = sync_target(&root) else {
+            return Err(AppError::Invalid(
+                "这个仓库还没开启同步。团队仓库靠同步在成员之间传改动：先开启同步（命令面板「开启同步…」）".into(),
+            ));
+        };
+        if login.eq_ignore_ascii_case(&me) {
+            return Err(AppError::Invalid("这是你自己的账号。填对方的用户名".into()));
+        }
+        let invited = with_token(&data_dir, provider, |http, token| provider.invite(http, token, &full_name, &login))?;
+        crate::vault::team::mark_team(&root)?;
+        register_device(&data_dir, &root)?;
+        sync.poke();
+        Ok(TeamInvite {
+            link: vault_link(provider, &full_name),
+            already: invited == crate::sync::provider::Invited::Already,
+        })
+    })
+    .await
+}
+
+/// 移出成员：托管方那边去掉他的权限（还没接受的邀请撤回），名单里他的设备也去掉
+#[tauri::command]
+#[specta::specta]
+pub async fn team_remove(ws: Ws, state: State<'_, AppState>, login: String) -> Result<()> {
+    let root = ws.root();
+    let data_dir = state.data_dir.clone();
+    let sync = ws.sync.clone();
+    blocking(move || {
+        let (provider, me, full_name) =
+            sync_target(&root).ok_or_else(|| AppError::Invalid("这个仓库没开同步".into()))?;
+        if login.eq_ignore_ascii_case(&me) {
+            return Err(AppError::Invalid("不能把自己移出去".into()));
+        }
+        with_token(&data_dir, provider, |http, token| provider.remove_member(http, token, &full_name, &login))?;
+        if crate::vault::team::remove_account(&root, &provider.account_key(&login))? > 0 {
+            sync.poke();
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// 别人发给我、还没接受的仓库邀请（启动器「从同步仓库拉一份」）
+#[tauri::command]
+#[specta::specta]
+pub async fn sync_invitations(state: State<'_, AppState>, provider: String) -> Result<Vec<SyncInvitation>> {
+    let provider = provider_of(&provider)?;
+    let data_dir = state.data_dir.clone();
+    blocking(move || {
+        let invitations = with_token(&data_dir, provider, |http, token| provider.my_invitations(http, token))?;
+        Ok(invitations
+            .into_iter()
+            .map(|invitation| SyncInvitation {
+                id: invitation.id.to_string(),
+                repo: remote_info(invitation.repo),
+                inviter: invitation.inviter,
+            })
+            .collect())
+    })
+    .await
+}
+
+/// 接受一个仓库邀请（接受了才拉得下来）
+#[tauri::command]
+#[specta::specta]
+pub async fn sync_accept_invitation(state: State<'_, AppState>, provider: String, id: String) -> Result<()> {
+    let provider = provider_of(&provider)?;
+    let id: u64 = id.parse().map_err(|_| AppError::Invalid("邀请的 id 不对".into()))?;
+    let data_dir = state.data_dir.clone();
+    blocking(move || Ok(with_token(&data_dir, provider, |http, token| provider.accept_invitation(http, token, id))?))
+        .await
 }

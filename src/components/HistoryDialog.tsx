@@ -42,6 +42,12 @@ const BODY_HEIGHT = "h-[min(560px,66vh)]";
 type Loaded = { history: DocHistory; texts: Record<string, string>; selected: number };
 type Result = { loaded: Loaded } | { error: string };
 
+/** 谁在哪台设备上改的：自己这台写「这台电脑」；团队仓库里别人改的带上他的账号（docs/协同编辑.md §22.3） */
+function whoOf(version: DocVersion): string {
+  if (version.mine) return "这台电脑";
+  return version.person ? `${version.person} · ${version.device}` : version.device;
+}
+
 /** 取历史；第一版（最近一次同步）一般就是现在的正文，那就先选中上一版 —— 打开是想看以前的。选中那一版的正文也先读好 */
 async function loadHistory(target: DocumentSaveTarget): Promise<Result> {
   try {
@@ -351,7 +357,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
                 )}
               </span>
               <span className="mt-0.5 block truncate text-[12px] text-faint">
-                {item.mine ? "这台电脑" : item.device}
+                {whoOf(item)}
                 {renamed && ` · 当时叫「${item.title}」`}
               </span>
             </button>
@@ -368,7 +374,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
           <div className="min-w-0 flex-1">
             <p className="truncate text-[13px] text-body">
               {version && formatTimestampFull(version.time)}
-              <span className="text-faint"> · {version?.mine ? "这台电脑" : version?.device}</span>
+              <span className="text-faint"> · {version ? whoOf(version) : ""}</span>
             </p>
             <p className="mt-0.5 font-mono text-[12px] text-faint">
               {text === undefined ? (

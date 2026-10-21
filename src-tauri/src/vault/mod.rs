@@ -30,6 +30,7 @@ mod logical;
 pub mod query;
 pub mod seed;
 pub mod tasks;
+pub mod team;
 pub mod tree;
 pub mod watch;
 
@@ -1796,6 +1797,7 @@ impl Vault {
                 archive_dir: self.layout.archive.clone(),
                 hidden_dirs: self.layout.hidden_dirs().into_iter().map(String::from).collect(),
             },
+            team: team::team_id(&self.root).is_some(),
         })
     }
 }

@@ -304,7 +304,71 @@ export interface SyncRemoteRepo {
   cloneUrl: string;
   private: boolean;
   updatedAt: string | null;
+  /** 主人的账号：不是我的话，这是别人拉我进来的团队仓库 */
+  owner: string;
 }
+
+/** 别人发给我、还没接受的仓库邀请（GitHub） */
+export interface SyncInvitation {
+  id: string;
+  repo: SyncRemoteRepo;
+  /** 谁邀请的 */
+  inviter: string;
+}
+
+/* ---------------- 团队仓库（docs/协同编辑.md §22.3） ----------------
+   开了 git 同步、几个账号都有权限的仓库。成员 = 仓库里设备名单（.odea/devices）上的设备，按账号合起来
+*/
+
+export interface TeamInfo {
+  /** 是团队仓库（仓库标记里写着 team） */
+  team: boolean;
+  /** 同步的托管方和仓库（`owner/name`）；没开同步是 null —— 那就还邀请不了人 */
+  provider: string | null;
+  repo: string | null;
+  /** 我同步用的账号 */
+  me: string | null;
+  people: TeamPerson[];
+  /** 托管方那边问不到（没网、登录失效、Gitee）：为什么。这时 people 只有名单里的 */
+  remoteError: string | null;
+}
+
+export interface TeamPerson {
+  login: string;
+  me: boolean;
+  /** 名单里他的设备，最近更新的在前 */
+  devices: TeamDevice[];
+  access: TeamAccess;
+}
+
+export interface TeamDevice {
+  name: string;
+  updated: number;
+  /** 就是这台设备 */
+  this: boolean;
+}
+
+/** 托管方那边：能推这个仓库 / 邀请了还没接受 / 名单里还有设备可已经没权限了 / 问不到 */
+export type TeamAccess = "member" | "invited" | "gone" | "unknown";
+
+export interface TeamInvite {
+  /** 发给他的链接：`odea://vault/github/owner/name`，点开在启动器里拉一份 */
+  link: string;
+  /** 他本来就有这个仓库的权限（不用等他接受邀请） */
+  already: boolean;
+}
+
+/** 这台电脑上开着日程的一个仓库（日程切换器，§22.6） */
+export interface JournalVault {
+  path: string;
+  name: string;
+  team: boolean;
+  /** 就是这个窗口的仓库 */
+  current: boolean;
+}
+
+/** 日程切换器跳过去以后停在哪一页 */
+export type JournalPage = "today" | "goal" | "calendar";
 
 /** 同步用的代理：用户填的，和实际在用的（填的 > 环境变量 > 系统代理） */
 export interface SyncProxy {
@@ -484,6 +548,8 @@ export interface DocVersion {
   time: number;
   /** 哪台设备改的 */
   device: string;
+  /** 谁改的：团队仓库里别人的账号；自己的、以前没带账号的是 null */
+  person: string | null;
   /** 这台设备自己改的 */
   mine: boolean;
   /** 这一版时的标题（笔记改过标题才和现在不一样；某一天、目标是空串） */
@@ -518,6 +584,8 @@ export interface VaultInfo {
   goals: number;
   tasks: number;
   layout: VaultLayout;
+  /** 团队仓库（docs/协同编辑.md §22.3） */
+  team: boolean;
 }
 
 /**

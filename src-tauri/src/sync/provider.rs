@@ -1,5 +1,7 @@
 /* ============================================================
-GitHub / Gitee 的接口（技术方案 §5.9.4）：登录、令牌续期、查账号、列出 / 新建仓库。
+GitHub / Gitee 的接口（技术方案 §5.9.4）：登录、令牌续期、查账号、列出 / 新建仓库；
+团队仓库（docs/协同编辑.md §22.3）的协作者：邀请、列出、移出，在 Odea 里接受别人的邀请。
+Gitee 的协作者接口还没用真实账号验过：只列出，邀请、移出先让用户去网页上做
 
 - GitHub 用 OAuth App 的设备码登录：应用里只有 client_id（不是机密），没有 client secret。
   2026-08 起新注册的 OAuth App 默认令牌 8 小时过期、另给刷新令牌；设备码来的令牌续期
@@ -76,13 +78,13 @@ impl Provider {
         Ok(user.login)
     }
 
-    /// 这个账号自己的仓库，最近更新的在前（只取第一页，100 个）
+    /// 这个账号能推的仓库：自己的、别人拉我当协作者的、组织的。最近更新的在前（只取第一页，100 个）
     pub fn repos(self, http: &Http, token: &str) -> SyncResult<Vec<RemoteRepo>> {
         match self {
             Provider::GitHub => {
                 let repos: Vec<GitHubRepo> = http.github_get(
                     token,
-                    "/user/repos?affiliation=owner&sort=updated&per_page=100",
+                    "/user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100",
                 )?;
                 Ok(repos.into_iter().map(RemoteRepo::from).collect())
             }
@@ -90,10 +92,98 @@ impl Provider {
                 let repos: Vec<GiteeRepo> = http.gitee_get(
                     token,
                     "/user/repos",
-                    &[("type", "owner"), ("sort", "updated"), ("per_page", "100")],
+                    &[("type", "all"), ("sort", "updated"), ("per_page", "100")],
                 )?;
                 Ok(repos.into_iter().map(RemoteRepo::from).collect())
             }
+        }
+    }
+
+    /// 把 login 拉成这个仓库的协作者（能推）。GitHub 给他发一封邀请，他接受了才算
+    pub fn invite(self, http: &Http, token: &str, full_name: &str, login: &str) -> SyncResult<Invited> {
+        match self {
+            Provider::GitHub => {
+                let url = format!("{GITHUB_API}/repos/{}/collaborators/{}", repo_path(full_name)?, segment(login)?);
+                let request = http
+                    .github(http.agent.put(url), token)
+                    .send_json(serde_json::json!({ "permission": "push" }));
+                // 201：发了邀请；204：他本来就有权限（已经是协作者、组织成员）
+                Ok(match read_status(request)? {
+                    (204, _) => Invited::Already,
+                    _ => Invited::Sent,
+                })
+            }
+            Provider::Gitee => Err(SyncError::Remote(GITEE_MEMBERS.into())),
+        }
+    }
+
+    /// 这个仓库现在有谁（能推的协作者，含主人）
+    pub fn collaborators(self, http: &Http, token: &str, full_name: &str) -> SyncResult<Vec<String>> {
+        let path = format!("/repos/{}/collaborators", repo_path(full_name)?);
+        let users: Vec<Owner> = match self {
+            Provider::GitHub => http.github_get(token, &format!("{path}?per_page=100"))?,
+            Provider::Gitee => http.gitee_get(token, &path, &[("per_page", "100")])?,
+        };
+        Ok(users.into_iter().map(|user| user.login).collect())
+    }
+
+    /// 发出去、对方还没接受的邀请：(邀请 id, 被邀请的 login)。Gitee 没有这一步
+    pub fn pending_invites(self, http: &Http, token: &str, full_name: &str) -> SyncResult<Vec<(u64, String)>> {
+        match self {
+            Provider::GitHub => {
+                let invitations: Vec<GitHubInvitation> =
+                    http.github_get(token, &format!("/repos/{}/invitations?per_page=100", repo_path(full_name)?))?;
+                Ok(invitations
+                    .into_iter()
+                    .filter_map(|invitation| Some((invitation.id, invitation.invitee?.login)))
+                    .collect())
+            }
+            Provider::Gitee => Ok(Vec::new()),
+        }
+    }
+
+    /// 去掉 login 的权限：还没接受邀请就撤回邀请，是协作者就移出
+    pub fn remove_member(self, http: &Http, token: &str, full_name: &str, login: &str) -> SyncResult<()> {
+        match self {
+            Provider::GitHub => {
+                let repo = repo_path(full_name)?;
+                for (id, invitee) in self.pending_invites(http, token, full_name)? {
+                    if invitee.eq_ignore_ascii_case(login) {
+                        let url = format!("{GITHUB_API}/repos/{repo}/invitations/{id}");
+                        read_status(http.github(http.agent.delete(url), token).call())?;
+                    }
+                }
+                let url = format!("{GITHUB_API}/repos/{repo}/collaborators/{}", segment(login)?);
+                match read_status(http.github(http.agent.delete(url), token).call()) {
+                    // 他本来就不是协作者（只有一封刚撤回的邀请）
+                    Err(SyncError::Remote(message)) if message.contains("Not Found") => Ok(()),
+                    other => other.map(|_| ()),
+                }
+            }
+            Provider::Gitee => Err(SyncError::Remote(GITEE_MEMBERS.into())),
+        }
+    }
+
+    /// 别人发给我、我还没接受的邀请
+    pub fn my_invitations(self, http: &Http, token: &str) -> SyncResult<Vec<RepoInvitation>> {
+        match self {
+            Provider::GitHub => {
+                let invitations: Vec<GitHubInvitation> =
+                    http.github_get(token, "/user/repository_invitations?per_page=100")?;
+                Ok(invitations.into_iter().filter_map(RepoInvitation::from_github).collect())
+            }
+            Provider::Gitee => Ok(Vec::new()),
+        }
+    }
+
+    pub fn accept_invitation(self, http: &Http, token: &str, id: u64) -> SyncResult<()> {
+        match self {
+            Provider::GitHub => {
+                let url = format!("{GITHUB_API}/user/repository_invitations/{id}");
+                read_status(http.github(http.agent.patch(url), token).send_empty())?;
+                Ok(())
+            }
+            Provider::Gitee => Err(SyncError::Remote(GITEE_MEMBERS.into())),
         }
     }
 
@@ -128,6 +218,30 @@ impl Provider {
     }
 }
 
+/// Gitee 的成员管理还没在 Odea 里做（协作者接口没用真实账号验过）
+const GITEE_MEMBERS: &str = "Gitee 的仓库请在 Gitee 网页上的「仓库成员管理」里添加、移出成员";
+
+/// 仓库在接口路径里的样子：`owner/name`，两段都只能是字母、数字和 - _ .
+fn repo_path(full_name: &str) -> SyncResult<String> {
+    let (owner, name) = full_name
+        .split_once('/')
+        .ok_or_else(|| SyncError::Local(format!("仓库名不对：{full_name}")))?;
+    Ok(format!("{}/{}", segment(owner)?, segment(name)?))
+}
+
+/// 账号、仓库名放进接口路径之前查一遍：不让 `/`、`?` 之类的混进去
+fn segment(part: &str) -> SyncResult<&str> {
+    let ok = !part.is_empty()
+        && part != "."
+        && part != ".."
+        && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if ok {
+        Ok(part)
+    } else {
+        Err(SyncError::Local(format!("账号或仓库名里有不认识的字：{part}")))
+    }
+}
+
 /// 云端的一个仓库
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteRepo {
@@ -137,6 +251,19 @@ pub struct RemoteRepo {
     pub clone_url: String,
     pub private: bool,
     pub updated_at: Option<String>,
+    /// 主人的 login：不是我的话，这是别人拉我进来的团队仓库
+    pub owner: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Owner {
+    login: String,
+}
+
+fn owner_of(owner: Option<Owner>, full_name: &str) -> String {
+    owner
+        .map(|owner| owner.login)
+        .unwrap_or_else(|| full_name.split('/').next().unwrap_or_default().to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,17 +275,58 @@ struct GitHubRepo {
     pushed_at: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
+    #[serde(default)]
+    owner: Option<Owner>,
 }
 
 impl From<GitHubRepo> for RemoteRepo {
     fn from(repo: GitHubRepo) -> Self {
         RemoteRepo {
+            owner: owner_of(repo.owner, &repo.full_name),
             full_name: repo.full_name,
             clone_url: repo.clone_url,
             private: repo.private,
             updated_at: repo.pushed_at.or(repo.updated_at),
         }
     }
+}
+
+/// 邀请：发出去的（invitee 是谁）、收到的（repository 是哪个、inviter 是谁）都是这个样子
+#[derive(Debug, Deserialize)]
+struct GitHubInvitation {
+    id: u64,
+    #[serde(default)]
+    repository: Option<GitHubRepo>,
+    #[serde(default)]
+    invitee: Option<Owner>,
+    #[serde(default)]
+    inviter: Option<Owner>,
+}
+
+/// 别人发给我的、还没接受的邀请
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoInvitation {
+    pub id: u64,
+    pub repo: RemoteRepo,
+    /// 谁邀请的（login）
+    pub inviter: String,
+}
+
+impl RepoInvitation {
+    fn from_github(invitation: GitHubInvitation) -> Option<Self> {
+        let repo = RemoteRepo::from(invitation.repository?);
+        let inviter = invitation.inviter.map(|inviter| inviter.login).unwrap_or_else(|| repo.owner.clone());
+        Some(RepoInvitation { id: invitation.id, repo, inviter })
+    }
+}
+
+/// 拉协作者的结果
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Invited {
+    /// 发了邀请，等他接受
+    Sent,
+    /// 他本来就能推这个仓库
+    Already,
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,6 +338,8 @@ struct GiteeRepo {
     pushed_at: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
+    #[serde(default)]
+    owner: Option<Owner>,
 }
 
 impl From<GiteeRepo> for RemoteRepo {
@@ -181,6 +351,7 @@ impl From<GiteeRepo> for RemoteRepo {
             format!("{}.git", repo.html_url.trim_end_matches('/'))
         };
         RemoteRepo {
+            owner: owner_of(repo.owner, &repo.full_name),
             full_name: repo.full_name,
             clone_url,
             private: repo.private,
@@ -369,6 +540,15 @@ fn now_ms() -> i64 {
 fn read_json<T: DeserializeOwned>(
     response: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
 ) -> SyncResult<T> {
+    let (_, text) = read_status(response)?;
+    serde_json::from_str(&text)
+        .map_err(|error| SyncError::Remote(format!("看不懂云端的回复: {error}")))
+}
+
+/// 不用看内容的回复（204 没有正文）：状态码和正文
+fn read_status(
+    response: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> SyncResult<(u16, String)> {
     let mut response = response.map_err(|error| SyncError::Network(error.to_string()))?;
     let status = response.status().as_u16();
     let text = response
@@ -383,8 +563,7 @@ fn read_json<T: DeserializeOwned>(
             api_message(&text).unwrap_or_else(|| format!("HTTP {status}")),
         ));
     }
-    serde_json::from_str(&text)
-        .map_err(|error| SyncError::Remote(format!("看不懂云端的回复: {error}")))
+    Ok((status, text))
 }
 
 /// 接口报错时说的话：GitHub `{ message, errors: [{ message }] }`，Gitee `{ message }`
@@ -478,6 +657,34 @@ mod tests {
         .unwrap();
         let urls: Vec<String> = gitee.into_iter().map(|repo| RemoteRepo::from(repo).clone_url).collect();
         assert_eq!(urls, vec!["https://gitee.com/me/notes.git", "https://gitee.com/me/other.git"]);
+    }
+
+    #[test]
+    fn repos_know_their_owner_and_invitations_read_back() {
+        let github: Vec<GitHubRepo> = serde_json::from_str(
+            r#"[{"full_name":"xiaowang/team-notes","clone_url":"https://github.com/xiaowang/team-notes.git","private":true,"owner":{"login":"xiaowang"}},
+                {"full_name":"me/notes","clone_url":"https://github.com/me/notes.git","private":true}]"#,
+        )
+        .unwrap();
+        let owners: Vec<String> = github.into_iter().map(|repo| RemoteRepo::from(repo).owner).collect();
+        assert_eq!(owners, vec!["xiaowang", "me"]);
+
+        let received: Vec<GitHubInvitation> = serde_json::from_str(
+            r#"[{"id":7,"repository":{"full_name":"xiaowang/team-notes","clone_url":"https://github.com/xiaowang/team-notes.git","private":true,"owner":{"login":"xiaowang"}},"inviter":{"login":"xiaowang"},"invitee":{"login":"me"},"permissions":"write"},
+                {"id":8}]"#,
+        )
+        .unwrap();
+        let mine: Vec<RepoInvitation> = received.into_iter().filter_map(RepoInvitation::from_github).collect();
+        assert_eq!(mine.len(), 1);
+        assert_eq!(
+            (mine[0].id, mine[0].inviter.as_str(), mine[0].repo.full_name.as_str()),
+            (7, "xiaowang", "xiaowang/team-notes")
+        );
+
+        assert_eq!(repo_path("me/notes").unwrap(), "me/notes");
+        assert!(repo_path("me/..").is_err());
+        assert!(repo_path("notes").is_err());
+        assert!(segment("a?b").is_err());
     }
 
     #[test]

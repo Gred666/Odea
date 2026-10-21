@@ -91,6 +91,8 @@ interface DataState {
    * 按「仓库 + 文档所在的文件夹」解析，见 editor/html.ts 的 resolveImageSource。
    */
   vaultRoot: string | null;
+  /** 团队仓库（docs/协同编辑.md §22.3）：仓库菜单里是「团队成员…」，日程切换器里带小人图标 */
+  team: boolean;
   /**
    * 这个仓库怎么摆（docs/仓库与启动器.md §6）：开没开日程、文件树的根在哪。取到仓库信息之前
    * 当它是 Odea 自己建的仓库
@@ -595,6 +597,7 @@ export const useData = create<DataState>((set, get) => ({
     }
   },
   vaultRoot: null,
+  team: false,
   layout: ODEA_LAYOUT,
   setJournal: async (on) => {
     try {
@@ -925,6 +928,7 @@ export const useData = create<DataState>((set, get) => ({
           ...logicalTree,
           marks,
           vaultRoot: isTauri && info ? info.root : null,
+          team: info?.team ?? false,
           initialized: true,
           loading: false,
         }));

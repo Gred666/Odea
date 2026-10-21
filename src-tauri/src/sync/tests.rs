@@ -264,11 +264,13 @@ fn settings_from_before_the_rename_move_to_the_new_keys() {
 
 #[test]
 fn commits_from_before_the_rename_still_name_their_device() {
-    use super::engine::device_of;
-    assert_eq!(device_of("Odea (书房的电脑)"), "书房的电脑");
-    assert_eq!(device_of("OnTheWay (书房的电脑)"), "书房的电脑");
-    assert_eq!(device_of("张三"), "张三");
-    assert_eq!(device_of("Odea"), "Odea");
+    use super::engine::author_parts;
+    assert_eq!(author_parts("OnTheWay (书房的电脑)"), (None, "书房的电脑"));
+    assert_eq!(author_parts("Odea"), (None, "Odea"));
+    assert_eq!(author_parts("Gred666 (书房的电脑)"), (Some("Gred666"), "书房的电脑"));
+    assert_eq!(author_parts("Odea (书房的电脑)"), (None, "书房的电脑"));
+    assert_eq!(author_parts("xiaowang (公司 (三楼))"), (Some("xiaowang"), "公司 (三楼)"));
+    assert_eq!(author_parts("张三"), (None, "张三"));
 }
 
 #[test]
@@ -316,6 +318,35 @@ fn markdown_is_stored_with_lf_and_attachments_byte_for_byte() {
     let b = Device::join(&cloud, "B");
     assert_eq!(b.read("笔记/外面写的.md").unwrap(), "第一行\n第二行\n");
     assert_eq!(b.bytes("附件/表.csv").unwrap(), b"a,b\r\n1,2\r\n");
+}
+
+#[test]
+fn two_devices_changing_the_team_device_list_at_once_both_keep_their_line() {
+    use crate::vault::team::{put_own, read, Device as TeamDevice};
+    let device = |c: char, account: &str, updated: i64, name: &str| TeamDevice {
+        key: c.to_string().repeat(64),
+        account: account.into(),
+        updated,
+        name: name.into(),
+    };
+    let cloud = cloud();
+    let a = Device::first(&cloud, "A");
+    put_own(&a.root, &device('a', "github:Gred666", 10, "旧名字")).unwrap();
+    a.sync();
+    let b = Device::join(&cloud, "B");
+
+    // 同时：A 改了自己的名字，B 写上自己那一行（就在 A 那一行后面）
+    put_own(&a.root, &device('a', "github:Gred666", 30, "书房的电脑")).unwrap();
+    put_own(&b.root, &device('b', "github:xiaowang", 20, "小王的笔记本")).unwrap();
+    a.sync();
+    let round = b.sync();
+    assert!(round.copies.is_empty(), "名单不出冲突副本：{:?}", round.copies);
+    let text = b.read(".odea/devices").unwrap();
+    assert!(!text.contains("<<<<<<<"), "{text}");
+    let devices = read(&b.root);
+    assert_eq!(devices.len(), 2, "{text}");
+    assert_eq!(devices[0].name, "书房的电脑");
+    assert_eq!(devices[1].name, "小王的笔记本");
 }
 
 #[test]

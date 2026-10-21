@@ -770,6 +770,106 @@ async launcherShow() : Promise<Result<null, AppError>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * 启动器起来时取：打开它的那个团队仓库链接
+ */
+async launcherTakeLink() : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_take_link") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 仓库窗口里点了团队仓库的链接（冷启动时它先被交给了最近的仓库窗口）：交给启动器
+ */
+async launcherOpenLink(link: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_open_link", { link }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 这台电脑上开着日程的仓库：个人的在前，再按名字
+ */
+async journalVaults() : Promise<Result<JournalVault[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("journal_vaults") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 跳到另一个仓库的日程：它的窗口提到前面（没开着就打开），摆在当前窗口的位置和大小上，停在同一页
+ */
+async journalSwitch(path: string, page: string, date: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("journal_switch", { path, page, date }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 这个仓库的成员：名单里的设备按账号合起来，对上托管方那边谁有权限
+ */
+async teamInfo() : Promise<Result<TeamInfo, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_info") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 邀请成员：在托管方那边拉他当协作者（GitHub 发一封邀请），标成团队仓库、把这台设备写进名单，
+ * 返回发给他的链接
+ */
+async teamInvite(login: string) : Promise<Result<TeamInvite, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_invite", { login }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 移出成员：托管方那边去掉他的权限（还没接受的邀请撤回），名单里他的设备也去掉
+ */
+async teamRemove(login: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_remove", { login }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 别人发给我、还没接受的仓库邀请（启动器「从同步仓库拉一份」）
+ */
+async syncInvitations(provider: string) : Promise<Result<SyncInvitation[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("sync_invitations", { provider }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 接受一个仓库邀请（接受了才拉得下来）
+ */
+async syncAcceptInvitation(provider: string, id: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("sync_accept_invitation", { provider, id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async syncStatus() : Promise<Result<SyncStatus, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("sync_status") };
@@ -1367,6 +1467,8 @@ collabCopyReady: CollabCopyReady,
 collabEvent: CollabEvent,
 collabLink: CollabLink,
 indexProgress: IndexProgress,
+journalGoto: JournalGoto,
+launcherLink: LauncherLink,
 syncNotice: SyncNotice,
 syncStatusChanged: SyncStatusChanged,
 updateReady: UpdateReady,
@@ -1376,6 +1478,8 @@ collabCopyReady: "collab-copy-ready",
 collabEvent: "collab-event",
 collabLink: "collab-link",
 indexProgress: "index-progress",
+journalGoto: "journal-goto",
+launcherLink: "launcher-link",
 syncNotice: "sync-notice",
 syncStatusChanged: "sync-status-changed",
 updateReady: "update-ready",
@@ -1649,9 +1753,14 @@ blob: string;
  */
 time: number; 
 /**
- * 哪台设备改的：同步提交署名「Odea (设备名)」（改名前是「OnTheWay (设备名)」）里的设备名；别的 git 工具提交的就是署名
+ * 哪台设备改的：同步提交署名「账号 (设备名)」（以前是「Odea (设备名)」、改名前「OnTheWay (设备名)」）里的设备名；
+ * 别的 git 工具提交的就是署名
  */
 device: string; 
+/**
+ * 谁改的：团队仓库里别人的账号。自己的（这个仓库同步用的账号）、以前没带账号的是 None
+ */
+person: string | null; 
 /**
  * 这台设备自己改的
  */
@@ -1866,6 +1975,30 @@ kind: string;
  * 给人看的标题：「10月6日 · 完成专注模式原型」「第 41 周目标」
  */
 title: string; updatedAt: number }
+/**
+ * 跳过去之后那个窗口停在哪一页（前端收到 JournalGoto 再翻过去）
+ */
+export type JournalGoto = { 
+/**
+ * `today` / `goal` / `calendar`
+ */
+page: string; 
+/**
+ * 日历选中的那一天（YYYY-MM-DD）
+ */
+date: string }
+/**
+ * 这台电脑上开着日程的一个仓库（日程切换器，docs/协同编辑.md §22.6）
+ */
+export type JournalVault = { path: string; name: string; team: boolean; 
+/**
+ * 就是这个窗口的仓库
+ */
+current: boolean }
+/**
+ * 启动器收到一个团队仓库的链接（它已经开着时）
+ */
+export type LauncherLink = string
 export type LinkRewrite = { relPath: string; before: string; after: string }
 /**
  * 一个成员（给界面看）
@@ -2084,6 +2217,18 @@ export type SyncDeviceCode = { userCode: string; verificationUri: string;
  */
 expiresIn: number }
 /**
+ * 别人发给我、还没接受的仓库邀请（GitHub，docs/协同编辑.md §22.3）
+ */
+export type SyncInvitation = { 
+/**
+ * 邀请的 id（数字，写成字符串：前端的 number 装不下大的）
+ */
+id: string; repo: SyncRemoteRepo; 
+/**
+ * 谁邀请的
+ */
+inviter: string }
+/**
  * 同步要告诉用户的一句话：冲突副本、超限的文件没同步、仓库快满了
  */
 export type SyncNotice = string
@@ -2124,7 +2269,11 @@ fullName: string; cloneUrl: string; private: boolean;
 /**
  * 最近一次推送 / 更新（云端给的时间字符串）
  */
-updatedAt: string | null }
+updatedAt: string | null; 
+/**
+ * 主人的账号：不是我的话，这是别人拉我进来的团队仓库
+ */
+owner: string }
 export type SyncState = 
 /**
  * 这个仓库没开同步
@@ -2195,6 +2344,76 @@ source: DocTarget | null;
  * 在那篇正文里的行号（从 0 开始）
  */
 line: number | null }
+/**
+ * 托管方那边他有没有这个仓库的权限
+ */
+export type TeamAccess = 
+/**
+ * 能推这个仓库
+ */
+"member" | 
+/**
+ * 邀请发出去了，他还没接受
+ */
+"invited" | 
+/**
+ * 名单里还有他的设备，可托管方那边已经没有他了（被移出了）
+ */
+"gone" | 
+/**
+ * 问不到托管方
+ */
+"unknown"
+export type TeamDevice = { name: string; 
+/**
+ * 名单里这一行上次改的时间（毫秒）
+ */
+updated: number; 
+/**
+ * 就是这台设备
+ */
+this: boolean }
+/**
+ * 团队仓库（docs/协同编辑.md §22.3）：这个仓库的成员，按账号合起来
+ */
+export type TeamInfo = { 
+/**
+ * 是团队仓库（仓库标记里写着 team）
+ */
+team: boolean; 
+/**
+ * 同步的托管方（`github` / `gitee`）和仓库（`owner/name`）；没开同步是 None —— 那就还邀请不了人
+ */
+provider: string | null; repo: string | null; 
+/**
+ * 我同步用的账号
+ */
+me: string | null; people: TeamPerson[]; 
+/**
+ * 托管方那边问不到（没网、登录失效、Gitee）：为什么。这时 people 只有名单里的
+ */
+remoteError: string | null }
+/**
+ * 邀请成员的结果
+ */
+export type TeamInvite = { 
+/**
+ * 发给他的链接：`odea://vault/github/owner/name`，点开在启动器里拉一份
+ */
+link: string; 
+/**
+ * 他本来就有这个仓库的权限（不用等他接受邀请）
+ */
+already: boolean }
+export type TeamPerson = { 
+/**
+ * 账号（login）
+ */
+login: string; me: boolean; 
+/**
+ * 名单（.odea/devices）里他的设备，最近更新的在前
+ */
+devices: TeamDevice[]; access: TeamAccess }
 /**
  * search_text 的一条：正文里出现了要找的字的文档
  */
@@ -2366,7 +2585,11 @@ export type VaultInfo = {
 /**
  * 仓库文件夹的绝对路径
  */
-root: string; notes: number; archived: number; days: number; goals: number; tasks: number; layout: VaultLayout }
+root: string; notes: number; archived: number; days: number; goals: number; tasks: number; layout: VaultLayout; 
+/**
+ * 团队仓库（仓库标记里写着 team，docs/协同编辑.md §22.3）
+ */
+team: boolean }
 /**
  * 这个仓库怎么摆（vault/layout.rs 的 Layout）：前端据此决定窄栏上有哪几项、一篇笔记在树上哪个文件夹
  */

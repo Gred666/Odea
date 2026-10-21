@@ -6,6 +6,7 @@ import { releaseOf } from "@/content/changelog";
 import { backend } from "@/data/backend";
 import { folderLabel, folderOf } from "@/data/folders";
 import { useData } from "@/data/store";
+import { useTeam } from "@/data/team";
 import { useTextSearch } from "@/data/textSearch";
 import type {
   DocumentSaveTarget,
@@ -50,6 +51,7 @@ import {
   PanelLeftOpen,
   Plus,
   RefreshCw,
+  Repeat,
   ScrollText,
   Search,
   Server,
@@ -64,6 +66,7 @@ import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { version as APP_VERSION } from "../../package.json";
+import { journalSwitchNext } from "./JournalSwitcher";
 
 type Group =
   | "最近"
@@ -166,6 +169,7 @@ export function CommandPalette({
   const openVaultFolder = useData((s) => s.openVaultFolder);
   const changeVaultRoot = useData((s) => s.changeVaultRoot);
   const vaultRoot = useData((s) => s.vaultRoot);
+  const team = useData((s) => s.team);
   const openGuide = useData((s) => s.openGuide);
   const syncState = useData((s) => s.syncStatus.state);
   const setSyncOpen = useApp((s) => s.setSyncOpen);
@@ -303,6 +307,16 @@ export function CommandPalette({
             nav("goal", "/GOAL", Target, "goal 目标 周 月 年"),
             nav("calendar", "日历", CalendarDays, "calendar 日期 某天"),
             nav("archive", "归档", Archive, "archive 存档"),
+            // 日程切换器（docs/协同编辑.md §22.6）：团队的、个人的日程在不同的仓库里
+            {
+              id: "journal-switch",
+              group: "跳转",
+              icon: Repeat,
+              label: "切换日程",
+              hint: isMac ? "Ctrl+Option+J" : "Ctrl+Alt+J",
+              keywords: "journal switch team personal 切换 日程 团队 个人 仓库 今日 todo 目标 日历",
+              run: () => void journalSwitchNext(),
+            } satisfies Item,
           ]
         : []),
 
@@ -459,6 +473,17 @@ export function CommandPalette({
               run: () => void useCollab.getState().stop(),
             } satisfies Item,
           ]),
+      // 团队仓库（docs/协同编辑.md §22.3）：别人也能读写这个同步仓库
+      {
+        id: "team",
+        group: "协作",
+        icon: Users,
+        label: team ? "团队成员…" : "邀请成员…",
+        hint: team ? "谁能读写这个仓库、邀请、移出" : "别人也能读写这个仓库，经同步合在一起",
+        keywords:
+          "team member invite collaborator 团队 成员 邀请 协作者 仓库 github 一起 共享 移出",
+        run: () => useTeam.getState().openDialog(),
+      } satisfies Item,
       // 自己配的中继（docs/协同编辑.md §6.4）：不在同一个网络的人靠它连上。不做设置页（技术方案 §16）
       {
         id: "collab-relays",
@@ -582,6 +607,7 @@ export function CommandPalette({
     setHistoryFor,
     changeVaultRoot,
     vaultRoot,
+    team,
   ]);
 
   const currentNote = docTarget?.kind === "note" ? docTarget.id : null;

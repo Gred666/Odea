@@ -31,6 +31,7 @@ import { CollabBanner, CollabPresence } from "./CollabDialog";
 import { ConflictBanner } from "./ConflictBanner";
 import { EmptyState } from "./EmptyArt";
 import { GuideUpdateBanner } from "./GuideUpdateBanner";
+import { JournalSwitcher, journalPageOf } from "./JournalSwitcher";
 import { NotePath } from "./NotePath";
 import { Outline } from "./Outline";
 import { OverlayScrollbar } from "./OverlayScrollbar";
@@ -374,12 +375,16 @@ export function DocumentView({
                       (doc.segments && onSegmentChange)) && (
                       <div className="mb-2 flex min-h-[20px] items-end justify-between gap-8">
                         {doc.eyebrow && (
-                          <p
-                            className="min-w-0 truncate text-[12px] font-medium leading-[20px]
-                                   tracking-[0.02em] text-muted"
-                          >
-                            {doc.eyebrow}
-                          </p>
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <p
+                              className="min-w-0 truncate text-[12px] font-medium leading-[20px]
+                                     tracking-[0.02em] text-muted"
+                            >
+                              {doc.eyebrow}
+                            </p>
+                            {/* 日程切换器（docs/协同编辑.md §22.6）：开着日程的仓库有两个以上时才有 */}
+                            {journalPageOf(workspace) && <JournalSwitcher />}
+                          </div>
                         )}
                         {/* 笔记：这篇在哪个文件夹（列表栏退回上层后，深处那篇在列表里看不见） */}
                         {doc.folder !== undefined && (

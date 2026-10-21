@@ -1,5 +1,6 @@
 import { backend } from "@/data/backend";
 import { useData } from "@/data/store";
+import { useTeam } from "@/data/team";
 import { type VaultEntry, launcherApi } from "@/launcher/api";
 import { cn } from "@/lib/cn";
 import { isTauri } from "@/lib/tauri";
@@ -13,6 +14,7 @@ import {
   FolderSearch,
   FolderTree,
   type LucideIcon,
+  Users,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -43,6 +45,7 @@ export function VaultSwitcher() {
   const journal = useData((s) => s.layout.journal);
   const setJournal = useData((s) => s.setJournal);
   const logical = useData((s) => s.layout.logical);
+  const team = useData((s) => s.team);
   const makeLogical = useData((s) => s.makeLogical);
   const exportTree = useData((s) => s.exportTree);
   const openVaultFolder = useData((s) => s.openVaultFolder);
@@ -163,6 +166,12 @@ export function VaultSwitcher() {
                 onSelect={() => void makeLogical()}
               />
             )}
+            <MenuItem
+              icon={Users}
+              label={team ? "团队成员…" : "邀请成员…"}
+              hint={team ? "谁能读写这个仓库、邀请、移出" : "别人也能读写这个仓库，经同步合在一起"}
+              onSelect={() => useTeam.getState().openDialog()}
+            />
             {isTauri && (
               <MenuItem
                 icon={FolderOpen}

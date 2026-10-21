@@ -43,6 +43,10 @@ pub struct AppState {
     pub focused: Mutex<Option<String>>,
     /// 启动器打开了一个仓库、在等它的窗口画出来再关自己（workspace::on_ready）
     pub launcher_waits_for: Mutex<Option<String>>,
+    /// 团队仓库的链接（odea://vault/）等启动器起来取（workspace::show_launcher_link）
+    pub launcher_link: Mutex<Option<String>>,
+    /// 日程切换器刚打开的窗口：起来以后摆到哪、翻到哪一页（workspace::journal_switch）
+    pub journal_jumps: Mutex<HashMap<String, crate::workspace::Jump>>,
     /// 应用数据目录：配置、索引、旧库
     pub data_dir: PathBuf,
     /// 正在进行的 GitHub 设备码登录（开始、等待、取消是三个命令）。账号是全应用的，不分仓库

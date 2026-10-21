@@ -224,10 +224,10 @@ const initial = {
 const SHARE_RETIRED =
   "这是共享仓库的邀请链接。共享仓库这个功能已经去掉了：请对方改用「邀请协作…」发一个协作链接";
 
-export function linkKind(text: string): "join" | "back" | "relay" | "share" | null {
+export function linkKind(text: string): "join" | "back" | "relay" | "share" | "vault" | null {
   const clean = text.trim().replace(/^[<"']+|[>"']+$/g, "");
-  const match = /^odea:(?:\/\/)?(join|back|relay|share)\//i.exec(clean);
-  if (match) return match[1]!.toLowerCase() as "join" | "back" | "relay" | "share";
+  const match = /^odea:(?:\/\/)?(join|back|relay|share|vault)\//i.exec(clean);
+  if (match) return match[1]!.toLowerCase() as "join" | "back" | "relay" | "share" | "vault";
   return /^[a-z2-7]{16,}$/i.test(clean) ? "join" : null;
 }
 
@@ -369,6 +369,13 @@ export const useCollab = create<CollabState>((set, get) => ({
       void import("./relayStore").then(({ useRelays }) => useRelays.getState().openRelays(link));
       return;
     }
+    // 团队仓库的链接（docs/协同编辑.md §22.3）：在启动器里拉一份
+    if (kind === "vault") {
+      void backend()
+        .then((api) => api.openVaultLink(link))
+        .catch((error) => useData.setState({ error: errorText(error) }));
+      return;
+    }
     // 0.3.0 共享仓库的邀请：共享仓库退役了（docs/协同编辑.md §22.7）
     if (kind === "share") {
       useData.setState({ error: SHARE_RETIRED });
@@ -454,6 +461,11 @@ export const useCollab = create<CollabState>((set, get) => ({
     const kind = linkKind(linkText);
     if (kind === "share") {
       set({ error: SHARE_RETIRED });
+      return;
+    }
+    if (kind === "vault") {
+      get().closeDialog();
+      get().openLink(linkText);
       return;
     }
     if (kind === "back" || kind === "relay") {

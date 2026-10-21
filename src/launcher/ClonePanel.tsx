@@ -1,12 +1,14 @@
 import { openExternal } from "@/editor/links";
 import { cn } from "@/lib/cn";
-import { Copy, Github, Globe, LoaderCircle, Lock } from "lucide-react";
+import { Copy, Github, Globe, LoaderCircle, Lock, Users } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type Provider,
   type SyncAccount,
   type SyncDeviceCode,
+  type SyncInvitation,
   type SyncRemoteRepo,
+  type VaultLink,
   launcherApi as api,
 } from "./api";
 import { Button, FIELD, PanelHeader } from "./parts";
@@ -16,7 +18,10 @@ import { Button, FIELD, PanelHeader } from "./parts";
    选托管方 → 登录（GitHub 设备码 / Gitee 私人令牌，账号是全应用的，登录过的直接用）→ 选一个仓库 →
    起名字、选位置 → clone 到新文件夹、打开（同步跟着开着）。
 
-   和仓库窗口里的同步对话框是同一套登录（SyncDialog）；这里只有「拉下来」，不在现有的仓库上接
+   和仓库窗口里的同步对话框是同一套登录（SyncDialog）；这里只有「拉下来」，不在现有的仓库上接。
+
+   团队仓库（docs/协同编辑.md §22.3）：别人拉我当协作者的仓库也在列表里，标「团队」；还没接受的邀请
+   列在最上面，点「接受」再拉。点别人发来的 odea://vault/ 链接打开时（target），登录好直接停在那个仓库
    ============================================================ */
 
 const PROVIDERS: Record<Provider, { label: string; note: string }> = {
@@ -36,10 +41,13 @@ type Step =
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export function ClonePanel({
+  target,
   busy,
   onBack,
   onClone,
 }: {
+  /** 点团队仓库的链接打开的：要拉的就是它 */
+  target?: VaultLink | null;
   /** 正在拉（启动器的 run 管着） */
   busy: boolean;
   onBack: () => void;
@@ -70,6 +78,13 @@ export function ClonePanel({
       setWorking(null);
     }
   }, []);
+
+  // 链接指着的托管方已经登录过：直接到它的仓库列表（只改这一屏的状态，StrictMode 跑两次也没事）
+  const targetAccount = target ? accounts.find((a) => a.provider === target.provider) : undefined;
+  useEffect(() => {
+    if (targetAccount)
+      setStep((now) => (now.kind === "provider" ? { kind: "repos", account: targetAccount } : now));
+  }, [targetAccount]);
 
   const loggedIn = (account: SyncAccount) => {
     setAccounts((list) => [...list.filter((a) => a.provider !== account.provider), account]);
@@ -117,9 +132,16 @@ export function ClonePanel({
 
       {step.kind === "provider" && (
         <>
-          <p className="text-[12.5px] leading-[1.65] text-muted">
-            在别的电脑上开过同步的话，把那个仓库拉到这台上，以后两边自动同步。
-          </p>
+          {target ? (
+            <p data-clone-target className="text-[12.5px] leading-[1.65] text-body">
+              要拉的是团队仓库 <span className="font-mono text-ink">{target.fullName}</span>
+              ：先登录 {PROVIDERS[target.provider].label}（邀请发给的那个账号）。
+            </p>
+          ) : (
+            <p className="text-[12.5px] leading-[1.65] text-muted">
+              在别的电脑上开过同步的话，把那个仓库拉到这台上，以后两边自动同步。别人邀请你加入的团队仓库也在这里。
+            </p>
+          )}
           <div className="mt-3 grid grid-cols-2 gap-2.5">
             {(Object.keys(PROVIDERS) as Provider[]).map((key) => {
               const account = accounts.find((a) => a.provider === key);
@@ -166,6 +188,7 @@ export function ClonePanel({
       {step.kind === "repos" && (
         <RepoList
           account={step.account}
+          target={target?.provider === step.account.provider ? target : null}
           run={run}
           onPick={(repo) => setStep({ kind: "place", account: step.account, repo })}
         />
@@ -274,25 +297,87 @@ function GiteeToken({
 
 function RepoList({
   account,
+  target,
   run,
   onPick,
 }: {
   account: SyncAccount;
+  target: VaultLink | null;
   run: (label: string, task: () => Promise<void>) => Promise<void>;
   onPick: (repo: SyncRemoteRepo) => void;
 }) {
   const [repos, setRepos] = useState<SyncRemoteRepo[] | null>(null);
-  const label = PROVIDERS[account.provider as Provider]?.label ?? account.provider;
+  const [invitations, setInvitations] = useState<SyncInvitation[]>([]);
+  const provider = account.provider as Provider;
+  const label = PROVIDERS[provider]?.label ?? account.provider;
+  const isTarget = (repo: SyncRemoteRepo) =>
+    !!target && repo.fullName.toLowerCase() === target.fullName.toLowerCase();
+  // 只在第一次读完时按链接直接往下走：接受邀请以后、返回到这一屏时不再自己跳
+  const jumped = useRef(false);
+  const pick = useRef(onPick);
+  pick.current = onPick;
   useEffect(() => {
     void run(`正在读取 ${label} 上的仓库…`, async () => {
-      setRepos(await api.repos(account.provider as Provider));
+      const [list, pending] = await Promise.all([
+        api.repos(provider),
+        api.invitations(provider).catch(() => [] as SyncInvitation[]),
+      ]);
+      setRepos(list);
+      setInvitations(pending);
+      const found = target
+        ? list.find((repo) => repo.fullName.toLowerCase() === target.fullName.toLowerCase())
+        : undefined;
+      if (found && !jumped.current) {
+        jumped.current = true;
+        pick.current(found);
+      }
     });
-  }, [account.provider, label, run]);
+  }, [provider, label, run, target]);
+  const accept = (invitation: SyncInvitation) =>
+    void run("正在接受邀请…", async () => {
+      await api.acceptInvitation(provider, invitation.id);
+      onPick(invitation.repo);
+    });
+  const missing =
+    !!target &&
+    repos !== null &&
+    !repos.some(isTarget) &&
+    !invitations.some((i) => isTarget(i.repo));
   return (
     <div>
       <p className="text-[12.5px] text-muted">
         已登录 {label} · <span className="text-body">{account.login}</span>　选一个开过同步的仓库：
       </p>
+      {invitations.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          {invitations.map((invitation) => (
+            <div
+              key={invitation.id}
+              data-clone-invitation
+              className={cn(
+                "flex items-center gap-2 rounded-xl border px-3.5 py-2.5",
+                isTarget(invitation.repo)
+                  ? "border-accent-line bg-accent-wash"
+                  : "border-line-strong",
+              )}
+            >
+              <Users size={12} strokeWidth={2} className="shrink-0 text-accent" />
+              <span className="min-w-0 flex-1 truncate text-[12.5px] text-body">
+                {invitation.inviter} 邀请你加入{" "}
+                <span className="font-mono text-ink">{invitation.repo.fullName}</span>
+              </span>
+              <Button primary onClick={() => accept(invitation)}>
+                接受
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+      {missing && (
+        <p className="mt-2 text-[12.5px] leading-[1.6] text-warning">
+          {`这个账号还看不到 ${target?.fullName}：他可能还没邀请你，或者邀请发给了别的账号。`}
+        </p>
+      )}
       <div className="mt-2 overflow-hidden rounded-xl border border-line-strong">
         {repos === null ? (
           <p className="px-3.5 py-3 text-[13px] text-faint">读取中…</p>
@@ -316,6 +401,15 @@ function RepoList({
                 <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink">
                   {repo.fullName}
                 </span>
+                {repo.owner.toLowerCase() !== account.login.toLowerCase() && (
+                  <span
+                    title={`团队仓库 · 主人是 ${repo.owner}`}
+                    className="flex shrink-0 items-center gap-1 text-[12px] text-faint"
+                  >
+                    <Users size={11} strokeWidth={2} />
+                    团队
+                  </span>
+                )}
                 {!repo.private && <span className="text-[12px] text-warning">公开</span>}
               </button>
             ))}
