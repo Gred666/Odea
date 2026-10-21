@@ -11,9 +11,9 @@ import {
   reachSummary,
 } from "@/collab/reach";
 import { useRelays } from "@/collab/relayStore";
-import { type JoinRequest, endText, linkKind, useCollab } from "@/collab/store";
+import { type CollabTreeDoc, type JoinRequest, endText, linkKind, useCollab } from "@/collab/store";
 import { useData } from "@/data/store";
-import type { Diagnosis, MemberInfo, Permission, Reach } from "@/lib/bindings";
+import type { Diagnosis, MemberInfo, Permission, Reach, Scope } from "@/lib/bindings";
 import { cn } from "@/lib/cn";
 import { popoverCard, tween } from "@/lib/motion";
 import { IS_WINDOWS } from "@/lib/platform";
@@ -139,6 +139,13 @@ export function CollabDialog() {
 
 /* ---------------- 主持人 ---------------- */
 
+/** 共享的是什么，放进一句话里：「周报」/ 文件夹「项目」/ 仓库「Odea」（设计 §22.5） */
+function scopeText(scope: Scope | null, noteTitle: string): string {
+  if (scope?.kind === "folder") return `文件夹「${scope.name}」`;
+  if (scope?.kind === "vault") return `仓库「${scope.name}」`;
+  return `「${noteTitle || scope?.name || ""}」`;
+}
+
 function HostBody() {
   const phase = useCollab((s) => s.phase);
   const link = useCollab((s) => s.link);
@@ -150,7 +157,9 @@ function HostBody() {
   const reach = useCollab((s) => s.reach);
   const trustedCount = useCollab((s) => s.trusted.length);
   const outdated = useCollab((s) => s.outdated);
-  const title = useData((s) => s.notes.find((note) => note.id === noteId)?.title ?? "");
+  const scope = useCollab((s) => s.scope);
+  const noteTitle = useData((s) => s.notes.find((note) => note.id === noteId)?.title ?? "");
+  const title = scopeText(scope, noteTitle);
   const [copied, setCopied] = useState(false);
   /** 复制出去的是哪一个：之后地址变了（端口映射到了、换了网络）提醒再复制一次 */
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
@@ -161,9 +170,7 @@ function HostBody() {
     setCopiedLink(link);
     // 附一句怎么打开：没装 Odea 的人点不开 odea:// 链接（没有网页兜底，那要服务器）
     await navigator.clipboard
-      .writeText(
-        `${link}\n用 Odea 打开这个链接，和我一起编辑「${title}」。还没装 Odea：${DOWNLOAD}`,
-      )
+      .writeText(`${link}\n用 Odea 打开这个链接，和我一起编辑${title}。还没装 Odea：${DOWNLOAD}`)
       .catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 1600);
@@ -173,7 +180,10 @@ function HostBody() {
     <div className="flex flex-col gap-4">
       <section>
         <p className="text-[13px] text-body">
-          把链接发给要一起编辑「<span className="text-ink">{title}</span>」的人
+          把链接发给要一起编辑<span className="text-ink">{title}</span>的人
+          {scope && scope.kind !== "doc" && (
+            <span className="text-muted">：里面的哪一篇对方都能打开</span>
+          )}
         </p>
         {/* 准备中和链接本身同样高：对话框展开时只量第一帧 */}
         <div className="mt-2 flex h-10 items-center gap-2 rounded-lg bg-raised pl-3 pr-1">
@@ -422,8 +432,8 @@ function RequestRow({ request, title }: { request: JoinRequest; title: string })
 
 /** 加入请求后半句：拿着链接的、「附近」点进来的、经别的访客转发来的（设计 §20.9） */
 function requestText(request: JoinRequest, title: string): string {
-  if (request.via) return ` 经由 ${request.via} 转发，想加入「${title}」`;
-  return request.invited ? ` 想加入「${title}」` : " 在同一个网络里，想加入";
+  if (request.via) return ` 经由 ${request.via} 转发，想加入${title}`;
+  return request.invited ? ` 想加入${title}` : " 在同一个网络里，想加入";
 }
 
 function AnswerButtons({
@@ -478,7 +488,16 @@ function MemberList({ members, editable }: { members: MemberInfo[]; editable?: b
   const trusted = useCollab((s) => s.trusted);
   const remember = useCollab((s) => s.remember);
   const forget = useCollab((s) => s.forget);
+  const notes = useData((s) => s.notes);
   if (!members.length) return null;
+  /** 主持人这边：他开着哪几篇（一篇的范围不用说） */
+  const viewing = (member: MemberInfo) =>
+    editable && useCollab.getState().scope?.kind !== "doc"
+      ? member.docs
+          .map((doc) => notes.find((note) => note.id === doc)?.title)
+          .filter(Boolean)
+          .join("、")
+      : "";
   // 记住了、现在不在的人：主持时列在下面，能忘掉
   const away = editable ? trusted.filter((peer) => !members.some((m) => m.id === peer.id)) : [];
   return (
@@ -498,6 +517,12 @@ function MemberList({ members, editable }: { members: MemberInfo[]; editable?: b
                   <span className="text-[12px] text-faint">
                     {" "}
                     · 经由 {members.find((other) => other.member === member.via)?.name ?? "别人"}
+                  </span>
+                )}
+                {viewing(member) && (
+                  <span data-collab-viewing className="text-[12px] text-faint">
+                    {" "}
+                    · 在看 {viewing(member)}
                   </span>
                 )}
               </span>
@@ -752,7 +777,10 @@ function GuestBody() {
   const stop = useCollab((s) => s.stop);
   const close = useCollab((s) => s.closeDialog);
   const relayed = useCollab((s) => s.relayed);
+  const scope = useCollab((s) => s.scope);
+  const current = useCollab((s) => s.current);
   const host = members.find((member) => member.host)?.name ?? "主持人";
+  const many = !!scope && scope.kind !== "doc";
 
   if (status?.state === "unreachable") {
     return <Unreachable diagnosis={status.diagnosis} host={host} />;
@@ -772,9 +800,11 @@ function GuestBody() {
         return {
           busy: false,
           text:
-            (permission === "read"
-              ? `正在看 ${host} 的「${title}」（只读）`
-              : `正在和 ${host} 一起编辑「${title}」`) +
+            (many
+              ? `${host} 共享了${scopeText(scope, "")}${permission === "read" ? "（只读）" : ""}：挑一篇打开`
+              : permission === "read"
+                ? `正在看 ${host} 的「${title}」（只读）`
+                : `正在和 ${host} 一起编辑「${title}」`) +
             // 打洞没成、一直经中继转发：慢一点是正常的
             (relayed ? "，经由中继转发" : ""),
         };
@@ -793,12 +823,13 @@ function GuestBody() {
           {line.text}
         </p>
       </div>
+      {many && status?.state === "connected" && <SharedTree />}
       <MemberList members={members} />
       {status?.state === "connected" && <ForwardLink host={host} />}
       <div className="flex items-center gap-1.5 border-t border-line pt-3">
         <NameField />
         <span className="flex-1" />
-        {status?.state === "connected" && !showShared && (
+        {status?.state === "connected" && !showShared && (!many || current) && (
           <BannerButton
             onClick={() => {
               setShowShared(true);
@@ -808,13 +839,102 @@ function GuestBody() {
             回到这篇
           </BannerButton>
         )}
-        {members.length > 0 && <SaveCopyButton />}
+        {/* 文件夹、整个仓库的范围存的是开着的那一篇：还没开就没有可存的 */}
+        {members.length > 0 && (!many || current) && <SaveCopyButton />}
         <BannerButton danger onClick={() => void stop()}>
           <LogOut size={12} strokeWidth={2} />
           {line.ended ? "关闭" : "离开"}
         </BannerButton>
       </div>
     </div>
+  );
+}
+
+/**
+ * 文件夹、整个仓库的范围（设计 §22.5）：主持人给的树，按文件夹分开列，点一篇就开它；能写的还能新建一篇。
+ * 协作对话框里有，访客窗口的左边也是它（compact）
+ */
+export function SharedTree({ compact }: { compact?: boolean }) {
+  const tree = useCollab((s) => s.tree);
+  const current = useCollab((s) => s.current);
+  const openDocs = useCollab((s) => s.openDocs);
+  const openShared = useCollab((s) => s.openShared);
+  const createShared = useCollab((s) => s.createShared);
+  const permission = useCollab((s) => s.permission);
+  const [newTitle, setNewTitle] = useState("");
+  const docs = tree?.docs ?? [];
+  const folders = [...new Set(docs.map((doc) => doc.folder))];
+  const create = async () => {
+    const title = newTitle.trim();
+    if (!title) return;
+    setNewTitle("");
+    await createShared("", title);
+  };
+  const row = (doc: CollabTreeDoc) => (
+    <li key={doc.id}>
+      <button
+        type="button"
+        data-collab-tree-doc
+        onClick={() => void openShared(doc.id)}
+        className={cn(
+          "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-[140ms]",
+          doc.id === current ? "bg-raised text-ink" : "text-body hover:bg-raised/60",
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate">{doc.title || "无标题"}</span>
+        {openDocs.includes(doc.id) && doc.id !== current && (
+          <span className="text-[11.5px] text-faint">开着</span>
+        )}
+      </button>
+    </li>
+  );
+  return (
+    <section data-collab-tree className={compact ? "flex min-h-0 flex-col" : undefined}>
+      {!compact && <p className="mb-1.5 text-[12px] text-faint">里面的笔记 · {docs.length}</p>}
+      <div
+        className={cn(
+          compact
+            ? "scroll-thin min-h-0 flex-1 overflow-y-auto"
+            : "scroll-thin max-h-[240px] overflow-y-auto",
+        )}
+      >
+        {docs.length === 0 ? (
+          <p className="px-2 py-1.5 text-[12.5px] text-muted">
+            {tree ? "这里面还没有笔记" : "正在拿主持人那边的目录…"}
+          </p>
+        ) : (
+          folders.map((folder) => (
+            <div key={folder || "/"} className="mb-1">
+              {folder && (
+                <p className="truncate px-2 pt-1.5 pb-0.5 text-[11.5px] text-faint" title={folder}>
+                  {folder}
+                </p>
+              )}
+              <ul className="flex flex-col">
+                {docs.filter((doc) => doc.folder === folder).map(row)}
+              </ul>
+            </div>
+          ))
+        )}
+      </div>
+      {permission === "edit" && (
+        <div className="mt-1.5 flex h-8 items-center gap-1.5 rounded-md bg-raised/60 pr-1 pl-2">
+          <input
+            value={newTitle}
+            onChange={(event) => setNewTitle(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) void create();
+            }}
+            placeholder="新建一篇：标题"
+            aria-label="新建一篇的标题"
+            className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-faint"
+          />
+          <BannerButton disabled={!newTitle.trim()} onClick={() => void create()}>
+            新建
+          </BannerButton>
+        </div>
+      )}
+    </section>
   );
 }
 

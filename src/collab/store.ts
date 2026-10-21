@@ -2,6 +2,7 @@ import { openDocument } from "@/app/navigate";
 import { useApp } from "@/app/store";
 import { base64Of, fallbackName } from "@/data/attachments";
 import { backend } from "@/data/backend";
+import { folderOf } from "@/data/folders";
 import { useData } from "@/data/store";
 import type { ImageResolver } from "@/editor/html";
 import { flushAllEditors } from "@/editor/saveBus";
@@ -16,6 +17,7 @@ import type {
   NearbyHost,
   Permission,
   Reach,
+  Scope,
   Status,
   TrustedPeer,
 } from "@/lib/bindings";
@@ -25,7 +27,7 @@ import { GuestImages, copyImages, dataUrlBase64, imageRefs, vaultPathOf } from "
 import { peerColor } from "./colors";
 import type { SavedSnapshot } from "./external";
 import type { SessionLink } from "./link";
-import { type CollabNet, type FetchedAttachment, collabNet, errorText } from "./net";
+import { type CollabNet, type FetchedAttachment, type Frame, collabNet, errorText } from "./net";
 import type { CollabSession } from "./session";
 
 /** Loro（wasm）和会话只在真要协作时才加载，不进主包；用之前等 wasm 编好（collab/loro.ts） */
@@ -56,10 +58,33 @@ const heavy = () =>
    - 连不上：3 秒内给结论（status 的 unreachable），后台接着试；可以生成回连链接发给主持人
    - 正文里相对路径的图片向主持人要（images）；粘贴的图片交给主持人存
    - 主持人停止、被移出：那一篇留着、不再更新，可以「存一份到我的笔记」
-   落盘（设计 §3）：双方每隔两秒（主持人还有每次存盘时）把文档的状态交给 Rust。崩溃、强退以后
+   落盘（设计 §3）：双方每隔两秒（主持人还有每次存盘时）把每一篇的状态交给 Rust。崩溃、强退以后
    重启，resume 里是上次的：主持人「继续协作」用同一个会话 id 和端口重新起来，访客自己接上；
    访客「重新加入」用落盘的状态建会话，断线期间各自的改动同步时补齐
+   一条连接里好几篇（设计 §22.5）：邀请的范围是一篇、一个文件夹或整个仓库。一篇一个会话（docs）：
+   - 主持人：访客要开哪篇（docOpen），看它在不在范围里，在的话建这一篇的会话（照存、照合外部改动）再回话；
+     没人开着了就收掉。范围里的树（笔记的标题、在哪个文件夹）变了就给 Rust 一份
+   - 访客：要哪篇开哪篇（openShared），正文区显示开着的那一篇（current）；一篇的范围进来就是那一篇
    ============================================================ */
+
+/** 范围里的一篇（主持人给访客的树里，设计 §22.5） */
+export interface CollabTreeDoc {
+  id: string;
+  title: string;
+  /** 在范围里的哪个文件夹（相对范围的根，空串是根上） */
+  folder: string;
+}
+
+/** 范围里的树：主持人给的 JSON */
+export interface CollabTree {
+  docs: CollabTreeDoc[];
+}
+
+/** 主持什么：一篇，或者一个文件夹（树上的路径）、整个仓库 */
+export type HostTarget =
+  | { kind: "doc"; noteId: string; title: string }
+  | { kind: "folder"; folder: string; name: string }
+  | { kind: "vault"; name: string };
 
 export interface JoinRequest {
   request: number;
@@ -85,14 +110,24 @@ export interface CollabState {
   phase: Phase;
   dialogOpen: boolean;
   identity: CollabIdentity | null;
-  /** 主持的是哪篇 */
+  /** 主持的是哪篇（一篇的范围；文件夹、整个仓库是 null） */
   noteId: string | null;
+  /** 邀请的范围（主持人：自己选的；访客：进来时主持人说的） */
+  scope: Scope | null;
+  /** 主持人：协作里的每一篇（文档 id 就是笔记 id）→ 会话。编辑器打开这篇时绑上它 */
+  hostedDocs: Record<string, CollabSession>;
+  /** 访客：范围里的树（主持人给的） */
+  tree: CollabTree | null;
+  /** 访客：开着的那几篇 */
+  openDocs: string[];
+  /** 访客：正文区显示的那一篇（文档 id） */
+  current: string | null;
   link: string | null;
   members: MemberInfo[];
   requests: JoinRequest[];
   /** 访客的连接状态 */
   status: Status | null;
-  /** 访客：主持人那篇的标题 */
+  /** 访客：正文区那一篇的标题 */
   title: string;
   permission: Permission;
   /** 访客：正文区显示共享的那篇（点了自己的笔记就收起，点协作标签回来） */
@@ -119,9 +154,9 @@ export interface CollabState {
   dialBack: { state: "dialing" | "ok" | "failed"; detail: string | null } | null;
   /** 访客：做客那一篇的图片解析器（图片从主持人那里要来、缓存在本机） */
   images: ImageResolver | null;
-  /** 会话（编辑器接它） */
+  /** 会话（编辑器接它）：访客是正文区那一篇的，主持人是主持的那一篇的（一篇的范围） */
   session: CollabSession | null;
-  /** 这次会话的键（做客那一篇的文档 key 用它：每次加入都是新的一篇） */
+  /** 做客那一篇的文档 key 用它：每次加入、每换一篇都是新的 */
   sessionKey: string;
   error: string | null;
   /** 「附近」：同一个网络里正在分享的人。null = 没在看 */
@@ -146,8 +181,16 @@ export interface CollabState {
   makeForwardLink(): Promise<void>;
   /** 主持人：打开访客发来的回连链接 */
   dialBackTo(link: string): Promise<void>;
-  /** 开始主持。resumeState：继续上次没正常结束的那一次（落盘的文档状态） */
+  /** 开始主持一篇。resumeState：继续上次没正常结束的那一次（落盘的文档状态） */
   startHosting(noteId: string, title: string, resumeState?: Uint8Array): Promise<void>;
+  /** 开始主持一个文件夹、整个仓库（设计 §22.5）。resume：继续上次的（每篇的状态访客来开时再读） */
+  startHostingScope(target: Exclude<HostTarget, { kind: "doc" }>, resume?: boolean): Promise<void>;
+  /** 访客：开范围里的一篇，正文区换成它 */
+  openShared(doc: string): Promise<void>;
+  /** 访客：关掉一篇 */
+  closeShared(doc: string): Promise<void>;
+  /** 访客：在范围里新建一篇（主持人那边建），建好了打开它 */
+  createShared(folder: string, title: string): Promise<void>;
   join(link: string): Promise<void>;
   /** 加入对话框开着时看「附近」 */
   startNearby(): void;
@@ -177,15 +220,26 @@ export interface CollabState {
 /* ---------------- 会话之外的东西（不进 React 的状态） ---------------- */
 
 let net: CollabNet | null = null;
-let link: SessionLink | null = null;
+/**
+ * 协作里的每一篇：会话接着网络，加上这一篇自己的订阅（主持人：存盘、外部改动、附件引用；
+ * 访客：要图片；双方：落盘）
+ */
+interface DocLink {
+  link: SessionLink;
+  cleanup: () => void;
+  /** 访客：这一篇正文里的图片 */
+  images: GuestImages | null;
+}
+const docs = new Map<string, DocLink>();
 let stopPipe: (() => void) | null = null;
-/** 主持人：存盘、外部改动、标题、附件引用的订阅；停止时一起拆 */
-let hostCleanup: (() => void) | null = null;
-/** 访客：要图片的 */
-let guestImages: GuestImages | null = null;
-let guestCleanup: (() => void) | null = null;
-/** 双方：定时落盘 */
-let persistCleanup: (() => void) | null = null;
+/** 主持人：范围里的树的订阅 */
+let treeCleanup: (() => void) | null = null;
+/** 双方：会话、绑定的模块（Loro 在里面，不进主包）。加入、主持的时候载好，之后同步地建会话 */
+let heavyModules: Awaited<ReturnType<typeof heavy>> | null = null;
+/** 访客「重新加入」：落盘的每一篇的状态（开那篇的时候用） */
+let resumeStates = new Map<string, Uint8Array>();
+/** 主持人「继续协作」：每篇落盘的状态访客来开时再读 */
+let hostResuming = false;
 let sessionCounter = 0;
 /** 加入框里的链接每变一次加一：预览（带没带中继）晚到的不覆盖新的 */
 let previewCounter = 0;
@@ -198,6 +252,11 @@ const PERSIST_MS = 2000;
 const initial = {
   phase: "idle" as Phase,
   noteId: null,
+  scope: null as Scope | null,
+  hostedDocs: {} as Record<string, CollabSession>,
+  tree: null as CollabTree | null,
+  openDocs: [] as string[],
+  current: null as string | null,
   link: null,
   members: [] as MemberInfo[],
   requests: [] as JoinRequest[],
@@ -245,25 +304,35 @@ async function identityOf(current: CollabNet) {
 }
 
 function teardown() {
-  hostCleanup?.();
-  hostCleanup = null;
-  guestCleanup?.();
-  guestCleanup = null;
-  guestImages = null;
-  persistCleanup?.();
-  persistCleanup = null;
+  treeCleanup?.();
+  treeCleanup = null;
+  for (const entry of docs.values()) {
+    entry.cleanup();
+    entry.link.destroy();
+  }
+  docs.clear();
   stopPipe?.();
   stopPipe = null;
-  link?.destroy();
-  link = null;
+  resumeStates = new Map();
+  hostResuming = false;
 }
 
-/** 双方：正文一变，停下两秒后把文档的状态落盘；开始时先落一次 */
-function watchPersist(session: CollabSession, current: CollabNet): () => void {
+/** 管道上来的一帧：交给那一篇的会话。访客那边没见过的那篇（主持人那边刚接上的）现建 */
+function receiveFrame(frame: Frame) {
+  const entry =
+    docs.get(frame.doc) ??
+    (useCollab.getState().phase === "guest" || useCollab.getState().phase === "joining"
+      ? guestDoc(frame.doc)
+      : undefined);
+  entry?.link.receive(frame);
+}
+
+/** 双方：正文一变，停下两秒后把这一篇的状态落盘；开始时先落一次 */
+function watchPersist(doc: string, session: CollabSession, current: CollabNet): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const save = () => {
     timer = null;
-    current.saveState(session.encodeState());
+    current.saveState(doc, session.encodeState());
   };
   const onUpdate = () => {
     if (timer) clearTimeout(timer);
@@ -278,14 +347,18 @@ function watchPersist(session: CollabSession, current: CollabNet): () => void {
   };
 }
 
-/** 访客：正文一变，看看有没有新的相对路径图片要向主持人要 */
-function watchGuestImages(session: CollabSession, current: CollabNet): () => void {
+/** 访客：这一篇正文一变，看看有没有新的相对路径图片要向主持人要 */
+function watchGuestImages(
+  doc: string,
+  session: CollabSession,
+  current: CollabNet,
+): { images: GuestImages; stop: () => void } {
   const images = new GuestImages(
-    (path) => current.fetchAttachment(path),
-    (resolver) => useCollab.setState({ images: resolver }),
+    (path) => current.fetchAttachment(doc, path),
+    (resolver) => {
+      if (useCollab.getState().current === doc) useCollab.setState({ images: resolver });
+    },
   );
-  guestImages = images;
-  useCollab.setState({ images: images.resolver });
   let timer: ReturnType<typeof setTimeout> | null = null;
   const onUpdate = () => {
     if (timer) return;
@@ -295,35 +368,111 @@ function watchGuestImages(session: CollabSession, current: CollabNet): () => voi
     }, 300);
   };
   const stop = session.onChange(onUpdate);
-  return () => {
-    stop();
-    if (timer) clearTimeout(timer);
-    images.destroy();
+  return {
+    images,
+    stop: () => {
+      stop();
+      if (timer) clearTimeout(timer);
+      images.destroy();
+    },
   };
 }
 
-/** 访客：建会话、接上帧，再让 Rust 去连（链接的、附近的、继续上次的都走这里） */
+/** 自己（会话里的光标、名字） */
+function selfPeer() {
+  const identity = useCollab.getState().identity;
+  const id = identity?.id ?? "me";
+  return { id, name: identity?.name ?? "我", color: peerColor(id) };
+}
+
+/**
+ * 访客：这一篇的会话（没有就建）。从空的开始：正文由主持人同步过来（两边各自用同一段文字建的话会重复一遍）。
+ * 继续上次的：用落盘的状态，断线期间各自的改动同步时补齐
+ */
+function guestDoc(doc: string): DocLink | undefined {
+  const known = docs.get(doc);
+  if (known || !heavyModules || !net) return known;
+  const current = net;
+  const [{ linkSession }] = heavyModules;
+  const link = linkSession(current, {
+    doc,
+    self: selfPeer(),
+    initialState: resumeStates.get(doc),
+  });
+  link.setMembers(useCollab.getState().members);
+  const { images, stop } = watchGuestImages(doc, link.session, current);
+  const stopPersist = watchPersist(doc, link.session, current);
+  const entry: DocLink = {
+    link,
+    images,
+    cleanup: () => {
+      stop();
+      stopPersist();
+    },
+  };
+  docs.set(doc, entry);
+  const state = useCollab.getState();
+  if (!state.openDocs.includes(doc)) useCollab.setState({ openDocs: [...state.openDocs, doc] });
+  if (state.current === doc) showGuestDoc(doc);
+  return entry;
+}
+
+/** 访客：正文区换成这一篇 */
+function showGuestDoc(doc: string) {
+  const entry = docs.get(doc);
+  const state = useCollab.getState();
+  const title =
+    state.tree?.docs.find((item) => item.id === doc)?.title ??
+    (state.scope?.kind === "doc" ? state.scope.name : "") ??
+    "";
+  sessionCounter += 1;
+  useCollab.setState({
+    current: doc,
+    session: entry?.link.session ?? null,
+    images: entry?.images?.resolver ?? null,
+    sessionKey: `guest-${sessionCounter}`,
+    ...(title || state.status?.state !== "connected" ? { title: title || state.title } : {}),
+  });
+  if (entry) entry.images?.scan(entry.link.session.toString());
+}
+
+/** 访客：一篇不要了（关掉、主持人不给） */
+function dropGuestDoc(doc: string) {
+  const entry = docs.get(doc);
+  if (entry) {
+    entry.cleanup();
+    entry.link.destroy();
+    docs.delete(doc);
+  }
+  const state = useCollab.getState();
+  const openDocs = state.openDocs.filter((open) => open !== doc);
+  useCollab.setState({ openDocs });
+  if (state.current === doc) {
+    const next = openDocs[0];
+    if (next) showGuestDoc(next);
+    else useCollab.setState({ current: null, session: null, images: null, showShared: false });
+  }
+}
+
+/** 访客：载好会话的模块、接上帧，再让 Rust 去连（链接的、附近的、继续上次的都走这里） */
 async function beginGuest(
   current: CollabNet,
   options: {
     joinLink: string;
     joinRelay: string | null;
     directOnly: boolean;
-    initialState?: Uint8Array;
+    /** 继续上次的：每一篇落盘的状态 */
+    resumed?: Map<string, Uint8Array>;
     start: () => Promise<void>;
   },
 ): Promise<void> {
   const set = useCollab.setState;
   await useCollab.getState().stop();
   try {
-    const identity = await identityOf(current);
-    const self = { id: identity.id, name: identity.name, color: peerColor(identity.id) };
-    // 访客的会话从空的开始：正文由主持人同步过来（两边各自用同一段文字建的话会重复一遍）。
-    // 继续上次的：用落盘的状态，断线期间各自的改动同步时补齐
-    const [{ linkSession }] = await heavy();
-    link = linkSession(current, { self, initialState: options.initialState });
-    stopPipe = await current.openPipe((frame) => link?.receive(frame));
-    sessionCounter += 1;
+    await identityOf(current);
+    heavyModules = await heavy();
+    resumeStates = options.resumed ?? new Map();
+    stopPipe = await current.openPipe(receiveFrame);
     set({
       ...initial,
       phase: "joining",
@@ -331,16 +480,177 @@ async function beginGuest(
       joinLink: options.joinLink,
       joinRelay: options.joinRelay,
       directOnly: options.directOnly,
-      session: link.session,
-      sessionKey: `guest-${sessionCounter}`,
     });
-    guestCleanup = watchGuestImages(link.session, current);
+    // 继续上次的：落盘的那几篇先建好（还没连上主持人也看得到上次写的），正文区是第一篇
+    const first = [...resumeStates.keys()][0];
+    for (const doc of resumeStates.keys()) guestDoc(doc);
+    if (first) showGuestDoc(first);
     await options.start();
-    persistCleanup = watchPersist(link.session, current);
+    // 继续上次的：断之前开着的那几篇照样开（连上以后 Rust 那边一篇一条流）
+    for (const doc of resumeStates.keys()) await current.openDoc(doc).catch(() => {});
   } catch (error) {
     teardown();
     set({ ...initial, joinLink: options.joinLink, error: `加入不了：${errorText(error)}` });
   }
+}
+
+/* ---------------- 主持人：一篇一个会话 ---------------- */
+
+/** 主持人：这一篇在不在范围里。在的话返回 null，不在的话是给访客看的一句话 */
+function refusalOf(doc: string): string | null {
+  const { scope, noteId } = useCollab.getState();
+  const note = useData.getState().notes.find((item) => item.id === doc);
+  if (!scope) return "协作已经停了";
+  if (scope.kind === "doc") return doc === noteId ? null : "这一篇不在共享的范围里";
+  if (!note) return "这一篇不在了（删掉了，或者归档了）";
+  if (scope.kind === "vault") return null;
+  const folder = folderOf(note);
+  return folder === scope.doc || folder.startsWith(`${scope.doc}/`)
+    ? null
+    : "这一篇不在共享的文件夹里";
+}
+
+/** 主持人：建这一篇的会话（正文从磁盘上的这一版开始；继续上次的话用落盘的状态，磁盘上后来的改动合进来） */
+async function hostDoc(doc: string, resumeState?: Uint8Array): Promise<DocLink> {
+  const known = docs.get(doc);
+  if (known) return known;
+  const current = await ensureNet();
+  // 编辑器里还没存的先存下去：会话从磁盘上的这一版开始，外部改动才有准确的分叉点
+  await flushAllEditors();
+  const disk = await useData.getState().loadBody(doc);
+  if (disk === undefined) throw new Error("这篇笔记已经不在了");
+  heavyModules ??= await heavy();
+  const [{ linkSession }, external] = heavyModules;
+  const again = docs.get(doc);
+  if (again) return again;
+  const self = selfPeer();
+  const link = resumeState
+    ? linkSession(current, { doc, self, initialState: resumeState })
+    : linkSession(current, { doc, self, initialText: disk });
+  // 继续上次的：落盘的状态是最后一次存盘时的（两者同时取），之后磁盘上又变了（别的程序改的、
+  // 崩溃前最后那几百毫秒存下去的）就当外部改动合进来
+  if (resumeState && disk !== link.session.toString()) {
+    external.mergeExternal(link.session, external.snapshot(link.session), disk);
+  }
+  link.setMembers(useCollab.getState().members);
+  const stopHosted = watchHosted(link.session, doc, current, external);
+  const stopPersist = watchPersist(doc, link.session, current);
+  const entry: DocLink = {
+    link,
+    images: null,
+    cleanup: () => {
+      stopHosted();
+      stopPersist();
+    },
+  };
+  docs.set(doc, entry);
+  useCollab.setState((state) => ({ hostedDocs: { ...state.hostedDocs, [doc]: link.session } }));
+  return entry;
+}
+
+/** 主持人：这一篇没人开着了，收掉（先存下去） */
+function dropHostedDoc(doc: string) {
+  const entry = docs.get(doc);
+  if (!entry) return;
+  entry.cleanup();
+  entry.link.destroy();
+  docs.delete(doc);
+  void net?.setAttachmentRefs(doc, null).catch(() => {});
+  useCollab.setState((state) => {
+    const { [doc]: _gone, ...rest } = state.hostedDocs;
+    return { hostedDocs: rest };
+  });
+}
+
+/** 主持人：访客要开一篇 */
+async function answerDocOpen(request: number, doc: string) {
+  const current = net;
+  if (!current || useCollab.getState().phase !== "hosting") return;
+  const refusal = refusalOf(doc);
+  if (refusal) {
+    await current.answerDoc(request, refusal).catch(() => {});
+    return;
+  }
+  try {
+    const state = hostResuming
+      ? await current.resumeState(true, doc).catch(() => undefined)
+      : undefined;
+    await hostDoc(doc, state);
+    await current.answerDoc(request, null);
+  } catch (error) {
+    await current.answerDoc(request, errorText(error)).catch(() => {});
+  }
+}
+
+/** 主持人：有人关掉了一篇。主持的那一篇（一篇的范围）留着；别的没人开着了就收掉 */
+function onDocClosed(member: number, doc: string) {
+  const state = useCollab.getState();
+  if (state.phase !== "hosting" || doc === state.noteId) return;
+  const watching = state.members.some(
+    (info) => !info.host && info.member !== member && info.docs.includes(doc),
+  );
+  if (!watching) dropHostedDoc(doc);
+}
+
+/** 主持人：访客要在范围里新建一篇 */
+async function answerCreate(request: number, folder: string, title: string) {
+  const current = net;
+  const { scope } = useCollab.getState();
+  if (!current || !scope || scope.kind === "doc") {
+    await current?.answerCreate(request, null, "这次协作只共享了一篇").catch(() => {});
+    return;
+  }
+  const clean = folder.replace(/^\/+|\/+$/g, "");
+  const place = scope.kind === "folder" ? [scope.doc, clean].filter(Boolean).join("/") : clean;
+  try {
+    const data = useData.getState();
+    const id = await data.createNote(place || undefined);
+    if (!id) throw new Error("建不了新的笔记");
+    if (title.trim()) await data.saveTitle({ kind: "note", id }, title.trim());
+    await current.answerCreate(request, id, null);
+  } catch (error) {
+    await current.answerCreate(request, null, errorText(error)).catch(() => {});
+  }
+}
+
+/** 主持人：范围里的树（笔记的标题、在范围里的哪个文件夹），笔记一变就再给一份 */
+function watchTree(scope: Scope, current: CollabNet): () => void {
+  let last = "";
+  const push = () => {
+    const notes = useData.getState().notes;
+    const docs: CollabTreeDoc[] = [];
+    for (const note of notes) {
+      const folder = folderOf(note);
+      if (scope.kind === "folder") {
+        if (folder !== scope.doc && !folder.startsWith(`${scope.doc}/`)) continue;
+        docs.push({
+          id: note.id,
+          title: note.title,
+          folder: folder.slice(scope.doc.length).replace(/^\//, ""),
+        });
+      } else {
+        docs.push({ id: note.id, title: note.title, folder });
+      }
+    }
+    docs.sort((a, b) => a.folder.localeCompare(b.folder) || a.title.localeCompare(b.title));
+    const tree = JSON.stringify({ docs } satisfies CollabTree);
+    if (tree === last) return;
+    last = tree;
+    void current.setTree(tree).catch(() => {});
+  };
+  push();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const unsubscribe = useData.subscribe((state, previous) => {
+    if (state.notes === previous.notes || timer) return;
+    timer = setTimeout(() => {
+      timer = null;
+      push();
+    }, 300);
+  });
+  return () => {
+    unsubscribe();
+    if (timer) clearTimeout(timer);
+  };
 }
 
 export const useCollab = create<CollabState>((set, get) => ({
@@ -414,30 +724,16 @@ export const useCollab = create<CollabState>((set, get) => ({
   startHosting: async (noteId, title, resumeState) => {
     if (get().phase === "preparing") return;
     await get().stop();
-    set({ ...initial, phase: "preparing", noteId, dialogOpen: true });
+    const scope: Scope = { kind: "doc", doc: noteId, name: title };
+    set({ ...initial, phase: "preparing", noteId, scope, dialogOpen: true });
     try {
       const current = await ensureNet();
-      const identity = await identityOf(current);
-      // 编辑器里还没存的先存下去：会话从磁盘上的这一版开始，外部改动才有准确的分叉点
-      await flushAllEditors();
-      const disk = await useData.getState().loadBody(noteId);
-      if (disk === undefined) throw new Error("这篇笔记已经不在了");
-      const self = { id: identity.id, name: identity.name, color: peerColor(identity.id) };
-      const [{ linkSession }, external] = await heavy();
-      link = resumeState
-        ? linkSession(current, { self, initialState: resumeState })
-        : linkSession(current, { self, initialText: disk });
-      // 继续上次的：落盘的状态是最后一次存盘时的（两者同时取），之后磁盘上又变了（别的程序改的、
-      // 崩溃前最后那几百毫秒存下去的）就当外部改动合进来
-      if (resumeState && disk !== link.session.toString()) {
-        external.mergeExternal(link.session, external.snapshot(link.session), disk);
-      }
-      stopPipe = await current.openPipe((frame) => link?.receive(frame));
-      const hosting = await current.host(title, "edit", noteId, !!resumeState);
+      await identityOf(current);
+      const entry = await hostDoc(noteId, resumeState);
+      stopPipe = await current.openPipe(receiveFrame);
+      const hosting = await current.host(title, "edit", noteId, scope, !!resumeState);
       if (get().phase !== "preparing" || get().noteId !== noteId) return;
-      hostCleanup = watchHosted(link.session, noteId, current, external);
-      persistCleanup = watchPersist(link.session, current);
-      link.setMembers(hosting.members);
+      entry.link.setMembers(hosting.members);
       void current
         .trusted()
         .then((trusted) => set({ trusted }))
@@ -447,12 +743,69 @@ export const useCollab = create<CollabState>((set, get) => ({
         phase: "hosting",
         link: hosting.link,
         members: hosting.members,
-        session: link.session,
+        session: entry.link.session,
         sessionKey: `host-${sessionCounter}`,
       });
     } catch (error) {
       teardown();
       set({ ...initial, error: `开始不了协作：${errorText(error)}` });
+    }
+  },
+
+  startHostingScope: async (target, resume) => {
+    if (get().phase === "preparing") return;
+    await get().stop();
+    const scope: Scope =
+      target.kind === "folder"
+        ? { kind: "folder", doc: target.folder, name: target.name }
+        : { kind: "vault", doc: "", name: target.name };
+    set({ ...initial, phase: "preparing", scope, dialogOpen: true });
+    try {
+      const current = await ensureNet();
+      await identityOf(current);
+      heavyModules ??= await heavy();
+      stopPipe = await current.openPipe(receiveFrame);
+      const hosting = await current.host(scope.name, "edit", "", scope, !!resume);
+      if (get().phase !== "preparing" || get().scope !== scope) return;
+      hostResuming = !!resume;
+      treeCleanup = watchTree(scope, current);
+      void current
+        .trusted()
+        .then((trusted) => set({ trusted }))
+        .catch(() => {});
+      sessionCounter += 1;
+      set({
+        phase: "hosting",
+        link: hosting.link,
+        members: hosting.members,
+        sessionKey: `host-${sessionCounter}`,
+      });
+    } catch (error) {
+      teardown();
+      set({ ...initial, error: `开始不了协作：${errorText(error)}` });
+    }
+  },
+
+  openShared: async (doc) => {
+    const current = net;
+    if (!current || get().phase !== "guest") return;
+    guestDoc(doc);
+    showGuestDoc(doc);
+    set({ showShared: true, dialogOpen: false });
+    await current.openDoc(doc).catch((error) => set({ error: errorText(error) }));
+  },
+  closeShared: async (doc) => {
+    dropGuestDoc(doc);
+    await net?.closeDoc(doc).catch(() => {});
+  },
+  createShared: async (folder, title) => {
+    const current = net;
+    if (!current || get().phase !== "guest") return;
+    try {
+      const doc = await current.createDoc(folder, title);
+      await get().openShared(doc);
+    } catch (error) {
+      set({ error: `建不了：${errorText(error)}` });
     }
   },
 
@@ -526,8 +879,17 @@ export const useCollab = create<CollabState>((set, get) => ({
     const info = resume?.host;
     if (!info) return;
     set({ resume: resume.guest ? { ...resume, host: null } : null });
+    // 文件夹、整个仓库：每篇的状态访客来开时再读
+    if (info.scope && info.scope.kind !== "doc") {
+      const target =
+        info.scope.kind === "folder"
+          ? { kind: "folder" as const, folder: info.scope.doc, name: info.scope.name }
+          : { kind: "vault" as const, name: info.scope.name };
+      await get().startHostingScope(target, true);
+      return;
+    }
     const current = await ensureNet();
-    const state = await current.resumeState(true).catch(() => null);
+    const state = await current.resumeState(true, info.note).catch(() => null);
     if (!state) {
       set({ error: "上次协作的状态已经没了", dialogOpen: true });
       return;
@@ -540,8 +902,12 @@ export const useCollab = create<CollabState>((set, get) => ({
     if (!resume?.guest) return;
     set({ resume: resume.host ? { ...resume, guest: null } : null });
     const current = await ensureNet();
-    const state = await current.resumeState(false).catch(() => null);
-    if (!state) {
+    const resumed = new Map<string, Uint8Array>();
+    for (const doc of await current.resumeDocs().catch(() => [] as string[])) {
+      const state = await current.resumeState(false, doc).catch(() => null);
+      if (state) resumed.set(doc, state);
+    }
+    if (!resumed.size) {
       set({ error: "上次做客的状态已经没了", dialogOpen: true });
       return;
     }
@@ -550,7 +916,7 @@ export const useCollab = create<CollabState>((set, get) => ({
       joinLink: "",
       joinRelay: null,
       directOnly: false,
-      initialState: state,
+      resumed,
       start: () => current.rejoin(),
     });
   },
@@ -644,10 +1010,10 @@ export const useCollab = create<CollabState>((set, get) => ({
   setShowShared: (showShared) => set({ showShared }),
 
   saveCopy: async () => {
-    const { session, title } = get();
+    const { session, title, current: doc } = get();
     if (!session) return null;
     const markdown = session.toString();
-    const images = guestImages;
+    const images = doc ? (docs.get(doc)?.images ?? null) : null;
     // 访客窗口没开仓库：正文连同要来的图片（本机缓存的文件，或者 base64）交给最近用过的仓库窗口去存
     if (windowKind === "guest") {
       try {
@@ -675,12 +1041,13 @@ export const useCollab = create<CollabState>((set, get) => ({
 
   attachFiles: async (files) => {
     const current = net;
-    if (!current || get().phase !== "guest") return [];
+    const doc = get().current;
+    if (!current || !doc || get().phase !== "guest") return [];
     const out: Attachment[] = [];
     for (const file of files) {
       try {
         const data = await base64Of(file);
-        out.push(await current.putAttachment(file.name || fallbackName(file.type), data));
+        out.push(await current.putAttachment(doc, file.name || fallbackName(file.type), data));
       } catch (error) {
         reportAttachError(error);
       }
@@ -689,11 +1056,12 @@ export const useCollab = create<CollabState>((set, get) => ({
   },
   attachPaths: async (paths) => {
     const current = net;
-    if (!current || get().phase !== "guest") return [];
+    const doc = get().current;
+    if (!current || !doc || get().phase !== "guest") return [];
     const out: Attachment[] = [];
     for (const path of paths) {
       try {
-        out.push(await current.putAttachmentPath(path));
+        out.push(await current.putAttachmentPath(doc, path));
       } catch (error) {
         reportAttachError(error);
       }
@@ -735,7 +1103,7 @@ export function handleControl(control: Control): void {
       });
       return;
     case "members":
-      link?.setMembers(control.members);
+      for (const entry of docs.values()) entry.link.setMembers(control.members);
       useCollab.setState({ members: control.members });
       return;
     case "permission":
@@ -765,6 +1133,28 @@ export function handleControl(control: Control): void {
     case "nearby":
       if (scanning) useCollab.setState({ nearby: control.hosts });
       return;
+    case "docOpen":
+      void answerDocOpen(control.request, control.doc);
+      return;
+    case "docClosed":
+      onDocClosed(control.member, control.doc);
+      return;
+    case "createDoc":
+      void answerCreate(control.request, control.folder, control.title);
+      return;
+    case "tree":
+      try {
+        useCollab.setState({ tree: JSON.parse(control.tree) as CollabTree });
+        const { current } = useCollab.getState();
+        if (current) showGuestDoc(current);
+      } catch {
+        // 主持人那边的版本说的不是这种树：当没有
+      }
+      return;
+    case "docRefused":
+      dropGuestDoc(control.doc);
+      useCollab.setState({ error: `打不开：${control.reason}` });
+      return;
   }
 }
 
@@ -774,16 +1164,25 @@ function handleStatus(status: Status) {
   if (state.phase === "idle" || state.phase === "preparing" || state.phase === "hosting") return;
   if (status.state === "connected") {
     // 连上了（第一次、或者断了又连上）：之前没要到的图片再要一遍
-    guestImages?.retryFailed();
-    if (link) guestImages?.scan(link.session.toString());
+    for (const entry of docs.values()) {
+      entry.images?.retryFailed();
+      entry.images?.scan(entry.link.session.toString());
+    }
+    const single = status.scope.kind === "doc";
     useCollab.setState({
       phase: "guest",
       status,
-      title: status.title,
+      scope: status.scope,
+      title: single ? status.title : state.title,
       permission: status.permission,
-      // 第一次进来：对话框收起，正文区换成共享的那篇
-      ...(state.phase === "joining" ? { showShared: true, dialogOpen: false } : {}),
+      // 第一次进来：一篇的范围对话框收起，正文区换成共享的那篇；文件夹、整个仓库的对话框留着，挑一篇开
+      ...(state.phase === "joining" && single
+        ? { showShared: true, dialogOpen: false, current: status.scope.doc }
+        : {}),
     });
+    if (single && state.phase === "joining") {
+      if (docs.has(status.scope.doc)) showGuestDoc(status.scope.doc);
+    }
     return;
   }
   if (status.state === "ended" && status.reason.kind === "left") return;
@@ -794,9 +1193,9 @@ function handleStatus(status: Status) {
       : {}),
   });
   if (status.state === "ended") {
-    // 结束了：网络那头已经收掉，会话留着（共享的那篇还能看、能存一份），不再收发、不再落盘
-    persistCleanup?.();
-    persistCleanup = null;
+    // 结束了：网络那头已经收掉，会话留着（共享的那几篇还能看、能存一份），不再收发、不再落盘
+    for (const entry of docs.values()) entry.cleanup();
+    for (const entry of docs.values()) entry.cleanup = () => {};
     stopPipe?.();
     stopPipe = null;
   }
@@ -854,7 +1253,7 @@ function watchHosted(
     try {
       await useData.getState().saveDocument({ kind: "note", id: noteId }, shot.text);
       saved = shot;
-      current.saveState(state);
+      current.saveState(noteId, state);
     } catch {
       // 存失败的提示由 data store 给；下次改动再存
     }
@@ -874,7 +1273,7 @@ function watchHosted(
     const key = JSON.stringify(refs);
     if (key === lastRefs) return;
     lastRefs = key;
-    void current.setAttachmentRefs(refs).catch(() => {});
+    void current.setAttachmentRefs(noteId, refs).catch(() => {});
   };
   pushRefs();
 
@@ -893,9 +1292,10 @@ function watchHosted(
       if (disk !== undefined && disk !== session.toString()) mergeExternal(session, saved, disk);
     }
     const next = state.notes.find((note) => note.id === noteId)?.title;
+    // 标题给访客：一篇的范围才有（文件夹、整个仓库的标题在树里）
     if (next && next !== title) {
       title = next;
-      void current.setTitle(next).catch(() => {});
+      if (useCollab.getState().noteId === noteId) void current.setTitle(next).catch(() => {});
     }
   });
 

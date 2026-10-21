@@ -1,15 +1,17 @@
 /* ============================================================
-odea/collab/2 的帧和消息（docs/协同编辑.md §7；2 是换成 Loro 以后的，§20）。
+odea/collab/3 的帧和消息（docs/协同编辑.md §7；2 是换成 Loro 以后的，§20；3 是一条连接里好几篇，§22.5）。
 
-一条 iroh 连接（ALPN `odea/collab/2`）上：
-- 控制流（双向流，访客先开）：Hello → Welcome / Reject；之后 Members / Permission / Kick / Bye
-- 文档流（双向流，访客在 Welcome 之后开）：Sync1 / Sync2 / Update。内容是 Loro 的二进制（版本向量、增量），
+一条 iroh 连接（ALPN `odea/collab/3`）上：
+- 控制流（双向流，访客先开）：Hello → Welcome{…, 范围} / Reject；之后 Members / Permission / Kick / Bye，
+  主持人发来范围里的树（Tree，前端给的 JSON，这里不解析）；访客要新建一篇（Create → Created）
+- 文档流（双向流，访客要哪篇开哪篇，一篇一条）：第一帧 Open{文档 id}，主持人问过前端（这篇在不在范围里）
+  才接着读，不给就回 DocErr 收尾。之后 Sync1 / Sync2 / Update。内容是 Loro 的二进制（版本向量、增量），
   这里不解析，原样交给前端。主持人发给某位访客的积压太多时丢掉排着的更新、发一个 Resync，
-  访客收到就重新发一次 Sync1，主持人回一份 Sync2 补齐（queue.rs，设计 §5.4）
-- 附件（访客开的双向流，一个文件一条）：AttachGet{正文里写的路径} → AttachData{字节} / AttachErr；
-  AttachPut{文件名, 字节} → AttachLink{从这篇引用它的路径} / AttachErr（设计 §7.2）
-- 光标：QUIC 数据报。主持人发给访客的前面带 2 字节成员号（小端），访客发给主持人的不带
-  （主持人从连接认出是谁）
+  访客收到就重新发一次 Sync1，主持人回一份 Sync2 补齐（queue.rs，设计 §5.4）。访客关掉那篇就把流收尾
+- 附件（访客开的双向流，一个文件一条）：AttachGet{哪篇, 正文里写的路径} → AttachData{字节} / AttachErr；
+  AttachPut{哪篇, 文件名, 字节} → AttachLink{从这篇引用它的路径} / AttachErr（设计 §7.2）
+- 光标：QUIC 数据报，内容前面带上是哪篇（1 字节长度 + 文档 id）。主持人发给访客的再在最前面带 2 字节
+  成员号（小端），访客发给主持人的不带（主持人从连接认出是谁）
 - 转发（设计 §20.9）：访客 B 替连不上主持人的 C 转发。B 在自己和主持人的连接上为 C 另开流，
   每条先发一帧 Forward{C 的公钥, 哪种流}（控制流还带着 C 的 Hello），之后原样搬字节；主持人把这些流
   当成成员 C。C 的光标数据报 B 前面加上 FF FF + C 的成员号再转，主持人发给 C 的同样包一层
@@ -22,12 +24,14 @@ odea/collab/2 的帧和消息（docs/协同编辑.md §7；2 是换成 Loro 以�
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const ALPN: &[u8] = b"odea/collab/2";
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const ALPN: &[u8] = b"odea/collab/3";
+pub const PROTOCOL_VERSION: u16 = 3;
 /// 兼容的能力。CRDT 的大版本写在这里：双方不一致时直说，不硬连（设计 §7.4）。
 /// loro1：Loro 1.x 的格式；resync：认得 Resync 帧（慢的访客补齐）；attach：附件流；
-/// forward：认得访客替别人开的转发流（§20.9）
-pub const FEATURES: &[&str] = &["loro1", "resync", "attach", "forward"];
+/// forward：认得访客替别人开的转发流（§20.9）；docs：一条连接里好几篇（§22.5）
+pub const FEATURES: &[&str] = &["loro1", "resync", "attach", "forward", "docs"];
+/// 文档 id 最长多少字节（数据报里用 1 字节记长度）
+pub const MAX_DOC_ID: usize = 255;
 /// 控制流、文档流的单帧上限。最大的是加入时的快照（几百 KB）；再大就当是坏数据
 pub const MAX_FRAME: usize = 32 << 20;
 /// 附件单个文件的上限（和仓库里粘贴附件的上限一样）
@@ -39,7 +43,7 @@ pub const PROOF_LABEL: &[u8] = b"odea-collab-hello";
 
 /// 帧类型
 pub mod kind {
-    /// 访客开文档流时先发一个空帧：QUIC 的流要有数据对方才知道（主持人收到就忽略）
+    /// 访客开文档流的第一帧：要的是哪篇（文档 id，UTF-8）
     pub const OPEN: u8 = 0;
     pub const HELLO: u8 = 1;
     pub const WELCOME: u8 = 2;
@@ -51,6 +55,12 @@ pub mod kind {
     /// 访客 → 主持人（控制流）：我改名字了（UTF-8）。主持人换掉成员表里的、再广播。
     /// 旧版本认不出直接忽略，不用进特性列表
     pub const NAME: u8 = 8;
+    /// 主持人 → 访客（控制流）：范围里的树（前端给的 JSON，UTF-8）。变了再发一次整棵
+    pub const TREE: u8 = 9;
+    /// 访客 → 主持人（控制流）：新建一篇（postcard 的 CreateDoc）
+    pub const CREATE: u8 = 10;
+    /// 主持人 → 访客（控制流）：建好了 / 建不了（postcard 的 CreatedDoc）
+    pub const CREATED: u8 = 11;
     /// 状态向量：「我有这些，你把我缺的发过来」
     pub const SYNC1: u8 = 16;
     /// 回 SYNC1：对方缺的更新
@@ -58,6 +68,8 @@ pub mod kind {
     pub const UPDATE: u8 = 18;
     /// 主持人 → 访客：积压的更新丢掉了，重新发一次 Sync1
     pub const RESYNC: u8 = 19;
+    /// 主持人 → 访客（文档流）：这篇不给（一句话，UTF-8），接着把流收尾
+    pub const DOC_ERR: u8 = 20;
     /// 附件流：访客要一个文件（内容是正文里写的路径，UTF-8）
     pub const ATTACH_GET: u8 = 32;
     /// 附件流：文件的字节
@@ -103,13 +115,40 @@ pub struct Member {
     pub via: Option<u16>,
 }
 
+/// 邀请的范围（设计 §22.5）：一篇、一个文件夹、整个仓库
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ScopeKind {
+    Doc,
+    Folder,
+    Vault,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Scope {
+    pub kind: ScopeKind,
+    /// 一篇的话是它的文档 id（访客进来就开它）；文件夹、整个仓库是空的
+    pub doc: String,
+    /// 给访客看的名字：那篇的标题、文件夹名、仓库名
+    pub name: String,
+}
+
+impl Scope {
+    #[cfg(test)]
+    pub fn doc(doc: impl Into<String>, title: impl Into<String>) -> Self {
+        Scope { kind: ScopeKind::Doc, doc: doc.into(), name: title.into() }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Welcome {
     pub member: u16,
     pub permission: Permission,
-    /// 文档标题：主持人允许之后才给（「附近」的广播里不带）
+    /// 文档标题（一篇的范围）：主持人允许之后才给（「附近」的广播里不带）
     pub title: String,
     pub members: Vec<Member>,
+    pub scope: Scope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
@@ -153,11 +192,36 @@ pub struct Forward {
     pub proven: bool,
 }
 
-/// 访客粘贴的文件：主持人存进仓库的「附件」
+/// 访客要一个附件：哪篇正文里写的哪个路径
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachGet {
+    pub doc: String,
+    pub path: String,
+}
+
+/// 访客粘贴的文件：主持人存进仓库的「附件」（按这篇的附件位置），回从这篇引用它的路径
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttachPut {
+    pub doc: String,
     pub name: String,
     pub bytes: Vec<u8>,
+}
+
+/// 访客要在范围里新建一篇（只读的不行）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateDoc {
+    /// 访客这边的请求号：回话里带回来
+    pub request: u32,
+    /// 放在范围里的哪个文件夹（树上的路径，空串是范围的根）
+    pub folder: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreatedDoc {
+    pub request: u32,
+    /// 建好了：它的文档 id；建不了：为什么
+    pub result: Result<String, String>,
 }
 
 /* ---------------- 帧 ---------------- */
@@ -288,7 +352,23 @@ pub fn untag_cursor(datagram: &[u8]) -> Option<(u16, &[u8])> {
     Some((u16::from_le_bytes([head[0], head[1]]), payload))
 }
 
-/// 转发的数据报打头的两个字节：成员号到不了 0xFFFF，光标消息的第一个字节是版本号（不会是 0xFF）
+/// 数据报的内容前面带上是哪篇：1 字节长度 + 文档 id。长了的截不了，调用方先查 MAX_DOC_ID
+pub fn tag_doc(doc: &str, payload: &[u8]) -> Vec<u8> {
+    let id = &doc.as_bytes()[..doc.len().min(MAX_DOC_ID)];
+    let mut out = Vec::with_capacity(payload.len() + id.len() + 1);
+    out.push(id.len() as u8);
+    out.extend_from_slice(id);
+    out.extend_from_slice(payload);
+    out
+}
+
+pub fn untag_doc(bytes: &[u8]) -> Option<(&str, &[u8])> {
+    let (&len, rest) = bytes.split_first()?;
+    let (id, payload) = rest.split_at_checked(len as usize)?;
+    Some((std::str::from_utf8(id).ok()?, payload))
+}
+
+/// 转发的数据报打头的两个字节：成员号到不了 0xFFFF，后面是文档 id 的长度（不会接着是 0xFF 0xFF 的成员号）
 const FORWARD_MARK: [u8; 2] = [0xff, 0xff];
 
 /// 经访客 B 转的数据报：FF FF + C 的成员号 + 原来的内容

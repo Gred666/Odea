@@ -44,7 +44,7 @@ pub use diagnose::Diagnosis;
 pub use endpoint::id_text;
 pub use guest::{Guest, GuestOptions};
 pub use host::{Decision, Host, HostOptions};
-pub use protocol::{Permission, RejectReason};
+pub use protocol::{Permission, RejectReason, Scope};
 pub use reach::Reach;
 pub use relays::Relay;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
@@ -65,6 +65,8 @@ pub struct MemberInfo {
     pub host: bool,
     /// 经哪位访客转发进来的（成员号，设计 §20.9）；自己连上主持人的是 None
     pub via: Option<u16>,
+    /// 他开着哪几篇（文档 id，设计 §22.5）。只有主持人这边知道，访客那边是空的
+    pub docs: Vec<String>,
 }
 
 /// 主持人「记住」的一个人（设计 §8.2）：下次进来不问，权限照这个
@@ -95,6 +97,8 @@ pub enum Status {
         member: u16,
         permission: Permission,
         title: String,
+        /// 邀请的范围：一篇、一个文件夹、整个仓库（设计 §22.5）
+        scope: Scope,
     },
     /// 断了，正在重连（本地照常编辑）
     Reconnecting,
@@ -170,6 +174,34 @@ pub enum Control {
     Nearby {
         hosts: Vec<nearby::NearbyHost>,
     },
+    /// 访客要开一篇（主持人）：前端看它在不在范围里，用 collab_doc_answer 回话
+    #[serde(rename_all = "camelCase")]
+    DocOpen {
+        request: u32,
+        member: u16,
+        doc: String,
+    },
+    /// 访客关掉了一篇、或者走了（主持人）：没人开着的那篇前端可以收掉
+    DocClosed {
+        member: u16,
+        doc: String,
+    },
+    /// 访客要在范围里新建一篇（主持人）：建好了用 collab_create_answer 回他文档 id
+    CreateDoc {
+        request: u32,
+        member: u16,
+        folder: String,
+        title: String,
+    },
+    /// 范围里的树（访客）：主持人给的 JSON，原样交给前端
+    Tree {
+        tree: String,
+    },
+    /// 主持人不给这一篇（访客）：不在范围里、已经删了
+    DocRefused {
+        doc: String,
+        reason: String,
+    },
 }
 
 /// 命令层对附件请求的回话
@@ -181,38 +213,45 @@ pub enum AttachReply {
     Link(String),
 }
 
+/// 文档字节的事件都带着是哪篇（doc，文档 id）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// 别人的文档更新（Update 和 Sync2 都是它）
     Update {
         from: u16,
+        doc: String,
         bytes: Vec<u8>,
     },
     Cursor {
         from: u16,
+        doc: String,
         bytes: Vec<u8>,
     },
     /// 别人发来了状态向量：前端回它缺的（send_sync Reply）
     SyncRequest {
         from: u16,
+        doc: String,
         vector: Vec<u8>,
     },
-    /// 刚连上这位：前端把自己的状态向量发给他（send_sync Vector）
+    /// 和这位接上了这一篇：前端把自己的状态向量发给他（send_sync Vector）
     SyncStart {
         with: u16,
+        doc: String,
     },
-    /// 访客要一个附件（主持人）：命令层查过「正文里引用了、落在仓库的附件里」再给，
+    /// 访客要一个附件（主持人）：命令层查过「这篇正文里引用了、落在仓库的附件里」再给，
     /// 回话用 Host::answer_attachment
     AttachGet {
         request: u32,
         from: u16,
+        doc: String,
         /// 正文里写的路径（相对这篇笔记）
         path: String,
     },
-    /// 访客粘贴了一个文件（主持人）：存进仓库的「附件」，回从这篇引用它的路径
+    /// 访客粘贴了一个文件（主持人）：存进这篇的附件位置，回从这篇引用它的路径
     AttachPut {
         request: u32,
         from: u16,
+        doc: String,
         name: String,
         bytes: Vec<u8>,
     },

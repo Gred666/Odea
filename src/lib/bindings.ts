@@ -1095,12 +1095,12 @@ async collabSetName(name: string) : Promise<Result<null, AppError>> {
 },
 /**
  * 开始协作（主持人）：起端点、返回邀请链接。第一次在网络上接受连接时 Windows 会弹防火墙
- * note 是主持的那篇笔记的 id（落盘、存访客粘贴的附件用）；resume = 继续上次没正常结束的那一次
- * （同一个会话 id、邀请密钥、端口，允许过的人不再问）
+ * note 是主持的那篇笔记的 id（一篇的范围；文件夹、整个仓库是空的，只记进落盘的记录里）；scope 是邀请的范围
+ * （设计 §22.5）；resume = 继续上次没正常结束的那一次（同一个会话 id、邀请密钥、端口，允许过的人不再问）
  */
-async collabHost(title: string, permission: Permission, note: string, resume: boolean) : Promise<Result<CollabHosting, AppError>> {
+async collabHost(title: string, permission: Permission, note: string, scope: Scope, resume: boolean) : Promise<Result<CollabHosting, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_host", { title, permission, note, resume }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_host", { title, permission, note, scope, resume }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1414,11 +1414,89 @@ async collabDiscardResume(host: boolean) : Promise<Result<null, AppError>> {
 }
 },
 /**
- * 主持人：这篇正文里引用的附件（正文一变前端就给一份新的）。只有在这里面的访客才要得到
+ * 主持人：这一篇正文里引用的附件（正文一变前端就给一份新的）。只有在这里面的访客才要得到。
+ * refs 是 None：这一篇不在协作里了（没人开着、收掉了）
  */
-async collabSetAttachmentRefs(refs: AttachmentRef[]) : Promise<Result<null, AppError>> {
+async collabSetAttachmentRefs(doc: string, refs: AttachmentRef[] | null) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_set_attachment_refs", { refs }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_attachment_refs", { doc, refs }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 上次做客时开着的那几篇（重新加入时照样开）
+ */
+async collabResumeDocs() : Promise<Result<string[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_resume_docs") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 主持人：前端对「访客要开这一篇」（docOpen）的回话。error 为空 = 给
+ */
+async collabDocAnswer(request: number, error: string | null) : Promise<Result<boolean, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_doc_answer", { request, error }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 主持人：范围里的树（JSON，前端给什么访客那边就收到什么）
+ */
+async collabSetTree(tree: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_tree", { tree }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 主持人：访客要的那篇建好了（doc），或者建不了（error）
+ */
+async collabCreateAnswer(request: number, doc: string | null, error: string | null) : Promise<Result<boolean, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_create_answer", { request, doc, error }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客：开一篇（范围里的）。开好了从管道上来 SyncStart；不给是 CollabEvent 的 docRefused
+ */
+async collabOpenDoc(doc: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_open_doc", { doc }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客：关掉一篇（主持人那边知道我不看了）
+ */
+async collabCloseDoc(doc: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_close_doc", { doc }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客：在范围里新建一篇（主持人那边建），返回它的文档 id
+ */
+async collabCreateDoc(folder: string, title: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_create_doc", { folder, title }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1427,9 +1505,9 @@ async collabSetAttachmentRefs(refs: AttachmentRef[]) : Promise<Result<null, AppE
 /**
  * 访客：向主持人要正文里引用的一个附件，缓存下来，返回本机的路径（前端转成 asset 地址显示）
  */
-async collabFetchAttachment(path: string) : Promise<Result<string, AppError>> {
+async collabFetchAttachment(doc: string, path: string) : Promise<Result<string, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_fetch_attachment", { path }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_fetch_attachment", { doc, path }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1438,9 +1516,9 @@ async collabFetchAttachment(path: string) : Promise<Result<string, AppError>> {
 /**
  * 访客：粘贴的文件交给主持人存进他的「附件」，返回从那篇引用它的路径（编辑器插进正文）
  */
-async collabPutAttachment(name: string, dataBase64: string) : Promise<Result<Attachment, AppError>> {
+async collabPutAttachment(doc: string, name: string, dataBase64: string) : Promise<Result<Attachment, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment", { name, dataBase64 }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment", { doc, name, dataBase64 }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1449,9 +1527,9 @@ async collabPutAttachment(name: string, dataBase64: string) : Promise<Result<Att
 /**
  * 访客：从系统拖进来的文件（只有路径）
  */
-async collabPutAttachmentPath(path: string) : Promise<Result<Attachment, AppError>> {
+async collabPutAttachmentPath(doc: string, path: string) : Promise<Result<Attachment, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment_path", { path }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment_path", { doc, path }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1687,7 +1765,27 @@ export type Control =
 /**
  * 同一个网络里正在分享的人（「附近」列表开着时，变了就报一次整张表）
  */
-{ type: "nearby"; hosts: NearbyHost[] }
+{ type: "nearby"; hosts: NearbyHost[] } | 
+/**
+ * 访客要开一篇（主持人）：前端看它在不在范围里，用 collab_doc_answer 回话
+ */
+{ type: "docOpen"; request: number; member: number; doc: string } | 
+/**
+ * 访客关掉了一篇、或者走了（主持人）：没人开着的那篇前端可以收掉
+ */
+{ type: "docClosed"; member: number; doc: string } | 
+/**
+ * 访客要在范围里新建一篇（主持人）：建好了用 collab_create_answer 回他文档 id
+ */
+{ type: "createDoc"; request: number; member: number; folder: string; title: string } | 
+/**
+ * 范围里的树（访客）：主持人给的 JSON，原样交给前端
+ */
+{ type: "tree"; tree: string } | 
+/**
+ * 主持人不给这一篇（访客）：不在范围里、已经删了
+ */
+{ type: "docRefused"; doc: string; reason: string }
 export type DayDoc = { date: string; title: string; tasks: Task[]; noteMd: string; updatedAt: number; 
 /**
  * 这一天还没写过、内容是从之前最近一天延续来的：那一天的日期。
@@ -1928,9 +2026,13 @@ name: string;
 body: string }
 export type HostResume = { 
 /**
- * 主持的那篇笔记的 id
+ * 主持的那篇笔记的 id（文件夹、整个仓库的范围是空的）
  */
-note: string; title: string; 
+note: string; 
+/**
+ * 邀请的范围
+ */
+scope: Scope | null; title: string; 
 /**
  * 有几位访客（允许过的）
  */
@@ -2011,7 +2113,11 @@ id: string; name: string; permission: Permission; host: boolean;
 /**
  * 经哪位访客转发进来的（成员号，设计 §20.9）；自己连上主持人的是 None
  */
-via: number | null }
+via: number | null; 
+/**
+ * 他开着哪几篇（文档 id，设计 §22.5）。只有主持人这边知道，访客那边是空的
+ */
+docs: string[] }
 /**
  * 列表里的一位
  */
@@ -2170,6 +2276,19 @@ skipped: string | null;
  * 每篇改之前、之后的全文，原样交给 note_relink_undo 就能撤销
  */
 rewrites: LinkRewrite[] }
+export type Scope = { kind: ScopeKind; 
+/**
+ * 一篇的话是它的文档 id（访客进来就开它）；文件夹、整个仓库是空的
+ */
+doc: string; 
+/**
+ * 给访客看的名字：那篇的标题、文件夹名、仓库名
+ */
+name: string }
+/**
+ * 邀请的范围（设计 §22.5）：一篇、一个文件夹、整个仓库
+ */
+export type ScopeKind = "doc" | "folder" | "vault"
 /**
  * 访客窗口里共享的那一篇，存一份到仓库里
  */
@@ -2195,7 +2314,7 @@ export type Status =
 /**
  * 连上了，等主持人确认
  */
-{ state: "waiting" } | { state: "connected"; member: number; permission: Permission; title: string } | 
+{ state: "waiting" } | { state: "connected"; member: number; permission: Permission; title: string; scope: Scope } | 
 /**
  * 断了，正在重连（本地照常编辑）
  */

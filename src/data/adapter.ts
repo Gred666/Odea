@@ -61,20 +61,20 @@ export function useCurrentDocument(): DocumentModel {
   const draftOr = (target: DocumentSaveTarget, stored: string) =>
     drafts[saveKeyOf(target)]?.contentMd ?? stored;
 
-  // 协作（docs/协同编辑.md）：做客时正文区换成共享的那一篇；主持的那篇笔记带上会话
+  // 协作（docs/协同编辑.md）：做客时正文区换成共享的那一篇；主持的那几篇笔记带上各自的会话
   const collabPhase = useCollab((s) => s.phase);
   const collabSession = useCollab((s) => s.session);
-  const hostedNoteId = useCollab((s) => s.noteId);
+  const hostedDocs = useCollab((s) => s.hostedDocs);
   const showShared = useCollab((s) => s.showShared);
   const sharedTitle = useCollab((s) => s.title);
   const sessionKey = useCollab((s) => s.sessionKey);
   const permission = useCollab((s) => s.permission);
   const ended = useCollab((s) => s.status?.state === "ended");
   const members = useCollab((s) => s.members);
-  const hostedCollab = (noteId: string) =>
-    collabPhase === "hosting" && hostedNoteId === noteId && collabSession
-      ? { session: collabSession, readOnly: false }
-      : undefined;
+  const hostedCollab = (noteId: string) => {
+    const session = collabPhase === "hosting" ? hostedDocs[noteId] : undefined;
+    return session ? { session, readOnly: false } : undefined;
+  };
 
   // 两个列表各自显示哪一篇：选中的不在了就是第一篇；正文还没取回来就先接着显示上一篇
   const shownNote = useShownNote(

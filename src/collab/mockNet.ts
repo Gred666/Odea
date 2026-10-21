@@ -8,6 +8,7 @@ import type {
   Permission,
   Reach,
   RelayInfo,
+  Scope,
   Status,
   TrustedPeer,
 } from "@/lib/bindings";
@@ -15,17 +16,18 @@ import { type CollabNet, type Frame, PIPE } from "./net";
 import { CollabSession, type Peer, peerColor } from "./session";
 
 /* ============================================================
-   浏览器预览里的协作网络（没有 Rust）。和 Rust 那边说同一套帧（net.ts 的 PIPE），
+   浏览器预览里的协作网络（没有 Rust）。和 Rust 那边说同一套帧（net.ts 的 PIPE，每一帧带着是哪篇），
    所以前端的会话、界面一行不用改：
-   - 主持：一会儿以后「Alex 想加入」；允许了，Alex 用一个真的 Yjs 会话和你同步，隔一会儿
-     在第一段后面打一句话、光标跟着动
-   - 加入：连接中 → 等确认 → 进来，对面「林夕」的文档同步过来，她也会打几个字
+   - 主持：一会儿以后「Alex 想加入」；允许了，Alex 要开一篇（一篇的范围就是那一篇，文件夹、整个仓库是
+     树里的第一篇），你那边给了，他用一个真的会话和你同步，隔一会儿在第一段后面打一句话、光标跟着动
+   - 加入：连接中 → 等确认 → 进来，对面「林夕」的文档同步过来，她也会打几个字。链接里有 folder 的是
+     一个文件夹的范围：先给树（两篇），开哪篇同步哪篇，新建的也在树上
    - 互联网上（P10.2）：主持时过一会儿报「只有同一网络里的人能加入」（配了中继的话是经由它）；
      链接里有 far 的连不上（3 秒给结论），生成回连链接以后过一会儿「主持人拨过来了」；
      链接里有 relay 的带着主持人的中继；主持时打开回连链接，过一会儿「Sam 想加入」
    - 中继：存在内存里；地址里有 bad 的测试时令牌被拒
    - 附近：过一会儿列出林夕和 Sam；点了照常进来
-   - 落盘：交来的状态存在内存里；单测用 simulateCrash() 假装崩了，再「继续上次的协作」
+   - 落盘：交来的每篇的状态存在内存里；单测用 simulateCrash() 假装崩了，再「继续上次的协作」
    - 附件：访客要的图片回一张占位的 SVG；粘贴的回「附件/文件名」
    时间可以按比例缩（单测里设得很快）。
    ============================================================ */
@@ -38,16 +40,17 @@ export interface MockNetOptions {
 }
 
 export interface MockNet extends CollabNet {
-  /** 单测：让对面那位打几个字 */
-  remoteType(text: string, at?: number): void;
-  /** 单测：对面那位的正文 */
-  remoteText(): string;
-  /** 单测：主持人最近交来的附件引用 */
-  attachmentRefs(): AttachmentRef[];
+  /** 单测：让对面那位在 doc（默认最近开的那一篇）里打几个字 */
+  remoteType(text: string, at?: number, doc?: string): void;
+  /** 单测：对面那位那一篇的正文（默认最近开的那一篇） */
+  remoteText(doc?: string): string;
+  /** 单测：主持人最近交来的某一篇（默认主持的那一篇）的附件引用 */
+  attachmentRefs(doc?: string): AttachmentRef[];
   /** 单测：假装崩了 —— 落盘的留着，会话没了（下次 resumeInfo 里有） */
   simulateCrash(): void;
 }
 
+/** 做客时对面那篇（一篇的范围） */
 const SAMPLE = `# 周会记录
 
 这一页大家一起改：林夕在主持，你是访客。
@@ -57,6 +60,17 @@ const SAMPLE = `# 周会记录
 - [ ] 把协同编辑接上网络
 - [x] 编辑器绑定
 `;
+
+/** 做客时对面的文件夹（链接里有 folder）：两篇 */
+const FOLDER_DOCS: { id: string; title: string; folder: string; text: string }[] = [
+  { id: "mock-weekly", title: "周会记录", folder: "", text: SAMPLE },
+  {
+    id: "mock-plan",
+    title: "下季度计划",
+    folder: "计划",
+    text: "# 下季度计划\n\n先把团队仓库做完，再说别的。\n",
+  },
+];
 
 export function createMockNet(options: MockNetOptions = {}): MockNet {
   const speed = options.speed ?? 1;
@@ -81,17 +95,19 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
     for (const listener of controls) listener(control);
   };
   const status = (status: Status) => emit({ type: "status", status });
-  const frame = (kind: number, member: number, payload: Uint8Array) => {
+  const frame = (kind: number, member: number, doc: string, payload: Uint8Array) => {
     // 和真的 Channel 一样异步到
-    queueMicrotask(() => onFrame?.({ kind, member, payload }));
+    queueMicrotask(() => onFrame?.({ kind, member, doc, payload }));
   };
 
-  /** 对面那位：成员号、Yjs 会话、权限 */
+  /** 对面那位：成员号、权限；他开着的每一篇各一个真的会话 */
   let remote: {
     member: number;
     peer: Peer;
-    session: CollabSession;
     permission: Permission;
+    docs: Map<string, CollabSession>;
+    /** 最近开的那一篇（自己打字打在这里） */
+    last: string | null;
     bot: ReturnType<typeof setInterval> | null;
   } | null = null;
   let role: "idle" | "host" | "guest" = "idle";
@@ -103,11 +119,25 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
   let hostLink = "";
   let joining = "";
   let relays: RelayInfo[] = [];
+  /** 主持人：主持的那一篇、范围、范围里的树（前端给的）、等着回话的「要开这一篇」 */
   let hostNote = "";
-  let refs: AttachmentRef[] = [];
-  /** 落盘：现在这一次的、崩了留下来的 */
-  let saved: Uint8Array | null = null;
-  let left: { host: boolean; state: Uint8Array; note: string; title: string } | null = null;
+  let hostScope: Scope | null = null;
+  let hostTree: { docs: { id: string }[] } | null = null;
+  const pendingDocs = new Map<number, string>();
+  let nextDocRequest = 100;
+  /** 访客：这一次的范围、对面的那几篇（文件夹的范围里新建的也在这里） */
+  let guestScope: Scope | null = null;
+  let guestDocs = FOLDER_DOCS.map((doc) => ({ ...doc }));
+  const refs = new Map<string, AttachmentRef[]>();
+  /** 落盘：现在这一次的（每篇一份）、崩了留下来的 */
+  let saved = new Map<string, Uint8Array>();
+  let left: {
+    host: boolean;
+    states: Map<string, Uint8Array>;
+    note: string;
+    scope: Scope | null;
+    title: string;
+  } | null = null;
   const PLACEHOLDER = `data:image/svg+xml;utf8,${encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="240" height="120" fill="#e5e5df"/><text x="120" y="66" font-size="14" text-anchor="middle" fill="#74746e">主持人那边的图</text></svg>',
   )}`;
@@ -136,19 +166,39 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
     hasIpv6: true,
     cause: { kind: "differentNetwork" },
   };
+  const guestTree = () =>
+    JSON.stringify({
+      docs: guestDocs.map(({ id, title, folder }) => ({ id, title, folder })),
+    });
+
   /** 等确认 → 进来（加入、回连都走这里） */
   const admitGuest = () => {
     status({ state: "waiting" });
     schedule(900, () => {
       if (role !== "guest") return;
-      title = "周会记录";
-      connect(
-        { id: "mock-linxi", name: "林夕", color: peerColor("mock-linxi") },
-        0,
-        "edit",
-        SAMPLE,
-      );
-      status({ state: "connected", member: 1, permission: "edit", title });
+      const linxi = { id: "mock-linxi", name: "林夕", color: peerColor("mock-linxi") };
+      remote = {
+        member: 0,
+        peer: linxi,
+        permission: "edit",
+        docs: new Map(),
+        last: null,
+        bot: null,
+      };
+      emit({ type: "members", members: members() });
+      if (/folder/i.test(joining)) {
+        // 一个文件夹：先给树，访客开哪篇同步哪篇
+        title = "项目";
+        guestScope = { kind: "folder", doc: "", name: "项目" };
+        emit({ type: "tree", tree: guestTree() });
+        status({ state: "connected", member: 1, permission: "edit", title, scope: guestScope });
+      } else {
+        // 一篇：Rust 那边进来就开那一篇
+        title = "周会记录";
+        guestScope = { kind: "doc", doc: "mock-doc", name: title };
+        status({ state: "connected", member: 1, permission: "edit", title, scope: guestScope });
+        openRemote("mock-doc", SAMPLE);
+      }
       emit({ type: "route", relayed: false });
     });
   };
@@ -160,6 +210,7 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
     permission: "edit",
     host: role === "host",
     via: null,
+    docs: [],
   });
   const members = (): MemberInfo[] => {
     if (!remote) return [selfInfo(0)];
@@ -170,30 +221,46 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
       permission: remote.permission,
       host: role === "guest",
       via: null,
+      // 主持人这边看得到他开着哪几篇
+      docs: role === "host" ? [...remote.docs.keys()].sort() : [],
     };
     return role === "host" ? [selfInfo(0), other] : [other, selfInfo(1)];
   };
 
-  /** 对面那位进来：建会话，双方互发 Sync1 */
-  const connect = (peer: Peer, member: number, permission: Permission, text?: string) => {
+  /** 对面那位开了一篇：建会话，双方互发 Sync1（text：做客时对面那篇本来的正文） */
+  const openRemote = (doc: string, text?: string) => {
+    if (!remote || remote.docs.has(doc)) return;
+    const member = remote.member;
     const session = new CollabSession({
-      self: peer,
+      self: remote.peer,
       initialText: text,
       transport: {
         sendUpdate: (update) => {
           // 只读的访客发的更新，主持人那边（Rust）会丢掉
           if (role === "host" && remote?.permission === "read") return;
-          frame(PIPE.update, member, update);
+          frame(PIPE.update, member, doc, update);
         },
-        sendCursor: (payload) => frame(PIPE.cursor, member, payload),
+        sendCursor: (payload) => frame(PIPE.cursor, member, doc, payload),
       },
     });
-    remote = { member, peer, session, permission, bot: null };
-    emit({ type: "members", members: members() });
+    remote.docs.set(doc, session);
+    remote.last = doc;
+    if (role === "host") emit({ type: "members", members: members() });
     // 请前端把状态向量发过来；对面也把自己的发过去
-    frame(PIPE.syncVector, member, new Uint8Array());
-    frame(PIPE.syncReply, member, session.stateVector());
-    if (bots) startBot();
+    frame(PIPE.syncVector, member, doc, new Uint8Array());
+    frame(PIPE.syncReply, member, doc, session.stateVector());
+    if (bots) startBot(doc);
+  };
+
+  /** 主持人那边：对面那位进来了，要开一篇（一篇的范围是那一篇，别的是树里的第一篇） */
+  const admitted = (peer: Peer, member: number, permission: Permission) => {
+    remote = { member, peer, permission, docs: new Map(), last: null, bot: null };
+    emit({ type: "members", members: members() });
+    const doc = hostScope?.kind === "doc" ? hostScope.doc : (hostTree?.docs[0]?.id ?? hostNote);
+    if (!doc) return;
+    const request = nextDocRequest++;
+    pendingDocs.set(request, doc);
+    emit({ type: "docOpen", request, member, doc });
   };
 
   const stopBot = () => {
@@ -201,8 +268,13 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
     if (remote) remote.bot = null;
   };
 
-  const remoteType = (text: string, at?: number) => {
-    const session = remote?.session;
+  const sessionOf = (doc?: string) => {
+    const key = doc ?? remote?.last;
+    return key ? remote?.docs.get(key) : undefined;
+  };
+
+  const remoteType = (text: string, at?: number, doc?: string) => {
+    const session = sessionOf(doc);
     if (!session) return;
     let position = at ?? firstParagraphEnd(session.toString());
     for (const char of text) {
@@ -212,16 +284,17 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
     session.setLocalCursor(position);
   };
 
-  /** 隔一会儿打一句话，一个字一个字地打 */
-  const startBot = () => {
+  /** 隔一会儿在这一篇里打一句话，一个字一个字地打 */
+  const startBot = (doc: string) => {
     if (!remote) return;
+    stopBot();
     const line = role === "host" ? "（Alex：这一条我来跟进。）" : "（林夕：欢迎！）";
     let index = 0;
     let position = -1;
     schedule(2500, () => {
       if (!remote) return;
       remote.bot = setInterval(() => {
-        const session = remote?.session;
+        const session = remote?.docs.get(doc);
         if (!session || remote?.permission === "read") return;
         if (index >= [...line].length) {
           stopBot();
@@ -239,8 +312,9 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
 
   const leave = () => {
     stopBot();
-    remote?.session.destroy();
+    for (const session of remote?.docs.values() ?? []) session.destroy();
     remote = null;
+    pendingDocs.clear();
   };
 
   return {
@@ -250,11 +324,13 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
       // 协作中改名：成员表跟着换（Rust 那边是主持人广播、访客发 NAME 帧）
       if (role !== "idle") emit({ type: "members", members: members() });
     },
-    host: async (nextTitle, permission, note, resume) => {
+    host: async (nextTitle, permission, note, scope, resume) => {
       leave();
       role = "host";
       title = nextTitle;
       hostNote = note;
+      hostScope = scope;
+      hostTree = null;
       void resume;
       await new Promise((resolve) => later(600, () => resolve(null)));
       // 过一会儿有人拿着链接来了
@@ -264,7 +340,7 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
         // 记住过的：不问，直接按记住的权限进来
         const known = trusted.find((peer) => peer.id === alex.id);
         if (known) {
-          connect(alex, 1, known.permission);
+          admitted(alex, 1, known.permission);
           return;
         }
         pendingRequest = 1;
@@ -298,6 +374,7 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
       leave();
       role = "guest";
       joining = link;
+      guestDocs = FOLDER_DOCS.map((doc) => ({ ...doc }));
       status({ state: "connecting" });
       // 链接里有 far：连不上，3 秒给结论（等回连）
       if (/far/i.test(link)) {
@@ -365,21 +442,29 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
       status({ state: "connecting" });
       schedule(500, admitGuest);
     },
-    saveState: (state) => {
-      saved = state.slice();
+    saveState: (doc, state) => {
+      saved.set(doc, state.slice());
     },
     resumeInfo: async (): Promise<CollabResume> => ({
       host:
         left?.host === true
-          ? { note: left.note, title: left.title, guests: 1, savedAt: Date.now() }
+          ? {
+              note: left.note,
+              scope: left.scope,
+              title: left.title,
+              guests: 1,
+              savedAt: Date.now(),
+            }
           : null,
       guest:
         left?.host === false ? { title: left.title, hostName: "林夕", savedAt: Date.now() } : null,
     }),
-    resumeState: async (host) => {
-      if (!left || left.host !== host) throw new Error("上次协作的状态已经没了");
-      return left.state;
+    resumeState: async (host, doc) => {
+      const state = left && left.host === host ? left.states.get(doc) : undefined;
+      if (!state) throw new Error("上次协作的状态已经没了");
+      return state;
     },
+    resumeDocs: async () => (left && !left.host ? [...left.states.keys()] : []),
     rejoin: async () => {
       leave();
       role = "guest";
@@ -391,16 +476,19 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
     discardResume: async (host) => {
       if (left?.host === host) left = null;
     },
-    setAttachmentRefs: async (next) => {
-      refs = next;
+    setAttachmentRefs: async (doc, next) => {
+      if (next) refs.set(doc, next);
+      else refs.delete(doc);
     },
-    fetchAttachment: async (path) => {
+    fetchAttachment: async (doc, path) => {
       await new Promise((resolve) => later(150, () => resolve(null)));
       if (role !== "guest") throw new Error("现在没连着主持人");
+      void doc;
       void path;
       return { url: PLACEHOLDER, file: null };
     },
-    putAttachment: async (name) => {
+    putAttachment: async (doc, name) => {
+      void doc;
       await new Promise((resolve) => later(150, () => resolve(null)));
       return {
         link: `附件/${name}`,
@@ -408,9 +496,45 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
         isImage: /\.(png|jpe?g|gif|webp|svg)$/i.test(name),
       };
     },
-    putAttachmentPath: async (path) => {
+    putAttachmentPath: async (doc, path) => {
+      void doc;
       const name = path.replace(/\\/g, "/").split("/").pop() ?? path;
       return { link: `附件/${name}`, name, isImage: /\.(png|jpe?g|gif|webp|svg)$/i.test(name) };
+    },
+    answerDoc: async (request, error) => {
+      const doc = pendingDocs.get(request);
+      if (!doc || !remote) return false;
+      pendingDocs.delete(request);
+      if (!error) openRemote(doc);
+      return true;
+    },
+    setTree: async (tree) => {
+      try {
+        hostTree = JSON.parse(tree);
+      } catch {
+        hostTree = null;
+      }
+    },
+    answerCreate: async () => true,
+    openDoc: async (doc) => {
+      if (role !== "guest" || !remote) return;
+      const found = guestDocs.find((item) => item.id === doc);
+      if (guestScope?.kind === "doc" ? doc !== guestScope.doc : !found) {
+        queueMicrotask(() => emit({ type: "docRefused", doc, reason: "这一篇不在共享的文件夹里" }));
+        return;
+      }
+      openRemote(doc, found?.text ?? SAMPLE);
+    },
+    closeDoc: async (doc) => {
+      remote?.docs.get(doc)?.destroy();
+      remote?.docs.delete(doc);
+    },
+    createDoc: async (folder, newTitle) => {
+      if (role !== "guest" || guestScope?.kind === "doc") throw new Error("这次协作只共享了一篇");
+      const id = `mock-new-${guestDocs.length + 1}`;
+      guestDocs.push({ id, title: newTitle || "无标题", folder, text: "" });
+      emit({ type: "tree", tree: guestTree() });
+      return id;
     },
     relays: async () => relays,
     relayInspect: async (code) => {
@@ -487,7 +611,7 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
       if (allow) {
         // 模拟的只有一位对面的人：后来的顶替先来的
         if (remote) leave();
-        connect(pendingPeer, request, allow);
+        admitted(pendingPeer, request, allow);
       }
       pendingPeer = null;
       return true;
@@ -525,7 +649,7 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
       pendingRequest = null;
       role = "idle";
       // 正常结束：落盘的删掉
-      saved = null;
+      saved = new Map();
       status({ state: "ended", reason: { kind: "left" } });
     },
     openPipe: async (listener) => {
@@ -534,9 +658,9 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
         if (onFrame === listener) onFrame = null;
       };
     },
-    send: (kind, member, payload) => {
-      const session = remote?.session;
-      if (!session) return;
+    send: (kind, member, doc, payload) => {
+      const session = remote?.docs.get(doc);
+      if (!session || !remote) return;
       const bytes = payload.slice();
       switch (kind) {
         case PIPE.update:
@@ -549,11 +673,11 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
           );
           return;
         case PIPE.syncVector:
-          if (member !== remote!.member) return;
-          session.answerSync(bytes, (reply) => frame(PIPE.update, member, reply));
+          if (member !== remote.member) return;
+          session.answerSync(bytes, (reply) => frame(PIPE.update, member, doc, reply));
           return;
         case PIPE.syncReply:
-          if (member !== remote!.member) return;
+          if (member !== remote.member) return;
           session.receiveUpdate(bytes);
           return;
       }
@@ -570,18 +694,24 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
     takeCopy: async () => null,
     onCopyReady: async () => () => {},
     remoteType,
-    remoteText: () => remote?.session.toString() ?? "",
-    attachmentRefs: () => refs,
+    remoteText: (doc) => sessionOf(doc)?.toString() ?? "",
+    attachmentRefs: (doc) => refs.get(doc ?? hostNote) ?? [],
     simulateCrash: () => {
-      if (saved && role !== "idle") {
-        left = { host: role === "host", state: saved, note: hostNote, title: title || "周会记录" };
+      if (saved.size && role !== "idle") {
+        left = {
+          host: role === "host",
+          states: new Map(saved),
+          note: hostNote,
+          scope: role === "host" ? hostScope : guestScope,
+          title: title || "周会记录",
+        };
       }
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       leave();
       pendingRequest = null;
       role = "idle";
-      saved = null;
+      saved = new Map();
     },
   };
 }

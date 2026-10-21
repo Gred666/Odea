@@ -53,12 +53,14 @@ afterEach(async () => {
 });
 
 describe("帧", () => {
-  it("类型、成员号、内容来回一致", () => {
-    const frame = encodeFrame(PIPE.cursor, 513, new Uint8Array([1, 2, 3]));
+  it("类型、成员号、哪一篇、内容来回一致", () => {
+    const frame = encodeFrame(PIPE.cursor, 513, "周报-1", new Uint8Array([1, 2, 3]));
     const back = decodeFrame(frame.buffer as ArrayBuffer);
-    expect(back).toMatchObject({ kind: PIPE.cursor, member: 513 });
+    expect(back).toMatchObject({ kind: PIPE.cursor, member: 513, doc: "周报-1" });
     expect([...back!.payload]).toEqual([1, 2, 3]);
     expect(decodeFrame(new Uint8Array([1]))).toBeNull();
+    // 说文档 id 有 9 个字节，后面只有 2 个
+    expect(decodeFrame(new Uint8Array([1, 0, 0, 9, 65, 66]))).toBeNull();
   });
 });
 
@@ -438,7 +440,13 @@ describe("P10.1 的遗留", () => {
     expect(useCollab.getState().phase).toBe("hosting");
     expect(useCollab.getState().resume).toBeNull();
     // 用同一个会话重新起来
-    expect(host).toHaveBeenCalledWith("周会", "edit", "n1", true);
+    expect(host).toHaveBeenCalledWith(
+      "周会",
+      "edit",
+      "n1",
+      { kind: "doc", doc: "n1", name: "周会" },
+      true,
+    );
     expect(useCollab.getState().session!.toString()).toBe(
       "第一行\n第二行\n第三行\n第四行\n磁盘上后来的",
     );
@@ -468,7 +476,7 @@ describe("P10.1 的遗留", () => {
     await until("同步到正文", () => session.toString().startsWith("# 周会记录"));
     session.insertText(session.text.length, "访客断线前写的");
     // 落盘是停下两秒后：等不了那么久，直接交一份
-    net.saveState(session.encodeState());
+    net.saveState("mock-doc", session.encodeState());
     net.simulateCrash();
     resetCollabForTest(net);
     useCollab.setState({ resume: await net.resumeInfo() });
@@ -514,7 +522,7 @@ describe("P10.1 的遗留", () => {
     const put = vi.spyOn(net, "putAttachment");
     const attached = await useCollab.getState().attachFiles([file]);
     expect(attached).toEqual([{ link: "附件/截图.png", name: "截图.png", isImage: true }]);
-    expect(put).toHaveBeenCalledWith("截图.png", "AQID");
+    expect(put).toHaveBeenCalledWith("mock-doc", "截图.png", "AQID");
   });
 });
 
@@ -531,5 +539,89 @@ describe("结束原因的说法", () => {
       "你的 Odea 比林夕的旧，连不上：升级到最新再试",
     );
     expect(endText({ kind: "dropped" }, "林夕")).toContain("林夕那边就断开了");
+  });
+});
+
+describe("一条连接里好几篇（设计 §22.5）", () => {
+  it("主持一个文件夹：树里只有文件夹里的，访客要开哪篇才建哪篇的会话，文件夹外的不给", async () => {
+    useData.setState({
+      notes: [
+        { id: "n1", title: "周会", relPath: "笔记/项目/周会.md" } as NoteSummary,
+        { id: "n2", title: "日记草稿", relPath: "笔记/私事/草稿.md" } as NoteSummary,
+      ],
+      bodies: { n1: "第一行\n第二行", n2: "不给别人看" },
+    });
+    const setTree = vi.spyOn(net, "setTree");
+    const answerDoc = vi.spyOn(net, "answerDoc");
+    await net.onControl(handleControl);
+    await useCollab.getState().startHostingScope({ kind: "folder", folder: "项目", name: "项目" });
+    expect(useCollab.getState()).toMatchObject({
+      phase: "hosting",
+      noteId: null,
+      scope: { kind: "folder", doc: "项目" },
+    });
+    // 树：只有「项目」里的那篇
+    const tree = JSON.parse(setTree.mock.calls.at(-1)![0]);
+    expect(tree.docs).toEqual([{ id: "n1", title: "周会", folder: "" }]);
+    // 还没人要：一篇会话都没有
+    expect(useCollab.getState().hostedDocs).toEqual({});
+
+    await until("加入请求", () => useCollab.getState().requests.length === 1);
+    await useCollab.getState().answer(1, "edit");
+    // Alex 要开树里的第一篇：给了，建起这一篇的会话
+    await until("建了 n1 的会话", () => !!useCollab.getState().hostedDocs.n1);
+    expect(answerDoc).toHaveBeenCalledWith(100, null);
+    await until("对方同步到", () => net.remoteText() === "第一行\n第二行");
+    net.remoteType("（Alex 写的）");
+    await until("存进 n1", () =>
+      saved.some((item) => item.id === "n1" && item.text.includes("Alex 写的")),
+    );
+
+    // 文件夹外的：不给，说为什么
+    handleControl({ type: "docOpen", request: 777, member: 1, doc: "n2" });
+    await until("回了不给", () => answerDoc.mock.calls.some((call) => call[0] === 777));
+    expect(answerDoc).toHaveBeenCalledWith(777, "这一篇不在共享的文件夹里");
+    expect(useCollab.getState().hostedDocs.n2).toBeUndefined();
+  });
+
+  it("进一个文件夹：拿到树，开哪篇显示哪篇，新建的打开它，开不了的说为什么", async () => {
+    await net.onControl(handleControl);
+    await useCollab.getState().join("odea://join/folderabcdefghijklmn");
+    await until("进来了", () => useCollab.getState().phase === "guest");
+    const state = useCollab.getState();
+    expect(state.scope).toMatchObject({ kind: "folder", name: "项目" });
+    expect(state.tree?.docs.map((doc) => doc.title)).toEqual(["周会记录", "下季度计划"]);
+    // 文件夹的范围：对话框留着挑一篇，正文区还没有
+    expect(state.current).toBeNull();
+
+    await useCollab.getState().openShared("mock-plan");
+    await until("同步到计划", () =>
+      (useCollab.getState().session?.toString() ?? "").startsWith("# 下季度计划"),
+    );
+    expect(useCollab.getState()).toMatchObject({
+      current: "mock-plan",
+      title: "下季度计划",
+      showShared: true,
+    });
+    await useCollab.getState().openShared("mock-weekly");
+    await until("换成周会", () =>
+      (useCollab.getState().session?.toString() ?? "").startsWith("# 周会记录"),
+    );
+    expect(useCollab.getState().openDocs).toEqual(["mock-plan", "mock-weekly"]);
+
+    // 关掉正在看的：换到还开着的那一篇
+    await useCollab.getState().closeShared("mock-weekly");
+    expect(useCollab.getState()).toMatchObject({ current: "mock-plan", openDocs: ["mock-plan"] });
+
+    // 新建：主持人那边建好，树上有了，打开它
+    await useCollab.getState().createShared("计划", "复盘");
+    await until("开着新的", () => useCollab.getState().current === "mock-new-3");
+    expect(useCollab.getState().tree?.docs.some((doc) => doc.title === "复盘")).toBe(true);
+
+    // 主持人不给的
+    await useCollab.getState().openShared("nope");
+    await until("说为什么", () => !!useCollab.getState().error);
+    expect(useCollab.getState().error).toContain("不在共享的文件夹里");
+    expect(useCollab.getState().openDocs).not.toContain("nope");
   });
 });

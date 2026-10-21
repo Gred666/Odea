@@ -4,7 +4,7 @@ import { useRelays } from "@/collab/relayStore";
 import { useCollab } from "@/collab/store";
 import { releaseOf } from "@/content/changelog";
 import { backend } from "@/data/backend";
-import { folderLabel, folderOf } from "@/data/folders";
+import { UNSORTED, folderLabel, folderName, folderOf, smartQuery } from "@/data/folders";
 import { useData } from "@/data/store";
 import { useTeam } from "@/data/team";
 import { useTextSearch } from "@/data/textSearch";
@@ -435,6 +435,41 @@ export function CommandPalette({
                   } satisfies Item,
                 ]
               : []),
+            // 一个文件夹、整个仓库（docs/协同编辑.md §22.5）：对方能打开里面的任何一篇
+            ...(workspace === "notes" &&
+            noteFolder &&
+            noteFolder !== UNSORTED &&
+            !smartQuery(noteFolder)
+              ? [
+                  {
+                    id: "collab-invite-folder",
+                    group: "协作",
+                    icon: Users,
+                    label: `邀请协作：文件夹「${folderName(noteFolder)}」…`,
+                    hint: "对方能打开这个文件夹里的每一篇",
+                    keywords: "collab invite folder share 协作 协同 文件夹 邀请 一起编辑 多人 共享",
+                    run: () =>
+                      void useCollab.getState().startHostingScope({
+                        kind: "folder",
+                        folder: noteFolder,
+                        name: folderName(noteFolder),
+                      }),
+                  } satisfies Item,
+                ]
+              : []),
+            {
+              id: "collab-invite-vault",
+              group: "协作",
+              icon: Users,
+              label: "邀请协作：整个仓库…",
+              hint: "对方能打开这个仓库里的每一篇笔记",
+              keywords: "collab invite vault share 协作 协同 仓库 全部 邀请 一起编辑 多人 共享",
+              run: () =>
+                void useCollab.getState().startHostingScope({
+                  kind: "vault",
+                  name: vaultRoot ? folderName(vaultRoot.replaceAll("\\", "/")) : "Odea",
+                }),
+            } satisfies Item,
             {
               id: "collab-join",
               group: "协作",

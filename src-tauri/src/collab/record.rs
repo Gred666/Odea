@@ -4,10 +4,11 @@
 应用数据目录的 collab/ 下，同一时刻最多一套主持、一套做客：
 - host.json：主持人的会话 id、邀请密钥、默认权限、标题、是哪篇笔记、允许过谁（成员号、权限）、
   拉黑了谁、端点绑的端口。Rust 的 Host 一有变化就重写（Host::persist）
-- guest.json：访客的邀请链接（或者「附近」点进来的主持人地址）、只直连没有、标题、主持人的名字。
-  命令层写
-- host.loro / guest.loro：Loro 文档的快照。前端每隔几秒、每次存盘时交过来
-  （collab_send 的 PIPE_SAVE），这里只存字节，不懂内容
+- guest.json：访客的邀请链接（或者「附近」点进来的主持人地址）、只直连没有、标题、主持人的名字、
+  开着哪几篇。命令层写
+- host-docs/、guest-docs/：每篇一个 Loro 文档的快照（文件名是文档 id 的十六进制）。前端每隔几秒、
+  每次存盘时交过来（collab_send 的 PIPE_SAVE），这里只存字节，不懂内容。一条连接里好几篇（设计 §22.5）
+  以前只有一个 host.loro / guest.loro（版本 1），升上来以后那种记录不认
 
 正常结束（停止协作、离开）就删掉。重启后还在 = 上次没正常结束：主持人那边出「继续上次的协作」，
 用同一个会话 id、邀请密钥和端口重新起端点，允许过的人不再问，访客的断线重连自己就接上了；
@@ -18,13 +19,15 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::protocol::Permission;
+use super::protocol::{Permission, Scope};
 
 pub const HOST_FILE: &str = "host.json";
-pub const HOST_STATE: &str = "host.loro";
 pub const GUEST_FILE: &str = "guest.json";
-pub const GUEST_STATE: &str = "guest.loro";
-const VERSION: u32 = 1;
+const HOST_DOCS: &str = "host-docs";
+const GUEST_DOCS: &str = "guest-docs";
+/// 版本 1 只有一篇的那一份快照：删的时候顺手删掉
+const OLD_STATES: [&str; 2] = ["host.loro", "guest.loro"];
+const VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -33,10 +36,11 @@ pub enum Role {
 }
 
 impl Role {
+    /// (说明的文件, 放每篇快照的文件夹)
     fn files(self) -> (&'static str, &'static str) {
         match self {
-            Role::Host => (HOST_FILE, HOST_STATE),
-            Role::Guest => (GUEST_FILE, GUEST_STATE),
+            Role::Host => (HOST_FILE, HOST_DOCS),
+            Role::Guest => (GUEST_FILE, GUEST_DOCS),
         }
     }
 }
@@ -60,8 +64,11 @@ pub struct HostRecord {
     pub secret: String,
     pub permission: Permission,
     pub title: String,
-    /// 主持的是哪篇笔记（前端的笔记 id；Rust 不解释它）
+    /// 主持的是哪篇笔记（前端的笔记 id；Rust 不解释它）。文件夹、整个仓库的范围是空的
     pub note: String,
+    /// 邀请的范围（版本 2 起）
+    #[serde(default)]
+    pub scope: Option<Scope>,
     pub approved: Vec<ApprovedRecord>,
     pub banned: Vec<String>,
     pub next_member: u16,
@@ -81,6 +88,9 @@ pub struct GuestRecord {
     pub direct_only: bool,
     pub title: String,
     pub host_name: String,
+    /// 开着哪几篇（文档 id）：重新加入时照样开
+    #[serde(default)]
+    pub docs: Vec<String>,
     pub saved_at: i64,
 }
 
@@ -93,6 +103,7 @@ impl HostRecord {
             permission,
             title,
             note,
+            scope: None,
             approved: Vec::new(),
             banned: Vec::new(),
             next_member: 1,
@@ -119,6 +130,7 @@ impl GuestRecord {
             direct_only,
             title: String::new(),
             host_name: String::new(),
+            docs: Vec::new(),
             saved_at: now_ms(),
         }
     }
@@ -212,35 +224,63 @@ pub fn load_json<T: for<'de> Deserialize<'de>>(dir: &Path, file: &str) -> Option
     serde_json::from_slice(&text).ok()
 }
 
-pub fn save_state(dir: &Path, role: Role, bytes: &[u8]) -> std::io::Result<()> {
-    write_atomic(&dir.join(role.files().1), bytes)
+/// 一篇的快照放在哪：文件名是文档 id 的十六进制（id 里可能有不能进文件名的字）
+fn state_path(dir: &Path, role: Role, doc: &str) -> PathBuf {
+    dir.join(role.files().1)
+        .join(format!("{}.loro", data_encoding::HEXLOWER.encode(doc.as_bytes())))
 }
 
-pub fn load_state(dir: &Path, role: Role) -> Option<Vec<u8>> {
-    std::fs::read(dir.join(role.files().1))
+pub fn save_state(dir: &Path, role: Role, doc: &str, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomic(&state_path(dir, role, doc), bytes)
+}
+
+pub fn load_state(dir: &Path, role: Role, doc: &str) -> Option<Vec<u8>> {
+    std::fs::read(state_path(dir, role, doc))
         .ok()
         .filter(|bytes| !bytes.is_empty())
 }
 
+/// 存着快照的那几篇（文档 id）
+pub fn saved_docs(dir: &Path, role: Role) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir.join(role.files().1)) else {
+        return Vec::new();
+    };
+    let mut docs: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let hex = name.strip_suffix(".loro")?;
+            let bytes = data_encoding::HEXLOWER.decode(hex.as_bytes()).ok()?;
+            String::from_utf8(bytes).ok()
+        })
+        .collect();
+    docs.sort();
+    docs
+}
+
 /// 正常结束：这一套都删掉
 pub fn remove(dir: &Path, role: Role) {
-    let (meta, state) = role.files();
-    for file in [meta, state] {
-        let _ = std::fs::remove_file(dir.join(file));
+    let (meta, docs) = role.files();
+    let _ = std::fs::remove_file(dir.join(meta));
+    let _ = std::fs::remove_dir_all(dir.join(docs));
+    for old in OLD_STATES {
+        if old.starts_with(if role == Role::Host { "host" } else { "guest" }) {
+            let _ = std::fs::remove_file(dir.join(old));
+        }
     }
 }
 
-/// 上次没正常结束的主持（说明和 文档 状态都在才算）
+/// 上次没正常结束的主持（说明和至少一篇的快照都在才算）
 pub fn host_left(dir: &Path) -> Option<HostRecord> {
     let record: HostRecord = load_json(dir, HOST_FILE)?;
     let usable = record.version == VERSION
         && record.session_bytes().is_some()
         && record.secret_bytes().is_some()
-        && dir.join(HOST_STATE).is_file();
+        && !saved_docs(dir, Role::Host).is_empty();
     usable.then_some(record)
 }
 
 pub fn guest_left(dir: &Path) -> Option<GuestRecord> {
     let record: GuestRecord = load_json(dir, GUEST_FILE)?;
-    (record.version == VERSION && dir.join(GUEST_STATE).is_file()).then_some(record)
+    (record.version == VERSION && !saved_docs(dir, Role::Guest).is_empty()).then_some(record)
 }

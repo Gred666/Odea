@@ -11,6 +11,7 @@ import type {
   Permission,
   RelayCheck,
   RelayInfo,
+  Scope,
   SharedCopy,
   TrustedPeer,
 } from "@/lib/bindings";
@@ -26,7 +27,8 @@ import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
      连接状态从 CollabEvent 事件里来
    - 数据：文档更新、光标、同步请求是不透明的字节。不走 JSON（一字节一个数字）：
      前端 → Rust 是原始请求体（collab_send），Rust → 前端是二进制 Channel（collab_pipe）。
-     帧 = 1 字节类型 + 2 字节成员号（小端）+ 内容
+     帧 = 1 字节类型 + 2 字节成员号（小端）+ 1 字节文档 id 长度 + 文档 id + 内容。
+     一条连接里好几篇（设计 §22.5）：每一帧都带着是哪篇
 
    浏览器预览里没有 Rust：换成 mockNet.ts（同一套帧，模拟一位访客来敲门、打字），
    界面在浏览器里也能走通、也能写测试。
@@ -53,6 +55,8 @@ export type RelayInput =
 export interface Frame {
   kind: number;
   member: number;
+  /** 哪一篇（文档 id） */
+  doc: string;
   payload: Uint8Array;
 }
 
@@ -68,13 +72,15 @@ export interface CollabNet {
   identity(): Promise<CollabIdentity>;
   setName(name: string): Promise<void>;
   /**
-   * 开始协作：起端点（要两三秒，iroh 初始化网络监视），返回邀请链接。note 是主持的那篇的 id；
+   * 开始协作：起端点（要两三秒，iroh 初始化网络监视），返回邀请链接。note 是主持的那篇的 id
+   * （一篇的范围；文件夹、整个仓库是空串），scope 是邀请的范围（设计 §22.5）；
    * resume = 继续上次没正常结束的那一次（同一个会话 id、邀请密钥、端口，允许过的人不再问）
    */
   host(
     title: string,
     permission: Permission,
     note: string,
+    scope: Scope,
     resume: boolean,
   ): Promise<CollabHosting>;
   resetInvite(): Promise<string>;
@@ -102,24 +108,38 @@ export interface CollabNet {
   nearbyStop(): Promise<void>;
   /** 点了列表里的一位：不用链接请求加入，进展和 join 一样 */
   joinNearby(id: string): Promise<void>;
-  /* 落盘（设计 §3） */
-  /** 文档的状态交给 Rust 存（不等回话） */
-  saveState(state: Uint8Array): void;
+  /* 落盘（设计 §3）：每篇一份 */
+  /** 这一篇的状态交给 Rust 存（不等回话） */
+  saveState(doc: string, state: Uint8Array): void;
   /** 上次没正常结束的协作 */
   resumeInfo(): Promise<CollabResume>;
-  /** 落盘的文档状态 */
-  resumeState(host: boolean): Promise<Uint8Array>;
+  /** 落盘的这一篇的状态 */
+  resumeState(host: boolean, doc: string): Promise<Uint8Array>;
+  /** 访客：上次做客时开着的那几篇 */
+  resumeDocs(): Promise<string[]>;
   /** 访客：继续上次的做客（会话已经用落盘的状态建好了） */
   rejoin(): Promise<void>;
   discardResume(host: boolean): Promise<void>;
-  /* 附件（设计 §7.2） */
-  /** 主持人：这篇正文里引用的附件（只有这些访客要得到） */
-  setAttachmentRefs(refs: AttachmentRef[]): Promise<void>;
-  /** 访客：向主持人要一个，缓存在本机 */
-  fetchAttachment(path: string): Promise<FetchedAttachment>;
-  /** 访客：粘贴的文件交给主持人存，返回从那篇引用它的路径 */
-  putAttachment(name: string, dataBase64: string): Promise<Attachment>;
-  putAttachmentPath(path: string): Promise<Attachment>;
+  /* 附件（设计 §7.2）：都按篇 */
+  /** 主持人：这一篇正文里引用的附件（只有这些访客要得到）。null = 这一篇不在协作里了 */
+  setAttachmentRefs(doc: string, refs: AttachmentRef[] | null): Promise<void>;
+  /** 访客：向主持人要这一篇里引用的一个，缓存在本机 */
+  fetchAttachment(doc: string, path: string): Promise<FetchedAttachment>;
+  /** 访客：粘贴的文件交给主持人存进这一篇的附件位置，返回从那篇引用它的路径 */
+  putAttachment(doc: string, name: string, dataBase64: string): Promise<Attachment>;
+  putAttachmentPath(doc: string, path: string): Promise<Attachment>;
+  /* 一条连接里好几篇（设计 §22.5） */
+  /** 主持人：对「访客要开这一篇」（docOpen）的回话。error 为 null = 给 */
+  answerDoc(request: number, error: string | null): Promise<boolean>;
+  /** 主持人：范围里的树（JSON）。变了再给一次整棵 */
+  setTree(tree: string): Promise<void>;
+  /** 主持人：访客要的那篇建好了（doc）或者建不了（error） */
+  answerCreate(request: number, doc: string | null, error: string | null): Promise<boolean>;
+  /** 访客：开一篇（开好了从管道上来 syncVector；不给是 onControl 的 docRefused） */
+  openDoc(doc: string): Promise<void>;
+  closeDoc(doc: string): Promise<void>;
+  /** 访客：在范围里新建一篇（主持人那边建），返回它的文档 id */
+  createDoc(folder: string, title: string): Promise<string>;
   answer(request: number, allow: Permission | null): Promise<boolean>;
   setPermission(member: number, permission: Permission): Promise<void>;
   kick(member: number): Promise<void>;
@@ -132,7 +152,7 @@ export interface CollabNet {
   stop(): Promise<void>;
   /** 开始收字节。返回的函数是停 */
   openPipe(onFrame: (frame: Frame) => void): Promise<() => void>;
-  send(kind: number, member: number, payload: Uint8Array): void;
+  send(kind: number, member: number, doc: string, payload: Uint8Array): void;
   onControl(listener: (control: Control) => void): Promise<() => void>;
   /** 冷启动时点进来的 odea:// 链接 */
   pendingLink(): Promise<string | null>;
@@ -147,12 +167,23 @@ export interface CollabNet {
   onCopyReady(listener: () => void): Promise<() => void>;
 }
 
-export function encodeFrame(kind: number, member: number, payload: Uint8Array): Uint8Array {
-  const frame = new Uint8Array(payload.length + 3);
+const utf8 = new TextEncoder();
+const fromUtf8 = new TextDecoder();
+
+export function encodeFrame(
+  kind: number,
+  member: number,
+  doc: string,
+  payload: Uint8Array,
+): Uint8Array {
+  const id = utf8.encode(doc).subarray(0, 255);
+  const frame = new Uint8Array(payload.length + id.length + 4);
   frame[0] = kind;
   frame[1] = member & 0xff;
   frame[2] = (member >> 8) & 0xff;
-  frame.set(payload, 3);
+  frame[3] = id.length;
+  frame.set(id, 4);
+  frame.set(payload, 4 + id.length);
   return frame;
 }
 
@@ -163,8 +194,15 @@ export function decodeFrame(data: ArrayBuffer | Uint8Array | number[]): Frame | 
       : data instanceof ArrayBuffer
         ? new Uint8Array(data)
         : Uint8Array.from(data);
-  if (bytes.length < 3) return null;
-  return { kind: bytes[0]!, member: bytes[1]! | (bytes[2]! << 8), payload: bytes.subarray(3) };
+  if (bytes.length < 4) return null;
+  const length = bytes[3]!;
+  if (bytes.length < 4 + length) return null;
+  return {
+    kind: bytes[0]!,
+    member: bytes[1]! | (bytes[2]! << 8),
+    doc: fromUtf8.decode(bytes.subarray(4, 4 + length)),
+    payload: bytes.subarray(4 + length),
+  };
 }
 
 /** AppError → 一句话 */
@@ -187,8 +225,8 @@ const tauriNet: CollabNet = {
   setName: async (name) => {
     await unwrap(commands.collabSetName(name));
   },
-  host: (title, permission, note, resume) =>
-    unwrap(commands.collabHost(title, permission, note, resume)),
+  host: (title, permission, note, scope, resume) =>
+    unwrap(commands.collabHost(title, permission, note, scope, resume)),
   resetInvite: () => unwrap(commands.collabResetInvite()),
   checkLink: async (link) => {
     const result = await commands.collabCheckLink(link);
@@ -228,28 +266,42 @@ const tauriNet: CollabNet = {
   joinNearby: async (id) => {
     await unwrap(commands.collabJoinNearby(id));
   },
-  saveState: (state) => tauriNet.send(PIPE.save, 0, state),
+  saveState: (doc, state) => tauriNet.send(PIPE.save, 0, doc, state),
   resumeInfo: () => unwrap(commands.collabResumeInfo()),
-  resumeState: async (host) => {
+  resumeState: async (host, doc) => {
     // 原始字节（不经 tauri-specta）
-    const data = await invoke<ArrayBuffer>("collab_resume_state", { host });
+    const data = await invoke<ArrayBuffer>("collab_resume_state", { host, doc });
     return new Uint8Array(data);
   },
+  resumeDocs: () => unwrap(commands.collabResumeDocs()),
   rejoin: async () => {
     await unwrap(commands.collabRejoin());
   },
   discardResume: async (host) => {
     await unwrap(commands.collabDiscardResume(host));
   },
-  setAttachmentRefs: async (refs) => {
-    await unwrap(commands.collabSetAttachmentRefs(refs));
+  setAttachmentRefs: async (doc, refs) => {
+    await unwrap(commands.collabSetAttachmentRefs(doc, refs));
   },
-  fetchAttachment: async (path) => {
-    const file = await unwrap(commands.collabFetchAttachment(path));
+  fetchAttachment: async (doc, path) => {
+    const file = await unwrap(commands.collabFetchAttachment(doc, path));
     return { url: convertFileSrc(file), file };
   },
-  putAttachment: (name, dataBase64) => unwrap(commands.collabPutAttachment(name, dataBase64)),
-  putAttachmentPath: (path) => unwrap(commands.collabPutAttachmentPath(path)),
+  putAttachment: (doc, name, dataBase64) =>
+    unwrap(commands.collabPutAttachment(doc, name, dataBase64)),
+  putAttachmentPath: (doc, path) => unwrap(commands.collabPutAttachmentPath(doc, path)),
+  answerDoc: (request, error) => unwrap(commands.collabDocAnswer(request, error)),
+  setTree: async (tree) => {
+    await unwrap(commands.collabSetTree(tree));
+  },
+  answerCreate: (request, doc, error) => unwrap(commands.collabCreateAnswer(request, doc, error)),
+  openDoc: async (doc) => {
+    await unwrap(commands.collabOpenDoc(doc));
+  },
+  closeDoc: async (doc) => {
+    await unwrap(commands.collabCloseDoc(doc));
+  },
+  createDoc: (folder, title) => unwrap(commands.collabCreateDoc(folder, title)),
   answer: (request, allow) => unwrap(commands.collabAnswer(request, allow)),
   setPermission: async (member, permission) => {
     await unwrap(commands.collabSetPermission(member, permission));
@@ -278,9 +330,9 @@ const tauriNet: CollabNet = {
       open = false;
     };
   },
-  send: (kind, member, payload) => {
+  send: (kind, member, doc, payload) => {
     // 原始请求体：Uint8Array 直接当 body，不会被拆成数字数组
-    invoke("collab_send", encodeFrame(kind, member, payload)).catch((error) => {
+    invoke("collab_send", encodeFrame(kind, member, doc, payload)).catch((error) => {
       console.error("协作：发不出去", error);
     });
   },

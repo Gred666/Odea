@@ -1518,8 +1518,9 @@ pub async fn sync_disable(ws: Ws) -> Result<SyncStatus> {
 - 文档更新、光标、同步请求是不透明的字节：不走 JSON（一字节一个数字），
   Rust → 前端走前端登记的二进制 Channel（collab_pipe），前端 → Rust 走原始请求体（collab_send）。
   这两个命令不经 tauri-specta（它不认原始请求体），lib.rs 里和 specta 的命令合在一个 handler 里。
-  帧：1 字节类型 + 2 字节成员号（小端）+ 内容，类型见 PIPE_*
-同一时刻只有一个会话：主持一篇，或者在别人那里做客。
+  帧：1 字节类型 + 2 字节成员号（小端）+ 1 字节文档 id 长度 + 文档 id + 内容，类型见 PIPE_*
+同一时刻只有一个会话：主持（一篇、一个文件夹、整个仓库，设计 §22.5），或者在别人那里做客。
+一条连接里好几篇：访客要开哪篇，主持人这边问前端（CollabEvent 的 docOpen），前端用 collab_doc_answer 回话。
 中继（设计 §6.4）：地址、名字、指纹记在 config.json 的 collab_relays，令牌在钥匙串（collab-relay:<地址>）。
 令牌不出 Rust：前端只看得到「带没带令牌」，中继码也在这边拆、这边存。
 落盘（设计 §3，collab/record.rs）：应用数据目录的 collab/ 下。文档 的状态前端经 collab_send（PIPE_SAVE）
@@ -1593,15 +1594,16 @@ pub struct CollabHub {
     nearby_owner: Mutex<Option<String>>,
     /// 上次没正常结束的做客已经给某个窗口看过了：同时开着几个仓库窗口时只问一次
     guest_resume_offered: std::sync::atomic::AtomicBool,
-    /// 主持人：主持的是哪篇、这篇正文里引用了哪些附件
+    /// 主持人：每篇正文里引用了哪些附件
     hosted: Mutex<Option<Hosted>>,
 }
 
-/// 主持人这边给访客附件时要查的
+/// 主持人这边给访客附件时要查的：会话里的每一篇（文档 id 就是笔记 id）→ 它正文里引用的附件
+#[derive(Default)]
 struct Hosted {
-    note: String,
-    /// 正文里写的路径 → 仓库里的相对路径（前端按这篇所在的文件夹算好，正文一变就换一份）
-    refs: std::collections::HashMap<String, String>,
+    /// 文档 id → (正文里写的路径 → 仓库里的相对路径)。前端按那篇所在的文件夹算好，正文一变就换一份。
+    /// 没在这里的那篇不给附件、不收粘贴
+    refs: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
 impl CollabHub {
@@ -1668,8 +1670,10 @@ pub struct CollabResume {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HostResume {
-    /// 主持的那篇笔记的 id
+    /// 主持的那篇笔记的 id（文件夹、整个仓库的范围是空的）
     pub note: String,
+    /// 邀请的范围
+    pub scope: Option<collab::Scope>,
     pub title: String,
     /// 有几位访客（允许过的）
     pub guests: u32,
@@ -1821,13 +1825,14 @@ fn clean_vault_path(path: &str) -> Option<String> {
 /// 主持人：访客要的附件。只给这篇正文里引用了的、规范化之后落在这篇的附件文件夹里的（设计 §7.2；
 /// Odea 的仓库是「附件」，Obsidian 的库照它的设置）：不然写个 `../../` 就能读到主持人硬盘上的任意文件，
 /// 写个 `其他笔记.md` 就能读到别的笔记
-async fn read_attachment(hub: &CollabHub, vault: &Arc<Mutex<Vault>>, path: &str) -> std::result::Result<Vec<u8>, String> {
-    let (note, vault_path) = hub
+async fn read_attachment(hub: &CollabHub, vault: &Arc<Mutex<Vault>>, doc: &str, path: &str) -> std::result::Result<Vec<u8>, String> {
+    let note = doc.to_string();
+    let vault_path = hub
         .hosted
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|hosted| Some((hosted.note.clone(), hosted.refs.get(path).cloned()?)))
+        .and_then(|hosted| hosted.refs.get(doc)?.get(path).cloned())
         .ok_or_else(|| "这个文件不在这篇正文里".to_string())?;
     let clean = clean_vault_path(&vault_path).ok_or_else(|| "只给这篇笔记的附件".to_string())?;
     let vault = vault.clone();
@@ -1854,16 +1859,20 @@ async fn read_attachment(hub: &CollabHub, vault: &Arc<Mutex<Vault>>, path: &str)
 async fn store_attachment(
     hub: &CollabHub,
     vault: &Arc<Mutex<Vault>>,
+    doc: String,
     name: String,
     bytes: Vec<u8>,
 ) -> std::result::Result<String, String> {
-    let note = hub
+    let hosted = hub
         .hosted
         .lock()
         .unwrap()
         .as_ref()
-        .map(|hosted| hosted.note.clone())
-        .ok_or_else(|| "主持人那边不在协作了".to_string())?;
+        .is_some_and(|hosted| hosted.refs.contains_key(&doc));
+    if !hosted {
+        return Err("这一篇不在协作里".into());
+    }
+    let note = doc;
     let vault = vault.clone();
     let stored = tauri::async_runtime::spawn_blocking(move || {
         let mut vault = vault.lock().map_err(|_| "仓库锁坏了".to_string())?;
@@ -1943,7 +1952,7 @@ fn forward_collab<R: Runtime>(
     let data_dir = state.data_dir.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
-            let (kind, member, bytes) = match event {
+            let (kind, member, doc, bytes) = match event {
                 collab::Event::Control(control) => {
                     note_guest(&hub, &data_dir, &control);
                     if let Err(error) = CollabEvent(control).emit_to(&app, label.as_str()) {
@@ -1951,11 +1960,11 @@ fn forward_collab<R: Runtime>(
                     }
                     continue;
                 }
-                collab::Event::AttachGet { request, path, .. } => {
+                collab::Event::AttachGet { request, doc, path, .. } => {
                     let (hub, vault) = (hub.clone(), vault.clone());
                     tauri::async_runtime::spawn(async move {
                         let reply = match &vault {
-                            Some(vault) => read_attachment(&hub, vault, &path).await,
+                            Some(vault) => read_attachment(&hub, vault, &doc, &path).await,
                             None => Err("这一边没开仓库".to_string()),
                         }
                         .map(AttachReply::Data);
@@ -1965,11 +1974,11 @@ fn forward_collab<R: Runtime>(
                     });
                     continue;
                 }
-                collab::Event::AttachPut { request, name, bytes, .. } => {
+                collab::Event::AttachPut { request, doc, name, bytes, .. } => {
                     let (hub, vault) = (hub.clone(), vault.clone());
                     tauri::async_runtime::spawn(async move {
                         let reply = match &vault {
-                            Some(vault) => store_attachment(&hub, vault, name, bytes).await,
+                            Some(vault) => store_attachment(&hub, vault, doc, name, bytes).await,
                             None => Err("这一边没开仓库".to_string()),
                         }
                         .map(AttachReply::Link);
@@ -1979,20 +1988,40 @@ fn forward_collab<R: Runtime>(
                     });
                     continue;
                 }
-                collab::Event::Update { from, bytes } => (PIPE_UPDATE, from, bytes),
-                collab::Event::Cursor { from, bytes } => (PIPE_CURSOR, from, bytes),
-                collab::Event::SyncRequest { from, vector } => (PIPE_SYNC_REPLY, from, vector),
-                collab::Event::SyncStart { with } => (PIPE_SYNC_VECTOR, with, Vec::new()),
+                collab::Event::Update { from, doc, bytes } => (PIPE_UPDATE, from, doc, bytes),
+                collab::Event::Cursor { from, doc, bytes } => (PIPE_CURSOR, from, doc, bytes),
+                collab::Event::SyncRequest { from, doc, vector } => (PIPE_SYNC_REPLY, from, doc, vector),
+                collab::Event::SyncStart { with, doc } => (PIPE_SYNC_VECTOR, with, doc, Vec::new()),
             };
-            let mut frame = Vec::with_capacity(bytes.len() + 3);
-            frame.push(kind);
-            frame.extend_from_slice(&member.to_le_bytes());
-            frame.extend_from_slice(&bytes);
+            let frame = pipe_frame(kind, member, &doc, &bytes);
             if let Some(pipe) = hub.pipes.lock().unwrap().get(&label) {
                 let _ = pipe.send(InvokeResponseBody::Raw(frame));
             }
         }
     });
+}
+
+/// 管道上的一帧：1 字节类型 + 2 字节成员号 + 1 字节文档 id 长度 + 文档 id + 内容
+fn pipe_frame(kind: u8, member: u16, doc: &str, payload: &[u8]) -> Vec<u8> {
+    let id = &doc.as_bytes()[..doc.len().min(collab::protocol::MAX_DOC_ID)];
+    let mut frame = Vec::with_capacity(payload.len() + id.len() + 4);
+    frame.push(kind);
+    frame.extend_from_slice(&member.to_le_bytes());
+    frame.push(id.len() as u8);
+    frame.extend_from_slice(id);
+    frame.extend_from_slice(payload);
+    frame
+}
+
+/// 拆开前端发来的一帧：(类型, 成员号, 文档 id, 内容)
+fn split_pipe_frame(frame: &[u8]) -> std::result::Result<(u8, u16, &str, &[u8]), String> {
+    let (&kind, rest) = frame.split_first().ok_or("空帧")?;
+    let (head, rest) = rest.split_at_checked(2).ok_or("帧太短")?;
+    let member = u16::from_le_bytes([head[0], head[1]]);
+    let (&len, rest) = rest.split_first().ok_or("帧太短")?;
+    let (doc, payload) = rest.split_at_checked(len as usize).ok_or("帧太短")?;
+    let doc = std::str::from_utf8(doc).map_err(|_| "文档 id 不对")?;
+    Ok((kind, member, doc, payload))
 }
 
 /// 访客的落盘记录跟着状态走：进去了记下标题、主持人叫什么；结束了（被拒、被移出、主持人停了）
@@ -2087,10 +2116,11 @@ pub async fn collab_set_name(state: State<'_, AppState>, name: String) -> Result
 }
 
 /// 开始协作（主持人）：起端点、返回邀请链接。第一次在网络上接受连接时 Windows 会弹防火墙
-/// note 是主持的那篇笔记的 id（落盘、存访客粘贴的附件用）；resume = 继续上次没正常结束的那一次
-/// （同一个会话 id、邀请密钥、端口，允许过的人不再问）
+/// note 是主持的那篇笔记的 id（一篇的范围；文件夹、整个仓库是空的，只记进落盘的记录里）；scope 是邀请的范围
+/// （设计 §22.5）；resume = 继续上次没正常结束的那一次（同一个会话 id、邀请密钥、端口，允许过的人不再问）
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)]
 pub async fn collab_host<R: Runtime>(
     app: AppHandle<R>,
     ws: Ws,
@@ -2098,6 +2128,7 @@ pub async fn collab_host<R: Runtime>(
     title: String,
     permission: Permission,
     note: String,
+    scope: collab::Scope,
     resume: bool,
 ) -> Result<CollabHosting> {
     state.collab.take_over(&ws.label).await?;
@@ -2129,13 +2160,14 @@ pub async fn collab_host<R: Runtime>(
         relays,
         portmap: true,
         firewall: true,
-        note: note.clone(),
+        note,
+        scope,
         record: Some(collab_dir(&state.data_dir)),
         resume: record,
         trusted,
     };
     let host = Host::start(options, events).await.map_err(AppError::Io)?;
-    *state.collab.hosted.lock().unwrap() = Some(Hosted { note, refs: Default::default() });
+    *state.collab.hosted.lock().unwrap() = Some(Hosted::default());
     forward_collab(app, &state, ws.label.clone(), Some(ws.vault.clone()), receiver);
     let hosting = CollabHosting { link: host.invite().to_link(), id: host.id(), members: host.members() };
     *state.collab.active.lock().unwrap() = Some(Active::Host(host));
@@ -2284,9 +2316,13 @@ pub async fn collab_resume_info(caller: Caller, state: State<'_, AppState>) -> R
             return Ok(CollabResume { host: None, guest: None });
         }
         let dir = collab_dir(&data_dir);
-        let here = |note: &str| vault.as_ref().is_some_and(|vault| vault.lock().is_ok_and(|vault| vault.note_get(note).is_ok()));
+        // 一篇的：那篇笔记在这个仓库里才问；文件夹、整个仓库的：在有仓库的窗口里问
+        let here = |note: &str| {
+            vault.as_ref().is_some_and(|vault| note.is_empty() || vault.lock().is_ok_and(|vault| vault.note_get(note).is_ok()))
+        };
         let host = collab_record::host_left(&dir).filter(|record| here(&record.note)).map(|record| HostResume {
             note: record.note,
+            scope: record.scope,
             title: record.title,
             guests: record.approved.len() as u32,
             saved_at: record.saved_at as f64,
@@ -2329,23 +2365,124 @@ pub async fn collab_discard_resume(state: State<'_, AppState>, host: bool) -> Re
     .await
 }
 
-/// 落盘的 文档 状态（不经 tauri-specta：原始字节）。host = 主持的那一份，否则做客的
+/// 落盘的这一篇的状态（不经 tauri-specta：原始字节）。host = 主持的那一份，否则做客的
 #[tauri::command]
-pub fn collab_resume_state(state: State<'_, AppState>, host: bool) -> std::result::Result<tauri::ipc::Response, String> {
+pub fn collab_resume_state(state: State<'_, AppState>, host: bool, doc: String) -> std::result::Result<tauri::ipc::Response, String> {
     let role = if host { Role::Host } else { Role::Guest };
-    collab_record::load_state(&collab_dir(&state.data_dir), role)
+    collab_record::load_state(&collab_dir(&state.data_dir), role, &doc)
         .map(tauri::ipc::Response::new)
         .ok_or_else(|| "上次协作的状态已经没了".to_string())
 }
 
-/* ---------------- 附件（设计 §7.2） ---------------- */
-
-/// 主持人：这篇正文里引用的附件（正文一变前端就给一份新的）。只有在这里面的访客才要得到
+/// 上次做客时开着的那几篇（重新加入时照样开）
 #[tauri::command]
 #[specta::specta]
-pub async fn collab_set_attachment_refs(state: State<'_, AppState>, refs: Vec<AttachmentRef>) -> Result<()> {
+pub async fn collab_resume_docs(state: State<'_, AppState>) -> Result<Vec<String>> {
+    let data_dir = state.data_dir.clone();
+    blocking(move || {
+        let dir = collab_dir(&data_dir);
+        Ok(collab_record::guest_left(&dir)
+            .map(|record| record.docs)
+            .filter(|docs| !docs.is_empty())
+            .unwrap_or_else(|| collab_record::saved_docs(&dir, Role::Guest)))
+    })
+    .await
+}
+
+/* ---------------- 一条连接里好几篇（设计 §22.5） ---------------- */
+
+/// 主持人：前端对「访客要开这一篇」（docOpen）的回话。error 为空 = 给
+#[tauri::command]
+#[specta::specta]
+pub async fn collab_doc_answer(state: State<'_, AppState>, request: u32, error: Option<String>) -> Result<bool> {
+    match state.collab.active.lock().unwrap().as_ref() {
+        Some(Active::Host(host)) => Ok(host.answer_doc(request, error.map_or(Ok(()), Err))),
+        _ => Ok(false),
+    }
+}
+
+/// 主持人：范围里的树（JSON，前端给什么访客那边就收到什么）
+#[tauri::command]
+#[specta::specta]
+pub async fn collab_set_tree(state: State<'_, AppState>, tree: String) -> Result<()> {
+    if let Some(Active::Host(host)) = state.collab.active.lock().unwrap().as_ref() {
+        host.set_tree(tree.into_bytes());
+    }
+    Ok(())
+}
+
+/// 主持人：访客要的那篇建好了（doc），或者建不了（error）
+#[tauri::command]
+#[specta::specta]
+pub async fn collab_create_answer(state: State<'_, AppState>, request: u32, doc: Option<String>, error: Option<String>) -> Result<bool> {
+    let result = match doc {
+        Some(doc) => Ok(doc),
+        None => Err(error.unwrap_or_else(|| "建不了".into())),
+    };
+    match state.collab.active.lock().unwrap().as_ref() {
+        Some(Active::Host(host)) => Ok(host.answer_create(request, result)),
+        _ => Ok(false),
+    }
+}
+
+/// 访客：开一篇（范围里的）。开好了从管道上来 SyncStart；不给是 CollabEvent 的 docRefused
+#[tauri::command]
+#[specta::specta]
+pub async fn collab_open_doc(state: State<'_, AppState>, doc: String) -> Result<()> {
+    if let Some(Active::Guest(guest)) = state.collab.active.lock().unwrap().as_ref() {
+        guest.open_doc(&doc);
+    }
+    let docs_doc = doc.clone();
+    update_guest_record(&state.data_dir, move |record| {
+        if !record.docs.contains(&docs_doc) {
+            record.docs.push(docs_doc);
+        }
+    });
+    Ok(())
+}
+
+/// 访客：关掉一篇（主持人那边知道我不看了）
+#[tauri::command]
+#[specta::specta]
+pub async fn collab_close_doc(state: State<'_, AppState>, doc: String) -> Result<()> {
+    if let Some(Active::Guest(guest)) = state.collab.active.lock().unwrap().as_ref() {
+        guest.close_doc(&doc);
+    }
+    update_guest_record(&state.data_dir, move |record| record.docs.retain(|open| open != &doc));
+    Ok(())
+}
+
+/// 访客：在范围里新建一篇（主持人那边建），返回它的文档 id
+#[tauri::command]
+#[specta::specta]
+pub async fn collab_create_doc(state: State<'_, AppState>, folder: String, title: String) -> Result<String> {
+    // 锁不跨 await：Guest 不能 clone，拿不出把手。新建是偶尔的事，借着锁发出去、锁外等回话
+    let waiter = {
+        let active = state.collab.active.lock().unwrap();
+        let Some(Active::Guest(guest)) = active.as_ref() else {
+            return Err(AppError::Invalid("现在没有在别人那里做客".into()));
+        };
+        guest.creator()
+    };
+    waiter.create(&folder, &title).await.map_err(AppError::Invalid)
+}
+
+/* ---------------- 附件（设计 §7.2） ---------------- */
+
+/// 主持人：这一篇正文里引用的附件（正文一变前端就给一份新的）。只有在这里面的访客才要得到。
+/// refs 是 None：这一篇不在协作里了（没人开着、收掉了）
+#[tauri::command]
+#[specta::specta]
+pub async fn collab_set_attachment_refs(state: State<'_, AppState>, doc: String, refs: Option<Vec<AttachmentRef>>) -> Result<()> {
     if let Some(hosted) = state.collab.hosted.lock().unwrap().as_mut() {
-        hosted.refs = refs.into_iter().map(|item| (item.path, item.vault_path)).collect();
+        match refs {
+            Some(refs) => {
+                hosted.refs.insert(doc, refs.into_iter().map(|item| (item.path, item.vault_path)).collect());
+            }
+            None => {
+                hosted.refs.remove(&doc);
+            }
+        }
     }
     Ok(())
 }
@@ -2353,12 +2490,12 @@ pub async fn collab_set_attachment_refs(state: State<'_, AppState>, refs: Vec<At
 /// 访客：向主持人要正文里引用的一个附件，缓存下来，返回本机的路径（前端转成 asset 地址显示）
 #[tauri::command]
 #[specta::specta]
-pub async fn collab_fetch_attachment(state: State<'_, AppState>, path: String) -> Result<String> {
+pub async fn collab_fetch_attachment(state: State<'_, AppState>, doc: String, path: String) -> Result<String> {
     let attachments = match state.collab.active.lock().unwrap().as_ref() {
         Some(Active::Guest(guest)) => guest.attachments(),
         _ => return Err(AppError::Invalid("现在没有在别人那里做客".into())),
     };
-    let bytes = attachments.fetch(&path).await.map_err(AppError::Io)?;
+    let bytes = attachments.fetch(&doc, &path).await.map_err(AppError::Io)?;
     let dir = attachment_cache(&state.data_dir);
     blocking(move || {
         // 一个路径一个文件夹（按路径算），里面的文件名跟着正文里写的走：「存一份到我的笔记」
@@ -2375,7 +2512,7 @@ pub async fn collab_fetch_attachment(state: State<'_, AppState>, path: String) -
 /// 访客：粘贴的文件交给主持人存进他的「附件」，返回从那篇引用它的路径（编辑器插进正文）
 #[tauri::command]
 #[specta::specta]
-pub async fn collab_put_attachment(state: State<'_, AppState>, name: String, data_base64: String) -> Result<Attachment> {
+pub async fn collab_put_attachment(state: State<'_, AppState>, doc: String, name: String, data_base64: String) -> Result<Attachment> {
     use base64::Engine;
     let bytes = blocking(move || {
         base64::engine::general_purpose::STANDARD
@@ -2383,13 +2520,13 @@ pub async fn collab_put_attachment(state: State<'_, AppState>, name: String, dat
             .map_err(|error| AppError::Invalid(format!("附件内容不是 base64: {error}")))
     })
     .await?;
-    put_attachment(&state, name, bytes).await
+    put_attachment(&state, doc, name, bytes).await
 }
 
 /// 访客：从系统拖进来的文件（只有路径）
 #[tauri::command]
 #[specta::specta]
-pub async fn collab_put_attachment_path(state: State<'_, AppState>, path: String) -> Result<Attachment> {
+pub async fn collab_put_attachment_path(state: State<'_, AppState>, doc: String, path: String) -> Result<Attachment> {
     let source = PathBuf::from(&path);
     let name = source
         .file_name()
@@ -2403,15 +2540,15 @@ pub async fn collab_put_attachment_path(state: State<'_, AppState>, path: String
         Ok(std::fs::read(&source)?)
     })
     .await?;
-    put_attachment(&state, name, bytes).await
+    put_attachment(&state, doc, name, bytes).await
 }
 
-async fn put_attachment(state: &AppState, name: String, bytes: Vec<u8>) -> Result<Attachment> {
+async fn put_attachment(state: &AppState, doc: String, name: String, bytes: Vec<u8>) -> Result<Attachment> {
     let attachments = match state.collab.active.lock().unwrap().as_ref() {
         Some(Active::Guest(guest)) => guest.attachments(),
         _ => return Err(AppError::Invalid("现在没有在别人那里做客".into())),
     };
-    let link = attachments.put(&name, bytes).await.map_err(AppError::Io)?;
+    let link = attachments.put(&doc, &name, bytes).await.map_err(AppError::Io)?;
     let file = link.rsplit('/').next().unwrap_or(&link).to_string();
     let ext = std::path::Path::new(&file)
         .extension()
@@ -2736,9 +2873,7 @@ pub fn collab_send(state: State<'_, AppState>, request: Request<'_>) -> std::res
     let InvokeBody::Raw(frame) = request.body() else {
         return Err("collab_send 要原始字节".into());
     };
-    let (&kind, rest) = frame.split_first().ok_or("空帧")?;
-    let (head, payload) = rest.split_at_checked(2).ok_or("帧太短")?;
-    let member = u16::from_le_bytes([head[0], head[1]]);
+    let (kind, member, doc, payload) = split_pipe_frame(frame)?;
     let active = state.collab.active.lock().unwrap();
     if kind == PIPE_SAVE {
         // 文档 的状态落盘：在阻塞线程里写，不卡 IPC
@@ -2748,23 +2883,23 @@ pub fn collab_send(state: State<'_, AppState>, request: Request<'_>) -> std::res
             None => return Ok(()),
         };
         let dir = collab_dir(&state.data_dir);
-        let bytes = payload.to_vec();
+        let (doc, bytes) = (doc.to_string(), payload.to_vec());
         tauri::async_runtime::spawn_blocking(move || {
-            if let Err(error) = collab_record::save_state(&dir, role, &bytes) {
+            if let Err(error) = collab_record::save_state(&dir, role, &doc, &bytes) {
                 eprintln!("协作：会话状态写不进去：{error}");
             }
         });
         return Ok(());
     }
     match (active.as_ref(), kind) {
-        (Some(Active::Host(host)), PIPE_UPDATE) => host.send_update(payload.to_vec()),
-        (Some(Active::Host(host)), PIPE_CURSOR) => host.send_cursor(payload),
-        (Some(Active::Host(host)), PIPE_SYNC_VECTOR) => host.send_sync(member, SyncKind::Vector, payload.to_vec()),
-        (Some(Active::Host(host)), PIPE_SYNC_REPLY) => host.send_sync(member, SyncKind::Reply, payload.to_vec()),
-        (Some(Active::Guest(guest)), PIPE_UPDATE) => guest.send_update(payload.to_vec()),
-        (Some(Active::Guest(guest)), PIPE_CURSOR) => guest.send_cursor(payload),
-        (Some(Active::Guest(guest)), PIPE_SYNC_VECTOR) => guest.send_sync(SyncKind::Vector, payload.to_vec()),
-        (Some(Active::Guest(guest)), PIPE_SYNC_REPLY) => guest.send_sync(SyncKind::Reply, payload.to_vec()),
+        (Some(Active::Host(host)), PIPE_UPDATE) => host.send_update(doc, payload.to_vec()),
+        (Some(Active::Host(host)), PIPE_CURSOR) => host.send_cursor(doc, payload),
+        (Some(Active::Host(host)), PIPE_SYNC_VECTOR) => host.send_sync(member, doc, SyncKind::Vector, payload.to_vec()),
+        (Some(Active::Host(host)), PIPE_SYNC_REPLY) => host.send_sync(member, doc, SyncKind::Reply, payload.to_vec()),
+        (Some(Active::Guest(guest)), PIPE_UPDATE) => guest.send_update(doc, payload.to_vec()),
+        (Some(Active::Guest(guest)), PIPE_CURSOR) => guest.send_cursor(doc, payload),
+        (Some(Active::Guest(guest)), PIPE_SYNC_VECTOR) => guest.send_sync(doc, SyncKind::Vector, payload.to_vec()),
+        (Some(Active::Guest(guest)), PIPE_SYNC_REPLY) => guest.send_sync(doc, SyncKind::Reply, payload.to_vec()),
         _ => {}
     }
     Ok(())

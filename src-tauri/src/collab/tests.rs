@@ -20,7 +20,7 @@ async fn frames_round_trip_and_end_cleanly() {
     protocol::write_frame(&mut a, kind::UPDATE, b"hello")
         .await
         .unwrap();
-    protocol::write_frame(&mut a, kind::OPEN, &[])
+    protocol::write_frame(&mut a, kind::OPEN, b"note-1")
         .await
         .unwrap();
     protocol::write_frame(&mut a, kind::SYNC2, &big)
@@ -34,7 +34,7 @@ async fn frames_round_trip_and_end_cleanly() {
     );
     assert_eq!(
         protocol::read_frame(&mut b).await.unwrap(),
-        Some((kind::OPEN, vec![]))
+        Some((kind::OPEN, b"note-1".to_vec()))
     );
     assert_eq!(
         protocol::read_frame(&mut b).await.unwrap(),
@@ -142,6 +142,8 @@ fn broken_or_newer_links_say_why() {
 /* ---------------- 两端实连 ---------------- */
 
 const WAIT: Duration = Duration::from_secs(15);
+/// 大多数测试只协作一篇：就是它（一篇的范围，访客进来就开它；主持人那边不问直接给）
+const DOC: &str = "note-1";
 
 /// 等一个满足条件的事件，中间别的跳过
 async fn expect<T>(
@@ -209,6 +211,7 @@ async fn start_host(title: &str) -> (Host, UnboundedReceiver<Event>) {
             portmap: false,
             firewall: false,
             note: String::new(),
+            scope: protocol::Scope::doc(DOC, title),
             record: None,
             resume: None,
             trusted: Default::default(),
@@ -217,6 +220,7 @@ async fn start_host(title: &str) -> (Host, UnboundedReceiver<Event>) {
     )
     .await
     .expect("主持人起不来");
+    host.allow_docs(&[DOC]);
     (host, rx)
 }
 
@@ -287,11 +291,11 @@ async fn admitted(
     .await;
     // 双方都被叫去发 Sync1
     expect(&mut events, "访客的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with: 0 }).then_some(())
+        matches!(event, Event::SyncStart { with: 0, .. }).then_some(())
     })
     .await;
     expect(host_events, "主持人的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with } if *with == member).then_some(())
+        matches!(event, Event::SyncStart { with, .. } if *with == member).then_some(())
     })
     .await;
     (guest, events, member)
@@ -322,40 +326,40 @@ async fn join_confirm_sync_forward_and_leave() {
     assert_eq!(members[1].name, "Alex");
 
     // 同步：访客发 Sync1 → 主持人前端收到请求 → 回 Sync2 → 访客收到
-    guest.send_sync(SyncKind::Vector, b"guest-sv".to_vec());
+    guest.send_sync(DOC, SyncKind::Vector, b"guest-sv".to_vec());
     expect(&mut host_events, "同步请求", |event| match event {
-        Event::SyncRequest { from: 1, vector } => {
+        Event::SyncRequest { from: 1, vector, .. } => {
             assert_eq!(vector, b"guest-sv");
             Some(())
         }
         _ => None,
     })
     .await;
-    host.send_sync(1, SyncKind::Reply, b"snapshot".to_vec());
+    host.send_sync(1, DOC, SyncKind::Reply, b"snapshot".to_vec());
     expect(&mut guest_events, "快照", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"snapshot").then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"snapshot").then_some(())
     })
     .await;
 
     // 实时更新两个方向
-    host.send_update(b"from-host".to_vec());
+    host.send_update(DOC, b"from-host".to_vec());
     expect(&mut guest_events, "主持人的更新", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"from-host").then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"from-host").then_some(())
     })
     .await;
-    guest.send_update(b"from-guest".to_vec());
+    guest.send_update(DOC, b"from-guest".to_vec());
     expect(&mut host_events, "访客的更新", |event| {
-        matches!(event, Event::Update { from: 1, bytes } if bytes == b"from-guest").then_some(())
+        matches!(event, Event::Update { from: 1, bytes, .. } if bytes == b"from-guest").then_some(())
     })
     .await;
 
     // 光标走数据报（可能丢：一直发到收到为止）
     let got = tokio::time::timeout(WAIT, async {
         loop {
-            guest.send_cursor(b"caret");
+            guest.send_cursor(DOC, b"caret");
             tokio::time::sleep(Duration::from_millis(50)).await;
             while let Ok(event) = host_events.try_recv() {
-                if matches!(&event, Event::Cursor { from: 1, bytes } if bytes == b"caret") {
+                if matches!(&event, Event::Cursor { from: 1, bytes, .. } if bytes == b"caret") {
                     return;
                 }
             }
@@ -378,12 +382,12 @@ async fn join_confirm_sync_forward_and_leave() {
         },
     )
     .await;
-    guest.send_update(b"forwarded".to_vec());
+    guest.send_update(DOC, b"forwarded".to_vec());
     expect(&mut reader_events, "转发的更新", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"forwarded").then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"forwarded").then_some(())
     })
     .await;
-    reader.send_update(b"read-only".to_vec());
+    reader.send_update(DOC, b"read-only".to_vec());
     expect_none(
         &mut host_events,
         "只读成员的更新",
@@ -399,10 +403,10 @@ async fn join_confirm_sync_forward_and_leave() {
     // 只读成员的光标照转（带着他的成员号）
     let got = tokio::time::timeout(WAIT, async {
         loop {
-            reader.send_cursor(b"reader-caret");
+            reader.send_cursor(DOC, b"reader-caret");
             tokio::time::sleep(Duration::from_millis(50)).await;
             while let Ok(event) = guest_events.try_recv() {
-                if matches!(&event, Event::Cursor { from: 2, bytes } if bytes == b"reader-caret") {
+                if matches!(&event, Event::Cursor { from: 2, bytes, .. } if bytes == b"reader-caret") {
                     return;
                 }
             }
@@ -423,9 +427,9 @@ async fn join_confirm_sync_forward_and_leave() {
         .then_some(())
     })
     .await;
-    reader.send_update(b"now-editing".to_vec());
+    reader.send_update(DOC, b"now-editing".to_vec());
     expect(&mut host_events, "改了权限之后的更新", |event| {
-        matches!(event, Event::Update { from: 2, bytes } if bytes == b"now-editing").then_some(())
+        matches!(event, Event::Update { from: 2, bytes, .. } if bytes == b"now-editing").then_some(())
     })
     .await;
 
@@ -628,20 +632,20 @@ async fn dropped_connections_reconnect_without_asking_again() {
     .await;
     assert_eq!((again, permission), (member, Permission::Read));
     expect(&mut events, "重连后的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with: 0 }).then_some(())
+        matches!(event, Event::SyncStart { with: 0, .. }).then_some(())
     })
     .await;
     expect(&mut host_events, "主持人这边的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with } if *with == member).then_some(())
+        matches!(event, Event::SyncStart { with, .. } if *with == member).then_some(())
     })
     .await;
     expect_none(&mut host_events, "重连不该再问", |event| {
         matches!(event, Event::Control(Control::JoinRequest { .. }))
     })
     .await;
-    host.send_update(b"after-reconnect".to_vec());
+    host.send_update(DOC, b"after-reconnect".to_vec());
     expect(&mut events, "重连后的更新", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"after-reconnect")
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"after-reconnect")
             .then_some(())
     })
     .await;
@@ -1033,6 +1037,7 @@ async fn guests_reach_hosts_through_the_relay() {
             portmap: false,
             firewall: false,
             note: String::new(),
+            scope: protocol::Scope::doc(DOC, "经中继"),
             record: None,
             resume: None,
             trusted: Default::default(),
@@ -1041,6 +1046,7 @@ async fn guests_reach_hosts_through_the_relay() {
     )
     .await
     .expect("主持人起不来");
+    host.allow_docs(&[DOC]);
 
     // 分享前自检：中继连上了，链接里带着它（令牌、指纹一起）
     let link = expect(&mut host_events, "自检：中继连上", |event| match event {
@@ -1072,21 +1078,21 @@ async fn guests_reach_hosts_through_the_relay() {
     .await;
     // 主持人那边登记好（文档流接上）才发得到
     expect(&mut host_events, "主持人的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with: 1 }).then_some(())
+        matches!(event, Event::SyncStart { with: 1, .. }).then_some(())
     })
     .await;
     expect(&mut guest_events, "走哪条路", |event| {
         matches!(event, Event::Control(Control::Route { .. })).then_some(())
     })
     .await;
-    host.send_update(b"via-relay".to_vec());
+    host.send_update(DOC, b"via-relay".to_vec());
     expect(&mut guest_events, "经中继的更新", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"via-relay").then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"via-relay").then_some(())
     })
     .await;
-    guest.send_update(b"back-via-relay".to_vec());
+    guest.send_update(DOC, b"back-via-relay".to_vec());
     expect(&mut host_events, "访客经中继的更新", |event| {
-        matches!(event, Event::Update { from: 1, bytes } if bytes == b"back-via-relay")
+        matches!(event, Event::Update { from: 1, bytes, .. } if bytes == b"back-via-relay")
             .then_some(())
     })
     .await;
@@ -1180,12 +1186,12 @@ async fn callback_links_let_the_host_dial_the_guest() {
     })
     .await;
     expect(&mut host_events, "主持人的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with: 1 }).then_some(())
+        matches!(event, Event::SyncStart { with: 1, .. }).then_some(())
     })
     .await;
-    host.send_update(b"dialed-back".to_vec());
+    host.send_update(DOC, b"dialed-back".to_vec());
     expect(&mut events, "回连上以后的更新", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"dialed-back").then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"dialed-back").then_some(())
     })
     .await;
     expect_none(&mut host_events, "只有一个加入请求", |event| {
@@ -1235,7 +1241,8 @@ fn host_options(title: &str) -> HostOptions {
         relays: Vec::new(),
         portmap: false,
         firewall: false,
-        note: "note-1".into(),
+        note: DOC.into(),
+        scope: protocol::Scope::doc(DOC, title),
         record: None,
         resume: None,
         trusted: Default::default(),
@@ -1257,10 +1264,11 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     )
     .await
     .unwrap();
+    host.allow_docs(&[DOC]);
     let (guest, mut guest_events, member) =
         admitted(&host, &mut host_events, "Alex", Permission::Read).await;
     // 前端每隔几秒交来的 文档 状态（这里随便几个字节）
-    record::save_state(dir.path(), record::Role::Host, b"y-state").unwrap();
+    record::save_state(dir.path(), record::Role::Host, DOC, b"y-state").unwrap();
     let left = record::host_left(dir.path()).expect("落盘的记录");
     assert_eq!(left.note, "note-1");
     assert_eq!(left.title, "周会");
@@ -1292,6 +1300,7 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     )
     .await
     .unwrap();
+    host.allow_docs(&[DOC]);
     assert_eq!(host.invite().session, old_session);
     // 访客自己接上：不再问，还是原来的成员号和权限
     let (again, permission) = expect(&mut guest_events, "接上了", |event| {
@@ -1305,16 +1314,16 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     .await;
     assert_eq!((again, permission), (member, Permission::Read));
     expect(&mut host_events, "主持人的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with } if *with == member).then_some(())
+        matches!(event, Event::SyncStart { with, .. } if *with == member).then_some(())
     })
     .await;
     expect_none(&mut host_events, "接上不该再问", |event| {
         matches!(event, Event::Control(Control::JoinRequest { .. }))
     })
     .await;
-    host.send_update(b"after-crash".to_vec());
+    host.send_update(DOC, b"after-crash".to_vec());
     expect(&mut guest_events, "重启后的更新", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"after-crash").then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"after-crash").then_some(())
     })
     .await;
 
@@ -1322,7 +1331,7 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     host.stop().await;
     assert!(record::host_left(dir.path()).is_none());
     assert!(!dir.path().join(record::HOST_FILE).exists());
-    assert!(!dir.path().join(record::HOST_STATE).exists());
+    assert!(record::saved_docs(dir.path(), record::Role::Host).is_empty());
     drop(guest);
 }
 
@@ -1385,6 +1394,7 @@ async fn nearby_list_finds_a_sharing_host_over_mdns() {
     )
     .await
     .unwrap();
+    host.allow_docs(&[DOC]);
     let (scan_tx, mut scan) = unbounded_channel();
     let nearby = nearby::Nearby::start(scan_tx).await.expect("mDNS 起不来");
     let id = host.id();
@@ -1438,7 +1448,7 @@ async fn guests_fetch_referenced_attachments_and_hand_over_pasted_ones() {
 
     // 要一个文件：主持人那边变成事件，命令层回字节
     let files = guest.attachments();
-    let fetch = tokio::spawn(async move { files.fetch("../附件/a.png").await });
+    let fetch = tokio::spawn(async move { files.fetch(DOC, "../附件/a.png").await });
     let request = expect(&mut host_events, "要附件", |event| match event {
         Event::AttachGet { request, path, .. } => {
             assert_eq!(path, "../附件/a.png");
@@ -1454,7 +1464,7 @@ async fn guests_fetch_referenced_attachments_and_hand_over_pasted_ones() {
 
     // 给不了：说为什么
     let files = guest.attachments();
-    let fetch = tokio::spawn(async move { files.fetch("C:/secret.png").await });
+    let fetch = tokio::spawn(async move { files.fetch(DOC, "C:/secret.png").await });
     let request = expect(&mut host_events, "要附件", |event| match event {
         Event::AttachGet { request, .. } => Some(*request),
         _ => None,
@@ -1468,7 +1478,7 @@ async fn guests_fetch_referenced_attachments_and_hand_over_pasted_ones() {
 
     // 粘贴的文件交给主持人存
     let files = guest.attachments();
-    let put = tokio::spawn(async move { files.put("截图.png", b"pasted".to_vec()).await });
+    let put = tokio::spawn(async move { files.put(DOC, "截图.png", b"pasted".to_vec()).await });
     let request = expect(&mut host_events, "存附件", |event| match event {
         Event::AttachPut {
             request,
@@ -1490,12 +1500,12 @@ async fn guests_fetch_referenced_attachments_and_hand_over_pasted_ones() {
 
     // 太大的不传
     let too_big = vec![0u8; protocol::MAX_ATTACHMENT + 1];
-    assert!(guest.attachments().put("big.bin", too_big).await.is_err());
+    assert!(guest.attachments().put(DOC, "big.bin", too_big).await.is_err());
 
     // 只读的人传不了：主持人那边连事件都没有
     let (reader, _reader_events, _) =
         admitted(&host, &mut host_events, "佐藤", Permission::Read).await;
-    let refused = reader.attachments().put("x.png", b"x".to_vec()).await;
+    let refused = reader.attachments().put(DOC, "x.png", b"x".to_vec()).await;
     assert!(refused.unwrap_err().contains("只读"));
     expect_none(&mut host_events, "只读的人的附件", |event| {
         matches!(event, Event::AttachPut { .. })
@@ -1624,17 +1634,17 @@ fn records_round_trip_and_only_count_with_their_state() {
     record::save_json(dir.path(), record::HOST_FILE, &host).unwrap();
     // 没有 文档 的状态：不算（接不上）
     assert!(record::host_left(dir.path()).is_none());
-    record::save_state(dir.path(), record::Role::Host, b"state").unwrap();
+    record::save_state(dir.path(), record::Role::Host, DOC, b"state").unwrap();
     let back = record::host_left(dir.path()).unwrap();
     assert_eq!(back, host);
     assert_eq!(back.session_bytes(), Some([1u8; 16]));
     assert_eq!(
-        record::load_state(dir.path(), record::Role::Host).as_deref(),
+        record::load_state(dir.path(), record::Role::Host, DOC).as_deref(),
         Some(&b"state"[..])
     );
     let guest = record::GuestRecord::new("odea://join/x".into(), false, true);
     record::save_json(dir.path(), record::GUEST_FILE, &guest).unwrap();
-    record::save_state(dir.path(), record::Role::Guest, b"g").unwrap();
+    record::save_state(dir.path(), record::Role::Guest, DOC, b"g").unwrap();
     assert_eq!(record::guest_left(dir.path()), Some(guest));
     record::remove(dir.path(), record::Role::Host);
     assert!(record::host_left(dir.path()).is_none());
@@ -1676,6 +1686,7 @@ async fn remembered_people_come_in_without_asking_until_forgotten() {
     )
     .await
     .expect("主持人起不来");
+    host.allow_docs(&[DOC]);
 
     // 记住的人：不问，按记住的权限进来
     let (guest, mut guest_events) = join_as(&key, "Alex", loopback(&host, host.invite())).await;
@@ -1763,6 +1774,7 @@ async fn remembered_people_come_in_without_asking_until_forgotten() {
     )
     .await
     .expect("主持人起不来");
+    host.allow_docs(&[DOC]);
     host.forget(&id);
     let (_asked, _asked_events) = join_as(&key, "Alex", loopback(&host, host.invite())).await;
     expect(&mut host_events, "忘掉以后要问", |event| {
@@ -2113,11 +2125,11 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
     .await;
     assert!(far_member != relay_member && far_member != 0);
     expect(&mut far_events, "C 的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with: 0 }).then_some(())
+        matches!(event, Event::SyncStart { with: 0, .. }).then_some(())
     })
     .await;
     expect(&mut host_events, "主持人和 C 的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with } if *with == far_member).then_some(())
+        matches!(event, Event::SyncStart { with, .. } if *with == far_member).then_some(())
     })
     .await;
     let via = host
@@ -2128,40 +2140,40 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
     assert_eq!(via, Some(relay_member), "成员表里记着经由谁");
 
     // 同步、两个方向的更新都经 B 走；B 自己也收到 C 的（主持人转给大家）
-    far.send_sync(SyncKind::Vector, b"c-sv".to_vec());
+    far.send_sync(DOC, SyncKind::Vector, b"c-sv".to_vec());
     expect(&mut host_events, "C 的同步请求", |event| {
-        matches!(event, Event::SyncRequest { from, vector } if *from == far_member && vector == b"c-sv")
+        matches!(event, Event::SyncRequest { from, vector, .. } if *from == far_member && vector == b"c-sv")
             .then_some(())
     })
     .await;
-    host.send_sync(far_member, SyncKind::Reply, b"c-snapshot".to_vec());
+    host.send_sync(far_member, DOC, SyncKind::Reply, b"c-snapshot".to_vec());
     expect(&mut far_events, "C 收到快照", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"c-snapshot").then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"c-snapshot").then_some(())
     })
     .await;
-    far.send_update(b"from-c".to_vec());
+    far.send_update(DOC, b"from-c".to_vec());
     expect(&mut host_events, "主持人收到 C 的", |event| {
-        matches!(event, Event::Update { from, bytes } if *from == far_member && bytes == b"from-c")
+        matches!(event, Event::Update { from, bytes, .. } if *from == far_member && bytes == b"from-c")
             .then_some(())
     })
     .await;
     expect(&mut relay_events, "B 收到 C 的（主持人转给大家）", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"from-c").then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"from-c").then_some(())
     })
     .await;
-    host.send_update(b"to-everyone".to_vec());
+    host.send_update(DOC, b"to-everyone".to_vec());
     expect(&mut far_events, "C 收到主持人的", |event| {
-        matches!(event, Event::Update { from: 0, bytes } if bytes == b"to-everyone").then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"to-everyone").then_some(())
     })
     .await;
 
     // 光标：C 的经 B 到主持人（带着 C 的成员号），主持人的经 B 到 C
     let got = tokio::time::timeout(WAIT, async {
         loop {
-            far.send_cursor(b"c-caret");
+            far.send_cursor(DOC, b"c-caret");
             tokio::time::sleep(Duration::from_millis(50)).await;
             while let Ok(event) = host_events.try_recv() {
-                if matches!(&event, Event::Cursor { from, bytes } if *from == far_member && bytes == b"c-caret") {
+                if matches!(&event, Event::Cursor { from, bytes, .. } if *from == far_member && bytes == b"c-caret") {
                     return;
                 }
             }
@@ -2171,10 +2183,10 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
     assert!(got.is_ok(), "主持人收不到经 B 转的光标");
     let got = tokio::time::timeout(WAIT, async {
         loop {
-            host.send_cursor(b"host-caret");
+            host.send_cursor(DOC, b"host-caret");
             tokio::time::sleep(Duration::from_millis(50)).await;
             while let Ok(event) = far_events.try_recv() {
-                if matches!(&event, Event::Cursor { from: 0, bytes } if bytes == b"host-caret") {
+                if matches!(&event, Event::Cursor { from: 0, bytes, .. } if bytes == b"host-caret") {
                     return;
                 }
             }
@@ -2190,7 +2202,7 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
             .then_some(())
     })
     .await;
-    far.send_update(b"c-read-only".to_vec());
+    far.send_update(DOC, b"c-read-only".to_vec());
     expect_none(&mut host_events, "只读的 C 的更新", |event| {
         matches!(event, Event::Update { bytes, .. } if bytes == b"c-read-only")
     })
@@ -2225,5 +2237,179 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
     })
     .await;
     relay.leave().await;
+    host.stop().await;
+}
+
+/* ---------------- 一条连接里好几篇（设计 §22.5） ---------------- */
+
+/// 文件夹范围的主持人：哪篇都不直接给，访客要哪篇都先问（DocOpen）
+async fn start_folder_host() -> (Host, UnboundedReceiver<Event>) {
+    let (events, rx) = unbounded_channel();
+    let host = Host::start(
+        HostOptions {
+            scope: protocol::Scope {
+                kind: protocol::ScopeKind::Folder,
+                doc: String::new(),
+                name: "周报".into(),
+            },
+            note: String::new(),
+            ..host_options("周报")
+        },
+        events,
+    )
+    .await
+    .expect("主持人起不来");
+    (host, rx)
+}
+
+/// 文件夹范围里加入并被允许：返回访客拿到的成员号（这时还一篇都没开）
+async fn admitted_to_folder(
+    host: &Host,
+    host_events: &mut UnboundedReceiver<Event>,
+    name: &str,
+    permission: Permission,
+) -> (Guest, UnboundedReceiver<Event>, u16) {
+    let (guest, mut events) = join(name, loopback(host, host.invite())).await;
+    let request = expect(host_events, "加入请求", |event| match event {
+        Event::Control(Control::JoinRequest { request, name: who, .. }) if who == name => Some(*request),
+        _ => None,
+    })
+    .await;
+    assert!(host.answer(request, Decision::Allow(permission)));
+    let member = expect(&mut events, "进来了", |event| match status_of(event) {
+        Some(Status::Connected { member, scope, .. }) => {
+            assert_eq!(scope.kind, protocol::ScopeKind::Folder);
+            assert_eq!(scope.name, "周报");
+            Some(member)
+        }
+        _ => None,
+    })
+    .await;
+    (guest, events, member)
+}
+
+/// 访客要开 doc：主持人那边等到 DocOpen，照 answer 回话
+async fn open_doc(
+    host: &Host,
+    host_events: &mut UnboundedReceiver<Event>,
+    guest: &Guest,
+    member: u16,
+    doc: &str,
+    answer: Result<(), String>,
+) {
+    guest.open_doc(doc);
+    let request = expect(host_events, "要开一篇", |event| match event {
+        Event::Control(Control::DocOpen { request, member: who, doc: wanted }) if *who == member && wanted == doc => {
+            Some(*request)
+        }
+        _ => None,
+    })
+    .await;
+    assert!(host.answer_doc(request, answer));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_folder_session_opens_docs_on_request_and_keeps_them_apart() {
+    let (host, mut host_events) = start_folder_host().await;
+    // 树在访客进来之前就给了：进来就收到
+    host.set_tree(br#"{"docs":["a","b"]}"#.to_vec());
+    let (guest, mut guest_events, member) =
+        admitted_to_folder(&host, &mut host_events, "Alex", Permission::Edit).await;
+    expect(&mut guest_events, "树", |event| match event {
+        Event::Control(Control::Tree { tree }) => Some(assert_eq!(tree, r#"{"docs":["a","b"]}"#)),
+        _ => None,
+    })
+    .await;
+
+    // 开 a：主持人给 → 两边都被叫去同步这一篇
+    open_doc(&host, &mut host_events, &guest, member, "a", Ok(())).await;
+    expect(&mut guest_events, "访客同步 a", |event| {
+        matches!(event, Event::SyncStart { with: 0, doc } if doc == "a").then_some(())
+    })
+    .await;
+    expect(&mut host_events, "主持人同步 a", |event| {
+        matches!(event, Event::SyncStart { with, doc } if *with == member && doc == "a").then_some(())
+    })
+    .await;
+    // 主持人这边看得到他开着哪篇
+    let docs = host.members().into_iter().find(|info| info.member == member).unwrap().docs;
+    assert_eq!(docs, vec!["a".to_string()]);
+
+    // 不在范围里的：说为什么，不再要它
+    open_doc(&host, &mut host_events, &guest, member, "secret", Err("不在共享的文件夹里".into())).await;
+    let refused = expect(&mut guest_events, "不给", |event| match event {
+        Event::Control(Control::DocRefused { doc, reason }) if doc == "secret" => Some(reason.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(refused, "不在共享的文件夹里");
+
+    // 更新只给开着那一篇的：a 的到了，没开的 c 的不到
+    host.send_update("c", b"c-update".to_vec());
+    host.send_update("a", b"a-update".to_vec());
+    expect(&mut guest_events, "a 的更新", |event| match event {
+        Event::Update { from: 0, doc, bytes } if doc == "a" => Some(assert_eq!(bytes, b"a-update")),
+        Event::Update { doc, .. } if doc == "c" => panic!("没开 c 却收到了 c 的更新"),
+        _ => None,
+    })
+    .await;
+    guest.send_update("a", b"from-guest".to_vec());
+    expect(&mut host_events, "访客在 a 里的更新", |event| {
+        matches!(event, Event::Update { from, doc, bytes } if *from == member && doc == "a" && bytes == b"from-guest")
+            .then_some(())
+    })
+    .await;
+    // 光标带着是哪篇
+    let got = tokio::time::timeout(WAIT, async {
+        loop {
+            guest.send_cursor("a", b"caret");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            while let Ok(event) = host_events.try_recv() {
+                if matches!(&event, Event::Cursor { from, doc, bytes } if *from == member && doc == "a" && bytes == b"caret") {
+                    return;
+                }
+            }
+        }
+    })
+    .await;
+    assert!(got.is_ok(), "主持人收不到 a 里的光标");
+
+    // 第二位访客只开 b：第一位在 a 里打的字不给他
+    let (other, mut other_events, other_member) =
+        admitted_to_folder(&host, &mut host_events, "佐藤", Permission::Read).await;
+    open_doc(&host, &mut host_events, &other, other_member, "b", Ok(())).await;
+    expect(&mut other_events, "佐藤同步 b", |event| {
+        matches!(event, Event::SyncStart { doc, .. } if doc == "b").then_some(())
+    })
+    .await;
+    guest.send_update("a", b"only-a".to_vec());
+    expect_none(&mut other_events, "别的篇的更新", |event| matches!(event, Event::Update { .. })).await;
+
+    // 新建：能写的交给主持人建，回来文档 id；只读的不行
+    let creator = guest.creator();
+    let created = tokio::spawn(async move { creator.create("项目", "新的一篇").await });
+    let request = expect(&mut host_events, "要新建", |event| match event {
+        Event::Control(Control::CreateDoc { request, member: who, folder, title }) if *who == member => {
+            assert_eq!((folder.as_str(), title.as_str()), ("项目", "新的一篇"));
+            Some(*request)
+        }
+        _ => None,
+    })
+    .await;
+    assert!(host.answer_create(request, Ok("n-9".into())));
+    assert_eq!(created.await.unwrap(), Ok("n-9".to_string()));
+    let refused = other.creator().create("", "只读的人建的").await;
+    assert!(refused.unwrap_err().contains("只读"));
+
+    // 关掉 a：主持人那边知道
+    guest.close_doc("a");
+    expect(&mut host_events, "关掉了 a", |event| {
+        matches!(event, Event::Control(Control::DocClosed { member: who, doc }) if *who == member && doc == "a")
+            .then_some(())
+    })
+    .await;
+
+    other.leave().await;
+    guest.leave().await;
     host.stop().await;
 }

@@ -2,7 +2,8 @@
 访客（docs/协同编辑.md §7.3、§8）。
 
 按邀请链接里的公钥、地址、中继拨主持人 → 控制流上发 Hello（带邀请证明）→ 等主持人确认
-→ Welcome 之后开文档流 → 叫前端发 Sync1，之后实时收发。
+→ Welcome 之后要哪篇开哪篇的文档流（第一帧 Open{文档 id}，设计 §22.5；一篇的范围进来就开那一篇）
+→ 叫前端发 Sync1，之后实时收发。主持人不给某一篇（DocErr）就告诉前端，不再要它
 
 连不上（设计 §8.5）：3 秒还没连上就给结论（diagnose.rs：哪几条路、卡在哪、怎么办），不无限转圈。
 但不算结束：后台每 8 秒再试一次（换了网络会自己连上），同时等着主持人按回连链接拨过来。
@@ -18,7 +19,8 @@
 替别人转发（设计 §20.9）：连不上主持人的人拿我的转发链接连我，我替他把流接到主持人那边（文件末尾）。
 ============================================================ */
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -27,14 +29,14 @@ use iroh::endpoint::{Connection, RecvStream, VarInt};
 use iroh::{Endpoint, PublicKey, SecretKey, Watcher};
 use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
 use n0_future::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use super::diagnose::{self, Diagnosis, Facts, RelayFact};
 use super::endpoint::{self, Bound};
 use super::protocol::{
-    self, kind, AttachPut, Forward, ForwardStream, Hello, Member, Permission, Reject, RejectReason,
-    Welcome,
+    self, kind, AttachGet, AttachPut, CreateDoc, CreatedDoc, Forward, ForwardStream, Hello, Member,
+    Permission, Reject, RejectReason, Welcome,
 };
 use super::reach::{self, Mapper, Portmap, Reach, RelayState};
 use super::relays::Relay;
@@ -57,6 +59,8 @@ const RELAY_LATE: Duration = Duration::from_secs(6);
 const ATTACH_TIMEOUT: Duration = Duration::from_secs(90);
 /// 替人转发时握手每一步最多等多久（主持人确认不算）
 const FORWARD_HANDSHAKE: Duration = Duration::from_secs(10);
+/// 新建一篇等主持人回话最多等多久
+const CREATE_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct GuestOptions {
     pub secret_key: SecretKey,
@@ -107,13 +111,19 @@ struct Shared {
     networks: Mutex<Option<Vec<(std::net::IpAddr, u8)>>>,
     portmap: bool,
     /// 经我转发的人：成员号 → 他连我的那条连接（主持人发给他的数据报从这里转过去）
-    forwarding: Mutex<std::collections::HashMap<u16, Connection>>,
+    forwarding: Mutex<HashMap<u16, Connection>>,
+    /// 要开着的那几篇（文档 id）：断了重连以后照样开
+    wanted: Mutex<BTreeSet<String>>,
+    next_create: AtomicU32,
+    /// 新建一篇：等主持人回话
+    creating: Mutex<HashMap<u32, oneshot::Sender<Result<String, String>>>>,
 }
 
 /// 现在连着的那一条
 struct Link {
     conn: Connection,
-    doc: mpsc::UnboundedSender<(u8, Vec<u8>)>,
+    /// 开着的那几篇：文档 id → 往这一篇的文档流里写
+    docs: HashMap<String, mpsc::UnboundedSender<(u8, Vec<u8>)>>,
     control: mpsc::UnboundedSender<(u8, Vec<u8>)>,
     writers: Vec<JoinHandle<()>>,
 }
@@ -160,7 +170,10 @@ impl Guest {
             nearby: options.nearby,
             networks: Mutex::new(None),
             portmap: options.portmap,
-            forwarding: Mutex::new(std::collections::HashMap::new()),
+            forwarding: Mutex::new(HashMap::new()),
+            wanted: Mutex::new(BTreeSet::new()),
+            next_create: AtomicU32::new(1),
+            creating: Mutex::new(HashMap::new()),
         });
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
         let mut tasks = vec![
@@ -201,23 +214,52 @@ impl Guest {
         }
     }
 
-    pub fn send_update(&self, bytes: Vec<u8>) {
-        // 断着的时候发不出去也没关系：前端的 文档 里都在，重连后同步补齐
-        if let Some(link) = self.shared.link.lock().unwrap().as_ref() {
-            let _ = link.doc.send((kind::UPDATE, bytes));
+    /// 要开这一篇：连着就马上开它的文档流，断着的话重连以后开。开好了是 SyncStart 事件
+    pub fn open_doc(&self, doc: &str) {
+        if doc.is_empty() || doc.len() > protocol::MAX_DOC_ID {
+            return;
+        }
+        if !self.shared.wanted.lock().unwrap().insert(doc.to_string()) {
+            return;
+        }
+        let conn = self.shared.link.lock().unwrap().as_ref().map(|link| link.conn.clone());
+        if let Some(conn) = conn {
+            tokio::spawn(open_stream(self.shared.clone(), conn, doc.to_string()));
         }
     }
 
-    pub fn send_cursor(&self, payload: &[u8]) {
+    /// 不要这一篇了：把它的文档流收尾（主持人那边读到头，就知道我关掉了）
+    pub fn close_doc(&self, doc: &str) {
+        self.shared.wanted.lock().unwrap().remove(doc);
+        if let Some(link) = self.shared.link.lock().unwrap().as_mut() {
+            link.docs.remove(doc);
+        }
+    }
+
+    pub fn send_update(&self, doc: &str, bytes: Vec<u8>) {
+        // 断着的时候发不出去也没关系：前端的 文档 里都在，重连后同步补齐
+        if let Some(sender) = self.shared.link.lock().unwrap().as_ref().and_then(|link| link.docs.get(doc)) {
+            let _ = sender.send((kind::UPDATE, bytes));
+        }
+    }
+
+    pub fn send_cursor(&self, doc: &str, payload: &[u8]) {
         if let Some(link) = self.shared.link.lock().unwrap().as_ref() {
-            let _ = link.conn.send_datagram(Bytes::copy_from_slice(payload));
+            let _ = link.conn.send_datagram(Bytes::from(protocol::tag_doc(doc, payload)));
         }
     }
 
     /// 只有主持人（成员 0）一个对象
-    pub fn send_sync(&self, kind: SyncKind, bytes: Vec<u8>) {
-        if let Some(link) = self.shared.link.lock().unwrap().as_ref() {
-            let _ = link.doc.send((kind.frame(), bytes));
+    pub fn send_sync(&self, doc: &str, kind: SyncKind, bytes: Vec<u8>) {
+        if let Some(sender) = self.shared.link.lock().unwrap().as_ref().and_then(|link| link.docs.get(doc)) {
+            let _ = sender.send((kind.frame(), bytes));
+        }
+    }
+
+    /// 新建一篇的把手：不借用 Guest（命令层不必拿着会话的锁等主持人回话）
+    pub fn creator(&self) -> Creator {
+        Creator {
+            shared: self.shared.clone(),
         }
     }
 
@@ -248,7 +290,7 @@ impl Guest {
         let link = self.shared.link.lock().unwrap().take();
         if let Some(link) = link {
             let _ = link.control.send((kind::BYE, Vec::new()));
-            drop(link.doc);
+            drop(link.docs);
             drop(link.control);
             let _ = tokio::time::timeout(Duration::from_millis(800), async {
                 for writer in link.writers {
@@ -273,6 +315,42 @@ impl Guest {
     }
 }
 
+/// 在范围里新建一篇
+pub struct Creator {
+    shared: Arc<Shared>,
+}
+
+impl Creator {
+    /// 在范围里新建一篇（主持人那边建，设计 §22.5）：返回它的文档 id
+    pub async fn create(&self, folder: &str, title: &str) -> Result<String, String> {
+        let request = self.shared.next_create.fetch_add(1, Ordering::SeqCst);
+        let (sender, receiver) = oneshot::channel();
+        self.shared.creating.lock().unwrap().insert(request, sender);
+        let payload = protocol::encode(&CreateDoc {
+            request,
+            folder: folder.to_string(),
+            title: title.to_string(),
+        });
+        let sent = self
+            .shared
+            .link
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|link| link.control.send((kind::CREATE, payload)).is_ok());
+        if !sent {
+            self.shared.creating.lock().unwrap().remove(&request);
+            return Err("现在没连着主持人".into());
+        }
+        let answer = tokio::time::timeout(CREATE_TIMEOUT, receiver).await;
+        self.shared.creating.lock().unwrap().remove(&request);
+        match answer {
+            Ok(Ok(result)) => result,
+            _ => Err("主持人那边没回话".into()),
+        }
+    }
+}
+
 /// 向主持人要附件、交粘贴的文件
 #[derive(Clone)]
 pub struct Attachments {
@@ -280,19 +358,20 @@ pub struct Attachments {
 }
 
 impl Attachments {
-    /// 正文里写的相对路径 → 文件的字节
-    pub async fn fetch(&self, path: &str) -> Result<Vec<u8>, String> {
-        match self
-            .request(kind::ATTACH_GET, path.as_bytes().to_vec())
-            .await?
-        {
+    /// 这一篇正文里写的相对路径 → 文件的字节
+    pub async fn fetch(&self, doc: &str, path: &str) -> Result<Vec<u8>, String> {
+        let payload = protocol::encode(&AttachGet {
+            doc: doc.to_string(),
+            path: path.to_string(),
+        });
+        match self.request(kind::ATTACH_GET, payload).await? {
             (kind::ATTACH_DATA, bytes) => Ok(bytes),
             (_, message) => Err(String::from_utf8_lossy(&message).into_owned()),
         }
     }
 
-    /// 粘贴的文件交给主持人存进他仓库的「附件」，回从那篇引用它的路径
-    pub async fn put(&self, name: &str, bytes: Vec<u8>) -> Result<String, String> {
+    /// 粘贴的文件交给主持人存进那一篇的附件位置，回从那篇引用它的路径
+    pub async fn put(&self, doc: &str, name: &str, bytes: Vec<u8>) -> Result<String, String> {
         if bytes.len() > protocol::MAX_ATTACHMENT {
             return Err(format!(
                 "文件太大了（{} MB），附件最多 {} MB",
@@ -301,6 +380,7 @@ impl Attachments {
             ));
         }
         let payload = protocol::encode(&AttachPut {
+            doc: doc.to_string(),
             name: name.to_string(),
             bytes,
         });
@@ -728,31 +808,34 @@ async fn session(
     let _ = shared.events.send(Event::Control(Control::Members {
         members: infos(&welcome.members),
     }));
+    // 一篇的范围：进来就开那一篇
+    if welcome.scope.kind == protocol::ScopeKind::Doc && !welcome.scope.doc.is_empty() {
+        shared.wanted.lock().unwrap().insert(welcome.scope.doc.clone());
+    }
     status(
         shared,
         Status::Connected {
             member: welcome.member,
             permission: welcome.permission,
             title: welcome.title.clone(),
+            scope: welcome.scope.clone(),
         },
     );
 
-    let (mut doc_send, doc_recv) = conn.open_bi().await.map_err(|error| error.to_string())?;
-    protocol::write_frame(&mut doc_send, kind::OPEN, &[])
-        .await
-        .map_err(|error| error.to_string())?;
-    let (doc, doc_writer) = spawn_writer(doc_send);
     let (control, control_writer) = spawn_writer(control_send);
     *shared.link.lock().unwrap() = Some(Link {
         conn: conn.clone(),
-        doc,
+        docs: HashMap::new(),
         control,
-        writers: vec![doc_writer, control_writer],
+        writers: vec![control_writer],
     });
-    let _ = shared.events.send(Event::SyncStart { with: 0 });
+    // 要开着的那几篇：重连的话就是断之前开着的
+    let wanted: Vec<String> = shared.wanted.lock().unwrap().iter().cloned().collect();
+    for doc in wanted {
+        tokio::spawn(open_stream(shared.clone(), conn.clone(), doc));
+    }
 
     let readers = [
-        tokio::spawn(read_doc(shared.clone(), doc_recv)),
         tokio::spawn(read_datagrams(shared.clone(), conn.clone())),
         tokio::spawn(watch_route(shared.clone(), conn.clone())),
     ];
@@ -803,6 +886,19 @@ async fn read_control(shared: &Shared, recv: &mut RecvStream) -> Outcome {
                         .send(Event::Control(Control::Permission { permission }));
                 }
             }
+            Ok(Some((kind::TREE, payload))) => {
+                let _ = shared.events.send(Event::Control(Control::Tree {
+                    tree: String::from_utf8_lossy(&payload).into_owned(),
+                }));
+            }
+            Ok(Some((kind::CREATED, payload))) => {
+                if let Ok(created) = protocol::decode::<CreatedDoc>(&payload) {
+                    let waiter = shared.creating.lock().unwrap().remove(&created.request);
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.send(created.result);
+                    }
+                }
+            }
             Ok(Some((kind::KICK, _))) => return Outcome::Ended(EndReason::Kicked),
             Ok(Some((kind::BYE, _))) => return Outcome::Ended(EndReason::HostStopped),
             Ok(Some(_)) => {}
@@ -814,28 +910,74 @@ async fn read_control(shared: &Shared, recv: &mut RecvStream) -> Outcome {
     }
 }
 
-async fn read_doc(shared: Arc<Shared>, mut recv: RecvStream) {
+/// 开一篇的文档流：第一帧 Open{文档 id}，登记好写手，叫前端发 Sync1，接着读。主持人不给（DocErr）就
+/// 告诉前端、不再要它；流断了（关掉了这一篇、连接断了）就从开着的里拿掉
+async fn open_stream(shared: Arc<Shared>, conn: Connection, doc: String) {
+    let Ok((mut send, recv)) = conn.open_bi().await else { return };
+    if protocol::write_frame(&mut send, kind::OPEN, doc.as_bytes()).await.is_err() {
+        return;
+    }
+    let (sender, writer) = spawn_writer(send);
+    {
+        let mut link = shared.link.lock().unwrap();
+        let Some(link) = link.as_mut().filter(|link| link.conn.stable_id() == conn.stable_id()) else {
+            return;
+        };
+        // 这期间又不要了
+        if !shared.wanted.lock().unwrap().contains(&doc) {
+            return;
+        }
+        link.docs.insert(doc.clone(), sender);
+        link.writers.push(writer);
+    }
+    let _ = shared.events.send(Event::SyncStart {
+        with: 0,
+        doc: doc.clone(),
+    });
+    let refused = read_doc(&shared, &doc, recv).await;
+    if let Some(reason) = refused {
+        shared.wanted.lock().unwrap().remove(&doc);
+        let _ = shared
+            .events
+            .send(Event::Control(Control::DocRefused { doc: doc.clone(), reason }));
+    }
+    if let Some(link) = shared.link.lock().unwrap().as_mut() {
+        if link.conn.stable_id() == conn.stable_id() {
+            link.docs.remove(&doc);
+        }
+    }
+}
+
+/// 一篇的文档流。主持人不给这一篇时返回他说的原因
+async fn read_doc(shared: &Shared, doc: &str, mut recv: RecvStream) -> Option<String> {
     while let Ok(Some((frame, payload))) = protocol::read_frame(&mut recv).await {
         match frame {
             kind::UPDATE | kind::SYNC2 => {
                 let _ = shared.events.send(Event::Update {
                     from: 0,
+                    doc: doc.to_string(),
                     bytes: payload,
                 });
             }
             kind::SYNC1 => {
                 let _ = shared.events.send(Event::SyncRequest {
                     from: 0,
+                    doc: doc.to_string(),
                     vector: payload,
                 });
             }
             // 主持人那边给我的积压丢掉了：重新发一次状态向量，他回一份补齐
             kind::RESYNC => {
-                let _ = shared.events.send(Event::SyncStart { with: 0 });
+                let _ = shared.events.send(Event::SyncStart {
+                    with: 0,
+                    doc: doc.to_string(),
+                });
             }
+            kind::DOC_ERR => return Some(String::from_utf8_lossy(&payload).into_owned()),
             _ => {}
         }
     }
+    None
 }
 
 async fn read_datagrams(shared: Arc<Shared>, conn: Connection) {
@@ -848,9 +990,11 @@ async fn read_datagrams(shared: Arc<Shared>, conn: Connection) {
             }
             continue;
         }
-        if let Some((member, payload)) = protocol::untag_cursor(&datagram) {
+        let Some((member, tagged)) = protocol::untag_cursor(&datagram) else { continue };
+        if let Some((doc, payload)) = protocol::untag_doc(tagged) {
             let _ = shared.events.send(Event::Cursor {
                 from: member,
+                doc: doc.to_string(),
                 bytes: payload.to_vec(),
             });
         }
@@ -867,6 +1011,7 @@ fn infos(members: &[Member]) -> Vec<MemberInfo> {
             permission: member.permission,
             host: member.member == 0,
             via: member.via,
+            docs: Vec::new(),
         })
         .collect()
 }
@@ -969,45 +1114,13 @@ async fn forward_session(shared: &Arc<Shared>, conn: &Connection) -> Result<(), 
         .unwrap()
         .insert(member, conn.clone());
 
-    let mut tasks = vec![
+    let tasks = vec![
         tokio::spawn(pipe(control_recv, host_send)),
         tokio::spawn(pipe(host_recv, control_send)),
+        // 他后来开的文档流（一篇一条）、附件流、发的光标
+        tokio::spawn(forward_streams(conn.clone(), host.clone(), id, proven)),
+        tokio::spawn(forward_datagrams(conn.clone(), host.clone(), member)),
     ];
-    // 他的文档流：他先发一个 OPEN 帧，主持人那边不要
-    let doc = async {
-        let (doc_send, mut doc_recv) = tokio::time::timeout(FORWARD_HANDSHAKE, conn.accept_bi())
-            .await
-            .map_err(|_| "等文档流超时".to_string())?
-            .map_err(|error| error.to_string())?;
-        let _ = protocol::read_frame(&mut doc_recv).await;
-        let (mut up_send, up_recv) = host.open_bi().await.map_err(|error| error.to_string())?;
-        let forward = Forward {
-            id,
-            stream: ForwardStream::Doc,
-            hello: None,
-            proven,
-        };
-        protocol::write_frame(&mut up_send, kind::FORWARD, &protocol::encode(&forward))
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok::<_, String>((doc_send, doc_recv, up_send, up_recv))
-    };
-    match doc.await {
-        Ok((doc_send, doc_recv, up_send, up_recv)) => {
-            tasks.push(tokio::spawn(pipe(doc_recv, up_send)));
-            tasks.push(tokio::spawn(pipe(up_recv, doc_send)));
-        }
-        Err(error) => {
-            shared.forwarding.lock().unwrap().remove(&member);
-            for task in tasks {
-                task.abort();
-            }
-            return Err(error);
-        }
-    }
-    // 他后来开的附件流、发的光标
-    tasks.push(tokio::spawn(forward_attachments(conn.clone(), host.clone(), id, proven)));
-    tasks.push(tokio::spawn(forward_datagrams(conn.clone(), host.clone(), member)));
     tokio::select! {
         _ = conn.closed() => {}
         _ = host.closed() => {}
@@ -1028,22 +1141,35 @@ async fn pipe(mut from: RecvStream, mut to: iroh::endpoint::SendStream) {
     let _ = to.finish();
 }
 
-/// 经我转发的人要附件：在我到主持人的连接上替他开一条（第一帧 Forward{Attach}），两头原样搬
-async fn forward_attachments(conn: Connection, host: Connection, id: [u8; 32], proven: bool) {
-    while let Ok((down_send, down_recv)) = conn.accept_bi().await {
+/// 经我转发的人后来开的流：文档流（第一帧 Open）、附件流。在我到主持人的连接上替他开一条
+/// （第一帧 Forward{Doc / Attach}，再接上他的第一帧），之后两头原样搬
+async fn forward_streams(conn: Connection, host: Connection, id: [u8; 32], proven: bool) {
+    while let Ok((down_send, mut down_recv)) = conn.accept_bi().await {
         let host = host.clone();
         tokio::spawn(async move {
+            let first = tokio::time::timeout(
+                FORWARD_HANDSHAKE,
+                protocol::read_frame_up_to(&mut down_recv, protocol::MAX_ATTACH_FRAME),
+            )
+            .await;
+            let Ok(Ok(Some((frame_kind, payload)))) = first else { return };
+            let stream = if frame_kind == kind::OPEN {
+                ForwardStream::Doc
+            } else {
+                ForwardStream::Attach
+            };
             let Ok((mut up_send, up_recv)) = host.open_bi().await else { return };
             let forward = Forward {
                 id,
-                stream: ForwardStream::Attach,
+                stream,
                 hello: None,
                 proven,
             };
-            if protocol::write_frame(&mut up_send, kind::FORWARD, &protocol::encode(&forward))
-                .await
-                .is_err()
-            {
+            let header = async {
+                protocol::write_frame(&mut up_send, kind::FORWARD, &protocol::encode(&forward)).await?;
+                protocol::write_frame(&mut up_send, frame_kind, &payload).await
+            };
+            if header.await.is_err() {
                 return;
             }
             let up = tokio::spawn(pipe(down_recv, up_send));
