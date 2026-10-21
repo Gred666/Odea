@@ -751,3 +751,52 @@ fn describe_names_the_files() {
         "更新 周报、.gitignore、vault.json"
     );
 }
+
+/// 逻辑目录的清单两边都改了（docs/仓库与启动器.md §7.4）：按节点合并，不出冲突副本。
+/// 两边动了同一个节点的，后合并的那台（本机）的说了算
+#[test]
+fn the_logical_tree_merges_by_node_instead_of_making_a_copy() {
+    use crate::vault::tree::{Item, Tree, TREE_FILE};
+    let note = |id: &str| Item::Note(id.into());
+    let cloud = cloud();
+    let a = Device::first(&cloud, "A");
+    let mut base = Tree::default();
+    base.add_folder("", "甲").unwrap();
+    base.add_folder("", "乙").unwrap();
+    for id in ["n1", "n2", "n3"] {
+        base.place(None, note(id), Some("甲"), None).unwrap();
+    }
+    a.write(TREE_FILE, base.render());
+    a.sync();
+    let b = Device::join(&cloud, "B");
+
+    // A：n1 挪进乙、甲改名；B：n2 挪进乙、n1 挪到根上、n3 挪到 n2 后面
+    let at = |tree: &Tree, id: &str| tree.find_note(id, "");
+    let mut on_a = base.clone();
+    on_a.place(at(&on_a, "n1"), note("n1"), Some("乙"), None).unwrap();
+    on_a.rename("甲", "甲甲").unwrap();
+    a.write(TREE_FILE, on_a.render());
+    let mut on_b = base.clone();
+    on_b.place(at(&on_b, "n2"), note("n2"), Some("乙"), None).unwrap();
+    on_b.place(at(&on_b, "n1"), note("n1"), Some(""), None).unwrap();
+    let after = at(&on_b, "n2");
+    on_b.place(at(&on_b, "n3"), note("n3"), Some("乙"), after.as_deref()).unwrap();
+    b.write(TREE_FILE, on_b.render());
+
+    a.sync();
+    let round = b.sync();
+    assert!(round.merged);
+    assert!(round.copies.is_empty(), "清单不出冲突副本：{:?}", round.copies);
+    let text = b.read(TREE_FILE).unwrap();
+    assert!(!text.contains("<<<<<<<"));
+    let merged = Tree::parse(&text);
+    let folder_of = |id: &str| merged.path_of(&merged.get(&merged.find_note(id, "").unwrap()).unwrap().parent);
+    assert_eq!(folder_of("n1"), "", "两边都挪了 n1：用 B（本机）的");
+    assert_eq!(folder_of("n2"), "乙");
+    assert_eq!(folder_of("n3"), "乙");
+    assert!(merged.find_branch("甲甲").is_some(), "A 的改名合进来了");
+
+    // A 再同步：快进，两边一样
+    a.sync();
+    assert_eq!(a.read(TREE_FILE), b.read(TREE_FILE));
+}

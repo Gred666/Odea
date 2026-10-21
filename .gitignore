@@ -4,6 +4,7 @@ dist-ssr/
 *.local
 
 src-tauri/target/
+scripts/perf/relay-load/target/
 src-tauri/gen/
 src-tauri/backups/
 

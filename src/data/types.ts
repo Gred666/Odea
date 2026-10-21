@@ -1,3 +1,4 @@
+import type { CollabSession } from "@/collab/session";
 import type { ISODate } from "@/lib/date";
 
 /* ============================================================
@@ -245,6 +246,11 @@ export interface VaultChange {
   foundCopies: string[];
   /** 「笔记」下面的文件夹变了（在资源管理器里建了、删了、改了名） */
   folders: boolean;
+  /**
+   * 仓库的摆法在别处变了（另一台设备开关了日程、转成了逻辑目录，同步过来）：问一句「切换过去」，
+   * 点了才按新的摆法重新认文件、整页重载（vaultRelayout）
+   */
+  layout: boolean;
 }
 
 /* ---------------- 同步（技术方案 §5.9） ---------------- */
@@ -359,6 +365,51 @@ export interface FolderDeletion {
   folders: string[];
   /** 文件夹里还有别的文件（图片、PDF），目录留着没删 */
   kept: boolean;
+  /** 逻辑目录：从清单里拿掉的那几行（文件夹、智能文件夹、笔记的位置），撤销时放回去 */
+  nodes: string | null;
+}
+
+/**
+ * 逻辑目录的树上的一个节点（Rust 的 vault/tree.rs，docs/仓库与启动器.md §7）：文件夹、智能文件夹、
+ * 放在树上的笔记。data/tree.ts 把它摊成界面认的样子
+ */
+export interface TreeNode {
+  id: string;
+  /** 父节点的 id，根是 `.` */
+  parent: string;
+  /** 排序键：同一层按它排，一样时按 id */
+  key: string;
+  kind: string;
+  /** 文件夹、智能文件夹的名字 */
+  name: string | null;
+  /** 笔记的 id */
+  note: string | null;
+  /** 智能文件夹的条件 */
+  query: string | null;
+}
+
+/**
+ * 文件树上一个不是笔记的文件：图片、PDF（docs/仓库与启动器.md §11）。整个仓库当树根时
+ * （打开的文件夹、Obsidian 的库）和 Obsidian 一样列出来；Odea 建的仓库的「附件」不在树上
+ */
+export interface TreeFile {
+  /** 仓库里的相对路径 */
+  relPath: string;
+  /** 在树上哪个文件夹（相对树根，空串是根） */
+  folder: string;
+  name: string;
+  kind: "image" | "pdf" | (string & {});
+  size: number;
+  updatedAt: number;
+}
+
+/** 导入一个文件夹的结果（docs/仓库与启动器.md §7.6） */
+export interface ImportReport {
+  /** 树上新文件夹的路径 */
+  folder: string;
+  notes: number;
+  /** 别的文件（图片、PDF …） */
+  files: number;
 }
 
 /* ---------------- 反向链接 ---------------- */
@@ -466,7 +517,37 @@ export interface VaultInfo {
   days: number;
   goals: number;
   tasks: number;
+  layout: VaultLayout;
 }
+
+/**
+ * 这个仓库怎么摆（docs/仓库与启动器.md §6，Rust 的 vault/layout.rs）：开没开日程、文件树的根在哪。
+ * 窄栏上有哪几项、一篇笔记在树上哪个文件夹（data/folders.ts）都看它
+ */
+export interface VaultLayout {
+  /** 逻辑目录（§7）：文件树是清单里摆的那一棵（treeView），文件夹不在硬盘上 */
+  logical: boolean;
+  /** 开没开日程（今日TODO、目标、日历、归档） */
+  journal: boolean;
+  /** 文件树的根：「笔记」，或者整个仓库（空串） */
+  notesDir: string;
+  daysDir: string;
+  goalsDir: string;
+  archiveDir: string;
+  /** 不在树上的文件夹（日程开着时的日记、目标、归档）：里面的笔记算在树根这一层 */
+  hiddenDirs: string[];
+}
+
+/** Odea 自己建的仓库：日程开着，树根是「笔记」。取到仓库的真实摆法之前先当它是这样 */
+export const ODEA_LAYOUT: VaultLayout = {
+  logical: false,
+  journal: true,
+  notesDir: "笔记",
+  daysDir: "日记",
+  goalsDir: "目标",
+  archiveDir: "归档",
+  hiddenDirs: ["日记", "目标", "归档"],
+};
 
 /**
  * 换笔记文件夹时现在的笔记怎么办：`ask` 新文件夹里没有笔记就问（搬过去 / 复制过去 / 只换文件夹），
@@ -528,9 +609,14 @@ export interface DocumentModel {
   statusParts: string[];
   /** 是否显示删除按钮（原型里笔记视图右下角有个红色垃圾桶） */
   deletable?: boolean;
+  /**
+   * 正在协作（docs/协同编辑.md）：编辑器接到这个会话上，正文以会话为准。
+   * 主持人那篇是普通的笔记带上它；访客那篇的保存目标是 shared
+   */
+  collab?: { session: CollabSession; readOnly: boolean };
   /** 所有持久化文档都由同一个 Markdown 编辑器编辑。 */
   editor?: {
-    target: DocumentSaveTarget;
+    target: EditorTarget;
     /** 标题也能直接改（笔记、某一天）。GOAL 的标题由周期决定，不能改。 */
     titleEditable?: boolean;
   };
@@ -540,3 +626,15 @@ export type DocumentSaveTarget =
   | { kind: "note"; id: string }
   | { kind: "goal"; horizon: GoalHorizon; periodStart: ISODate }
   | { kind: "day"; id: ISODate };
+
+/**
+ * 在别人那里做客的那一篇（docs/协同编辑.md §3）：真相在主持人那台，访客这边不落盘，
+ * 保存、改标题都没有。id 是这次会话的键。只出现在文档模型的编辑器目标上
+ */
+export interface SharedTarget {
+  kind: "shared";
+  id: string;
+}
+
+/** 编辑器在编辑什么：仓库里的一篇，或者做客的那一篇 */
+export type EditorTarget = DocumentSaveTarget | SharedTarget;

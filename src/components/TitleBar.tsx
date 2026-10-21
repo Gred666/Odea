@@ -85,7 +85,7 @@ export function TitleBar() {
   );
 }
 
-function WinButton({
+export function WinButton({
   children,
   onClick,
   label,

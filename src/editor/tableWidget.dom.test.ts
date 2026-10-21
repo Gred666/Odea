@@ -6,7 +6,7 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { typoraDecorations } from "./MarkdownEditor";
 import { markdownSupport } from "./markdownParser";
-import { mapOffset } from "./tableWidget";
+import { mapOffset, shiftedAt } from "./tableWidget";
 
 const views: EditorView[] = [];
 
@@ -268,5 +268,29 @@ describe("点击位置对到源码", () => {
     expect(mapOffset("粗体", "**粗体**", 1)).toBe(3);
     expect(mapOffset("链接", "[链接](https://x)", 2)).toBe(3);
     expect(mapOffset("🚀", ":rocket:", 1)).toBe(":rocket:".length);
+  });
+});
+
+describe("别处插了 / 删了一行（列）：找出位置", () => {
+  it("只差一个时给出位置；同时还改了别处就不认", () => {
+    expect(shiftedAt(["甲", "乙"], ["丙", "甲", "乙"], null)).toBe(0);
+    expect(shiftedAt(["甲", "乙"], ["甲", "丙", "乙"], null)).toBe(1);
+    expect(shiftedAt(["甲", "乙"], ["甲", "乙", "丙"], null)).toBe(2);
+    expect(shiftedAt(["甲", "乙", "丙"], ["甲", "丙"], null)).toBe(1);
+    expect(shiftedAt(["甲", "乙"], ["丙", "甲", "改"], null)).toBeNull();
+    expect(shiftedAt(["甲", "乙"], ["甲", "乙"], null)).toBeNull();
+    expect(shiftedAt(["甲"], ["甲", "乙", "丙"], null)).toBeNull();
+  });
+
+  it("落在一串一样的里面：挑一处不挪正在编辑的那个", () => {
+    // 三个空行里插了一个：正在编辑第 1 个（下标 1），插在它后面
+    expect(shiftedAt(["甲", "", "", "乙"], ["甲", "", "", "", "乙"], 1)).toBe(2);
+    // 正在编辑的是这串的最后一个：也插在它后面
+    expect(shiftedAt(["甲", "", "", "乙"], ["甲", "", "", "", "乙"], 2)).toBe(3);
+    // 删了一个空行：别删正在编辑的那个
+    expect(shiftedAt(["甲", "", "", "乙"], ["甲", "", "乙"], 2)).toBe(1);
+    expect(shiftedAt(["甲", "", "", "乙"], ["甲", "", "乙"], 1)).toBe(2);
+    // 只剩它一个能删：就是它被删了
+    expect(shiftedAt(["甲", "乙"], ["甲"], 1)).toBe(1);
   });
 });

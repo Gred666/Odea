@@ -1,15 +1,55 @@
-import type { NoteSummary } from "./types";
+import type { TreeShape } from "./tree";
+import { type NoteSummary, ODEA_LAYOUT, type VaultLayout } from "./types";
 
 /* ============================================================
-   笔记文件夹的路径小工具。
+   文件树上文件夹的路径小工具。
 
-   文件夹路径相对仓库里的「笔记」：`工作/周报`；空串是「笔记」本身（全部笔记）。
+   文件夹路径相对树根：`工作/周报`；空串是树根本身（全部笔记）。树根是仓库里的「笔记」
+   （Odea 建的仓库），或者整个仓库（没开日程的，比如打开的 Obsidian 库），见 VaultLayout。
    一篇笔记在哪个文件夹由它的 relPath 决定（`笔记/工作/周报/第 40 周.md`）；
-   不在「笔记」底下的（仓库根上、别的工具建的目录里）都算在「全部笔记」这一层。
+   不在树根底下的（仓库根上、别的工具建的目录里）、在日程那几个文件夹里的都算在「全部笔记」这一层。
+
+   逻辑目录（docs/仓库与启动器.md §7）：文件夹在清单里（data/tree.ts 摊开的 TreeShape），
+   一篇在哪个文件夹看它在树上的位置、和文件在哪无关；没放进树里的在「未整理」（UNSORTED）。
+   文件夹按手动排的顺序，不按名字
    ============================================================ */
 
-export const NOTES_DIR = "笔记";
 export const ROOT_LABEL = "全部笔记";
+/** 「未整理」在界面上的路径：真的文件夹路径不会以 / 开头（Rust 的 tree::UNSORTED） */
+export const UNSORTED = "/";
+export const UNSORTED_LABEL = "未整理";
+
+/** 逻辑目录的树摊开的样子；本地目录是 null。data/store 取到树时换上（setTreeShape） */
+let logical: TreeShape | null = null;
+
+export function setTreeShape(shape: TreeShape | null) {
+  logical = shape;
+}
+
+export const isLogical = () => logical !== null;
+
+/** 智能文件夹的条件；不是智能文件夹返回 undefined */
+export const smartQuery = (path: string) => logical?.smart.get(path);
+
+/** 放在这个文件夹里的快捷方式（逻辑目录才有），按排序键 */
+export const shortcutsIn = (path: string) => logical?.shortcuts.get(path) ?? [];
+
+/** 手动排序（逻辑目录）时这一篇的排序键；没放进树里的没有 */
+export const manualKey = (note: Pick<NoteSummary, "id">) => logical?.placement.get(note.id)?.key;
+
+/** 这个窗口的仓库怎么摆。data/store 取到仓库信息时换成真的（setTreeLayout） */
+let tree: Pick<VaultLayout, "notesDir" | "hiddenDirs"> = ODEA_LAYOUT;
+
+export function setTreeLayout(layout: Pick<VaultLayout, "notesDir" | "hiddenDirs">) {
+  tree = layout;
+}
+
+/** 树根在仓库里的路径：「笔记」，或者整个仓库（空串） */
+export const treeRoot = () => tree.notesDir;
+
+/** 树上的文件夹 → 仓库里的目录 */
+const dirOf = (folder: string) =>
+  tree.notesDir && folder ? `${tree.notesDir}/${folder}` : tree.notesDir || folder;
 
 export const parentOf = (path: string) =>
   path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
@@ -20,14 +60,23 @@ export const within = (folder: string, path: string) =>
   path === "" || folder === path || folder.startsWith(`${path}/`);
 
 /** 给人看的路径：`工作 / 周报`，空串是「全部笔记」 */
-export const folderLabel = (path: string) => (path ? path.split("/").join(" / ") : ROOT_LABEL);
+export const folderLabel = (path: string) =>
+  path === UNSORTED ? UNSORTED_LABEL : path ? path.split("/").join(" / ") : ROOT_LABEL;
 
-/** 笔记所在的文件夹 */
-export function folderOf(note: Pick<NoteSummary, "relPath">): string {
+/** 文件夹自己的名字：空串是「全部笔记」，UNSORTED 是「未整理」 */
+export const folderName = (path: string) =>
+  path === UNSORTED ? UNSORTED_LABEL : path ? nameOf(path) : ROOT_LABEL;
+
+/** 笔记所在的文件夹（和 Rust 的 Layout::folder_of_dir 一样）。逻辑目录看它在树上的位置 */
+export function folderOf(note: Pick<NoteSummary, "relPath"> & { id?: string }): string {
+  if (logical) return (note.id && logical.placement.get(note.id)?.folder) ?? UNSORTED;
   const rel = note.relPath ?? "";
   const dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
-  if (dir === NOTES_DIR) return "";
-  return dir.startsWith(`${NOTES_DIR}/`) ? dir.slice(NOTES_DIR.length + 1) : "";
+  if (tree.hiddenDirs.some((hidden) => dir === hidden || dir.startsWith(`${hidden}/`))) return "";
+  const root = tree.notesDir;
+  if (!root) return dir;
+  if (dir === root) return "";
+  return dir.startsWith(`${root}/`) ? dir.slice(root.length + 1) : "";
 }
 
 export const joinFolder = (parent: string, name: string) => (parent ? `${parent}/${name}` : name);
@@ -90,11 +139,11 @@ export function uniqueChild(
   }
 }
 
-/** 直接的子文件夹，按名字排（中文按拼音） */
+/** 直接的子文件夹，按名字排（中文按拼音）。逻辑目录按手动排的顺序（folders 本来就是这个顺序） */
 export function childFolders(folders: string[], parent: string): string[] {
-  return folders
-    .filter((folder) => parentOf(folder) === parent)
-    .sort((a, b) => nameOf(a).localeCompare(nameOf(b), "zh-Hans-CN"));
+  const children = folders.filter((folder) => parentOf(folder) === parent && folder !== UNSORTED);
+  if (logical) return children;
+  return children.sort((a, b) => nameOf(a).localeCompare(nameOf(b), "zh-Hans-CN"));
 }
 
 /** 整棵树按显示顺序摊平：父在前、子在后，带深度 */
@@ -122,10 +171,8 @@ export function renamedPath(path: string, from: string, to: string): string {
 
 /** relPath 跟着文件夹改名换前缀 */
 export function renamedRelPath(relPath: string, from: string, to: string): string {
-  const prefix = `${NOTES_DIR}/${from}/`;
-  return relPath.startsWith(prefix)
-    ? `${NOTES_DIR}/${to}/${relPath.slice(prefix.length)}`
-    : relPath;
+  const prefix = `${dirOf(from)}/`;
+  return relPath.startsWith(prefix) ? `${dirOf(to)}/${relPath.slice(prefix.length)}` : relPath;
 }
 
 /** 一篇笔记挪到 folder 之后的 relPath（文件名不变；重名加序号由后端决定，这里只是乐观的猜测） */
@@ -133,5 +180,6 @@ export function relPathIn(note: Pick<NoteSummary, "relPath" | "title">, folder: 
   const name = note.relPath
     ? note.relPath.slice(note.relPath.lastIndexOf("/") + 1)
     : `${fileStemFor(note.title)}.md`;
-  return folder ? `${NOTES_DIR}/${folder}/${name}` : `${NOTES_DIR}/${name}`;
+  const dir = dirOf(folder);
+  return dir ? `${dir}/${name}` : name;
 }

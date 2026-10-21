@@ -1,8 +1,17 @@
-import { ROOT_LABEL, countIn, folderLabel, folderTree, nameOf, parentOf } from "@/data/folders";
+import {
+  UNSORTED,
+  countIn,
+  folderLabel,
+  folderName,
+  folderOf,
+  folderTree,
+  parentOf,
+  smartQuery,
+} from "@/data/folders";
 import { useData } from "@/data/store";
 import { cn } from "@/lib/cn";
 import { popoverCard } from "@/lib/motion";
-import { Check, Copy, Folder, Search } from "lucide-react";
+import { Check, Copy, Folder, Inbox, ListFilter, Search } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -11,6 +20,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
    ↑↓ 选、回车确定。两种用法：
    - jump：点标题打开，跳到任何一个文件夹 —— 平级之间来回不用先退回上层
    - move：笔记「…」菜单里的「移动到…」，选目标文件夹
+   - shortcut：笔记「…」菜单里的「添加快捷方式到…」（逻辑目录），选放快捷方式的文件夹
+   逻辑目录（docs/仓库与启动器.md §7）的最后一项是「未整理」；智能文件夹能跳过去，不能往里放
 
    盖在文字上，所以从第一帧就是实心的，按高度从顶上展开、里面的字不动
    （lib/motion.ts 的 popoverCard）。
@@ -33,8 +44,8 @@ export function FolderPicker({
   onPick,
   onClose,
 }: {
-  mode: "jump" | "move";
-  /** jump：现在所在的文件夹（打勾）；move：笔记现在所在的文件夹（不能选） */
+  mode: "jump" | "move" | "shortcut";
+  /** jump：现在所在的文件夹（打勾）；move、shortcut：笔记现在所在的文件夹（不能选） */
   current: string;
   /** move 时显示「移动「…」到」 */
   noteTitle?: string;
@@ -45,12 +56,19 @@ export function FolderPicker({
 }) {
   const folders = useData((s) => s.folders);
   const notes = useData((s) => s.notes);
+  const logical = useData((s) => s.layout.logical);
   const [query, setQuery] = useState("");
   const panel = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
 
-  const entries = useMemo(() => entriesFor(folders, query), [folders, query]);
-  const disabled = (path: string) => mode === "move" && path === current;
+  // 快捷方式放不进「未整理」
+  const withUnsorted = logical && mode !== "shortcut";
+  const entries = useMemo(
+    () => entriesFor(folders, query, withUnsorted),
+    [folders, query, withUnsorted],
+  );
+  const disabled = (path: string) =>
+    mode !== "jump" && (path === current || smartQuery(path) !== undefined);
   const firstEnabled = (list: Entry[]) =>
     Math.max(
       0,
@@ -69,7 +87,7 @@ export function FolderPicker({
   const changeQuery = (next: string) => {
     setQuery(next);
     // 筛选词变了从第一个能选的开始
-    setActive(firstEnabled(entriesFor(folders, next)));
+    setActive(firstEnabled(entriesFor(folders, next, withUnsorted)));
   };
 
   useEffect(() => {
@@ -109,7 +127,9 @@ export function FolderPicker({
     <motion.div
       ref={panel}
       role="dialog"
-      aria-label={mode === "jump" ? "跳到文件夹" : "移动到文件夹"}
+      aria-label={
+        mode === "jump" ? "跳到文件夹" : mode === "shortcut" ? "放快捷方式的文件夹" : "移动到文件夹"
+      }
       variants={popoverCard}
       custom={SEARCH_BAR_HEIGHT}
       initial="hidden"
@@ -142,15 +162,27 @@ export function FolderPicker({
               onClose();
             }
           }}
-          placeholder={mode === "jump" ? "跳到文件夹…" : "移到哪个文件夹…"}
-          aria-label={mode === "jump" ? "跳到文件夹" : "移到哪个文件夹"}
+          placeholder={
+            mode === "jump"
+              ? "跳到文件夹…"
+              : mode === "shortcut"
+                ? "放到哪个文件夹…"
+                : "移到哪个文件夹…"
+          }
+          aria-label={
+            mode === "jump"
+              ? "跳到文件夹"
+              : mode === "shortcut"
+                ? "放到哪个文件夹"
+                : "移到哪个文件夹"
+          }
           className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-faint"
         />
       </div>
 
-      {mode === "move" && noteTitle && (
+      {mode !== "jump" && noteTitle && (
         <div className="truncate px-3 pb-0.5 pt-2 text-[12px] text-faint">
-          移动「{noteTitle}」到
+          {mode === "shortcut" ? `给「${noteTitle}」放一个快捷方式到` : `移动「${noteTitle}」到`}
         </div>
       )}
 
@@ -169,7 +201,9 @@ export function FolderPicker({
           const isCurrent = entry.path === current;
           const off = disabled(entry.path);
           // 「全部笔记」用左侧导航里「笔记」的那个图标
-          const Icon = entry.path ? Folder : Copy;
+          const smart = smartQuery(entry.path) !== undefined;
+          const Icon =
+            entry.path === UNSORTED ? Inbox : smart ? ListFilter : entry.path ? Folder : Copy;
           return (
             <button
               key={entry.path || "/"}
@@ -196,17 +230,25 @@ export function FolderPicker({
                   isCurrent && mode === "jump" ? "text-accent" : "text-faint",
                 )}
               />
-              <span className="min-w-0 truncate">
-                {entry.path ? nameOf(entry.path) : ROOT_LABEL}
-              </span>
+              <span className="min-w-0 truncate">{folderName(entry.path)}</span>
               {entry.hint && (
                 <span className="min-w-0 truncate text-[12px] text-faint">{entry.hint}</span>
               )}
               <span className="ml-auto shrink-0 pl-2 text-[12px] tabular-nums text-faint">
                 {off ? (
-                  "当前位置"
+                  smart ? (
+                    "智能文件夹"
+                  ) : mode === "shortcut" ? (
+                    "笔记在这里"
+                  ) : (
+                    "当前位置"
+                  )
                 ) : isCurrent && mode === "jump" ? (
                   <Check size={13} strokeWidth={2.2} className="text-accent" />
+                ) : smart ? (
+                  ""
+                ) : entry.path === UNSORTED ? (
+                  notes.filter((note) => folderOf(note) === UNSORTED).length
                 ) : (
                   countIn(notes, entry.path)
                 )}
@@ -222,7 +264,7 @@ export function FolderPicker({
         </span>
         <span>
           <Kbd>Enter</Kbd>
-          {mode === "jump" ? "打开" : "移过去"}
+          {mode === "jump" ? "打开" : mode === "shortcut" ? "放进去" : "移过去"}
         </span>
         <span>
           <Kbd>Esc</Kbd>关闭
@@ -232,17 +274,20 @@ export function FolderPicker({
   );
 }
 
-/** 没有筛选词时是整棵树（「全部笔记」打头）；有的话是名字对得上的文件夹，摊平 */
-function entriesFor(folders: string[], query: string): Entry[] {
+/**
+ * 没有筛选词时是整棵树（「全部笔记」打头，逻辑目录最后是「未整理」）；有的话是名字对得上的文件夹，摊平
+ */
+function entriesFor(folders: string[], query: string, unsorted: boolean): Entry[] {
   const q = query.trim().toLowerCase();
   if (!q) {
     return [
       { path: "", depth: 0 },
       ...folderTree(folders).map((item) => ({ path: item.path, depth: item.depth + 1 })),
+      ...(unsorted ? [{ path: UNSORTED, depth: 1 }] : []),
     ];
   }
-  return folders
-    .filter((folder) => nameOf(folder).toLowerCase().includes(q))
+  return [...folders, ...(unsorted ? [UNSORTED] : [])]
+    .filter((folder) => folderName(folder).toLowerCase().includes(q))
     .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
     .map((path) => ({
       path,

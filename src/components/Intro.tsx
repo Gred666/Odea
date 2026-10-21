@@ -1,5 +1,4 @@
 import { landIntro, useIntro } from "@/app/intro";
-import { useApp } from "@/app/store";
 import { animate, motion, useMotionValue, useMotionValueEvent, useTransform } from "motion/react";
 import type { AnimationPlaybackControls } from "motion/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -88,8 +87,8 @@ export function Intro() {
   // 落地以后元素再留两帧才卸（这边的「O」在落地那一帧就藏了，见下面的 useLayoutEffect）
   const [gone, setGone] = useState(false);
 
-  // 收起着的话落点是收起后的样子（整体往左挪了一点），开场全程带着这个偏移，落地才对得上
-  const [shiftU] = useState(() => (useApp.getState().navCollapsed ? MARK_SHIFT : 0));
+  // 窄栏上的 Logo 是收起后的样子（整体往左挪了一点），开场全程带着这个偏移，落地才对得上
+  const shiftU = MARK_SHIFT;
 
   const [startScale] = useState(() => startHeight() / O_HEIGHT);
   const tail = useMotionValue(0);

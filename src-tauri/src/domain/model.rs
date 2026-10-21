@@ -240,6 +240,36 @@ pub struct VaultChange {
     pub found_copies: Vec<String>,
     /// 「笔记」下面的文件夹变了（在资源管理器里建了、删了、改了名）
     pub folders: bool,
+    /// 仓库的摆法在别处变了（另一台设备开关了日程、转成了逻辑目录，同步过来）：要按新的摆法重新认文件、
+    /// 整页重载，前端问一句「切换过去」（vault_relayout）。没切换之前照旧按原来的摆法
+    pub layout: bool,
+}
+
+/// 文件树上的一个不是笔记的文件：图片、PDF（docs/仓库与启动器.md §11：整个仓库当树根时和 Obsidian 一样列出来）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeFile {
+    /// 仓库里的相对路径
+    pub rel_path: String,
+    /// 在树上哪个文件夹（相对树根，空串是根）
+    pub folder: String,
+    pub name: String,
+    /// `image` / `pdf`
+    pub kind: String,
+    pub size: f64,
+    /// 修改时间（Unix 毫秒）
+    pub updated_at: f64,
+}
+
+/// 导入一个文件夹的结果（Vault::import_folder）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport {
+    /// 树上新文件夹的路径（相对树根）
+    pub folder: String,
+    pub notes: u32,
+    /// 别的文件（图片、PDF …）
+    pub files: u32,
 }
 
 /// 删掉一个文件夹的结果，原样交回 folder_undelete 就能撤销
@@ -254,6 +284,28 @@ pub struct FolderDeletion {
     pub folders: Vec<String>,
     /// 文件夹里还有别的文件（图片、PDF），目录留着没删
     pub kept: bool,
+    /// 逻辑目录：从清单里拿掉的那些行（文件夹、智能文件夹、笔记的位置），撤销时放回去
+    pub nodes: Option<String>,
+}
+
+/// 逻辑目录的树（vault/tree.rs）上的一个节点，给前端的样子。按路径引用的笔记已经换成了 id，
+/// 引用的笔记不在了的不给
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeNode {
+    pub id: String,
+    /// 父节点的 id，根是 `.`
+    pub parent: String,
+    /// 排序键：同一层按它排，一样时按 id（data/tree.ts）
+    pub key: String,
+    /// folder / query / note
+    pub kind: String,
+    /// 文件夹、智能文件夹的名字
+    pub name: Option<String>,
+    /// 笔记的 id
+    pub note: Option<String>,
+    /// 智能文件夹的条件（vault/query.rs）
+    pub query: Option<String>,
 }
 
 /// 反向链接：一篇正文里写了 `[[这篇的标题]]` 的文档
@@ -365,6 +417,24 @@ pub struct VaultInfo {
     pub days: i64,
     pub goals: i64,
     pub tasks: i64,
+    pub layout: VaultLayout,
+}
+
+/// 这个仓库怎么摆（vault/layout.rs 的 Layout）：前端据此决定窄栏上有哪几项、一篇笔记在树上哪个文件夹
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultLayout {
+    /// 逻辑目录（docs/仓库与启动器.md §7）：文件树是清单里摆的那一棵（tree_view），不按文件夹
+    pub logical: bool,
+    /// 开没开日程（今日TODO、目标、日历、归档）
+    pub journal: bool,
+    /// 文件树的根：「笔记」，或者整个仓库（空串）
+    pub notes_dir: String,
+    pub days_dir: String,
+    pub goals_dir: String,
+    pub archive_dir: String,
+    /// 不在树上的文件夹（日程开着时的日记、目标、归档）：里面的笔记算在树根这一层
+    pub hidden_dirs: Vec<String>,
 }
 
 /* ---------------- 同步（技术方案 §5.9） ---------------- */

@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "笔记、待办、目标与日历一体的个人效率工具"
 authors = ["Odea"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.91"
 
 [features]
 default = ["desktop-runtime"]
@@ -16,6 +16,7 @@ desktop-runtime = [
   "dep:tauri-plugin-window-state",
   "dep:tauri-plugin-single-instance",
   "dep:tauri-plugin-updater",
+  "dep:tauri-plugin-deep-link",
   "tauri/wry",
   "tauri/compression",
   "tauri/common-controls-v6",
@@ -55,6 +56,8 @@ tauri-plugin-window-state = { version = "2", optional = true }
 # 自动更新（技术方案 §14.4）：检查、下载、安装都在 Rust 里调，前端不需要权限。
 # TLS 用系统的，和 ureq 一样不带 rustls / ring。2.13 起要 tauri 2.12，这里还是 2.11，先停在 2.12
 tauri-plugin-updater = { version = "~2.12", default-features = false, features = ["native-tls"], optional = true }
+# 协作的邀请链接 odea://join/…（docs/协同编辑.md §8.1）：点开就打开 Odea。只在 Rust 里用，前端不需要权限
+tauri-plugin-deep-link = { version = "2", optional = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -96,13 +99,47 @@ ureq = { version = "3.4", default-features = false, features = ["native-tls", "j
 # 令牌放系统钥匙串：keyring-core + 各平台自己的存储（keyring 4 的 v1 会顺带一个数据库存储，用不上）
 keyring-core = "1"
 
+# --- 多人协同（docs/协同编辑.md）---
+# iroh：按公钥拨号的 QUIC，端到端加密。不要默认 features：metrics 用不上；它自带的端口映射
+# 没配中继时根本不会去要（socket.rs 里中继表为空就整段跳过），所以端口映射自己驱动（下面的 portmapper）。
+# QUIC 的 TLS 绕不开 rustls，这里用 ring（同步那边仍然走系统 TLS，不受影响）。
+# unstable-net-report：配了中继时拿网络报告（到中继的延迟、UDP 通不通、公网地址），测试中继和
+# 分享前自检用。它不受语义化版本保护，所以锁在 1.3.x：升 iroh 时先看 Endpoint::net_report 变没变
+iroh = { version = "~1.3", default-features = false, features = ["tls-ring", "unstable-net-report"] }
+# 局域网里按公钥找到对方的地址（mDNS），也给「附近」列表用
+iroh-mdns-address-lookup = "0.6"
+# 自己配的中继（设计 §6）：RelayQuicConfig 这些 iroh 没有转出来；url 拿来规范化中继地址。依赖树里本来就有
+iroh-relay = { version = "~1.3", default-features = false }
+url = "2"
+# 问自家路由器要一个公网端口（UPnP / NAT-PMP / PCP，设计 §5.2）。和 iroh 1.3 内部用的是同一版
+portmapper = { version = "0.19", default-features = false }
+# 网卡和子网：访客连不上时判断「是不是在同一个网络里」（设计 §8.5）。iroh 依赖树里本来就有
+netwatch = "0.19"
+# 订阅 mDNS 的发现事件（Stream）：访客连不上时看「同一个网络里能不能看到主持人」。依赖树里本来就有
+n0-future = "0.3"
+# 自签名证书的中继按指纹认（设计 §6.2）：要自己实现 rustls 的证书校验。iroh 依赖树里本来就有
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+# iroh 跑在 tokio 上；Tauri 自己也用它，同一个运行时
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+# 控制消息的编码（设计 §7.4：很小的结构，不用 JSON）、邀请链接的 base32、握手的 HMAC
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+data-encoding = "2"
+ring = "0.17"
+# 光标走 QUIC 数据报，iroh 的接口收发的是 Bytes。依赖树里本来就有
+bytes = "1"
+# 共享仓库（docs/协同编辑.md §20）：每篇一个 Loro 文档，存在仓库的 .odea/share/ 里，后台合并、写盘。
+# 和前端的 loro-crdt 是同一份 Rust 核心（前端是它编成的 wasm）：两边的大版本必须一致，所以锁死。
+# 不要计数器（counter）：用不上
+loro = { version = "=1.16.2", default-features = false }
+
 # --- 类型安全的 IPC 绑定 ---
 specta = { version = "=2.0.0-rc.22", features = ["derive"] }
 specta-typescript = "=0.0.9"
 tauri-specta = { version = "=2.0.0-rc.21", features = ["derive", "typescript"], optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-single-instance = { version = "2", optional = true }
+# deep-link：应用已经开着时再点 odea:// 链接，交给正在运行的那个实例
+tauri-plugin-single-instance = { version = "2", optional = true, features = ["deep-link"] }
 
 [target.'cfg(windows)'.dependencies]
 # 同步：令牌放 Windows 凭据管理器；系统代理从注册表读（winreg 依赖树里本来就有）
@@ -110,7 +147,16 @@ windows-native-keyring-store = "1.1"
 winreg = "0.55"
 # 窗口图标从 exe 里嵌的多尺寸图标资源加载（lib.rs 的 use_app_icon_resource）。
 # 和 tauri / tao 用的是同一个版本，依赖树里本来就有
-windows = { version = "0.61", features = ["Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+# 协作的分享前自检读防火墙规则（collab/firewall.rs）：INetFwPolicy2、枚举规则用的 IEnumVARIANT
+windows = { version = "0.61", features = [
+  "Win32_System_LibraryLoader",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Foundation",
+  "Win32_NetworkManagement_WindowsFirewall",
+  "Win32_System_Com",
+  "Win32_System_Ole",
+  "Win32_System_Variant",
+] }
 # 最小化时让 WebView2 少占内存（memory.rs）。Tauri 只给出 WebView2 的 controller，
 # 要 ICoreWebView2_19 得用它自己用的这个版本的绑定
 webview2-com = "0.38"
@@ -126,6 +172,13 @@ openssl-sys = { version = "0.9", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = "3"
+# 协作的测试在进程里起一台真的中继（官方 iroh-relay 的服务端，自签名证书）
+iroh-relay = { version = "~1.3", features = ["server", "test-utils"] }
+
+# 调试版：依赖不带调试信息。加上 Loro 以后测试程序的模块太多，MSVC 的链接器写不下 PDB（LNK1140）；
+# 依赖的调试信息平时也用不上
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 opt-level = "s"

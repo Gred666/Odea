@@ -8,6 +8,7 @@
 // 量生产构建：开发构建（pnpm dev / tauri dev）慢 2.5–3.5 倍，而且 React 是开发模式。
 // 选项：--cpu 4  --notes 400（仓库里有多少篇笔记）  --port 9333（Chrome 调试端口）
 //       --only startup,switch,typing,arrows,scroll,palette,nav,memory
+//       --only collab：协作实验台的长文里，访客每秒打 20 个字时主持人打字（默认不跑，单独量）
 //
 // 按键的延迟是页面里量的「keydown（面板里打字是 input）→ 下一帧画完」（rAF 里再 setTimeout 0）：Event Timing 的按键条目
 // 在无头模式下按键之后没有新画面时会一直算到下一次绘制，长尾全是假的。点击（切换笔记、切区）
@@ -358,6 +359,56 @@ try {
         longestFrame: Math.round(Math.max(0, ...frames)),
       });
     }
+  }
+
+  if (ONLY.includes("collab")) {
+    // 协作（docs/协同编辑.md §12 P10.0 的标准）：访客在主持人上面几行每秒打 20 个字，主持人
+    // 打字的 p90 不能比没人打时差。只画主持人一栏，访客的字直接打进它的正文（就像在另一台
+    // 电脑上打）：访客自己那一栏的排版不该算在主持人头上。机器人不发 keydown，不算进按键
+    await send("Page.navigate", {
+      url: new URL("?lab=collab&latency=20&doc=long&view=host", BASE).href,
+    });
+    for (let i = 0; i < 200 && !(await evaluate("!!window.__collabLab")); i++) await sleep(100);
+    await idle(1500);
+    const host = "document.querySelector('[data-lab-peer=\"lab-host\"] .cm-content').cmTile.view";
+    // 两边都打在普通正文段落里（标题、列表、表格里打一个字要整篇重建块级层，那是编辑器本来的
+    // 代价，和协作无关）：主持人在文档中间往后找第一段，访客在它上面最近的另一段
+    const remoteAt = await evaluate(`(() => {
+      const h = ${host}; const doc = h.state.doc;
+      const plain = (n) => { const text = doc.line(n).text;
+        return text.length > 20 && !/^\\s*([#>|\`*+\\-]|\\d+\\.|!\\[|\\$\\$|<|:::)/.test(text); };
+      let mine = doc.lineAt(Math.floor(doc.length * 0.5)).number;
+      while (!plain(mine)) mine += 1;
+      let theirs = mine - 2;
+      while (!plain(theirs)) theirs -= 1;
+      h.dispatch({ selection: { anchor: doc.line(mine).to }, scrollIntoView: true });
+      h.focus(); return doc.line(theirs).to; })()`);
+    out.collab = {};
+    for (const label of ["alone", "remoteTyping"]) {
+      if (label === "remoteTyping") {
+        await evaluate(`window.__collabLab.typeHeadless(1, ${remoteAt}); true`);
+        await sleep(1000);
+      }
+      await idle();
+      await resetProbes();
+      for (let round = 0; round < 2; round++) {
+        for (const ch of "今天的进度还可以abc def") {
+          await key(ch, "", 0, { text: ch });
+          await sleep(110);
+        }
+        for (let i = 0; i < 6; i++) {
+          await key("Backspace", "Backspace", 8);
+          await sleep(110);
+        }
+      }
+      await idle(400);
+      const { keys, frames } = await probes();
+      out.collab[label] = { ...stats(keys), longestFrame: Math.round(Math.max(0, ...frames)) };
+    }
+    await evaluate("window.__collabLab.stopHeadless(); true");
+    out.collab.synced = await evaluate(
+      "new Promise((r) => setTimeout(() => { const [a, b] = window.__collabLab.members.map((m) => m.session.toString()); r(a === b); }, 1500))",
+    );
   }
 
   if (ONLY.includes("memory")) {

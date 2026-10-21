@@ -26,9 +26,12 @@ use crate::vault::{fsio, guide, layout, legacy, seed};
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
-    /// 仓库文件夹。没有就用默认位置
+    /// 最近打开的那个仓库。有了 `vaults` 以后只为降级：旧版只认这一个
     #[serde(default)]
     pub vault_root: Option<PathBuf>,
+    /// 用过的仓库（docs/仓库与启动器.md §5）：启动器左边的列表、下次启动要打开哪些
+    #[serde(default)]
+    pub vaults: Vec<SavedVault>,
     /// 旧库（ontheway.db）已经搬过了，或者已经有过一个仓库、不该再搬
     #[serde(default)]
     pub legacy_imported: bool,
@@ -41,6 +44,174 @@ pub struct Config {
     /// 上一次启动的是哪一版。升级后第一次打开时据此提示一次更新说明（note_version）
     #[serde(default)]
     pub last_version: Option<String>,
+    /// 协作时别人看到的我的名字（docs/协同编辑.md §8.6：没有账号，在本地设）
+    #[serde(default)]
+    pub collab_name: Option<String>,
+    /// 自己配的协作中继（docs/协同编辑.md §6.4）。令牌在钥匙串里，这里不放
+    #[serde(default)]
+    pub collab_relays: Vec<SavedRelay>,
+    /// 主持协作时「记住」的人（docs/协同编辑.md §8.2）：下次拿着链接或者从「附近」进来不用再问
+    #[serde(default)]
+    pub collab_trusted: Vec<SavedPeer>,
+}
+
+/// config.json 里记着的一个仓库
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedVault {
+    pub path: PathBuf,
+    /// 窗口标签。只有从旧配置迁过来的那个写 `main`（窗口位置插件按标签记位置，升级后窗口还在原处），
+    /// 别的按路径算（`window_label`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+    /// 上次打开的时间（Unix 毫秒）
+    #[serde(default)]
+    pub last_opened: i64,
+    /// 上次关应用的时候还开着：下次启动打开它（§3.1「上次开着」怎么记）
+    #[serde(default)]
+    pub open: bool,
+}
+
+/// 比较两个仓库路径用的：去掉 Windows 的 `\\?\` 前缀和结尾的分隔符，Windows / macOS 不分大小写。
+/// 文件夹在的话先 `canonicalize`（`D:\笔记\..\笔记` 和 `d:/笔记` 是同一个）
+pub fn path_key(path: &Path) -> String {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut text = resolved.to_string_lossy().into_owned();
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        text = rest.to_string();
+    }
+    if cfg!(windows) {
+        text = text.replace('/', "\\");
+    }
+    while text.len() > 1 && (text.ends_with('\\') || text.ends_with('/')) && !text.ends_with(":\\") {
+        text.pop();
+    }
+    if cfg!(any(windows, target_os = "macos")) {
+        text = text.to_lowercase();
+    }
+    text
+}
+
+pub fn same_vault(a: &Path, b: &Path) -> bool {
+    path_key(a) == path_key(b)
+}
+
+/// 仓库窗口的标签：迁过来的那个是 `main`，别的是 `vault-<路径指纹>`
+pub fn window_label(saved: &SavedVault) -> String {
+    saved
+        .window
+        .clone()
+        .unwrap_or_else(|| format!("vault-{}", fsio::fingerprint(&path_key(&saved.path))))
+}
+
+impl Config {
+    /// 旧配置只记着一个 `vaultRoot`：变成列表里的第一条，标成开着 —— 升级后第一次打开直接进原来的仓库
+    pub fn migrate_vaults(&mut self, now: i64) {
+        if !self.vaults.is_empty() {
+            return;
+        }
+        if let Some(root) = &self.vault_root {
+            self.vaults.push(SavedVault {
+                path: root.clone(),
+                window: Some("main".into()),
+                last_opened: now,
+                open: true,
+            });
+        }
+    }
+
+    pub fn saved_vault(&self, root: &Path) -> Option<&SavedVault> {
+        self.vaults.iter().find(|saved| same_vault(&saved.path, root))
+    }
+
+    /// 打开了一个仓库：没有就加进列表，记下时间、标成开着。`vaultRoot` 跟着它走（降级用）
+    pub fn remember_vault(&mut self, root: &Path, now: i64) -> SavedVault {
+        self.vault_root = Some(root.to_path_buf());
+        let index = match self.vaults.iter().position(|saved| same_vault(&saved.path, root)) {
+            Some(index) => index,
+            None => {
+                self.vaults.push(SavedVault { path: root.to_path_buf(), ..SavedVault::default() });
+                self.vaults.len() - 1
+            }
+        };
+        let saved = &mut self.vaults[index];
+        saved.last_opened = now;
+        saved.open = true;
+        saved.clone()
+    }
+
+    pub fn set_vault_open(&mut self, root: &Path, open: bool) {
+        if let Some(saved) = self.vaults.iter_mut().find(|saved| same_vault(&saved.path, root)) {
+            saved.open = open;
+        }
+    }
+
+    /// 从列表里拿掉（不碰文件）
+    pub fn forget_vault(&mut self, root: &Path) {
+        self.vaults.retain(|saved| !same_vault(&saved.path, root));
+        if self.vault_root.as_deref().is_some_and(|last| same_vault(last, root)) {
+            self.vault_root = self.recent_vaults().first().map(|saved| saved.path.clone());
+        }
+    }
+
+    /// 仓库搬了家：这一条换成新路径，窗口标签跟着它
+    pub fn move_vault(&mut self, from: &Path, to: &Path) {
+        self.vaults.retain(|saved| !same_vault(&saved.path, to));
+        if let Some(saved) = self.vaults.iter_mut().find(|saved| same_vault(&saved.path, from)) {
+            saved.path = to.to_path_buf();
+        }
+        if self.vault_root.as_deref().is_some_and(|last| same_vault(last, from)) {
+            self.vault_root = Some(to.to_path_buf());
+        }
+    }
+
+    /// 最近打开的在前
+    pub fn recent_vaults(&self) -> Vec<SavedVault> {
+        let mut vaults = self.vaults.clone();
+        vaults.sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
+        vaults
+    }
+
+    /// 启动时要打开的：上次开着、文件夹还在的。先开的在前（最近的最后开，落在最上面）。
+    /// 找不到的不打开（不在原处新建空仓库），启动器里标「找不到」
+    pub fn vaults_to_restore(&self) -> Vec<SavedVault> {
+        let mut vaults: Vec<_> = self.vaults.iter().filter(|saved| saved.open && saved.path.is_dir()).cloned().collect();
+        vaults.sort_by_key(|saved| saved.last_opened);
+        vaults
+    }
+}
+
+/// config.json 里记住的一个人：设备公钥（十六进制）、上次见到的名字、进来时给不给改
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedPeer {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub edit: bool,
+}
+
+/// config.json 里的一台中继：地址、名字、自签名证书的指纹（十六进制）
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedRelay {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+}
+
+/// 读 - 改 - 写 config.json 时拿着它：几个窗口的命令同时改仓库列表（一个窗口关了、启动器在开另一个），
+/// 各读各写会把对方的改动盖掉
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 读出配置、改、存回去，整个过程拿着 CONFIG_LOCK。返回 `change` 的结果
+pub fn edit_config<T>(data_dir: &Path, change: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
+    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut config = Config::load(data_dir);
+    let value = change(&mut config)?;
+    config.save(data_dir)?;
+    Ok(value)
 }
 
 impl Config {
@@ -89,16 +260,44 @@ pub fn data_dir(default: PathBuf) -> PathBuf {
     std::env::var_os("ODEA_DATA_DIR").map_or(default, PathBuf::from)
 }
 
-/// 环境变量 > 配置 > 「文档/Odea」（拿不到文档目录时放在应用数据目录下）。
-/// 改名前装的，配置里记着「文档/OnTheWay」，照旧用它
-pub fn vault_root(config: &Config, documents: Option<PathBuf>, data_dir: &Path) -> PathBuf {
-    if let Some(root) = std::env::var_os("ODEA_VAULT") {
-        return PathBuf::from(root);
-    }
-    if let Some(root) = &config.vault_root {
-        return root.clone();
-    }
+/// 开发、测试用的 `ODEA_VAULT`：只打开它，不记进仓库列表
+pub fn env_vault() -> Option<PathBuf> {
+    std::env::var_os("ODEA_VAULT").map(PathBuf::from)
+}
+
+/// 新建仓库默认放在哪：「文档」（拿不到文档目录时放在应用数据目录下）
+pub fn default_parent(documents: Option<PathBuf>, data_dir: &Path) -> PathBuf {
+    documents.unwrap_or_else(|| data_dir.to_path_buf())
+}
+
+/// 默认的仓库：「文档/Odea」（拿不到文档目录时是应用数据目录下的 vault）。
+/// 只有从 SQLite 时代的旧库搬家时才直接建在这里，别的情况走启动器
+pub fn default_root(documents: Option<PathBuf>, data_dir: &Path) -> PathBuf {
     documents.map_or_else(|| data_dir.join("vault"), |dir| dir.join("Odea"))
+}
+
+/// 冷启动打开什么（docs/仓库与启动器.md §3.1）
+#[derive(Debug, PartialEq, Eq)]
+pub enum Startup {
+    /// 打开这些仓库（先开的在前）。`seed` = 空文件夹里放使用指南（只有 ODEA_VAULT 和旧库搬家）
+    Open { roots: Vec<PathBuf>, seed: bool, remember: bool },
+    /// 一个都没有：弹启动器
+    Launcher,
+}
+
+/// `legacy` = SQLite 时代的旧库里有东西、还没搬过
+pub fn startup(config: &Config, env: Option<PathBuf>, default: PathBuf, legacy: bool) -> Startup {
+    if let Some(root) = env {
+        return Startup::Open { roots: vec![root], seed: true, remember: false };
+    }
+    let restore = config.vaults_to_restore();
+    if !restore.is_empty() {
+        return Startup::Open { roots: restore.into_iter().map(|saved| saved.path).collect(), seed: false, remember: true };
+    }
+    if config.vaults.is_empty() && legacy {
+        return Startup::Open { roots: vec![default], seed: true, remember: true };
+    }
+    Startup::Launcher
 }
 
 /// 每个仓库一份索引，按仓库路径分开：换来换去的时候各自的缓存都还在
@@ -123,8 +322,9 @@ pub enum Prepared {
 
 /// 第一次打开一个仓库：旧库有东西就搬过来，否则空文件夹里放示例内容；
 /// 最后写下仓库标记，以后不再做这些。`first_run` 为 false（用户换到另一个文件夹）
-/// 时不搬也不放示例 —— 那是用户自己挑的文件夹。
-pub fn prepare(root: &Path, data_dir: &Path, config: &mut Config, first_run: bool) -> Result<Prepared> {
+/// 时不搬也不放示例 —— 那是用户自己挑的文件夹。`logical`（启动器「新建」）：空文件夹建成逻辑目录
+/// （docs/仓库与启动器.md §7），指南平放在仓库根上
+pub fn prepare(root: &Path, data_dir: &Path, config: &mut Config, first_run: bool, logical: bool) -> Result<Prepared> {
     // 改名前的 .ontheway/ 先并进来：仓库标记也在里面
     if let Err(error) = crate::old_name::move_vault_dir(root, layout::APP_DIR) {
         eprintln!("搬仓库里的 {} 失败: {error}", crate::old_name::VAULT_DIR);
@@ -135,24 +335,23 @@ pub fn prepare(root: &Path, data_dir: &Path, config: &mut Config, first_run: boo
     }
     std::fs::create_dir_all(root)?;
     let empty = !fsio::has_markdown(root);
+    let logical = logical && empty;
     let legacy_db = data_dir.join("ontheway.db");
 
     let prepared = if first_run && empty && !config.legacy_imported && legacy::has_data(&legacy_db) {
         Prepared::Imported(legacy::import(&legacy_db, root, &data_dir.join("import-tmp"))?)
     } else if first_run && empty {
-        seed::write(root)?;
+        seed::write(root, if logical { "" } else { layout::NOTES_DIR })?;
         Prepared::Seeded
     } else {
         Prepared::Empty
     };
 
+    // 空文件夹（新建的、换到的空文件夹、搬旧库）按 Odea 的摆法、开着日程；已经有笔记的文件夹
+    // 不开，树就是它本来的样子（docs/仓库与启动器.md §6）
     fsio::write_atomic(
         &marker,
-        &serde_json::to_string_pretty(&serde_json::json!({
-            "app": "Odea",
-            "version": 1,
-            "createdAt": crate::db::now_ms(),
-        }))?,
+        &serde_json::to_string_pretty(&layout::new_marker(empty, logical, crate::db::now_ms()))?,
     )?;
     // 旧库只搬一次：以后换到别的文件夹也不再搬
     config.legacy_imported = true;
@@ -293,13 +492,13 @@ mod tests {
         let root = dir.path().join("vault");
         let mut config = Config::default();
 
-        assert_eq!(prepare(&root, &data, &mut config, true).unwrap(), Prepared::Seeded);
+        assert_eq!(prepare(&root, &data, &mut config, true, false).unwrap(), Prepared::Seeded);
         assert!(fsio::has_markdown(&root));
         assert!(config.legacy_imported);
 
         // 用户删光了也不会再塞回来
         std::fs::remove_dir_all(root.join(layout::NOTES_DIR)).unwrap();
-        assert_eq!(prepare(&root, &data, &mut config, true).unwrap(), Prepared::Existing);
+        assert_eq!(prepare(&root, &data, &mut config, true, false).unwrap(), Prepared::Existing);
         assert!(!root.join(layout::NOTES_DIR).exists());
     }
 
@@ -310,7 +509,7 @@ mod tests {
         fsio::write_atomic(&fsio::abs(&root, "随手记.md"), "别人的笔记").unwrap();
         let mut config = Config::default();
         assert_eq!(
-            prepare(&root, &dir.path().join("data"), &mut config, true).unwrap(),
+            prepare(&root, &dir.path().join("data"), &mut config, true, false).unwrap(),
             Prepared::Empty
         );
         assert_eq!(fsio::walk_markdown(&root).len(), 1, "不往别人的文件夹里塞示例");
@@ -325,7 +524,7 @@ mod tests {
         fsio::write_atomic(&fsio::abs(&root, ".ontheway/trash/a.md"), "回收站").unwrap();
         let mut config = Config::default();
         assert_eq!(
-            prepare(&root, &dir.path().join("data"), &mut config, true).unwrap(),
+            prepare(&root, &dir.path().join("data"), &mut config, true, false).unwrap(),
             Prepared::Existing
         );
         assert!(root.join(layout::TRASH_DIR).join("a.md").exists());
@@ -337,7 +536,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         assert_eq!(
-            prepare(&dir.path().join("新的"), &dir.path().join("data"), &mut config, false).unwrap(),
+            prepare(&dir.path().join("新的"), &dir.path().join("data"), &mut config, false, false).unwrap(),
             Prepared::Empty
         );
     }
@@ -473,6 +672,110 @@ mod tests {
         std::fs::write(to.join("附件/图.png"), "图").unwrap();
         std::fs::remove_file(to.join("笔记/工作/计划.md")).unwrap();
         assert!(first_difference(&from, &to).unwrap().contains("没复制过去"));
+    }
+
+    #[test]
+    fn an_old_config_becomes_the_first_vault_and_opens_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("文档/Odea");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            serde_json::json!({ "vaultRoot": root, "legacyImported": true }).to_string(),
+        )
+        .unwrap();
+        let mut config = Config::load(dir.path());
+        config.migrate_vaults(100);
+        assert_eq!(config.vaults.len(), 1);
+        assert_eq!(window_label(&config.vaults[0]), "main", "窗口位置记在 main 下，升级后还在原处");
+        assert_eq!(
+            startup(&config, None, dir.path().join("默认"), false),
+            Startup::Open { roots: vec![root.clone()], seed: false, remember: true }
+        );
+        // 只迁一次
+        config.migrate_vaults(200);
+        assert_eq!(config.vaults.len(), 1);
+        config.save(dir.path()).unwrap();
+        assert_eq!(Config::load(dir.path()).vaults, config.vaults);
+    }
+
+    #[test]
+    fn a_fresh_install_shows_the_launcher_unless_there_is_an_old_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Config::default();
+        let default = dir.path().join("文档/Odea");
+        assert_eq!(startup(&config, None, default.clone(), false), Startup::Launcher);
+        assert_eq!(
+            startup(&config, None, default.clone(), true),
+            Startup::Open { roots: vec![default], seed: true, remember: true }
+        );
+        // ODEA_VAULT：只开它，不记进列表
+        assert_eq!(
+            startup(&config, Some(dir.path().join("测试")), dir.path().join("x"), false),
+            Startup::Open { roots: vec![dir.path().join("测试")], seed: true, remember: false }
+        );
+    }
+
+    #[test]
+    fn restores_the_vaults_left_open_and_never_creates_a_missing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b, gone) = (dir.path().join("a"), dir.path().join("b"), dir.path().join("移动硬盘"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let mut config = Config::default();
+        config.remember_vault(&b, 300);
+        config.remember_vault(&a, 100);
+        config.remember_vault(&gone, 400);
+        assert_eq!(config.vault_root.as_deref(), Some(gone.as_path()));
+        // 最近的最后开（落在最上面）；找不到的不开
+        assert_eq!(
+            startup(&config, None, dir.path().join("x"), false),
+            Startup::Open { roots: vec![a.clone(), b.clone()], seed: false, remember: true }
+        );
+        assert!(!gone.exists());
+        // 都关了 / 都找不到：弹启动器
+        config.set_vault_open(&a, false);
+        config.set_vault_open(&b, false);
+        assert_eq!(startup(&config, None, dir.path().join("x"), true), Startup::Launcher, "有过仓库就不再搬旧库");
+        // 启动器的顺序：最近打开的在前
+        let order: Vec<_> = config.recent_vaults().into_iter().map(|saved| saved.path).collect();
+        assert_eq!(order, vec![gone.clone(), b.clone(), a.clone()]);
+    }
+
+    #[test]
+    fn the_same_folder_is_one_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("笔记");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut config = Config::default();
+        config.remember_vault(&root, 1);
+        config.remember_vault(&root.join("..").join("笔记"), 2);
+        assert_eq!(config.vaults.len(), 1);
+        assert_eq!(config.vaults[0].last_opened, 2);
+        if cfg!(windows) {
+            let upper = PathBuf::from(root.to_string_lossy().to_uppercase());
+            assert!(same_vault(&root, &upper));
+            assert!(same_vault(&root, &PathBuf::from(format!("{}\\", root.display()))));
+        }
+    }
+
+    #[test]
+    fn forgetting_and_moving_keep_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b, c) = (dir.path().join("a"), dir.path().join("b"), dir.path().join("c"));
+        let mut config = Config::default();
+        config.vault_root = Some(a.clone());
+        config.migrate_vaults(1);
+        config.remember_vault(&b, 2);
+        // 搬家：标签跟着走
+        config.move_vault(&a, &c);
+        assert_eq!(config.saved_vault(&c).and_then(|saved| saved.window.clone()).as_deref(), Some("main"));
+        assert!(config.saved_vault(&a).is_none());
+        // 拿掉最近的那个：vaultRoot 落到剩下最近的
+        config.forget_vault(&b);
+        assert_eq!(config.vaults.len(), 1);
+        assert_eq!(config.vault_root.as_deref(), Some(c.as_path()));
+        assert_ne!(window_label(&SavedVault { path: a.clone(), ..SavedVault::default() }), window_label(&SavedVault { path: b, ..SavedVault::default() }));
     }
 
     #[test]

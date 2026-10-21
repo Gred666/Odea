@@ -1,3 +1,5 @@
+import { collab as collabBinding } from "@/collab/binding";
+import type { CollabSession } from "@/collab/session";
 import type { Attachment, MatchAnchor, OutlineItem } from "@/data/types";
 import { registerEditorCommands } from "@/lib/editorCommands";
 import { MOD_KEY } from "@/lib/platform";
@@ -16,7 +18,7 @@ import {
   Facet,
   Prec,
   StateField,
-  type Transaction,
+  Transaction,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -68,6 +70,7 @@ import {
 import { abbrTip, hoverCard } from "./hoverCard";
 import {
   INLINE_HTML_TAGS,
+  type ImageBase,
   imageBaseDir,
   inlineStyleOf,
   parseTag,
@@ -84,6 +87,7 @@ import {
   splitWikiTarget,
   wikiTargetAt,
 } from "./links";
+import { longRuns } from "./longRuns";
 import { markdownKeymap } from "./markdownKeymap";
 import { markdownSupport } from "./markdownParser";
 import {
@@ -176,6 +180,10 @@ const session = new Compartment();
 const imageBaseSlot = new Compartment();
 /** 有哪些笔记标题：新建、改名、删掉笔记时单独换掉 */
 const wikiTitlesSlot = new Compartment();
+/** 协作会话（collab/binding.ts）：编辑器挂着时开始、结束协作，单独换上、换下 */
+const collabSlot = new Compartment();
+/** 只读（协作时主持人给的权限是「只读」）：能选、能复制，不能改 */
+const readOnlySlot = new Compartment();
 
 /**
  * 所有笔记的标题（trim + 小写，和 lib/wikilinks 的 sameTitle 同一个口径）。
@@ -186,6 +194,8 @@ export const knownWikiTitles = Facet.define<ReadonlySet<string> | null, Readonly
 );
 
 const wikiKey = (title: string) => title.trim().toLowerCase();
+/** 一个都不认识：双链全按「不存在」画（做客的那一篇） */
+const NO_TITLES: ReadonlySet<string> = new Set();
 
 /** 笔记的空白正文里显示的提示（某一天 / 某个周期的用 templatePlaceholder） */
 const NOTE_PLACEHOLDER = "写点什么…　输入 / 插入标题、待办、表格，[[ 链接到别的笔记";
@@ -250,11 +260,14 @@ export function MarkdownEditor({
   onExternalConflict,
   templateContext,
   imageBase = null,
+  linksMissing = false,
   onAttachFiles,
   onAttachPaths,
   linkTargets,
   linkSelf,
   onExitTop,
+  collab = null,
+  readOnly = false,
 }: {
   initialMarkdown: string;
   onSave: (markdown: string) => Promise<void>;
@@ -292,7 +305,12 @@ export function MarkdownEditor({
    * 这篇文档所在的文件夹（绝对路径）。正文里的相对图片路径（`../附件/截图.png`）
    * 以它为基准；浏览器预览里没有仓库文件夹，是 null。
    */
-  imageBase?: string | null;
+  imageBase?: ImageBase;
+  /**
+   * 双链一律按「不存在」画：做客的那一篇里的双链指向的是主持人的笔记，这边没有
+   * （没有 linkTargets 时平时是不判断存不存在）
+   */
+  linksMissing?: boolean;
   /** 粘贴 / 拖进来的文件：存进「附件」，返回从这篇引用它们的路径（见 editor/attachments.ts） */
   onAttachFiles?: (files: File[]) => Promise<Attachment[]>;
   /** 桌面端从系统拖进窗口的文件（只有路径） */
@@ -306,6 +324,14 @@ export function MarkdownEditor({
   linkSelf?: string;
   /** 光标在第一行时按 ↑：回到标题（只有能改标题的文档给） */
   onExitTop?: () => void;
+  /**
+   * 这篇正在协作（docs/协同编辑.md）：正文以会话的为准，编辑器挂上时用它的内容建，
+   * initialMarkdown 的变化（外部改动回填）不管 —— 外部改动由上层合进会话（collab/external.ts）。
+   * 协作中的文档不进、也不取编辑器状态缓存：切走期间别人还在改
+   */
+  collab?: CollabSession | null;
+  /** 只读：能选、能复制，不能改（协作时被给了「只读」） */
+  readOnly?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -326,6 +352,8 @@ export function MarkdownEditor({
   onDocumentChangeRef.current = onDocumentChange;
   onWikiLinkRef.current = onWikiLink;
   const imageBaseRef = useRef(imageBase);
+  const collabRef = useRef(collab);
+  const readOnlyRef = useRef(readOnly);
   /** 现取的附件回调：编辑器复用缓存的状态时，换的只是这一截闭包 */
   const attachRef = useRef<AttachHooks | null>(null);
   attachRef.current = onAttachFiles ? { files: onAttachFiles, paths: onAttachPaths } : null;
@@ -365,8 +393,13 @@ export function MarkdownEditor({
     setSuggest(null);
   }, []);
   const knownTitles = useMemo(
-    () => (linkTargets ? new Set(linkTargets.map((note) => wikiKey(note.title))) : null),
-    [linkTargets],
+    () =>
+      linkTargets
+        ? new Set(linkTargets.map((note) => wikiKey(note.title)))
+        : linksMissing
+          ? NO_TITLES
+          : null,
+    [linkTargets, linksMissing],
   );
   const knownTitlesRef = useRef(knownTitles);
 
@@ -452,6 +485,20 @@ export function MarkdownEditor({
       });
     };
 
+    /** 选择器开着时，触发词那一行被别人的改动挪了位置：重新量，选择器跟着字走（不重新打开） */
+    const remeasureTemplateMenu = (view: EditorView) => {
+      view.requestMeasure({
+        read: (current) => {
+          const trigger = templateTrigger(current.state);
+          return trigger ? caretAnchor(current, trigger.from) : null;
+        },
+        write: (anchor) => {
+          if (!anchor || !templateOpenRef.current) return;
+          setTemplateMenu((menu) => (menu ? { ...menu, anchor } : menu));
+        },
+      });
+    };
+
     /** 选择器开着时，把方向键 / 回车 / Esc 转给它；输入法组字时的按键是给候选框的 */
     const forwardToPicker =
       (action: (picker: TemplatePickerHandle) => void) => (view: EditorView) => {
@@ -470,6 +517,9 @@ export function MarkdownEditor({
               const moved =
                 (update.docChanged || update.selectionSet) && !templateTrigger(update.state);
               if (moved || (update.focusChanged && !update.view.hasFocus)) closeTemplateMenu();
+              // 别人（协同）在上面加了几行：触发词那一行在页面上挪了，选择器跟过去
+              else if (update.docChanged && remoteChange(update))
+                remeasureTemplateMenu(update.view);
               return;
             }
             if (!update.docChanged) return;
@@ -517,6 +567,22 @@ export function MarkdownEditor({
         },
       });
     };
+    /** 菜单开着时被别人的改动挪了位置：重新量，菜单跟着字走 */
+    const remeasureSuggest = (view: EditorView, session: number) => {
+      view.requestMeasure({
+        read: (current) => {
+          const open = suggestRef.current;
+          return open?.session === session ? caretAnchor(current, open.from) : null;
+        },
+        write: (anchor) => {
+          const open = suggestRef.current;
+          if (!anchor || open?.session !== session) return;
+          const next = { ...open, anchor };
+          suggestRef.current = next;
+          setSuggest(next);
+        },
+      });
+    };
     /** `/` 后面打的字一项都对不上，就是在写普通文字；没有笔记列表（单测）不弹 `[[` */
     const hasSuggestions = (trigger: SuggestTrigger) =>
       trigger.kind === "wiki"
@@ -532,12 +598,28 @@ export function MarkdownEditor({
 
     const suggestExtensions: Extension[] = [
       EditorView.updateListener.of((update) => {
-        const open = suggestRef.current;
+        let open = suggestRef.current;
         if (open && update.focusChanged && !update.view.hasFocus) {
           closeSuggest();
           return;
         }
         if (!update.docChanged && !update.selectionSet) return;
+        // 触发词的起点跟着改动映射：别人（协同）在前面加了字，菜单还是这一个，不收起；
+        // 在页面上的位置也变了，重新量一次
+        if (update.docChanged) {
+          if (open) {
+            const from = update.changes.mapPos(open.from, 1);
+            if (from !== open.from) {
+              open = { ...open, from };
+              suggestRef.current = open;
+              setSuggest(open);
+            }
+            if (remoteChange(update)) remeasureSuggest(update.view, open.session);
+          }
+          if (suggestDismissedRef.current !== null) {
+            suggestDismissedRef.current = update.changes.mapPos(suggestDismissedRef.current, 1);
+          }
+        }
         const typed = update.transactions.some((transaction) =>
           transaction.isUserEvent("input.type"),
         );
@@ -636,6 +718,8 @@ export function MarkdownEditor({
       ...(templateContextRef.current ? [] : [placeholder(NOTE_PLACEHOLDER)]),
       ...suggestExtensions,
       imageBaseSlot.of(imageBaseDir.of(imageBaseRef.current)),
+      collabSlot.of(collabRef.current ? collabBinding(collabRef.current) : []),
+      readOnlySlot.of(EditorState.readOnly.of(readOnlyRef.current)),
       wikiTitlesSlot.of(knownWikiTitles.of(knownTitlesRef.current)),
       attachmentHandlers(() => attachRef.current),
       linkClickHandler((title, heading) => onWikiLinkRef.current?.(title, heading)),
@@ -689,10 +773,12 @@ export function MarkdownEditor({
       ]),
     ];
 
-    const cached = key ? takeState(key, initialMarkdownRef.current) : null;
+    const shared = collabRef.current;
+    const initialDoc = shared ? shared.toString() : initialMarkdownRef.current;
+    const cached = key && !shared ? takeState(key, initialDoc) : null;
     // 上次在这篇看到哪、光标在哪（切回来、重新打开应用都回到那里）
     const spot = key ? spotOf(key) : undefined;
-    const docLength = initialMarkdownRef.current.length;
+    const docLength = initialDoc.length;
     const restoredHead = spot ? Math.min(spot.head, docLength) : 0;
     const state = cached
       ? // 解析好的语法树、装饰、撤销历史原样沿用
@@ -701,7 +787,7 @@ export function MarkdownEditor({
           selection: EditorSelection.cursor(restoredHead),
         }).state
       : EditorState.create({
-          doc: initialMarkdownRef.current,
+          doc: initialDoc,
           selection: EditorSelection.cursor(restoredHead),
           extensions: [
             // 围栏代码按语言名懒加载对应的解析器，配合 codeHighlight 上色
@@ -802,7 +888,8 @@ export function MarkdownEditor({
       listeners.clear();
       onOutlineHandle(null);
       delete host.dataset.editorReady;
-      if (key) rememberState(key, view.state);
+      // 协作中的不缓存：切走期间别人还在改，回来时以会话的正文为准
+      if (key && !collabRef.current) rememberState(key, view.state);
       view.destroy();
       forgetDetachedEmoji();
     };
@@ -815,6 +902,24 @@ export function MarkdownEditor({
     if (!view || view.state.facet(imageBaseDir) === imageBase) return;
     view.dispatch({ effects: imageBaseSlot.reconfigure(imageBaseDir.of(imageBase)) });
   }, [imageBase]);
+
+  // 编辑器挂着时开始 / 结束协作：换上、换下绑定。开始时会话是拿编辑器里现在的正文建的，
+  // 两边一致；撤销历史留着（主持人的历史都是自己的改动）
+  useEffect(() => {
+    if (collabRef.current === collab) return;
+    collabRef.current = collab;
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: collabSlot.reconfigure(collab ? collabBinding(collab) : []) });
+  }, [collab]);
+
+  useEffect(() => {
+    if (readOnlyRef.current === readOnly) return;
+    readOnlyRef.current = readOnly;
+    viewRef.current?.dispatch({
+      effects: readOnlySlot.reconfigure(EditorState.readOnly.of(readOnly)),
+    });
+  }, [readOnly]);
 
   // 笔记新建、改名、删掉了：链到不存在的笔记的双链重新标
   useEffect(() => {
@@ -837,7 +942,8 @@ export function MarkdownEditor({
     const view = viewRef.current;
     const external = externalRevision !== externalRevisionRef.current;
     externalRevisionRef.current = externalRevision;
-    if (!view) return;
+    // 协作中：正文的真相是会话。整篇替换 = 在 CRDT 里删光再插一遍，所有人的光标塌到一处
+    if (!view || collabRef.current) return;
     const current = view.state.doc.toString();
     if (initialMarkdown === current) {
       syncedMarkdownRef.current = initialMarkdown;
@@ -1070,6 +1176,12 @@ function insertWikiLink(view: EditorView, trigger: SuggestTrigger, item: WikiIte
  * 选择器贴着主光标（模板选择器：触发词那一行的行首）弹出来。量不到坐标（不在渲染
  * 范围里）时，退到编辑区左上角 —— 宁可位置不那么贴，也不能按了快捷键没反应。
  */
+/** 这次更新里有别人（协同）的改动 */
+const remoteChange = (update: ViewUpdate) =>
+  update.transactions.some(
+    (transaction) => transaction.docChanged && transaction.annotation(Transaction.remote),
+  );
+
 function caretAnchor(view: EditorView, pos = view.state.selection.main.head): EmojiPickerAnchor {
   const coords = view.coordsAtPos(pos, 1) ?? view.coordsAtPos(pos, -1);
   if (coords) return { left: coords.left, top: coords.top, bottom: coords.bottom };
@@ -2816,6 +2928,7 @@ export const typoraDecorations: Extension = [
   headingFoldExtension,
   typoraBlockDecorations,
   typoraInlineDecorations,
+  longRuns,
 ];
 
 /**
@@ -2824,7 +2937,7 @@ export const typoraDecorations: Extension = [
 export function resolveImage(
   markdown: string,
   source: string,
-  base: string | null = null,
+  base: ImageBase = null,
 ): ImageSpec | null {
   const inline = /^!\[([^\]]*)\]\((\S+?)(?:\s+["'](.*)["'])?\)$/.exec(source);
   if (inline) return withSize(inline[1]!, inline[2]!, inline[3] ?? "", base);
@@ -2840,7 +2953,7 @@ export function resolveImage(
   return url ? withSize(reference[1]!, url, definition?.[3] ?? "", base) : null;
 }
 
-function withSize(rawAlt: string, source: string, title: string, base: string | null): ImageSpec {
+function withSize(rawAlt: string, source: string, title: string, base: ImageBase): ImageSpec {
   const size = /^(.*?)\|(\d+)(?:x(\d+))?$/.exec(rawAlt);
   return {
     alt: (size ? size[1]! : rawAlt).trim(),

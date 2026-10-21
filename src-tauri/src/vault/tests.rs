@@ -1135,6 +1135,65 @@ fn attachments_go_into_the_attachment_folder_with_relative_links() {
 }
 
 #[test]
+fn the_tree_lists_images_and_pdfs_of_a_plain_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("库");
+    fsio::write_atomic(&fsio::abs(&root, "工作/周报.md"), "周报").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&root, "工作/图.PNG"), b"png").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&root, "说明.pdf"), b"pdf").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&root, "数据.xlsx"), b"xlsx").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&root, ".obsidian/图.png"), b"png").unwrap();
+    fsio::write_atomic(
+        &fsio::abs(&root, layout::VAULT_MARKER),
+        &serde_json::to_string(&layout::new_marker(false, false, 0)).unwrap(),
+    )
+    .unwrap();
+    let mut vault = Vault::open_in_memory(&root);
+    let files = vault.tree_files();
+    let listed: Vec<_> = files.iter().map(|file| (file.rel_path.as_str(), file.folder.as_str(), file.kind.as_str())).collect();
+    assert_eq!(listed, vec![("工作/图.PNG", "工作", "image"), ("说明.pdf", "", "pdf")]);
+    assert!(vault.tree_file_path("说明.pdf").is_ok());
+    assert!(vault.tree_file_path("数据.xlsx").is_err(), "树上没列的不打开");
+    assert!(vault.tree_file_path("../外面.pdf").is_err());
+    assert!(vault.tree_file_path(".obsidian/图.png").is_err());
+    // 外面多了一张图：扫描时告诉前端
+    fsio::write_atomic_bytes(&fsio::abs(&root, "新图.png"), b"png").unwrap();
+    assert!(vault.rescan().unwrap().folders);
+    assert!(!vault.rescan().unwrap().folders, "没再变就不报");
+    // Odea 的仓库树根是「笔记」，「附件」不在树上
+    let mut f = fixture();
+    fsio::write_atomic_bytes(&fsio::abs(&f.root, "附件/图.png"), b"png").unwrap();
+    assert!(f.vault.tree_files().is_empty());
+}
+
+#[test]
+fn obsidian_vaults_put_attachments_where_obsidian_would() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("库");
+    fsio::write_atomic(&fsio::abs(&root, ".obsidian/app.json"), r#"{"attachmentFolderPath":"./"}"#).unwrap();
+    fsio::write_atomic(&fsio::abs(&root, "工作/周报.md"), "周报").unwrap();
+    fsio::write_atomic(&fsio::abs(&root, "工作/私密.md"), "别给").unwrap();
+    let mut vault = Vault::open_in_memory(&root);
+    let id = vault.note_list_full(false).unwrap().into_iter().find(|note| note.title == "周报").unwrap().id;
+    let note = DocTarget::Note { id: id.clone() };
+    let pasted = vault.attach(&note, "截图.png", b"png").unwrap();
+    assert_eq!(pasted.link, "截图.png", "和笔记放在一起，直接写名字");
+    assert!(root.join("工作/截图.png").is_file());
+    // 协作时访客只拿得到这篇的附件，拿不到旁边的笔记
+    assert!(vault.attachment_for_guest(&id, "工作/截图.png").is_ok());
+    assert!(vault.attachment_for_guest(&id, "工作/私密.md").is_err());
+    assert!(vault.attachment_for_guest(&id, "工作/没有.png").is_err());
+    // Obsidian 什么都没设：仓库根
+    fsio::write_atomic(&fsio::abs(&root, ".obsidian/app.json"), "{}").unwrap();
+    let mut vault = Vault::open_in_memory(&root);
+    // 属性块里没写 id 的笔记，索引给的 id 只在这一次
+    let id = vault.note_list_full(false).unwrap().into_iter().find(|note| note.title == "周报").unwrap().id;
+    let pasted = vault.attach(&DocTarget::Note { id }, "图.png", b"png").unwrap();
+    assert_eq!(pasted.link, "../图.png");
+    assert!(root.join("图.png").is_file());
+}
+
+#[test]
 fn dropped_files_are_copied_unless_already_attached() {
     let mut f = fixture();
     let id = f.vault.note_create("周报", "").unwrap();
@@ -1468,4 +1527,521 @@ fn large_vault_timings() {
     let t = Instant::now();
     vault.rescan().unwrap();
     eprintln!("rescan（没有变化）           {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+}
+
+/* ---------------- 日程开关、文件树的根（docs/仓库与启动器.md §6） ---------------- */
+
+/// 一个别人的文件夹：根上一篇、子文件夹里一篇、日记文件夹里一天
+fn plain_folder(root: &Path) {
+    fsio::write_atomic(&fsio::abs(root, "随手记.md"), "根上的").unwrap();
+    fsio::write_atomic(&fsio::abs(root, "工作/周报.md"), "---\nid: weekly\n---\n\n- [ ] 交周报 @2026-10-20\n").unwrap();
+    fsio::write_atomic(&fsio::abs(root, "日记/2026/2026-10-20.md"), "今天").unwrap();
+    fsio::write_atomic(
+        &fsio::abs(root, layout::VAULT_MARKER),
+        &serde_json::to_string(&layout::new_marker(false, false, 0)).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_folder_without_journal_is_all_notes_with_the_whole_vault_as_the_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let mut vault = Vault::open_in_memory(&root);
+
+    let mut titles: Vec<_> = vault.note_list(false).unwrap().into_iter().map(|note| note.title).collect();
+    titles.sort();
+    assert_eq!(titles, vec!["2026-10-20", "周报", "随手记"], "日记文件夹里的也是笔记");
+    assert!(vault.journal_list().unwrap().is_empty());
+    assert_eq!(vault.folders(), vec!["工作", "日记", "日记/2026"]);
+
+    // 新建放在树根（仓库根），文件夹也建在仓库根上
+    let id = vault.note_create_in("", "新的一篇", "").unwrap();
+    assert_eq!(vault.note_get(&id).unwrap().rel_path, "新的一篇.md");
+    assert_eq!(vault.folder_create("", "读书").unwrap(), "读书");
+    assert!(root.join("读书").is_dir());
+    let moved = vault.note_move(&id, "工作").unwrap();
+    assert_eq!(moved.rel_path, "工作/新的一篇.md");
+
+    // 日记、目标、归档不往别人的文件夹里写
+    assert!(vault.save_day("2026-10-21", "", "x").is_err());
+    assert!(vault.save_goal("week", "2026-10-19", "x").is_err());
+    assert!(vault.note_archive(&id, None).is_err());
+    assert!(!root.join("目标").exists());
+    let info = vault.info().unwrap();
+    assert!(!info.layout.journal);
+    assert_eq!(info.layout.notes_dir, "");
+}
+
+#[test]
+fn turning_journal_on_and_off_reclassifies_files_without_touching_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let before = fsio::walk_markdown(&root);
+    let index = dir.path().join("index.db");
+    let (mut vault, _) = Vault::open_quick(&root, &index).unwrap();
+
+    let backlog = vault.set_journal(true).unwrap();
+    assert!(backlog.is_empty(), "文件不多，当场读完");
+    assert_eq!(vault.day("2026-10-20", false).unwrap().note_md, "今天");
+    assert_eq!(vault.folders(), vec!["工作"], "日记从窄栏进，不在树上");
+    let mut titles: Vec<_> = vault.note_list(false).unwrap().into_iter().map(|note| note.title).collect();
+    titles.sort();
+    assert_eq!(titles, vec!["周报", "随手记"]);
+    assert!(vault.note_get("weekly").is_ok(), "属性块里有 id 的笔记 id 不变");
+    assert_eq!(vault.info().unwrap().layout.notes_dir, "", "树根还是整个仓库");
+    // 新的一天按年分文件夹（不是 Obsidian 的库）
+    vault.save_day("2026-10-21", "", "明天").unwrap();
+    assert!(root.join("日记/2026/2026-10-21.md").is_file());
+
+    // 重新打开：索引记着按哪种摆法建的，不用重读
+    drop(vault);
+    let (mut vault, backlog) = Vault::open_quick(&root, &index).unwrap();
+    assert!(backlog.is_empty());
+    assert_eq!(vault.day("2026-10-20", false).unwrap().note_md, "今天");
+
+    vault.set_journal(false).unwrap();
+    assert!(vault.journal_list().unwrap().is_empty(), "关了日程，日记又是笔记");
+    assert_eq!(vault.note_list(false).unwrap().len(), 4);
+    assert!(vault.folders().contains(&"日记".to_string()));
+    // 文件一个都没动（除了上面自己写的那一天）
+    let after: Vec<_> = fsio::walk_markdown(&root).into_iter().map(|file| file.rel).collect();
+    for file in before {
+        assert!(after.contains(&file.rel), "{} 不见了", file.rel);
+    }
+}
+
+#[test]
+fn journal_toggled_on_another_device_is_offered_then_applied() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    assert!(vault.journal_list().unwrap().is_empty());
+    // 另一台设备开了日程，标记同步过来：这台先不换，告诉前端一回
+    let marker_path = fsio::abs(&root, layout::VAULT_MARKER);
+    let marker = serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).ok();
+    let marker = layout::marker_with_journal(marker, true);
+    fsio::write_atomic(&marker_path, &serde_json::to_string_pretty(&marker).unwrap()).unwrap();
+    let change = vault.rescan().unwrap();
+    assert!(change.layout);
+    assert!(!vault.layout().journal, "用户点之前照旧按原来的摆法");
+    assert!(!vault.rescan().unwrap().layout, "同一次变化只报一回");
+    // 点了「切换过去」
+    vault.relayout().unwrap();
+    assert!(vault.layout().journal);
+    assert_eq!(vault.day("2026-10-20", false).unwrap().note_md, "今天");
+    assert!(!vault.rescan().unwrap().layout);
+    // 只改了附件放哪：直接换上，不打扰
+    let mut marker: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
+    marker["folders"]["attachments"] = "图".into();
+    fsio::write_atomic(&marker_path, &marker.to_string()).unwrap();
+    assert!(!vault.rescan().unwrap().layout);
+    assert_eq!(vault.layout().attachment_dir("工作/周报.md"), "图");
+}
+
+#[test]
+fn an_old_vault_keeps_its_notes_folder_as_the_tree_root_across_a_toggle() {
+    let mut f = fixture();
+    let id = f.vault.note_create_in("", "一篇", "").unwrap();
+    f.vault.save_day("2026-10-20", "", "今天").unwrap();
+    assert_eq!(f.vault.info().unwrap().layout.notes_dir, "笔记");
+
+    f.vault.set_journal(false).unwrap();
+    let layout = f.vault.info().unwrap().layout;
+    assert!(!layout.journal);
+    assert_eq!(layout.notes_dir, "", "关了日程，整个仓库在树上");
+    assert!(f.vault.folders().contains(&"笔记".to_string()));
+    assert!(f.vault.note_get(&id).is_ok());
+
+    f.vault.set_journal(true).unwrap();
+    assert_eq!(f.vault.info().unwrap().layout.notes_dir, "笔记", "再开回来，树根还是「笔记」");
+    assert_eq!(f.vault.day("2026-10-20", false).unwrap().note_md, "今天");
+}
+
+#[test]
+fn obsidian_daily_notes_show_up_as_days() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("库");
+    fsio::write_atomic(&fsio::abs(&root, ".obsidian/daily-notes.json"), r#"{"folder":"Daily"}"#).unwrap();
+    fsio::write_atomic(&fsio::abs(&root, "Daily/2026-10-19.md"), "昨天的日记").unwrap();
+    fsio::write_atomic(&fsio::abs(&root, "Daily/随便.md"), "不是日期").unwrap();
+    fsio::write_atomic(
+        &fsio::abs(&root, layout::VAULT_MARKER),
+        &serde_json::to_string(&layout::marker_with_journal(Some(layout::new_marker(false, false, 0)), true)).unwrap(),
+    )
+    .unwrap();
+    let mut vault = Vault::open_in_memory(&root);
+    assert_eq!(vault.day("2026-10-19", false).unwrap().note_md, "昨天的日记");
+    // 今天还没写：延续昨天的；写下去平放在 Daily 里（Obsidian 就是这么建的）
+    assert_eq!(vault.day("2026-10-20", true).unwrap().carried_from.as_deref(), Some("2026-10-19"));
+    vault.save_day("2026-10-20", "", "今天").unwrap();
+    assert!(root.join("Daily/2026-10-20.md").is_file());
+    // Daily 里不是日期的那篇是笔记，算在树根这一层（Daily 不在树上）
+    assert!(vault.folders().is_empty());
+    let note = vault.note_list(false).unwrap();
+    assert_eq!(note.len(), 1);
+    assert_eq!(note[0].title, "随便");
+}
+
+/* ---------------- 逻辑目录（docs/仓库与启动器.md §7） ---------------- */
+
+/// 每个 .md 的 (路径, 修改时间, 大小)：只改清单的操作一个都不该动
+fn file_states(root: &Path) -> Vec<(String, i64, i64)> {
+    let mut files: Vec<_> = fsio::walk_markdown(root).into_iter().map(|file| (file.rel, file.mtime, file.size)).collect();
+    files.sort();
+    files
+}
+
+/// 启动器「新建」出来的逻辑目录
+fn new_logical(root: &Path) {
+    seed::write(root, "").unwrap();
+    fsio::write_atomic(
+        &fsio::abs(root, layout::VAULT_MARKER),
+        &serde_json::to_string(&layout::new_marker(true, true, 0)).unwrap(),
+    )
+    .unwrap();
+}
+
+/// 树上每一篇所在的文件夹（根是空串）
+fn placements(vault: &Vault) -> HashMap<String, String> {
+    let nodes = vault.tree_view().unwrap();
+    let path_of = |id: &str| {
+        let mut parts = Vec::new();
+        let mut id = id.to_string();
+        while id != tree::ROOT {
+            let node = nodes.iter().find(|node| node.id == id).unwrap();
+            parts.push(node.name.clone().unwrap());
+            id = node.parent.clone();
+        }
+        parts.reverse();
+        parts.join("/")
+    };
+    nodes
+        .iter()
+        .filter(|node| node.kind == "note")
+        .map(|node| (node.note.clone().unwrap(), path_of(&node.parent)))
+        .collect()
+}
+
+#[test]
+fn a_new_logical_vault_keeps_notes_flat_and_the_tree_in_the_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    let info = vault.info().unwrap();
+    assert!(info.layout.logical && info.layout.journal);
+    assert_eq!(info.layout.notes_dir, "");
+    // 指南平放在仓库根上，树上放在根这一层
+    assert!(root.join("欢迎使用 Odea.md").is_file());
+    assert!(root.join(tree::TREE_FILE).is_file(), "第一次打开就把清单建好");
+    let placed = placements(&vault);
+    assert_eq!(placed.len(), 2);
+    assert!(placed.values().all(|folder| folder.is_empty()));
+
+    // 文件夹只在清单里；新建的笔记文件平放，树上放在文件夹里
+    assert_eq!(vault.folder_create("", "交易").unwrap(), "交易");
+    assert_eq!(vault.folder_create("交易", "学习").unwrap(), "交易/学习");
+    assert!(!root.join("交易").exists(), "逻辑目录的文件夹不在硬盘上");
+    let id = vault.note_create_in("交易/学习", "数学建模流程", "").unwrap();
+    assert_eq!(vault.note_get(&id).unwrap().rel_path, "数学建模流程.md");
+    assert_eq!(placements(&vault)[&id], "交易/学习");
+    assert_eq!(vault.folders(), vec!["交易", "交易/学习"]);
+    // 未整理里新建：不放进树
+    let loose = vault.note_create_in(tree::UNSORTED, "随手", "").unwrap();
+    assert!(!placements(&vault).contains_key(&loose));
+    assert!(vault.note_create_in("没有这个", "x", "").is_err());
+
+    // 日程照常：日记写在「日记」里，不在树上
+    vault.save_day("2026-10-20", "", "今天").unwrap();
+    assert!(root.join("日记/2026/2026-10-20.md").is_file());
+
+    // 重新打开：树还是那棵
+    let tree_before = std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap();
+    drop(vault);
+    let vault = Vault::open_in_memory(&root);
+    assert_eq!(placements(&vault)[&id], "交易/学习");
+    assert_eq!(std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap(), tree_before);
+}
+
+#[test]
+fn moving_renaming_and_ordering_only_touch_the_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    vault.folder_create("", "交易").unwrap();
+    vault.folder_create("", "读书").unwrap();
+    let a = vault.note_create_in("交易", "甲", "正文").unwrap();
+    let b = vault.note_create_in("交易", "乙", "正文").unwrap();
+    let c = vault.note_create_in("交易", "丙", "正文").unwrap();
+    let before = file_states(&root);
+
+    // 改名、挪文件夹、挪笔记、排顺序、移到未整理
+    assert_eq!(vault.folder_rename("交易", "交易学习").unwrap(), "交易学习");
+    assert_eq!(vault.tree_move_folder("读书", "交易学习", None).unwrap(), "交易学习/读书");
+    let moved = vault.note_move(&a, "交易学习/读书").unwrap();
+    assert_eq!(moved.rel_path, "甲.md", "文件不挪");
+    vault.tree_place(&c, "交易学习", Some(&b)).unwrap();
+    vault.tree_place(&b, tree::UNSORTED, None).unwrap();
+    let placed = placements(&vault);
+    assert_eq!(placed[&a], "交易学习/读书");
+    assert_eq!(placed[&c], "交易学习");
+    assert!(!placed.contains_key(&b), "移到未整理只改清单");
+    assert_eq!(file_states(&root), before, "一个 .md 都没动（修改时间、大小都一样）");
+    assert!(vault.tree_move_folder("交易学习", "交易学习/读书", None).is_err(), "不能挪进自己底下");
+
+    // 新建的排在最前面
+    let d = vault.note_create_in("交易学习", "丁", "").unwrap();
+    let nodes = vault.tree_view().unwrap();
+    let parent = nodes.iter().find(|node| node.name.as_deref() == Some("交易学习")).unwrap().id.clone();
+    let mut here: Vec<_> = nodes.iter().filter(|node| node.parent == parent && node.kind == "note").collect();
+    here.sort_by(|x, y| (&x.key, &x.id).cmp(&(&y.key, &y.id)));
+    let order: Vec<_> = here.iter().map(|node| node.note.clone().unwrap()).collect();
+    assert_eq!(order, vec![d, c]);
+}
+
+#[test]
+fn converting_a_local_folder_builds_the_tree_without_touching_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    let before = file_states(&root);
+    let loose = vault.note_list(false).unwrap().into_iter().find(|note| note.title == "随手记").unwrap();
+
+    vault.make_logical().unwrap();
+    assert!(vault.info().unwrap().layout.logical);
+    assert_eq!(file_states(&root), before, "转成逻辑目录一个文件都不动");
+    assert_eq!(vault.folders(), vec!["工作", "日记", "日记/2026"]);
+    let placed = placements(&vault);
+    assert_eq!(placed["weekly"], "工作");
+    assert_eq!(placed[&loose.id], "");
+    // 属性块里没 id 的按路径引用；有 id 的按 id
+    let manifest = std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap();
+    assert!(manifest.contains("file 随手记.md") && manifest.contains("note weekly"), "{manifest}");
+
+    // 在 Odea 里改了标题（文件跟着改名、属性块里写上 id）：那一行换成按 id，位置不丢
+    vault.note_update(&loose.id, "改过名的随手记", "根上的").unwrap();
+    let manifest = std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap();
+    assert!(!manifest.contains("file 随手记.md") && manifest.contains(&format!("note {}", loose.id)), "{manifest}");
+    assert_eq!(placements(&vault)[&loose.id], "");
+
+    // 重新打开还是逻辑目录（标记里记着），树还在
+    drop(vault);
+    let vault = Vault::open_in_memory(&root);
+    assert!(vault.info().unwrap().layout.logical);
+    assert_eq!(placements(&vault)["weekly"], "工作");
+}
+
+#[test]
+fn deleting_a_logical_folder_trashes_its_notes_and_undo_puts_everything_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    vault.folder_create("", "交易").unwrap();
+    vault.folder_create("交易", "学习").unwrap();
+    vault.tree_add_query("交易", "近期", "updated:7d").unwrap();
+    let a = vault.note_create_in("交易/学习", "甲", "").unwrap();
+    let b = vault.note_create_in("交易", "乙", "").unwrap();
+
+    let deletion = vault.folder_delete("交易").unwrap();
+    let mut gone = deletion.notes.clone();
+    gone.sort();
+    let mut expected = vec![a.clone(), b.clone()];
+    expected.sort();
+    assert_eq!(gone, expected);
+    assert!(vault.note_get(&a).is_err(), "进了回收站");
+    assert!(vault.folders().is_empty());
+
+    vault.folder_undelete(&deletion).unwrap();
+    let placed = placements(&vault);
+    assert_eq!(placed[&a], "交易/学习");
+    assert_eq!(placed[&b], "交易");
+    let queries: Vec<_> = vault.tree_view().unwrap().into_iter().filter_map(|node| node.query).collect();
+    assert_eq!(queries, vec!["updated:7d"], "智能文件夹也回来了");
+}
+
+#[test]
+fn notes_dropped_in_from_outside_are_unsorted_and_missing_ones_go_on_the_second_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let index = dir.path().join("index.db");
+    let (mut vault, _) = Vault::open_quick(&root, &index).unwrap();
+    vault.folder_create("", "交易").unwrap();
+    let id = vault.note_create_in("交易", "要被删的", "").unwrap();
+    // 资源管理器里扔进来一篇：不在树上（未整理）
+    fsio::write_atomic(&root.join("外面来的.md"), "你好").unwrap();
+    vault.rescan().unwrap();
+    let outside = vault.note_list(false).unwrap().into_iter().find(|note| note.title == "外面来的").unwrap();
+    assert!(!placements(&vault).contains_key(&outside.id));
+    // 资源管理器里删了一篇：清单里那一行第一次打开还留着（网盘可能还没把文件拷过来），第二次才去掉
+    std::fs::remove_file(root.join("要被删的.md")).unwrap();
+    drop(vault);
+    let (vault, _) = Vault::open_quick(&root, &index).unwrap();
+    assert!(std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap().contains(&id));
+    drop(vault);
+    let (vault, _) = Vault::open_quick(&root, &index).unwrap();
+    assert!(!std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap().contains(&id));
+    assert_eq!(vault.folders(), vec!["交易"]);
+}
+
+#[test]
+fn edits_to_the_manifest_from_elsewhere_and_cloud_drive_copies_are_picked_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    let announced = Arc::new(Mutex::new(Vec::new()));
+    let sink = announced.clone();
+    vault.set_announcer(Arc::new(move |change| sink.lock().unwrap().push(change)));
+    vault.folder_create("", "交易").unwrap();
+    let mine = std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap();
+    // 网盘另存了一份（另一台设备建了「读书」）
+    let mut other = tree::Tree::parse(&mine);
+    other.add_folder("", "读书").unwrap();
+    fsio::write_atomic(&root.join(".odea/tree (1)"), &other.render()).unwrap();
+    vault.rescan_paths_and_announce(&[]).unwrap();
+    let mut folders = vault.folders();
+    folders.sort();
+    assert_eq!(folders, vec!["交易", "读书"]);
+    assert!(!root.join(".odea/tree (1)").exists(), "并进来以后副本删掉");
+    assert!(announced.lock().unwrap().iter().any(|change| change.folders));
+    // 别的工具直接改了清单
+    let mut edited = tree::Tree::parse(&std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap());
+    edited.rename("交易", "交易学习").unwrap();
+    fsio::write_atomic(&root.join(tree::TREE_FILE), &edited.render()).unwrap();
+    vault.rescan().unwrap();
+    assert!(vault.folders().contains(&"交易学习".to_string()));
+}
+
+#[test]
+fn smart_folders_filter_notes_by_their_condition() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    vault.folder_create("", "交易").unwrap();
+    let a = vault.note_create_in("交易", "周复盘", "这周 #复盘 一下\n- [ ] 改进止损").unwrap();
+    let b = vault.note_create_in("", "随手", "#复盘会 不算").unwrap();
+    assert_eq!(vault.tree_add_query("", "复盘", "#复盘").unwrap(), "复盘");
+    // 同一层不重名：和文件夹一样加序号
+    assert_eq!(vault.tree_add_query("", "交易", "in:交易").unwrap(), "交易 2");
+    vault.tree_place(&b, "复盘", None).unwrap();
+    assert_eq!(placements(&vault)[&b], "", "智能文件夹里放不了东西：放到根上");
+    let found = vault
+        .tree_queries(&["#复盘".into(), "in:交易 has:todo".into(), "in:未整理".into(), "-#复盘".into()])
+        .unwrap();
+    assert_eq!(found[0], vec![a.clone()]);
+    assert_eq!(found[1], vec![a.clone()]);
+    assert!(found[2].iter().all(|id| *id != a && *id != b));
+    assert!(found[3].contains(&b) && !found[3].contains(&a));
+    assert_eq!(vault.tree_set_query("复盘", "复盘笔记", "#复盘 updated:7d").unwrap(), "复盘笔记");
+    // 删掉智能文件夹只是拿掉那一行，笔记不动
+    let deletion = vault.folder_delete("复盘笔记").unwrap();
+    assert!(deletion.notes.is_empty());
+    assert!(vault.note_get(&a).is_ok());
+}
+
+/* ---------------- 快捷方式、导入（docs/仓库与启动器.md §7.5、§7.6） ---------------- */
+
+#[test]
+fn shortcuts_point_at_a_note_placed_elsewhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    vault.folder_create("", "交易").unwrap();
+    vault.folder_create("", "复盘").unwrap();
+    let id = vault.note_create_in("交易", "周复盘", "").unwrap();
+    let node = vault.tree_add_shortcut(&id, "复盘").unwrap();
+    assert_eq!(vault.tree_add_shortcut(&id, "复盘").unwrap(), node, "同一个文件夹里不放两个");
+    let nodes = vault.tree_view().unwrap();
+    let link = nodes.iter().find(|n| n.id == node).unwrap();
+    assert_eq!(link.kind, "shortcut");
+    assert_eq!(link.note.as_deref(), Some(id.as_str()));
+    assert_eq!(placements(&vault)[&id], "交易", "笔记还在原来的位置");
+    assert!(vault.tree_add_shortcut(&id, tree::UNSORTED).is_err());
+    let text = std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap();
+    assert!(text.contains(&format!("link note {id}")), "{text}");
+    // 重新打开读回来一样
+    let mut vault = Vault::open_in_memory(&root);
+    assert!(vault.tree_view().unwrap().iter().any(|n| n.id == node && n.kind == "shortcut"));
+    // 删快捷方式不删笔记
+    vault.tree_remove_shortcut(&node).unwrap();
+    assert!(vault.note_get(&id).is_ok());
+    assert!(vault.tree_view().unwrap().iter().all(|n| n.kind != "shortcut"));
+    assert!(vault.tree_remove_shortcut(&node).is_err());
+}
+
+#[test]
+fn shortcuts_to_notes_without_an_id_follow_them_once_they_get_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    fsio::write_atomic(&fsio::abs(&root, "外面写的.md"), "正文").unwrap();
+    let mut vault = Vault::open_in_memory(&root);
+    vault.folder_create("", "收藏").unwrap();
+    let id = vault.note_list_full(false).unwrap().into_iter().find(|n| n.title == "外面写的").unwrap().id;
+    vault.tree_add_shortcut(&id, "收藏").unwrap();
+    let text = std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap();
+    assert!(text.contains("link file 外面写的.md"), "属性块里没有 id：按路径指着它");
+    // 应用给它改名（属性块里写上 id）：快捷方式跟着换成按 id
+    vault.note_update(&id, "改了名", "正文").unwrap();
+    let text = std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap();
+    assert!(text.contains(&format!("link note {id}")), "{text}");
+    let link = vault.tree_view().unwrap().into_iter().find(|n| n.kind == "shortcut").unwrap();
+    assert_eq!(link.note.as_deref(), Some(id.as_str()));
+}
+
+#[test]
+fn importing_a_folder_copies_it_and_keeps_its_structure() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("读书笔记");
+    fsio::write_atomic(&fsio::abs(&outside, "三体.md"), "![](图/封面.png)").unwrap();
+    fsio::write_atomic(&fsio::abs(&outside, "小说/活着.md"), "---\nid: alive\n---\n\n正文").unwrap();
+    fsio::write_atomic(&fsio::abs(&outside, "小说/长篇/白鹿原.md"), "正文").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&outside, "图/封面.png"), b"png").unwrap();
+    fsio::write_atomic(&fsio::abs(&outside, ".obsidian/app.json"), "{}").unwrap();
+
+    // 逻辑目录：文件平放在仓库根下的「读书笔记」里，树上照原来的结构摆在当前文件夹底下
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    vault.folder_create("", "书").unwrap();
+    let report = vault.import_folder(&outside, "书").unwrap();
+    assert_eq!(report.folder, "书/读书笔记");
+    assert_eq!((report.notes, report.files), (3, 1));
+    assert!(root.join("读书笔记/图/封面.png").is_file(), "正文里的相对路径照样指着它");
+    assert!(!root.join("读书笔记/.obsidian").exists(), "以点开头的不拷");
+    assert!(outside.join("三体.md").is_file(), "原来的不动");
+    assert_eq!(
+        vault.folders(),
+        vec!["书", "书/读书笔记", "书/读书笔记/小说", "书/读书笔记/小说/长篇"],
+        "只有图片的文件夹不上树"
+    );
+    let placed = placements(&vault);
+    assert_eq!(placed["alive"], "书/读书笔记/小说");
+    assert_eq!(placed.values().filter(|folder| *folder == "书/读书笔记").count(), 1);
+    // 不能导入仓库自己、包着仓库的
+    assert!(vault.import_folder(&root.join("读书笔记"), "").is_err());
+    assert!(vault.import_folder(dir.path(), "").is_err());
+
+    // 本地目录：拷进树上那个文件夹，树就是真的文件夹
+    let local = dir.path().join("本地");
+    plain_folder(&local);
+    let mut vault = Vault::open_in_memory(&local);
+    let report = vault.import_folder(&outside, "工作").unwrap();
+    assert_eq!(report.folder, "工作/读书笔记");
+    assert!(local.join("工作/读书笔记/小说/活着.md").is_file());
+    assert!(vault.folders().contains(&"工作/读书笔记/小说".to_string()));
+    assert!(vault.note_get("alive").is_ok());
+    // 同名的加序号
+    assert_eq!(vault.import_folder(&outside, "").unwrap().folder, "读书笔记");
+    assert!(vault.import_folder(&outside, "工作").unwrap().folder.starts_with("工作/读书笔记 2"));
 }

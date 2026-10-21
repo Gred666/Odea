@@ -1,4 +1,4 @@
-import type { Extension } from "@codemirror/state";
+import { type Extension, Transaction } from "@codemirror/state";
 import { type EditorView, type LayerMarker, RectangleMarker, layer } from "@codemirror/view";
 
 /* ============================================================
@@ -10,7 +10,9 @@ import { type EditorView, type LayerMarker, RectangleMarker, layer } from "@code
    - 移动（打字、方向键、点到附近）时滑过去，而不是瞬移；
    - 跳得远（点到隔几段的地方、翻页）时不拖一条长轨迹，就地「落」下来；
    - 闪烁是柔和的呼吸（淡出淡入），每次移动重新从常亮开始 —— 打字时一直是亮的；
-   - 高度跟着字号走，从正文移进大标题会平滑地长高。
+   - 高度跟着字号走，从正文移进大标题会平滑地长高；
+   - 别人的改动（协同，Transaction.remote）把光标挤开时直接落位：字是瞬间挪过去的，
+     光标在后面追着滑，看着像光标自己在动（docs/协同编辑.md §4.3）。
 
    只画光标；选区在 selectionLayer.ts。
 
@@ -20,12 +22,17 @@ import { type EditorView, type LayerMarker, RectangleMarker, layer } from "@code
 /** 超过这个距离就不滑了，直接落到新位置 */
 const JUMP_DISTANCE = 120;
 
+/** 这次重画是因为别人的改动挪了光标：直接落位。update 里记下，markers 里取走 */
+const remoteMoved = new WeakSet<EditorView>();
+
 class CaretMarker implements LayerMarker {
   constructor(
     readonly primary: boolean,
     readonly left: number,
     readonly top: number,
     readonly height: number,
+    /** 别人的改动挪的：直接落位，不滑也不播落地（不进 eq，只看位置变没变） */
+    readonly snap = false,
   ) {}
 
   eq(other: LayerMarker): boolean {
@@ -51,7 +58,12 @@ class CaretMarker implements LayerMarker {
     const far =
       Math.abs(previous.top - this.top) > JUMP_DISTANCE ||
       Math.abs(previous.left - this.left) > JUMP_DISTANCE * 4;
-    if (far) {
+    if (this.snap) {
+      dom.classList.add("is-jumping");
+      this.place(dom);
+      void dom.offsetWidth;
+      dom.classList.remove("is-jumping");
+    } else if (far) {
       // 过渡先关掉、位置落定、强制算一次样式，再把过渡还回去 —— 这一下是瞬移的
       dom.classList.add("is-jumping");
       this.place(dom);
@@ -81,17 +93,30 @@ const caretLayer = layer({
   class: "odea-caret-layer",
   markers(view: EditorView) {
     const markers: CaretMarker[] = [];
+    const snap = remoteMoved.has(view);
+    remoteMoved.delete(view);
     const { main, ranges } = view.state.selection;
     for (const range of ranges) {
       // 有选区时和系统一样不画光标，只看选区
       if (!range.empty) continue;
       for (const piece of RectangleMarker.forRange(view, "", range)) {
-        markers.push(new CaretMarker(range === main, piece.left, piece.top, piece.height));
+        markers.push(new CaretMarker(range === main, piece.left, piece.top, piece.height, snap));
       }
     }
     return markers;
   },
   update(update, dom) {
+    const remote = update.transactions.some(
+      (transaction) => transaction.docChanged && transaction.annotation(Transaction.remote),
+    );
+    // 自己挪的（点、方向键、打字）照常滑；只带效果的事务（远端光标之类）两边都不算
+    const local = update.transactions.some(
+      (transaction) =>
+        !!transaction.selection ||
+        (transaction.docChanged && !transaction.annotation(Transaction.remote)),
+    );
+    if (local) remoteMoved.delete(update.view);
+    else if (remote) remoteMoved.add(update.view);
     // 光标动了：闪烁从「常亮」那一段重新开始，打字、移动时不会正好碰上灭的那一下
     if (update.transactions.some((transaction) => transaction.selection)) {
       dom.style.animationName =

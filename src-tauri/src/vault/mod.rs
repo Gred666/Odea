@@ -24,8 +24,14 @@ pub mod index;
 pub mod layout;
 pub mod legacy;
 pub mod links;
+mod export;
+mod import;
+mod logical;
+pub mod query;
 pub mod seed;
+pub mod shared;
 pub mod tasks;
+pub mod tree;
 pub mod watch;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -39,7 +45,7 @@ use crate::db::now_ms;
 use crate::domain::model::{
     Attachment, Backlink, BacklinkLine, CalendarMarks, DayDoc, DocTarget, FindFile, FindMatch,
     FindOptions, FindResult, FolderDeletion, Goal, JournalDoc, LinkRewrite, Note, NoteSummary,
-    Relink, Task, TextHit, TextSearch, VaultChange, VaultInfo,
+    Relink, Task, TextHit, TextSearch, TreeFile, VaultChange, VaultInfo, VaultLayout,
 };
 use crate::domain::search;
 use crate::error::{AppError, Result};
@@ -83,8 +89,30 @@ pub struct Vault {
     db: Connection,
     log: activity::Log,
     announce: Option<Announce>,
-    /// 上次扫描时「笔记」下面的文件夹：外部建了 / 删了文件夹，比一下就知道
+    /// 这个仓库怎么摆：日程开没开、文件树的根、日记目标归档在哪（.odea/vault.json）
+    layout: layout::Layout,
+    /// 磁盘上的仓库标记在别处改了、已经告诉过前端的那一种摆法（check_layout）：同一次变化只报一回
+    layout_pending: Option<String>,
+    /// 上次扫描时文件树上的文件夹：外部建了 / 删了文件夹，比一下就知道
     folders: Vec<String>,
+    /// 上次扫描时树上列的图片、PDF（本地目录才有）：多了、少了、改了也要告诉前端
+    files: Vec<TreeFile>,
+    /// 逻辑目录的树（.odea/tree，见 tree.rs、logical.rs）；本地目录是 None
+    tree: Option<tree::Tree>,
+    /// 清单文件上次读到 / 写下的内容：和磁盘上的一比，就知道别处改没改过它
+    tree_text: String,
+    /// 打开时清单文件不在（新建的逻辑目录）：索引读全了以后按文件夹结构建一份
+    tree_build: bool,
+    /// 索引和磁盘对齐过一遍了（后台那批读完了）。没读完的时候，索引里找不到的笔记不一定是没了
+    indexed_all: bool,
+    /// 共享仓库（shared.rs）：正文只由 Rust 写，编辑器存盘时交来的正文不用
+    shared: bool,
+    /// 共享仓库：上次对账以来进了 / 离开了索引的文档（索引里的 id）、清单变没变
+    touched: Vec<String>,
+    tree_touched: bool,
+    on_touch: Option<shared::OnTouch>,
+    /// 共享仓库：这一篇（索引里的 id）的正文现在归前端的 Loro 副本（编辑器绑着它），编辑器存盘时交来的不用
+    body_owner: Option<shared::BodyOwner>,
 }
 
 impl VaultChange {
@@ -96,6 +124,7 @@ impl VaultChange {
             && self.conflicts.is_empty()
             && self.found_copies.is_empty()
             && !self.folders
+            && !self.layout
     }
 
     fn record(&mut self, row: &DocRow) {
@@ -126,6 +155,7 @@ impl VaultChange {
         extend(&mut self.found_copies, other.found_copies);
         self.tasks |= other.tasks;
         self.folders |= other.folders;
+        self.layout |= other.layout;
     }
 
     /// 去掉前端自己发起的那篇：它刚拿到了结果，不用再刷一遍
@@ -194,24 +224,103 @@ impl Vault {
     fn with_index(root: &Path, db: Connection) -> Result<Self> {
         let mut vault = Self::bare(root, db)?;
         vault.rescan()?;
+        vault.on_indexed();
         vault.purge_trash(TRASH_KEEP_DAYS * 86_400_000);
         Ok(vault)
     }
 
-    /// 还没和磁盘对齐过的仓库
+    /// 还没和磁盘对齐过的仓库。摆法和建索引时不一样了（别的设备开关了日程、同步过来）就清空索引重新认
     fn bare(root: &Path, db: Connection) -> Result<Self> {
         std::fs::create_dir_all(root)?;
-        Ok(Self {
+        let layout = layout::Layout::load(root);
+        index::sync_layout(&db, &layout.fingerprint(), &layout::Layout::odea().fingerprint())?;
+        let mut vault = Self {
             root: root.to_path_buf(),
             db,
             log: activity::Log::new(fsio::abs(root, layout::ACTIVITY_DIR)),
             announce: None,
+            layout,
+            layout_pending: None,
             folders: Vec::new(),
-        })
+            files: Vec::new(),
+            tree: None,
+            tree_text: String::new(),
+            tree_build: false,
+            indexed_all: false,
+            shared: false,
+            touched: Vec::new(),
+            tree_touched: false,
+            on_touch: None,
+            body_owner: None,
+        };
+        vault.load_tree();
+        Ok(vault)
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn layout(&self) -> &layout::Layout {
+        &self.layout
+    }
+
+    /// 开 / 关日程（docs/仓库与启动器.md §6）：改仓库标记，按新的摆法把每个文件重新认一遍 ——
+    /// 日记、目标从笔记变成某一天 / 目标，或者反过来。文件一个都不动。
+    /// 要读的不多就当场读完；多的交回去，调用方在后台读（和 open_quick 一样）
+    pub fn set_journal(&mut self, on: bool) -> Result<Backlog> {
+        let path = fsio::abs(&self.root, layout::VAULT_MARKER);
+        let marker = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok());
+        let marker = layout::marker_with_journal(marker, on);
+        fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker)?)?;
+        let backlog = self.relayout()?;
+        self.log.record("vault", "journal", if on { "enabled" } else { "disabled" });
+        Ok(backlog)
+    }
+
+    /// 按磁盘上的仓库标记重新摆：开关日程之后；别的设备开关了日程、转成了逻辑目录，同步过来以后
+    /// 用户点了「切换过去」（check_layout）。每个文件按新的摆法重新认一遍，文件一个都不动。
+    /// 要读的不多就当场读完；多的交回去，调用方在后台读（和 open_quick 一样）
+    pub fn relayout(&mut self) -> Result<Backlog> {
+        let was_logical = self.layout.logical;
+        self.layout = layout::Layout::load(&self.root);
+        self.layout_pending = None;
+        index::sync_layout(&self.db, &self.layout.fingerprint(), "")?;
+        if self.layout.logical != was_logical {
+            self.load_tree();
+        }
+        self.indexed_all = false;
+        let (_, stale) = self.plan_rescan()?;
+        let mut backlog = Backlog {
+            root: self.root.clone(),
+            total: stale.len(),
+            files: stale.into_iter().map(|file| file.rel).collect(),
+        };
+        if backlog.total <= QUICK_SCAN_LIMIT {
+            self.index_backlog(&mut backlog, None);
+        }
+        Ok(backlog)
+    }
+
+    /// 仓库标记（或 Obsidian 的设置）在别处改了（同步合并、网盘、别的工具）。只是附件放哪变了的
+    /// 直接换上（已经认好的文件不受影响）；日程、文件夹、逻辑目录变了要重新认文件、前端整页重载 ——
+    /// 用户可能正在打字，先告诉前端（VaultChange.layout），等用户点了再换（relayout）。同一次变化只报一回
+    fn check_layout(&mut self) -> bool {
+        let fresh = layout::Layout::load(&self.root);
+        let shape = |of: &layout::Layout| format!("{}|{}", of.fingerprint(), of.logical);
+        if shape(&fresh) == shape(&self.layout) {
+            self.layout.attachments = fresh.attachments;
+            self.layout_pending = None;
+            return false;
+        }
+        let key = shape(&fresh);
+        if self.layout_pending.as_deref() == Some(key.as_str()) {
+            return false;
+        }
+        self.layout_pending = Some(key);
+        true
     }
 
     pub fn set_announcer(&mut self, announce: Announce) {
@@ -244,7 +353,10 @@ impl Vault {
     /// 扫描里不读文件的那一半：只 stat。消失了的从索引里去掉、文件夹列表更新，
     /// 返回修改时间或大小变了、要（重新）读进索引的文件，按该读的顺序
     fn plan_rescan(&mut self) -> Result<(VaultChange, Vec<fsio::FileEntry>)> {
-        let mut change = VaultChange::default();
+        let mut change = VaultChange {
+            layout: self.check_layout(),
+            ..VaultChange::default()
+        };
         let mut files = fsio::walk_markdown(&self.root);
         // 名字像冲突副本的放到最后：网盘拷出来的副本带着原文属性块里的 id，谁先被索引
         // 谁拿到这个 id。「周报 (1).md」按字节序排在「周报.md」前面，不挪的话原文反倒
@@ -269,12 +381,42 @@ impl Vault {
             .into_iter()
             .filter(|file| known_state.get(file.rel.as_str()) != Some(&(file.mtime, file.size)))
             .collect();
-        let folders = folders::list(&self.root);
-        if folders != self.folders {
-            self.folders = folders;
-            change.folders = true;
+        if self.tree.is_some() {
+            // 逻辑目录的文件夹在清单里：硬盘上建了、删了文件夹和树无关，清单被别处改了才算
+            change.folders |= self.reload_tree();
+        } else {
+            let (folders, files) = folders::scan(&self.root, &self.layout, true);
+            if folders != self.folders || files != self.files {
+                self.folders = folders;
+                self.files = files;
+                change.folders = true;
+            }
         }
         Ok((change, stale))
+    }
+
+    /// 文件树上列的图片、PDF（本地目录；逻辑目录的树上只有笔记，是空的）
+    pub fn tree_files(&mut self) -> Vec<TreeFile> {
+        if self.tree.is_some() {
+            return Vec::new();
+        }
+        let (folders, files) = folders::scan(&self.root, &self.layout, true);
+        self.folders = folders;
+        self.files = files.clone();
+        files
+    }
+
+    /// 树上列出来的一个文件在磁盘上的位置（前端给的路径要是树上真有的那种文件，以点开头的不认）
+    pub fn tree_file_path(&self, rel: &str) -> Result<PathBuf> {
+        let ok = !rel.is_empty()
+            && rel.split('/').all(|part| !part.is_empty() && part != ".." && !fsio::is_hidden_name(part))
+            && !rel.contains('\\')
+            && folders::tree_file_kind(rel).is_some();
+        let path = fsio::abs(&self.root, rel);
+        if !ok || !path.is_file() {
+            return Err(AppError::NotFound(format!("文件不在了: {rel}")));
+        }
+        Ok(path)
     }
 
     /// 接着读后台那批文件，读到 budget 用完为止（None = 全部读完）。一个文件读不了就跳过
@@ -293,6 +435,9 @@ impl Vault {
             if budget.is_some_and(|budget| start.elapsed() >= budget) {
                 break;
             }
+        }
+        if backlog.is_empty() && !self.indexed_all {
+            change.folders |= self.on_indexed();
         }
         change
     }
@@ -336,6 +481,9 @@ impl Vault {
     /// 带着同一个 id，旧的那一行得先让位。
     pub fn rescan_paths_and_announce(&mut self, rels: &[String]) -> Result<()> {
         let mut change = VaultChange::default();
+        // 逻辑目录的清单、仓库标记（文件监听单独放行了 .odea/tree、.odea/vault.json，见 watch.rs）
+        change.folders |= self.reload_tree();
+        change.layout |= self.check_layout();
         for rel in rels {
             if !fsio::abs(&self.root, rel).is_file() {
                 if let Some(row) = index::by_path(&self.db, rel)? {
@@ -365,6 +513,7 @@ impl Vault {
         }
         index::remove(&self.db, &row.id)?;
         change.record(row);
+        self.touch(&row.id);
         Ok(())
     }
 
@@ -405,7 +554,7 @@ impl Vault {
         }
 
         let (meta, body) = frontmatter::split(text);
-        let mut slot = layout::classify(rel);
+        let mut slot = self.layout.classify(rel);
         // 同一天、同一个周期只能有一篇；多出来的（比如手动拷了一份）当普通笔记
         match &slot {
             Slot::Day(date) => {
@@ -498,9 +647,11 @@ impl Vault {
         if let Some(previous) = &previous {
             if previous.id != row.id {
                 change.record(previous);
+                self.touch(&previous.id);
             }
         }
         change.record(&row);
+        self.touch(&row.id);
         // 新出现的冲突副本（网盘同步时两边都改过）：让前端提示一声
         if previous.is_none() && row.kind == "note" && self.conflict_of(&row)?.is_some() {
             change.found_copies.push(row.title.clone());
@@ -578,9 +729,9 @@ impl Vault {
     }
 
     /// 挪走 / 删掉一篇之后，删掉空了的目录（`日记/2026/` 这种空壳）。
-    /// 「笔记」底下的除外：那是用户的文件夹，空着也留着。
+    /// 文件树上的除外：那是用户的文件夹，空着也留着。
     fn prune(&self, dir: &str) {
-        if layout::folder_of_dir(dir).is_none() {
+        if self.layout.folder_of_dir(dir).is_none() {
             fsio::prune_empty_dirs(&self.root, dir);
         }
     }
@@ -639,6 +790,7 @@ impl Vault {
             Some(rel) if rel != row.rel_path => {
                 fsio::move_file(&self.root, &row.rel_path, &rel)?;
                 index::rename(&self.db, &row.id, &rel)?;
+                self.tree_follow(&row.rel_path, &row.id);
                 self.prune(layout::dir_of(&row.rel_path));
                 rel
             }
@@ -702,9 +854,14 @@ impl Vault {
         self.note_create_in("", title, content)
     }
 
-    /// 在某个文件夹里新建（空串是「笔记」本身）
+    /// 在某个文件夹里新建（空串是「笔记」本身）。逻辑目录：文件平放，树上放在这个文件夹里
     pub fn note_create_in(&mut self, folder: &str, title: &str, content: &str) -> Result<String> {
-        let dir = self.existing_folder_dir(folder)?;
+        let dir = if self.tree.is_some() {
+            self.tree_check_parent(folder)?;
+            self.layout.notes.clone()
+        } else {
+            self.existing_folder_dir(folder)?
+        };
         let id = crate::db::new_id();
         let stem = layout::file_stem_for_title(title);
         let rel = fsio::unique_rel(&self.root, &dir, &stem, None);
@@ -716,18 +873,24 @@ impl Vault {
         };
         let mut change = VaultChange::default();
         let row = self.write_and_index(&rel, &frontmatter::render(&meta, content), &mut change)?;
+        self.tree_adopt(&row, folder)?;
         self.log.record("note", &row.id, "created");
         self.announce(change.without(&row));
         Ok(row.id)
     }
 
     /// 改正文和标题。标题变了文件跟着改名（同一个文件夹里）。
+    /// 共享仓库里编辑器绑着 Loro 副本的那一篇，正文由 Rust 写（shared.rs）：这里只改标题，正文用磁盘上的
     pub fn note_update(&mut self, id: &str, title: &str, content: &str) -> Result<()> {
         let row = self.note_row(id)?;
         let mut change = VaultChange::default();
-        self.keep_external_edits(&row, &mut change)?;
+        let owned = self.body_owned(id);
+        if !owned {
+            self.keep_external_edits(&row, &mut change)?;
+        }
 
-        let (mut meta, _) = frontmatter::split(&self.read(&row.rel_path)?.unwrap_or_default());
+        let (mut meta, on_disk) = frontmatter::split(&self.read(&row.rel_path)?.unwrap_or_default());
+        let content = if owned { on_disk.as_str() } else { content };
         let rel = if title != row.title {
             let stem = layout::file_stem_for_title(title);
             let rel = fsio::unique_rel(
@@ -739,6 +902,7 @@ impl Vault {
             if rel != row.rel_path {
                 fsio::move_file(&self.root, &row.rel_path, &rel)?;
                 index::rename(&self.db, &row.id, &rel)?;
+                self.tree_follow(&row.rel_path, &row.id);
             }
             rel
         } else {
@@ -763,18 +927,21 @@ impl Vault {
         Ok(())
     }
 
-    /// 归档 = 挪进「归档」文件夹。置顶随之取消。原来在「笔记」的哪个子文件夹里
+    /// 归档 = 挪进「归档」文件夹。置顶随之取消。原来在树上的哪个子文件夹里
     /// 记在属性块里，恢复时放回去。
     pub fn note_archive(&mut self, id: &str, category: Option<String>) -> Result<()> {
+        self.layout.require_journal()?;
         let row = self.note_row(id)?;
         let rel = fsio::unique_rel(
             &self.root,
-            layout::ARCHIVE_DIR,
+            &self.layout.archive,
             layout::stem_of(&row.rel_path),
             None,
         );
         let from = layout::dir_of(&row.rel_path);
-        let archived_from = layout::folder_of_dir(from)
+        let archived_from = self
+            .layout
+            .folder_of_dir(from)
             .filter(|folder| !folder.is_empty())
             .map(|_| from.to_string());
         let (saved, change) = self.rewrite_note_meta(&row, Some(rel), |meta| {
@@ -790,22 +957,24 @@ impl Vault {
         Ok(())
     }
 
-    /// 恢复 = 挪回「笔记」—— 归档前在哪个子文件夹就回哪个（文件夹没了就重新建上）
+    /// 恢复 = 挪回树根 —— 归档前在哪个子文件夹就回哪个（文件夹没了就重新建上）
     pub fn note_restore(&mut self, id: &str) -> Result<()> {
         let row = self.note_row(id)?;
         let (meta, _) = frontmatter::split(&self.read(&row.rel_path)?.unwrap_or_default());
         let dir = meta
             .archived_from
             .filter(|dir| {
-                layout::folder_of_dir(dir).is_some_and(|folder| layout::folder_dir(folder).is_ok())
+                self.layout
+                    .folder_of_dir(dir)
+                    .is_some_and(|folder| self.layout.folder_dir(folder).is_ok())
             })
-            .unwrap_or_else(|| layout::NOTES_DIR.to_string());
+            .unwrap_or_else(|| self.layout.notes.clone());
         let rel = fsio::unique_rel(&self.root, &dir, layout::stem_of(&row.rel_path), None);
         let (saved, change) = self.rewrite_note_meta(&row, Some(rel), |meta| {
             meta.archived = None;
             meta.archived_from = None;
         })?;
-        self.folders = folders::list(&self.root);
+        self.folders = folders::list(&self.root, &self.layout);
         self.log.record("note", &saved.id, "restored");
         self.announce(change);
         Ok(())
@@ -845,7 +1014,7 @@ impl Vault {
         let from = meta
             .trashed_from
             .take()
-            .unwrap_or_else(|| format!("{}/{}.md", layout::NOTES_DIR, layout::UNTITLED));
+            .unwrap_or_else(|| layout::join(&self.layout.notes, &format!("{}.md", layout::UNTITLED)));
         let title = meta
             .title
             .clone()
@@ -863,18 +1032,23 @@ impl Vault {
         let row = self.write_and_index(&rel, &frontmatter::render(&meta, &body), &mut change)?;
         std::fs::remove_file(fsio::abs(&self.root, &trash))?;
         // 原来的文件夹可能连同它一起删掉了，放回去时重新建上
-        self.folders = folders::list(&self.root);
+        self.folders = folders::list(&self.root, &self.layout);
         self.log.record("note", &row.id, "undeleted");
         self.announce(change.without(&row));
         Ok(())
     }
 
-    /// 挪到另一个文件夹（空串是「笔记」本身）。文件名不变，重名时加序号；
+    /// 挪到另一个文件夹（空串是树根）。文件名不变，重名时加序号；
     /// 正文里相对路径的图片、链接跟着改。
     pub fn note_move(&mut self, id: &str, folder: &str) -> Result<Note> {
         let row = self.note_row(id)?;
         if row.archived {
             return Err(AppError::Invalid("归档里的笔记先恢复再移动".into()));
+        }
+        if self.tree.is_some() {
+            // 逻辑目录：只改清单，文件不动
+            self.tree_place(id, folder, None)?;
+            return self.note_of(&row);
         }
         let dir = self.existing_folder_dir(folder)?;
         if layout::dir_of(&row.rel_path) == dir {
@@ -889,14 +1063,17 @@ impl Vault {
 
     /* ---------------- 文件夹 ---------------- */
 
-    /// 「笔记」下面所有的子文件夹（相对「笔记」的路径）
+    /// 文件树上所有的文件夹（相对树根的路径）
     pub fn folders(&self) -> Vec<String> {
-        folders::list(&self.root)
+        match &self.tree {
+            Some(tree) => tree.folder_paths(),
+            None => folders::list(&self.root, &self.layout),
+        }
     }
 
-    /// 文件夹对应的目录，并且它得真的在（空串是「笔记」本身，不在就建）
+    /// 文件夹对应的目录，并且它得真的在（空串是树根，不在就建）
     fn existing_folder_dir(&self, folder: &str) -> Result<String> {
-        let dir = layout::folder_dir(folder)?;
+        let dir = self.layout.folder_dir(folder)?;
         if !folder.is_empty() && !fsio::abs(&self.root, &dir).is_dir() {
             return Err(AppError::NotFound(format!("文件夹「{folder}」不在了")));
         }
@@ -905,14 +1082,17 @@ impl Vault {
 
     /// 在 parent 里新建一个文件夹，重名时加序号。返回它的路径（相对「笔记」）。
     pub fn folder_create(&mut self, parent: &str, name: &str) -> Result<String> {
+        if self.tree.is_some() {
+            return self.tree_edit(|tree| tree.add_folder(parent, name), "created");
+        }
         let parent_dir = self.existing_folder_dir(parent)?;
         let name = layout::folder_name(name)
             .ok_or_else(|| AppError::Invalid("文件夹名不能是空的".into()))?;
         let dir = folders::unique_dir(&self.root, &parent_dir, &name, None);
         std::fs::create_dir_all(fsio::abs(&self.root, &dir))?;
-        self.folders = folders::list(&self.root);
+        self.folders = folders::list(&self.root, &self.layout);
         self.log.record("folder", &dir, "created");
-        Ok(layout::folder_of_dir(&dir).unwrap_or_default().to_string())
+        Ok(self.layout.folder_of_dir(&dir).unwrap_or_default().to_string())
     }
 
     /// 改名（同一个上层里），重名时加序号。底下的笔记路径跟着变，id 不变。
@@ -920,6 +1100,9 @@ impl Vault {
     pub fn folder_rename(&mut self, folder: &str, name: &str) -> Result<String> {
         if folder.is_empty() {
             return Err(AppError::Invalid("「笔记」本身不能改名".into()));
+        }
+        if self.tree.is_some() {
+            return self.tree_edit(|tree| tree.rename(folder, name), "renamed");
         }
         let old_dir = self.existing_folder_dir(folder)?;
         let name = layout::folder_name(name)
@@ -930,7 +1113,7 @@ impl Vault {
         }
         std::fs::rename(fsio::abs(&self.root, &old_dir), fsio::abs(&self.root, &new_dir))?;
         index::rename_dir(&self.db, &old_dir, &new_dir)?;
-        self.folders = folders::list(&self.root);
+        self.folders = folders::list(&self.root, &self.layout);
         self.log.record_with("folder", &old_dir, "renamed", Some(&new_dir));
 
         // 底下每篇的路径都变了：让前端刷新它们（正文里的图片以文件夹为基准）
@@ -939,7 +1122,7 @@ impl Vault {
             change.record(&row);
         }
         self.announce(change);
-        Ok(layout::folder_of_dir(&new_dir).unwrap_or_default().to_string())
+        Ok(self.layout.folder_of_dir(&new_dir).unwrap_or_default().to_string())
     }
 
     /// 删除文件夹：里面（任意深度）的笔记都进回收站，可以撤销（folder_undelete）。
@@ -948,8 +1131,11 @@ impl Vault {
         if folder.is_empty() {
             return Err(AppError::Invalid("「笔记」本身不能删".into()));
         }
+        if self.tree.is_some() {
+            return self.tree_delete(folder);
+        }
         let dir = self.existing_folder_dir(folder)?;
-        let removed: Vec<String> = folders::list(&self.root)
+        let removed: Vec<String> = folders::list(&self.root, &self.layout)
             .into_iter()
             .filter(|path| path == folder || path.starts_with(&format!("{folder}/")))
             .collect();
@@ -960,7 +1146,7 @@ impl Vault {
             notes.push(row.id);
         }
         let kept = !folders::remove_empty_tree(&fsio::abs(&self.root, &dir));
-        self.folders = folders::list(&self.root);
+        self.folders = folders::list(&self.root, &self.layout);
         self.log.record("folder", &dir, "deleted");
         // 删掉的笔记前端自己会拿掉；只把连带的变化（日历上的任务）告诉它
         change.notes.clear();
@@ -970,24 +1156,32 @@ impl Vault {
             notes,
             folders: removed,
             kept,
+            nodes: None,
         })
     }
 
     /// 撤销删除文件夹：目录重新建上，笔记从回收站放回原处
     pub fn folder_undelete(&mut self, deletion: &FolderDeletion) -> Result<()> {
+        if self.tree.is_some() {
+            return self.tree_undelete(deletion);
+        }
         for folder in &deletion.folders {
-            std::fs::create_dir_all(fsio::abs(&self.root, &layout::folder_dir(folder)?))?;
+            std::fs::create_dir_all(fsio::abs(&self.root, &self.layout.folder_dir(folder)?))?;
         }
         for id in &deletion.notes {
             self.note_undelete(id)?;
         }
-        self.folders = folders::list(&self.root);
+        self.folders = folders::list(&self.root, &self.layout);
         self.log.record("folder", &deletion.folder, "undeleted");
         Ok(())
     }
 
     /// 文件夹在磁盘上的位置（在文件管理器里打开它）
     pub fn locate_folder(&self, folder: &str) -> Result<PathBuf> {
+        // 逻辑目录的文件夹不在硬盘上：打开仓库本身
+        if self.tree.is_some() {
+            return Ok(self.root.clone());
+        }
         let dir = self.existing_folder_dir(folder)?;
         Ok(fsio::abs(&self.root, &dir))
     }
@@ -1021,7 +1215,7 @@ impl Vault {
     /// （不落库，用户一编辑才以今天的身份写文件）。
     pub fn day(&mut self, date: &str, carry: bool) -> Result<DayDoc> {
         if index::day(&self.db, date)?.is_none() {
-            self.index_if_unseen(&layout::day_path(date)?)?;
+            self.index_if_unseen(&self.layout.day_path(date)?)?;
         }
         let tasks = self.tasks_due(date)?;
         if let Some(row) = index::day(&self.db, date)? {
@@ -1035,9 +1229,10 @@ impl Vault {
                 rel_path: row.rel_path,
             });
         }
-        // 还没写过：给它将来的位置（延续来的内容也是以今天的身份写到这里）
-        let rel_path = layout::day_path(date)?;
-        if carry {
+        // 还没写过：给它将来的位置（延续来的内容也是以今天的身份写到这里）。
+        // 共享仓库不延续：两台设备同时打开今天、各自把昨天的内容抄进来，合并后就是两份
+        let rel_path = self.layout.day_path(date)?;
+        if carry && !self.shared {
             if let Some(previous) = index::latest_day_before(&self.db, date)? {
                 return Ok(DayDoc {
                     date: date.to_string(),
@@ -1063,8 +1258,12 @@ impl Vault {
 
     /// 写某一天。标题和正文都清空了就删掉这个文件 —— 空文件留在文件夹里只是杂物。
     pub fn save_day(&mut self, date: &str, title: &str, body: &str) -> Result<DayDoc> {
+        self.layout.require_journal()?;
+        if self.body_owned(&format!("day:{date}")) {
+            return self.save_day_title(date, title);
+        }
         if index::day(&self.db, date)?.is_none() {
-            self.index_if_unseen(&layout::day_path(date)?)?;
+            self.index_if_unseen(&self.layout.day_path(date)?)?;
         }
         let existing = index::day(&self.db, date)?;
         let mut change = VaultChange::default();
@@ -1073,7 +1272,7 @@ impl Vault {
                 self.keep_external_edits(row, &mut change)?;
                 row.rel_path.clone()
             }
-            None => layout::day_path(date)?,
+            None => self.layout.day_path(date)?,
         };
         let (mut meta, _) = frontmatter::split(&self.read(&rel)?.unwrap_or_default());
         meta.title = (!title.is_empty()).then(|| title.to_string());
@@ -1128,7 +1327,7 @@ impl Vault {
     pub fn goal(&mut self, horizon: &str, period_start: &str) -> Result<Goal> {
         layout::validate_period_start(horizon, period_start)?;
         if index::goal(&self.db, horizon, period_start)?.is_none() {
-            self.index_if_unseen(&layout::goal_path(horizon, period_start)?)?;
+            self.index_if_unseen(&self.layout.goal_path(horizon, period_start)?)?;
         }
         Ok(match index::goal(&self.db, horizon, period_start)? {
             Some(row) => Goal {
@@ -1149,15 +1348,20 @@ impl Vault {
                 content_md: String::new(),
                 created_at: 0,
                 updated_at: 0,
-                rel_path: layout::goal_path(horizon, period_start)?,
+                rel_path: self.layout.goal_path(horizon, period_start)?,
             },
         })
     }
 
     pub fn save_goal(&mut self, horizon: &str, period_start: &str, body: &str) -> Result<Goal> {
+        self.layout.require_journal()?;
+        // 共享仓库：正文经前端的 Loro 副本交给 Rust 写（shared.rs），这里没什么可存的
+        if self.body_owned(&format!("goal:{horizon}:{period_start}")) {
+            return self.goal(horizon, period_start);
+        }
         layout::validate_period_start(horizon, period_start)?;
         if index::goal(&self.db, horizon, period_start)?.is_none() {
-            self.index_if_unseen(&layout::goal_path(horizon, period_start)?)?;
+            self.index_if_unseen(&self.layout.goal_path(horizon, period_start)?)?;
         }
         let existing = index::goal(&self.db, horizon, period_start)?;
         let mut change = VaultChange::default();
@@ -1166,7 +1370,7 @@ impl Vault {
                 self.keep_external_edits(row, &mut change)?;
                 row.rel_path.clone()
             }
-            None => layout::goal_path(horizon, period_start)?,
+            None => self.layout.goal_path(horizon, period_start)?,
         };
         let (meta, _) = frontmatter::split(&self.read(&rel)?.unwrap_or_default());
 
@@ -1271,14 +1475,14 @@ impl Vault {
             DocTarget::Note { id } => self.note_row(id)?.rel_path,
             DocTarget::Day { id } => match index::day(&self.db, id)? {
                 Some(row) => row.rel_path,
-                None => layout::day_path(id)?,
+                None => self.layout.day_path(id)?,
             },
             DocTarget::Goal {
                 horizon,
                 period_start,
             } => match index::goal(&self.db, horizon, period_start)? {
                 Some(row) => row.rel_path,
-                None => layout::goal_path(horizon, period_start)?,
+                None => self.layout.goal_path(horizon, period_start)?,
             },
         })
     }
@@ -1500,8 +1704,9 @@ impl Vault {
 
     /* ---------------- 附件 ---------------- */
 
-    /// 把一个文件（粘贴的图片、拖进来的文件）存进仓库的「附件」文件夹，返回从这篇文档
-    /// 引用它的相对路径。同名的文件已经在了：内容一样就直接用它，不一样就换个名字。
+    /// 把一个文件（粘贴的图片、拖进来的文件）存进这篇文档的附件文件夹（Odea 的仓库是「附件」，
+    /// Obsidian 的库照它的设置，Layout::attachment_dir），返回从这篇文档引用它的相对路径。
+    /// 同名的文件已经在了：内容一样就直接用它，不一样就换个名字。
     pub fn attach(&mut self, target: &DocTarget, name: &str, bytes: &[u8]) -> Result<Attachment> {
         if bytes.is_empty() {
             return Err(AppError::Invalid("文件是空的".into()));
@@ -1514,6 +1719,7 @@ impl Vault {
             )));
         }
         let doc_rel = self.target_rel(target)?;
+        let dir = self.layout.attachment_dir(&doc_rel);
         let (stem, ext) = split_name(name);
         let ext = ext.to_ascii_lowercase();
         // 剪贴板里的图片浏览器统一叫 image.png：换成「粘贴-时间」，免得附件里一堆 image-2、image-3
@@ -1531,7 +1737,8 @@ impl Vault {
         };
         for n in 1.. {
             let candidate = file_name(n);
-            let path = fsio::abs(&self.root, &layout::join(layout::ATTACHMENTS_DIR, &candidate));
+            let rel = layout::join(&dir, &candidate);
+            let path = fsio::abs(&self.root, &rel);
             match std::fs::read(&path) {
                 Ok(existing) if existing == bytes => {}
                 Ok(_) => continue,
@@ -1542,7 +1749,7 @@ impl Vault {
             }
             self.log.record("attachment", &candidate, "added");
             return Ok(Attachment {
-                link: layout::attachment_link(&doc_rel, &candidate),
+                link: layout::relative_link(&doc_rel, &rel),
                 is_image: IMAGE_EXTENSIONS.contains(&ext.as_str()),
                 name: candidate,
             });
@@ -1550,23 +1757,44 @@ impl Vault {
         unreachable!()
     }
 
-    /// 拖进来的是磁盘上的文件：读出来存进「附件」。本来就在仓库的「附件」里的，直接引用。
+    /// 协作时访客要的文件（docs/协同编辑.md §7.2）：只给放在这篇附件位置上的（Layout::is_attachment_of，
+    /// 不给别的笔记），规范化之后（符号链接解开）还在那个文件夹里。返回磁盘上的路径
+    pub fn attachment_for_guest(&self, note: &str, file_rel: &str) -> Result<PathBuf> {
+        let doc_rel = self.target_rel(&DocTarget::Note { id: note.to_string() })?;
+        let refuse = || AppError::Invalid("只给这篇笔记的附件".into());
+        if !self.layout.is_attachment_of(&doc_rel, file_rel) {
+            return Err(refuse());
+        }
+        let dir = fsio::abs(&self.root, &self.layout.attachment_dir(&doc_rel))
+            .canonicalize()
+            .map_err(|_| refuse())?;
+        let file = fsio::abs(&self.root, file_rel)
+            .canonicalize()
+            .map_err(|_| AppError::Invalid("主持人那边找不到这个文件".into()))?;
+        if file.parent() != Some(dir.as_path()) || !file.is_file() {
+            return Err(refuse());
+        }
+        Ok(file)
+    }
+
+    /// 拖进来的是磁盘上的文件：读出来存进附件文件夹。本来就在这篇的附件文件夹里的，直接引用。
     pub fn attach_path(&mut self, target: &DocTarget, source: &Path) -> Result<Attachment> {
         let name = source
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .ok_or_else(|| AppError::Invalid(format!("不是文件: {}", source.display())))?;
-        let attachments = fsio::abs(&self.root, layout::ATTACHMENTS_DIR);
+        let doc_rel = self.target_rel(target)?;
+        let dir = self.layout.attachment_dir(&doc_rel);
+        let attachments = fsio::abs(&self.root, &dir);
         let inside = source
             .parent()
             .zip(attachments.canonicalize().ok())
             .and_then(|(parent, dir)| parent.canonicalize().ok().map(|parent| parent == dir))
             .unwrap_or(false);
         if inside {
-            let doc_rel = self.target_rel(target)?;
             let (_, ext) = split_name(&name);
             return Ok(Attachment {
-                link: layout::attachment_link(&doc_rel, &name),
+                link: layout::relative_link(&doc_rel, &layout::join(&dir, &name)),
                 is_image: IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()),
                 name,
             });
@@ -1592,6 +1820,15 @@ impl Vault {
             days: counts.days,
             goals: counts.goals,
             tasks: counts.tasks,
+            layout: VaultLayout {
+                logical: self.tree.is_some(),
+                journal: self.layout.journal,
+                notes_dir: self.layout.notes.clone(),
+                days_dir: self.layout.days.clone(),
+                goals_dir: self.layout.goals.clone(),
+                archive_dir: self.layout.archive.clone(),
+                hidden_dirs: self.layout.hidden_dirs().into_iter().map(String::from).collect(),
+            },
         })
     }
 }
@@ -1600,7 +1837,7 @@ impl Vault {
 const MAX_ATTACHMENT_BYTES: usize = 50 * 1_048_576;
 
 /// 当图片插进正文（`![](…)`）的扩展名；和 tauri.conf.json 里 asset 协议放行的一致
-const IMAGE_EXTENSIONS: [&str; 9] = ["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "bmp", "ico"];
+pub const IMAGE_EXTENSIONS: [&str; 9] = ["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "bmp", "ico"];
 
 /// 「截图 1.PNG」→ ("截图 1", "PNG")；没有扩展名时第二个是空串
 fn split_name(name: &str) -> (&str, &str) {

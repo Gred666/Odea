@@ -53,6 +53,9 @@ importers:
       katex:
         specifier: ^0.18.7
         version: 0.18.7
+      loro-crdt:
+        specifier: 1.16.4
+        version: 1.16.4
       lucide-react:
         specifier: ^0.475.0
         version: 0.475.0(react@19.2.8)
@@ -1843,6 +1846,9 @@ packages:
 
   lodash-es@4.18.1:
     resolution: {integrity: sha512-J8xewKD/Gk22OZbhpOVSwcs60zhd95ESDwezOFuA3/099925PdHJ7OFHNTGtajL3AlZkykD32HykiMo+BIBI8A==}
+
+  loro-crdt@1.16.4:
+    resolution: {integrity: sha512-UPufMpHSEMLRVjWfCjhVbOD8nkCDwxdfVk4Uer6xTEFAcNn+X+oGYWGgIIYuAgofc8UiI0ERZUIMnP7ib/kh6w==}
 
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
@@ -3961,6 +3967,8 @@ snapshots:
   lodash-es@4.17.23: {}
 
   lodash-es@4.18.1: {}
+
+  loro-crdt@1.16.4: {}
 
   lru-cache@5.1.1:
     dependencies:

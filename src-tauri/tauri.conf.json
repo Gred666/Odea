@@ -4,30 +4,14 @@
   "identifier": "dev.odea.editor",
   "build": {
     "beforeDevCommand": "pnpm dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Odea",
-        "width": 1440,
-        "height": 900,
-        "minWidth": 940,
-        "minHeight": 620,
-        "resizable": true,
-        "center": true,
-        "decorations": false,
-        "transparent": false,
-        "dragDropEnabled": true,
-        "theme": null,
-        "backgroundColor": "#F1F1ED",
-        "visible": false
-      }
-    ],
+    "windows": [],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https: http: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https: http: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": [
@@ -45,6 +29,9 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["odea"] }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkyMTNBM0M4MDBBNTYwQTgKUldTb1lLVUF5S01Ua3RSZDkrSmg4N29wTEZoTDZyM2UyNm1aR2d6RjdEaEFzZkJvUC9rTXRmckcK",
       "endpoints": [

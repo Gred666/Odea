@@ -1,5 +1,5 @@
 import { events, type Result as IpcResult, commands } from "@/lib/bindings";
-import { isTauri } from "@/lib/tauri";
+import { isTauri, thisWindow } from "@/lib/tauri";
 import type {
   AppUpgrade,
   Attachment,
@@ -16,6 +16,7 @@ import type {
   GoalHorizon,
   GuideName,
   GuideUpdate,
+  ImportReport,
   IndexProgress,
   JournalDoc,
   LinkRewrite,
@@ -32,6 +33,8 @@ import type {
   SyncStatus,
   Task,
   TextSearch,
+  TreeFile,
+  TreeNode,
   UpdateInfo,
   VaultChange,
   VaultInfo,
@@ -84,6 +87,33 @@ export interface Backend {
   folderUndelete(deletion: FolderDeletion): Promise<void>;
   /** 在系统的文件管理器里打开这个文件夹 */
   folderReveal(folder: string): Promise<void>;
+  /** 文件树上列的图片、PDF（本地目录；逻辑目录是空的） */
+  treeFiles(): Promise<TreeFile[]>;
+  /** 树上的一个文件：用系统的默认程序打开，reveal 时在文件管理器里定位它 */
+  treeFileOpen(relPath: string, reveal: boolean): Promise<void>;
+  /* ---- 逻辑目录（docs/仓库与启动器.md §7）：树在清单里，文件夹不在硬盘上 ---- */
+  /** 树上的节点：文件夹、智能文件夹、放在树上的笔记（不是逻辑目录报错） */
+  treeView(): Promise<TreeNode[]>;
+  /** 把一篇放进 folder（`/` 是「未整理」），排在 after 那一篇后面，null 是最前面。只改清单 */
+  treePlace(id: string, folder: string, after: string | null): Promise<void>;
+  /** 在 folder 里放一个指着笔记 id 的快捷方式，返回它的节点 id（已经有就是那一个） */
+  treeAddShortcut(id: string, folder: string): Promise<string>;
+  /** 删一个快捷方式（节点 id）：笔记不动 */
+  treeRemoveShortcut(node: string): Promise<void>;
+  /** 导入：弹选文件夹的对话框，把仓库外的一个文件夹复制进来放在 folder 里。取消了返回 null */
+  vaultImport(folder: string): Promise<ImportReport | null>;
+  /** 挪文件夹：放进 parent，排在 after（同一层的路径）后面，null 是最前面。返回新路径 */
+  treeMoveFolder(folder: string, parent: string, after: string | null): Promise<string>;
+  /** 新建智能文件夹，返回它的路径 */
+  treeAddQuery(parent: string, name: string, query: string): Promise<string>;
+  /** 改智能文件夹的名字和条件，返回新路径 */
+  treeSetQuery(folder: string, name: string, query: string): Promise<string>;
+  /** 按几个条件各筛一遍，每个给出命中的笔记 id（置顶在前、最近改过的在前） */
+  treeQueries(queries: string[]): Promise<string[][]>;
+  /** 本地目录转成逻辑目录（先问一句，一个文件都不动）。取消了返回 null；转好了整页重载 */
+  vaultMakeLogical(): Promise<VaultInfo | null>;
+  /** 导出成真实文件夹：弹选位置的对话框、拷完在文件管理器里打开。取消了返回 null */
+  treeExport(): Promise<string | null>;
   /**
    * 搜正文：大小写不敏感的子串，笔记和日记、目标各自最多 limit 条；archivedOnly 只搜归档里的笔记
    * （归档的搜索框）。被同一处后来的一次顶掉的会返回空结果，调用方只认最后一次的
@@ -112,6 +142,10 @@ export interface Backend {
   /** 命令面板「使用指南」：那一篇的 id，删掉了就照这个版本重新放一篇 */
   guideOpen(name: GuideName): Promise<string>;
   vaultInfo(): Promise<VaultInfo>;
+  /** 开 / 关日程：改仓库标记、每个文件按新的摆法重新认一遍（文件不动）。之后整页重载 */
+  vaultSetJournal(on: boolean): Promise<VaultInfo>;
+  /** 别的设备开关了日程、转成了逻辑目录（VaultChange.layout）：按磁盘上的仓库标记重新摆 */
+  vaultRelayout(): Promise<VaultInfo>;
   /** 在系统的文件管理器里定位这篇文档的文件 */
   vaultReveal(target: DocumentSaveTarget): Promise<void>;
   /** 打开整个笔记文件夹 */
@@ -123,8 +157,8 @@ export interface Backend {
    * 只换文件夹；`move`：直接搬过去
    */
   vaultChangeRoot(mode: ChangeRootMode): Promise<VaultInfo | null>;
-  /** 新装第一次打开时笔记文件夹在哪；只给一次，不是第一次打开是 null */
-  vaultFirstRun(): Promise<string | null>;
+  /** 弹启动器（docs/仓库与启动器.md §3）：打开别的仓库、新建、加入协同编辑 */
+  showLauncher(): Promise<void>;
   /** 粘贴进来的文件存进「附件」文件夹（内容是 base64），返回从这篇文档引用它的路径 */
   vaultAttach(target: DocumentSaveTarget, name: string, dataBase64: string): Promise<Attachment>;
   /** 拖进窗口的文件（桌面端拿到的是路径）存进「附件」文件夹 */
@@ -224,6 +258,25 @@ const tauriBackend: Backend = {
   folderReveal: async (folder) => {
     await unwrap(commands.folderReveal(folder));
   },
+  treeFiles: () => unwrap(commands.treeFiles()),
+  treeFileOpen: async (relPath, reveal) => {
+    await unwrap(commands.treeFileOpen(relPath, reveal));
+  },
+  treeView: () => unwrap(commands.treeView()),
+  treeAddShortcut: (id, folder) => unwrap(commands.treeAddShortcut(id, folder)),
+  treeRemoveShortcut: async (node) => {
+    await unwrap(commands.treeRemoveShortcut(node));
+  },
+  vaultImport: (folder) => unwrap(commands.vaultImport(folder)),
+  treePlace: async (id, folder, after) => {
+    await unwrap(commands.treePlace(id, folder, after));
+  },
+  treeMoveFolder: (folder, parent, after) => unwrap(commands.treeMoveFolder(folder, parent, after)),
+  treeAddQuery: (parent, name, query) => unwrap(commands.treeAddQuery(parent, name, query)),
+  treeSetQuery: (folder, name, query) => unwrap(commands.treeSetQuery(folder, name, query)),
+  treeQueries: (queries) => unwrap(commands.treeQueries(queries)),
+  vaultMakeLogical: () => unwrap(commands.vaultMakeLogical()),
+  treeExport: () => unwrap(commands.treeExport()),
   searchText: (query, limit, archivedOnly) =>
     unwrap(commands.searchText(query, limit, archivedOnly)) as Promise<TextSearch>,
   findInVault: (query, options) =>
@@ -248,6 +301,8 @@ const tauriBackend: Backend = {
   },
   guideOpen: (name) => unwrap(commands.guideOpen(name)),
   vaultInfo: () => unwrap(commands.vaultInfo()),
+  vaultSetJournal: (on) => unwrap(commands.vaultSetJournal(on)),
+  vaultRelayout: () => unwrap(commands.vaultRelayout()),
   vaultReveal: async (target) => {
     await unwrap(commands.vaultReveal(target));
   },
@@ -256,18 +311,22 @@ const tauriBackend: Backend = {
   },
   vaultKeepConflictCopy: (target) => unwrap(commands.vaultKeepConflictCopy(target)),
   vaultChangeRoot: (mode) => unwrap(commands.vaultChangeRoot(mode)),
-  vaultFirstRun: () => unwrap(commands.vaultFirstRun()),
+  showLauncher: async () => {
+    await unwrap(commands.launcherShow());
+  },
   vaultAttach: (target, name, dataBase64) => unwrap(commands.vaultAttach(target, name, dataBase64)),
   vaultAttachPath: (target, path) => unwrap(commands.vaultAttachPath(target, path)),
   onVaultChanged: (listener) =>
-    events.vaultChanged.listen((event) => listener(event.payload as VaultChange)),
+    events.vaultChanged(thisWindow()).listen((event) => listener(event.payload as VaultChange)),
   indexProgress: () => unwrap(commands.indexProgress()),
-  onIndexProgress: (listener) => events.indexProgress.listen((event) => listener(event.payload)),
+  onIndexProgress: (listener) =>
+    events.indexProgress(thisWindow()).listen((event) => listener(event.payload)),
   syncStatus: () => unwrap(commands.syncStatus()) as Promise<SyncStatus>,
   syncNow: () => unwrap(commands.syncNow()),
   onSyncStatus: (listener) =>
-    events.syncStatusChanged.listen((event) => listener(event.payload as SyncStatus)),
-  onSyncNotice: (listener) => events.syncNotice.listen((event) => listener(event.payload)),
+    events.syncStatusChanged(thisWindow()).listen((event) => listener(event.payload as SyncStatus)),
+  onSyncNotice: (listener) =>
+    events.syncNotice(thisWindow()).listen((event) => listener(event.payload)),
   syncAccounts: () => unwrap(commands.syncAccounts()) as Promise<SyncAccount[]>,
   syncGithubLoginStart: () => unwrap(commands.syncGithubLoginStart()),
   syncGithubLoginWait: () => unwrap(commands.syncGithubLoginWait()) as Promise<SyncAccount>,
@@ -291,7 +350,8 @@ const tauriBackend: Backend = {
   updateInstall: async () => {
     await unwrap(commands.updateInstall());
   },
-  onUpdateReady: (listener) => events.updateReady.listen((event) => listener(event.payload)),
+  onUpdateReady: (listener) =>
+    events.updateReady(thisWindow()).listen((event) => listener(event.payload)),
   appUpgrade: () => unwrap(commands.appUpgrade()),
 };
 

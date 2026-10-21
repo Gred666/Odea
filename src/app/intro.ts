@@ -1,4 +1,5 @@
 import { useApp } from "@/app/store";
+import { quietWindow } from "@/lib/tauri";
 import { create } from "zustand";
 
 /* ============================================================
@@ -26,6 +27,8 @@ const PLAYED_KEY = "odea.introPlayed";
 
 /** 挂载 React 之前调用：决定这一次要不要播 */
 export function armIntro() {
+  // 启动以后才开的仓库窗口（启动器里打开的、点链接打开的）不播：开场只属于冷启动
+  if (quietWindow) return;
   const reduce =
     useApp.getState().reduceMotion || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if (reduce) return;

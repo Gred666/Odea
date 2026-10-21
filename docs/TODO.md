@@ -39,6 +39,8 @@ pnpm dev
 pnpm tauri dev
 ```
 
+开发服务器绑的是 `127.0.0.1`（`vite.config.ts` 的 `server.host`、`tauri.conf.json` 的 `devUrl`），不用 `localhost`：Node 在 Windows 上把 `localhost` 解析成 `::1`，只听 IPv6。开发机上连 `::1` 一律 EACCES（2026-10-18 查的：整台机器都这样，不只 Claude 的沙箱；最可疑的是 Clash Verge 的 TUN 开着 `strict-route`，没关掉试过），以前 `tauri dev` 一直卡在「Waiting for your frontend dev server」、内置浏览器打开是错误页，被误记成「回环被拦」。`127.0.0.1` 是通的。cargo 没在 PATH 里的话先加 `D:\Dev\cargo\bin`（launch.json 的 `odea-desktop` 已经加了）。
+
 类型检查 / lint / 前端测试：
 
 ```bash
@@ -122,6 +124,8 @@ cd src-tauri; cargo run --example export_bindings --features typegen --no-defaul
 - [x] **P6.5 文档模型收口**（行动项迁回 Markdown、今日TODO = 某一天、GOAL 一周期一篇）
 - [ ] **P7 打磨与性能**
 - [ ] **P8 多设备同步（内置 git）** ← 现在（2026-10-07 设计定稿，见技术方案 §5.9）
+- [ ] **P10 多人协同编辑**（2026-10-18 设计定稿，见 [协同编辑.md](./协同编辑.md)；P10.0 编辑器绑定做完了，P10.1 局域网、P10.2 互联网 + 自配中继接上了，两期的遗留也补上了；P10.3（换 Loro、组字、访客转发、共享仓库、历史版本）2026-10-21 做了；两台实机、真实网络还没测）← 现在
+- [ ] **P11 多仓库与逻辑目录**（2026-10-20 设计定稿，见 [仓库与启动器.md](./仓库与启动器.md)；P11.1–P11.4 和遗留都做完了，剩真设备、真账号上的验证）
 
 ---
 
@@ -311,12 +315,12 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - [x] 应用这一侧（2026-10-13）：`update.rs` 后台查、下载、验签，下好了导航栏同步那一行上面出现「新版本 0.2.0」，点开是新版本卡片（「稍后」/「重启并更新」，没有跳过这个版本）；装之前先存编辑器、推同步、记窗口位置；deb / rpm 只提示、打开下载页；请求走同步的代理。命令面板「检查更新」「这一版的更新说明」。升级后第一次打开弹一次更新说明（`config.json` 的 `lastVersion`，正文是 `src/content/changelog.md`）。版本号只剩 `package.json` 和 `Cargo.toml` 两处，`pnpm bump` 一起改，测试对两处一样。本机用测试密钥 + 本地 latest.json 在真实应用里走过：签名不对的不装、对的下好后卡片弹出、点「重启并更新」交给安装包、进程退出
   - [x] 生成正式的更新签名密钥（2026-10-13）：私钥在 `%USERPROFILE%\.tauri\ontheway.key`（带密码，公钥 ID 9213A3C800A560A8；第一对的密码在 GitHub 上对不上，重新生成过），公钥已填进 `tauri.conf.json` 的 `plugins.updater.pubkey`。私钥和密码另外备份（密码管理器）；`.gitignore` 挡了 `*.key`。PowerShell 里 `-w ~/…` 不展开 `~`，会生成在当前目录下一个叫 `~` 的文件夹里。本机打包要设 `TAURI_SIGNING_PRIVATE_KEY`（私钥内容或文件路径；这一版 CLI 不认 `_PATH`）和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。密钥要设密码：PowerShell 里把环境变量设成空串等于删掉，CLI 会卡在问密码
   - [x] 发版 CI（2026-10-13，写好了、还没在 GitHub 上跑过）：`.github/workflows/release.yml`，打 `v*` tag 触发。先 `scripts/release-notes.mjs` 对版本（tag = package.json = Cargo.toml = Cargo.lock）、取 `changelog.md` 最上面那一节（不是这一版就不发），跑类型检查和前端测试；再 Windows / macOS（Apple 芯片、Intel 各一个）/ Linux 并行打包、签名，建草稿 Release，附件里有安装包、`.sig`、`latest.json`。Publish 之后用户才查得到。手动 Run workflow = 试打包，安装包在 Artifacts 里，不建 Release。两个 Secret 已经加了。bundle 目标加了 `app`（macOS 的更新包从 .app 打）
-  - [ ] 第一次在 GitHub 上跑：先试打包，看 macOS / Linux 能不能编过（这个项目还没在这两个平台上编过）
+  - [x] 第一次在 GitHub 上跑：先试打包，看 macOS / Linux 能不能编过（这个项目还没在这两个平台上编过）。0.2.0 是 CI 正式发布的（2026-10-21 查 Release 确认）
     - 第一次试打包（2026-10-13）四个都挂了：Windows / Linux / macOS Apple 芯片编完了，签名时「Wrong password for that key」—— Secret 里的密码和私钥对不上，要重填；macOS Intel 在 Apple 芯片机器上交叉编，找不到 OpenSSL（git2 带进来的 openssl-sys），改成 macOS 上 vendored，CI 加了 otool 检查。Actions 升到 Node 24 的版本（checkout / setup-node v7、pnpm/action-setup v6、tauri-action v1）
   - [x] ~~Gitee 镜像~~（2026-10-13 做的，2026-10-16 去掉了，见下面）：仓库 `hyxzs111111/on-the-way`（公开）。附件不登录能下、单个 ≤ 100 MB、仓库一共 ≤ 1 GB（实测 + 帮助文档）；没有 latest/download，latest.json 放在固定的 `updater` 发行版。`scripts/gitee-release.mjs` + CI 的「同步到 Gitee」，四个打包都成了才镜像、镜像成了才正式发布，只留最近两版。应用的 `endpoints` 改成 Gitee 在前、GitHub 兜底，`update.rs` 一个地址从查到下载验签整条不行就换下一个（本机走过）。下载页（deb / rpm）改成 Gitee 的发行版页。Mac 加了临时签名（`signingIdentity: "-"`）
   - [x] 去掉 Gitee 镜像（2026-10-16）：从 GitHub 的机器往 Gitee 传又慢又常常传不上，发版人在国外。删了 `scripts/gitee-release.mjs`、CI 的「Gitee 令牌」「同步到 Gitee」，`endpoints` 只留 GitHub；`github-latest.mjs` 把要用的几个函数搬了过来；手动 Run workflow 的 `mirror` 改名 `latest_only`（只补改已发布那一版的 latest.json）
   - [x] **需要你**：删掉 Gitee 上 `hyxzs111111/on-the-way` 的 `updater` 发行版（或它里面的 latest.json，或者把仓库设为私有 / 删掉）。0.1.0 先问 Gitee、Gitee 说「已经最新」就停，不删的话装着 0.1.0 的人永远收不到下一版（技术方案 §14.4）
-  - [ ] **需要你**：GitHub 仓库 Settings → Secrets 里的 `GITEE_TOKEN` 用不上了，可以删
+  - [x] **需要你**：GitHub 仓库 Settings → Secrets 里的 `GITEE_TOKEN` 用不上了，可以删（2026-10-21 删了）
   - [ ] 代码签名（Windows Authenticode、macOS 公证），以后再说
 - [x] 清理旧代码：没用的依赖（`@dnd-kit/*`、`fractional-indexing`、`marked`、Radix dialog / popover / tooltip，Rust 的 `r2d2`、`rrule`、`chrono-tz`）；旧数据模型留下的字段（笔记的 `icon`、恒为空的 `actionGroup`、任务的 `priority` / `goalId` / `sortKey` / `completedAt`）、没人调的 `note_list`、用不上的 `NoteIcon` 组件；日历当日安排从 `ActionGroup` 简化成 `DayTasks`
 - [x] 标题收起（2026-10-17 用户要的，像 Obsidian：悬停标题出箭头，点了这一节收成一行；技术方案 §11.4.5）
@@ -398,18 +402,110 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - [x] 旧名留下的东西新版认、读到就换（`old_name.rs`）：数据目录、WebView 数据、仓库里的 `.ontheway/`、`.git/config` 的键、`.gitignore` 那一段、钥匙串、提交署名、指南的记号和标题；单测各一条
   - [x] Windows 安装包装完清掉旧的安装（`src-tauri/windows/hooks.nsh`）
   - [x] Logo 重做：「起笔一点」—— 字标的 O 本来就开口、带蓝点（就是图标），蓝点一直在，笔画照旧循环；开场先落蓝点再写 O；蓝点改半径不用 scale
-  - [ ] **需要你**：GitHub 上把仓库 `Gred666/OnTheWay` 改名成 `Odea`，**在发 0.3.0 之前**：新版的更新地址已经指向新名字，旧版靠 GitHub 的跳转拿到新版（以后别再建一个叫 OnTheWay 的仓库，跳转会断）
-  - [ ] **需要你**：GitHub 的 OAuth App 改名成 Odea（用户授权同步时看到的名字；client_id 不变，不用改代码）
-  - [ ] 发 0.3.0 时在 `changelog.md` 写一条改名（更新说明卡片里用户会看到）
+  - [x] **需要你**：GitHub 上把仓库 `Gred666/OnTheWay` 改名成 `Odea`（2026-10-21 查过：旧地址 301 跳到新名字），**在发 0.3.0 之前**：新版的更新地址已经指向新名字，旧版靠 GitHub 的跳转拿到新版（以后别再建一个叫 OnTheWay 的仓库，跳转会断）
+  - [x] **需要你**：GitHub 的 OAuth App 改名成 Odea（2026-10-21 改了）（用户授权同步时看到的名字；client_id 不变，不用改代码）
+  - [x] 发 0.3.0 时在 `changelog.md` 写一条改名（更新说明卡片里用户会看到）（2026-10-21）
   - [ ] 在 Windows 上真的升级一次：装 0.2.0、登录同步 → 自动更新到 0.3.0 → 开始菜单 / 桌面只剩 Odea，「应用和功能」里没有 OnTheWay；主题、侧栏收起这些设置还在，同步不用重新登录，笔记文件夹还是原来那个
   - [ ] 所有设备都升级上来以后（0.4 前后）：删 `old_name.rs` 和各处引用它的地方、`lib/legacyStorage.ts`、`index.html` 里的 `otw.theme`、`.gitignore` / `.gitattributes` 那一段里的 `.ontheway` 两行、`hooks.nsh`
   - [x] 内部前缀 `otw` 换成 `odea`（CSS 类名、`data-` 属性、存储键、表情短码、扩展文件后缀）：存储键启动时搬（`lib/legacyStorage.ts`），旧短码 `:otw_fire:` 和旧的 `.otwx` 扩展文件照样认
   - [ ] 本机的项目文件夹 `D:\OnTheWay` 要不要跟着改名（`.claude/launch.json` 里有一条绝对路径）
 
+## P10 多人协同编辑
+
+设计见 [协同编辑.md](./协同编辑.md)（2026-10-18 定稿）：会话式（主持人的 .md 仍是真相）、Yjs、iroh 点对点；默认不连任何服务器，用户可以自己配中继。每一阶段「做完的标准」在设计 §12。
+
+**P10.0 编辑器绑定（不碰网络，最该先做）** ✔ 2026-10-18，记录在设计 §15
+- [x] 同一个窗口里两个编辑器经 Y.Doc 同步：出站 / 入站、组字期间排队、撤销只撤自己的、远端光标（设计 §4.3）。`src/collab/`；编辑器上是 `MarkdownEditor` 的 `collab` 参数
+- [x] 外部改动进 CRDT：外部程序当成从上次保存处分叉的协作者（§4.4，`collab/external.ts`）
+- [x] 收敛模糊测试（一万轮全过）、编辑器边角测试；`perf.mjs --only collab`、`fade-frames.mjs … remote`、`collab-ime.mjs`（真 Chrome 走输入法）
+- [x] 和现有机制的交界：平滑光标遇到远端位移直接落位、别人的改动不替你展开收起的标题、`/` `[[` 菜单跟着映射、表格格子只写回变了的字且编辑中不丢焦点、状态缓存跳过协作中的文档
+- 坑：回 Sync2 之前要先把收件箱里排着的更新应用掉，不然刚重连的人永远缺那几个字（模糊测试第 622 轮）；happy-dom 里不让出宏任务，CodeMirror 图层的测量请求一直攒着，一万轮把测试进程撑到 4GB；StrictMode 下 `useMemo` 的初始化跑两遍、留第一遍。细节见设计 §15.1、§15.4
+- [x] 遗留：格子编辑中别人在这张表上面插了一行（列），编辑的格子会认成另一行 —— 2026-10-18 修了：先比出插 / 删在哪、DOM 里同一处插 / 删（`tableWidget.ts` 的 `shiftedAt`，设计 §19.1）。访客那边的双链、相对路径图片在 §18 做了
+
+**P10.1 局域网**（2026-10-18 接上了，记录在设计 §16）
+- [x] Rust `collab/`：iroh 端点（没有中继）、mDNS 地址查找、主持人 / 访客、星形转发、断线自动重连（§5、§11）
+- [x] `odea/collab/1`：帧、握手鉴权（绑在 TLS 会话上的 HMAC 证明）、Sync1 / Sync2、光标数据报（§7）
+- [x] 邀请链接（`odea://join/`，`tauri-plugin-deep-link`）、主持人确认（允许编辑 / 只读 / 拒绝）、改权限、移出、换链接（§8）
+- [x] 前端：会话接到 Rust 上（`collab/net.ts`、`link.ts`、`store.ts`）、做客的那一篇、协作对话框、加入请求卡、协作标签；浏览器预览里走模拟网络（`mockNet.ts`）
+- [x] macOS 本地网络权限（`Info.plist` 的 `NSLocalNetworkUsageDescription`、`NSBonjourServices`）；Windows 防火墙只在开始协作时说一句（§10）
+- [ ] 两台实机实测「A 按键 → B 画完」：还没有第二台机器。同一台电脑上两个实例测过（设计 §19.2）：画出来中位 6–7ms、p95 9–11ms，加入、附近、记住、访客重新加入、主持人崩溃后自动接上都走通了
+- [x] 「附近」列表（§8.3）：加入对话框里、命令面板「附近的协作…」，点一下不用链接请求加入（设计 §18）
+- [x] 会话状态落盘：崩溃、强退以后重启，主持人「继续协作」用同一个会话 id 和端口起来，访客自动接上；访客「重新加入」（§3，设计 §18）
+- [x] 附件按需传：访客那边相对路径的图片向主持人要、粘贴的交给主持人存；只给正文里引用了的、「附件/」里的（§7.2）；访客那边双链按「不存在」画（设计 §18）
+- [x] 慢的访客合包（§5.4）：积压了丢掉排着的、换成一次补齐（Resync → Sync1 → Sync2），效果和合包一样（设计 §18）
+- [x] 看得到却连不上时把「Windows 防火墙把这个网络标成了公用」列为第一个原因（§10）：P10.2 的访客结论里做了（mDNS 看到了主持人还连不进）；主持人那边的检测还没有
+- 坑：iroh 建端点要 2–3 秒（`netmon::Monitor::new`，Windows 上枚举网卡）——对话框先开、链接出来之前占着同样高度；踢人和「Welcome 发出去、文档流还没接上」有竞态（按公钥拉黑、接上时再查）；postcard 不支持内部打标签的枚举（`#[serde(tag)]`）；`cargo fmt` 会把整个 crate 重排（项目没按 rustfmt 排），只对自己的文件单独跑 `rustfmt`。细节见设计 §16
+
+**P10.2 互联网 + 自配中继**（2026-10-18 接上了，记录在设计 §17）
+- [x] 端口映射（自己驱动 `portmapper`：iroh 1.3 没配中继时不去要）、IPv6、回连链接（`odea://back/`）；分享前自检、连不上时 3 秒内给结论（§8.4、§8.5；`collab/reach.rs`、`diagnose.rs`，前端 `collab/reach.ts`）
+- [x] 中继配置（命令面板「协作中继…」）、中继码（`odea://relay/`，添加前确认）、测试按钮、自签名证书按指纹认；邀请链接 v2 带着主持人的中继，访客能选只直连（§6）
+- [x] 「自建中继」文档和样例配置：[自建中继.md](./自建中继.md)
+- [ ] 连通性矩阵实测（家宽有 / 没有 UPnP、IPv6，手机热点，公司网络，客户端隔离的公共 Wi-Fi，有 / 没有中继）；中继压测在真实云主机上复测（§13）。2026-10-18 用户两台 Windows 测了一轮（设计 §19.4）：同一个学校 / 公司网络跨网段能直连、断网恢复不丢字；一台换到别的网络、没配中继时连不上（按设计）；「附近」跨网段找不到。2026-10-19 配了用户自己架的中继再测：两边都在 NAT 后面的情况连上了，延迟感觉不到；修了自检把中继看到的出口地址当成网卡上的公网 IPv4（设计 §19.5）。剩下：IPv6 / UPnP 的家宽、中继压测。压测程序在 `scripts/perf/relay-load`（设计附录 A.3）
+- [x] 主持人那边检测 Windows 防火墙（`collab/firewall.rs`：当前网络的类型 + 这个 exe 的入站规则），自检里一行，挡着时说怎么改（设计 §18）
+- [x] 设备公钥在界面上看得到：「协作中继…」底下（设计 §18）
+- [x] 第二轮（2026-10-18，设计 §19）：「存一份到我的笔记」带上图片；记住这个人（`config.json` 的 `collab_trusted`，下次不问）；版本对不上说清是谁的旧、主持人那边也知道一声；中继版本不配套直说（「测试」时问出它认哪一版）；断线时标签说「重新连接中…」；设了 `ODEA_DATA_DIR` 的设备密钥放在数据目录（同一台电脑开两个实例才不是同一个身份）
+- [x] 桌面端实际跑一遍（2026-10-18，设计 §18.5）：深链接、加入框、「附近」、邀请时的自检和防火墙一行都对。跑出两个问题修了：自检把 Clash TUN 网卡的 `198.18.0.1`（RFC 2544 基准测试段）当成公网 IPv4，说「互联网上的人都能加入」；「停止协作」后对话框没关、变成加入框。防火墙弹窗本身、在别的程序里点链接冷启动还没验（从 Claude 里起的调试版写的 `odea://` 注册被 MSIX 重定向，外面看不到）
+- 坑：从 Claude 桌面端起的进程写 HKCU 会进 Claude 的私有注册表（MSIX），调试版注册的 `odea://` 只有 Claude 进程树里看得到；要测点链接打开，调试版从资源管理器或 Claude 之外的终端起
+- 坑（遗留补全时）：访客断开后主持人给他的文档流写手一直挂在空队列上，连接和端口都放不掉 —— `Slot` 丢掉时关队列；崩溃重启的测试才暴露出来。细节见设计 §18.4
+- 坑：iroh 1.3 的端口映射只在中继表不空时才要，光开 feature 不管用；「3 秒给结论」第一版是 5.2 秒，Windows 上读一次网卡两秒多，改成加入时后台读好；官方中继的 `shared_token` 拒绝时不带原因，客户端拿到 `not authorized`。细节见设计 §17
+
+**P10.3 换 Loro、共享仓库** ✔ 2026-10-21（设计 §20 定稿、§21 实现记录）
+- [x] CRDT 换成 Loro（前端 `loro-crdt`、Rust `loro`，一份 Rust 核心）：会话式也换，协议升 `odea/collab/2`；Loro 导出里没有挂着的包，要自己留着补（模糊测试种子 1015）
+- [x] 组字时不碰那一行的远端改动立刻进来（§20.10）：先读完 DOM 里的组字改动再 import，碰到的攒成 ChangeSet、本地组字改动映射过它
+- [x] 访客之间转发（§20.9）：做客时「转发链接」，主持人那边「经由 B」、权限上限是 B 的
+- [x] 共享仓库（§20.3–§20.8）：整个仓库在成员之间网状同步、Rust 写盘、外部程序改的照样合进来；签名的成员表（管理员 / 可编辑 / 只读）、邀请链接 `odea://share/`、等管理员同意、移出；清单按行、附件按哈希；编辑器绑前端的 Loro 副本；命令面板 / 仓库菜单「共享这个仓库…」「加入共享仓库…」
+- [x] 共享仓库的历史版本：同一台设备、停顿 5 分钟以内是一版，看全文、比较、恢复（别人那里也恢复）
+- [x] 桌面端两个实例实测（同一台电脑，设计 §21.7）：加入、等同意、同步笔记和附件、两边编辑器实时互通、外部程序改文件、历史版本恢复、移出
+- [ ] 没测到的：点链接加入时选文件夹的系统对话框；防火墙弹窗；两台实机、真实网络、经中继；macOS、release 包
+- [ ] 没做的：浅快照和按需加载（现在每篇的 Loro 文档都在内存里）；局域网「附近」里显示经由 B 加入；共享时自动转逻辑目录 / 停同步（现在是拦下来说清楚）
+- 坑：加了 Loro 以后测试程序 `LNK1140`（PDB 模块太多）—— 依赖不带调试信息，重编那一下把 D 盘写满了；移出成员时马上断开他收不到新的成员表。细节见设计 §21.8
+
+## P11 多仓库与逻辑目录
+
+设计见 [仓库与启动器.md](./仓库与启动器.md)（2026-10-20 定稿）：启动器像 Obsidian / VS Code；一个窗口一个仓库；P2 那套（今日TODO / GOAL / 日历 / 归档）做成仓库的「日程」功能，不单独成一种模式；逻辑目录 = 文件随便放 + `.odea/tree` 一行一个节点。每一阶段「完成的样子」在设计 §8。
+
+**P11.1 启动器 + 多窗口** ✔ 2026-10-20，记录在设计 §10
+- [x] 仓库列表（`config.json` 的 `vaults`）、老配置迁移（`vaultRoot` → 第一条，窗口标签 `main`）
+- [x] 一个窗口一个仓库：`AppState.workspaces`、注入参数 `Ws`、事件 `emit_to`、协作记着属于哪个窗口
+- [x] 启动器窗口：列表、新建、打开文件夹、加入协同编辑；新装第一次打开弹它
+- [x] 再双击弹启动器、上次开着的都回来、找不到的不建空仓库
+- [x] 前端按仓库分开存「上次停在哪」「展开的文件夹」；后开的窗口不播开场；事件订阅只听本窗口
+- [x] 去掉「第一次打开时说一声」的横幅（位置是新建时自己选的）
+- [ ] 没测到的：macOS 点 Dock、「打开文件夹」「换个位置…」的系统对话框（自动化点不了，要你点一下）、真的从桌面图标双击
+- 坑：Tauri 的 `emit_to` 到了前端，全局 `listen` 照样收（订阅目标是 Any 就全收），订阅要挂在窗口上；细节见设计 §10.4
+
+**P11.2 左栏和日程** ✔ 2026-10-20，记录在设计 §11
+- [x] 窄栏常驻（64 宽，240 宽带字的导航不要了，和用户确认过）；能收起的是它右边那一栏，像 VS Code 的侧栏
+- [x] 文件树：没开日程的仓库是整个仓库；Odea 建的仓库照旧是「笔记」
+- [x] 日程变成仓库的功能（`.odea/vault.json` 的 `features.journal`、`folders`）：新建的、空文件夹开着，打开有笔记的文件夹不开；命令面板和「仓库名 ⌄」里开关；开关后每个文件按新的摆法重新认，文件不动
+- [x] 接 Obsidian 的日记设置（`.obsidian/daily-notes.json`，YYYY-MM-DD 的才认），原来的日记进今日TODO 和日历，新的一天平放进它的文件夹
+- [x] 列表栏底下「仓库名 ⌄」：最近用过的别的仓库、打开别的仓库…、开关日程、在文件夹中显示
+- [x] 遗留（2026-10-21，设计 §14）：Obsidian 的附件文件夹设置；树上列图片、PDF（本地目录）；别的设备开关了日程，底部问一句「切换过去」
+- [ ] macOS、release 包没测
+- 坑：Windows 上用 Python 改文件会写成 CRLF（Biome 整篇判错）；导出类型绑定别加 `--no-default-features`（窗口命令会丢）。细节见设计 §11.4
+
+**P11.3 逻辑目录** ✔ 2026-10-21，记录在设计 §12
+- [x] `.odea/tree`（一行一个节点、分数排序键、按 id 引用；属性块里没 id 的按路径引用，转换时一个文件都不动）
+- [x] 「未整理」、「手动排序」下拖着排、拖文件夹（放进去 / 插在前后）、移到未整理；挪动、改名、排序只改清单，.md 的修改时间不变
+- [x] 启动器「新建」建逻辑目录；命令面板 / 仓库菜单「转成逻辑目录…」
+- [x] 同步时两边都改了清单按节点三方合并（git 合上了也重合）；网盘的冲突副本并进来再删；文件监听放行 `.odea/tree`
+- [ ] 没测到的：两台真设备同步清单（单测用本机裸仓库）；桌面端点确认框转换（单测覆盖）；macOS、release 包
+- 坑：排序键结尾不能是 0；内置浏览器窗格藏着时动画不走、读到的 DOM 是旧的；Vite 的 `?t=` 模块地址；Bash heredoc 吃反斜杠。细节见设计 §12.4
+
+**P11.4 补全** ✔ 2026-10-21，记录在设计 §13
+- [x] 智能文件夹（`query 名字 | 条件`，条件在 Rust 里筛：词、`#标签`、`in:`、`updated:30d`、`has:todo`、`-不要`）
+- [x] 导出成真实文件夹（「仓库名（导出）」，正文里的相对链接跟着改）
+- [x] 启动器「从同步仓库拉一份」（登录 → 选仓库 → 放在哪 → clone、打开）
+- [x] 不用开仓库的协作访客窗口；「存一份到我的笔记」交给最近用过的仓库窗口
+- [ ] 没测到的：桌面端点对话框导出；真账号拉一份；访客窗口和另一台设备真的连上
+- [x] 遗留（2026-10-21，设计 §14）：「导入文件夹…」（复制进来、树按原结构建）；快捷方式节点；代码块里的 `#标签`、`- [ ]` 不再被智能文件夹认
+
 ---
 
 ## 决策记录
 
+- **共享仓库 + 换 Loro**（2026-10-21）：逻辑目录让「共享文件夹」最难的一半（两台设备上文件路径怎么对上）没了，共享的单位直接是一个仓库。每台设备上的 .md 仍是这台设备的真相，设备之间靠 CRDT 合并：CRDT 存在 Rust（`.odea/share/`），正文只由 Rust 写，别的程序改了文件照外部改动的办法合进来；网状、没有谁必须一直在线；和 git 同步二选一。持久共享里两边的 CRDT 分叉了就永远分叉，所以前后端要是同一份实现：Loro 的前端就是它 Rust 核心编的 wasm（yrs 是 Yjs 的移植，还在修和 Yjs 不一致的地方），历史版本也是自带的。代价是 wasm 1.1MB（gzip），只在用到时加载。详见 [协同编辑.md](./协同编辑.md) §20
+- **多人协同：会话式 + Yjs + iroh，默认不连任何服务器**（2026-10-18）：主持人那台的 .md 仍是唯一真相，CRDT 只在会话期间存在，和「文件是真相」不冲突（持久共享要和 .md、别的编辑器、git 同步三方对账，不做）。Yjs 13 是实测下来更新包最小、合并最快、体积最小的；Automerge 3.5 的访客每收一次按键要 16–37ms，排除。我们不提供中继：没有第三台机器时，两边都在 NAT 后面就连不上，这一点在界面上说清楚；有条件的用户自己配中继（官方 iroh-relay 就能用），主持人配了、访客零配置。详见 [协同编辑.md](./协同编辑.md)
 - **改名 Odea、旧数据原地认**（2026-10-17）：以后要做成通用编辑器，OnTheWay 像个待办应用。新标识下数据目录是空的，不搬的话老用户一升级就成了新装：配置没了、在「文档/Odea」放一个新仓库，看着像笔记全没了。所以旧名的东西一律「新版认旧的、读到就换成新的」，集中在 `old_name.rs`，以后整个删掉；用户的笔记文件夹不动
 - **文件是真相，SQLite 只是索引**（2026-09-27）：v2.0 的 SQLite 为真相让「一切皆文档」只在界面上成立 —— 数据锁在库里，没法在文件夹里找到一篇笔记、没法用别的编辑器打开、没法放进网盘。现在每篇文档是仓库里的一个 .md；索引存在应用数据目录（不在仓库里：网盘来回拷一个正在写的 SQLite 迟早出冲突），表结构改了升版本号、清空重建，不写迁移。event / review / key_result / tag 这些建了没用的表连同 rrule 一起删掉了（git 历史里有）。
 - **任务只有 Markdown 一个来源**：日历「当日安排」来自任何文档里带日期的 `- [ ] … @2026-09-30`，勾选改原文件那一行。独立的 task 表没了。
@@ -450,7 +546,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - `pnpm 10` 拦 postinstall，esbuild 不放行则 vite 起不来。
 - `pnpm tauri dev` 会占 1420 端口，和已经在跑的 `pnpm dev` 冲突，先停一个。
 - Python 脚本在 Windows 上写文件会把换行转成 CRLF，Biome 会报格式错。批量改文件后跑一次 LF 归一化。
-- 这台机器上 `cargo run --example export_bindings` 编得过、跑不起来（`STATUS_ENTRYPOINT_NOT_FOUND`，DLL 加载的问题）；要新的 `bindings.ts` 就启动一次 debug 桌面端。桌面端在 `tauri dev` 里因为改了 Rust 自动重启时，写 `bindings.ts` 可能撞上文件正被占着（Windows 错误 1224「用户映射区域」）直接 panic 退出 —— 再启动一次就好（2026-10-07）。
+- ~~这台机器上 `cargo run --example export_bindings` 编得过、跑不起来（`STATUS_ENTRYPOINT_NOT_FOUND`，DLL 加载的问题）；要新的 `bindings.ts` 就启动一次 debug 桌面端。~~ 2026-10-18 修好了，见下面「comctl32 v6」那条。桌面端在 `tauri dev` 里因为改了 Rust 自动重启时，写 `bindings.ts` 可能撞上文件正被占着（Windows 错误 1224「用户映射区域」）直接 panic 退出 —— 再启动一次就好（2026-10-07）。
 - **不要跑 `cargo fmt`**：项目的 Rust 代码不是按 rustfmt 默认配置排的（不少行超过 100 列），也没有 `rustfmt.toml`。跑一次会改动整个 crate 二十多个文件，把没提交的改动里也混进一堆换行（2026-10-07 出过一次，靠 Claude Code 的文件快照还原）。
 - `cargo test --no-default-features` 会因 `main.rs` 的 `run()` 被 feature 门控而失败，加 `--lib`。
 - tauri-specta 三个 crate 的 RC 版本互不兼容，`=` 锁死，不要跟着 `cargo update` 走。
@@ -509,7 +605,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - 粘贴的图片插进去以后光标要落到下一行：光标挨着图片时图片显示成源码（Typora 式），插完看到的是一串 `![](…)`
 - 光标进到链接 / 图片里时 `(…)` 里的地址也是 `.cm-odea-syntax-marker`；它以前是 `white-space: nowrap`，长地址把整栏撑宽、右边的字被裁掉。改成 `overflow-wrap: anywhere`
 - 网盘拷出来的副本带着原文属性块里的 id；扫描按字节序，「周报 (1).md」排在「周报.md」前面，先被索引就抢走了原文的 id —— 名字像副本的要排到最后
-- `cargo run --example export_bindings` 在这台机器上跑不起来（dialog 插件要的 comctl32 v6 清单示例程序没有，STATUS_ENTRYPOINT_NOT_FOUND）。重新生成 `bindings.ts`：`cargo build` 后用一个临时的 `ODEA_DATA_DIR` / `ODEA_VAULT` 直接跑一下 `target/debug/odea.exe`（debug 启动时就写绑定，窗口在前端没起来时不会显示），写完杀掉
+- `cargo run --example export_bindings` 跑不起来（dialog 插件要 comctl32 v6 的 `TaskDialogIndirect`，tauri-build 只给主程序嵌应用清单，example 没有，STATUS_ENTRYPOINT_NOT_FOUND）：2026-10-18 起 build.rs 给 examples 单独嵌一份只声明 comctl32 v6 的清单（`/MANIFESTDEPENDENCY`），能跑了。注意它导出的命令表是 typegen 那一份，**没有 `ready`、`win_*` 这几个只在桌面运行时里编的窗口命令**：直接覆盖会把它们从 `bindings.ts` 里删掉（前端是按字符串直接 invoke 的，不影响运行，但文件对不上）。要么把旧文件里那一段原样拼回去，要么照旧用 debug 桌面端启动时写的那一份
 
 **CodeMirror**
 

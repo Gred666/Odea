@@ -1,12 +1,13 @@
 import { within } from "@/data/folders";
 import type { DocumentAnchor, DocumentSaveTarget, GoalHorizon, WorkspaceId } from "@/data/types";
 import { type ISODate, today } from "@/lib/date";
+import { isTauri } from "@/lib/tauri";
 import { transitionTheme } from "@/lib/themeTransition";
 import { create } from "zustand";
 
 export type ThemePref = "system" | "light" | "dark";
-/** 笔记列表的排序 */
-export type NoteSort = "updated" | "created" | "title";
+/** 笔记列表的排序。「手动」只有逻辑目录有：按树上摆的顺序 */
+export type NoteSort = "manual" | "updated" | "created" | "title";
 
 /**
  * 新建之后光标该去哪：标题（还没起名）还是正文开头（起好名了）。
@@ -23,6 +24,8 @@ interface AppState {
   /** 导航切换方向，用于让主内容做方向感知的位移动画 */
   navDirection: 1 | -1;
   setWorkspace: (w: WorkspaceId) => void;
+  /** 这个仓库开没开日程（data/store 取到仓库信息时调）：没开的话，停在日程那几页的回到文件 */
+  fitJournal: (journal: boolean) => void;
 
   /* ---- 各区的选中项 ---- */
   selectedNoteId: string;
@@ -107,9 +110,12 @@ interface AppState {
   /** 历史版本对话框开着的那一篇（技术方案 §5.9.11）；null = 关着 */
   historyFor: DocumentSaveTarget | null;
   setHistoryFor: (target: DocumentSaveTarget | null) => void;
-  /** 左侧导航收成一条图标栏（窄窗口里给正文让地方），记在本机 */
-  navCollapsed: boolean;
-  setNavCollapsed: (v: boolean) => void;
+  /**
+   * 窄栏右边那一栏（文件树、日历的月历、归档列表）收起来，给正文让地方（像 VS Code 的侧栏），
+   * 记在本机。今日TODO、目标本来就没有这一栏
+   */
+  panelCollapsed: boolean;
+  setPanelCollapsed: (v: boolean) => void;
 
   /* ---- 专注模式：编辑区铺满整页，只有笔记区有 ---- */
   zen: boolean;
@@ -119,13 +125,16 @@ interface AppState {
 /** 导航顺序 —— 决定切换时主内容往哪个方向位移 */
 const NAV_ORDER: WorkspaceId[] = ["notes", "today", "goal", "calendar", "archive", "extensions"];
 
+/** 日程那几页（docs/仓库与启动器.md §6）：仓库开了日程才有 */
+export const JOURNAL_WORKSPACES: WorkspaceId[] = ["today", "goal", "calendar", "archive"];
+
 const LS_KEY = "odea.prefs";
 
 interface Prefs {
   theme: ThemePref;
   reduceMotion: boolean;
   noteSort: NoteSort;
-  navCollapsed: boolean;
+  panelCollapsed: boolean;
 }
 
 function loadPrefs(): Prefs {
@@ -133,7 +142,7 @@ function loadPrefs(): Prefs {
     theme: "system",
     reduceMotion: false,
     noteSort: "updated",
-    navCollapsed: false,
+    panelCollapsed: false,
   };
   try {
     const raw = localStorage.getItem(LS_KEY);
@@ -141,8 +150,10 @@ function loadPrefs(): Prefs {
       const p = JSON.parse(raw);
       if (p.theme === "light" || p.theme === "dark") prefs.theme = p.theme;
       prefs.reduceMotion = !!p.reduceMotion;
-      if (p.noteSort === "created" || p.noteSort === "title") prefs.noteSort = p.noteSort;
-      prefs.navCollapsed = !!p.navCollapsed;
+      if (p.noteSort === "created" || p.noteSort === "title" || p.noteSort === "manual")
+        prefs.noteSort = p.noteSort;
+      // 以前的 navCollapsed（导航栏收成图标栏）不接着用：导航栏现在一直是窄栏（P11.2）
+      prefs.panelCollapsed = !!p.panelCollapsed;
     }
   } catch {
     /* 隐私模式 / 禁用存储：走默认值 */
@@ -152,10 +163,10 @@ function loadPrefs(): Prefs {
 
 function savePrefs(patch: Partial<Prefs>) {
   try {
-    const { theme, reduceMotion, noteSort, navCollapsed } = useApp.getState();
+    const { theme, reduceMotion, noteSort, panelCollapsed } = useApp.getState();
     localStorage.setItem(
       LS_KEY,
-      JSON.stringify({ theme, reduceMotion, noteSort, navCollapsed, ...patch }),
+      JSON.stringify({ theme, reduceMotion, noteSort, panelCollapsed, ...patch }),
     );
   } catch {
     /* 忽略：偏好丢失不影响使用 */
@@ -164,9 +175,24 @@ function savePrefs(patch: Partial<Prefs>) {
 
 const initialPrefs = loadPrefs();
 
-/* ---- 上次停在哪：重新打开应用回到那个区、那一篇、那个文件夹 ---- */
+/* ---- 上次停在哪：重新打开应用回到那个区、那一篇、那个文件夹 ----
+   按仓库分开记（docs/仓库与启动器.md §4.2）：一个窗口一个仓库，localStorage 是所有窗口共用的。
+   键是「旧键:仓库路径」；main.tsx 在第一帧之前调 restoreVaultSession 换成这个仓库的记录。
+   浏览器预览里不分（只有一个假仓库），用旧键 */
 
 const SESSION_KEY = "odea.session";
+const EXPANDED_KEY = "odea.folders.expanded";
+/** 这个窗口的仓库路径。restoreVaultSession 之前是 null */
+let vaultKey: string | null = null;
+/** 从旧配置迁过来的那个仓库：自己的记录还没有时读旧的、不分仓库的那份 */
+let legacyFallback = true;
+const keyOf = (base: string) => (vaultKey === null ? base : `${base}:${vaultKey}`);
+
+function readStored(base: string): string | null {
+  const own = localStorage.getItem(keyOf(base));
+  if (own !== null || vaultKey === null || !legacyFallback) return own;
+  return localStorage.getItem(base);
+}
 
 interface Session {
   workspace: WorkspaceId;
@@ -178,7 +204,7 @@ interface Session {
 function loadSession(): Session {
   const session: Session = { workspace: "notes", noteId: "", archiveId: "", noteFolder: "" };
   try {
-    const p = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "{}");
+    const p = JSON.parse(readStored(SESSION_KEY) ?? "{}");
     // 扩展页还没有运行时，从导航里拿掉了：停在那儿的回到笔记
     if (NAV_ORDER.includes(p.workspace) && p.workspace !== "extensions") {
       session.workspace = p.workspace;
@@ -194,11 +220,9 @@ function loadSession(): Session {
 
 const initialSession = loadSession();
 
-const EXPANDED_KEY = "odea.folders.expanded";
-
 function loadExpanded(): Set<string> {
   try {
-    const raw = JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]");
+    const raw = JSON.parse(readStored(EXPANDED_KEY) ?? "[]");
     if (Array.isArray(raw)) return new Set(raw.filter((item) => typeof item === "string"));
   } catch {
     /* 隐私模式 / 数据损坏：全部收起 */
@@ -208,7 +232,7 @@ function loadExpanded(): Set<string> {
 
 function saveExpanded(expanded: Set<string>) {
   try {
-    localStorage.setItem(EXPANDED_KEY, JSON.stringify([...expanded]));
+    localStorage.setItem(keyOf(EXPANDED_KEY), JSON.stringify([...expanded]));
   } catch {
     /* 忽略：展开状态丢了不影响使用 */
   }
@@ -233,6 +257,9 @@ export const useApp = create<AppState>((set, get) => ({
     // 用户在日历页找不到任何东西可以点回来。
     set({ workspace: w, navDirection: to > from ? 1 : -1, zen: false });
   },
+  fitJournal: (journal) => {
+    if (!journal && JOURNAL_WORKSPACES.includes(get().workspace)) set({ workspace: "notes" });
+  },
 
   // 上次看的那一篇；不在了（删了、换了仓库）由列表栏退到第一篇
   selectedNoteId: initialSession.noteId,
@@ -256,14 +283,18 @@ export const useApp = create<AppState>((set, get) => ({
   noteFolderDir: 0,
   setNoteFolder: (folder) =>
     set({ noteFolder: folder, noteFolderDir: folderDir(get().noteFolder, folder) }),
-  openNoteFolder: (folder) =>
+  openNoteFolder: (folder) => {
+    // 侧栏收起着的话展开：点路径就是想在树上看到它
+    if (get().panelCollapsed) savePrefs({ panelCollapsed: false });
     set((state) => ({
       noteFolder: folder,
       noteFolderDir: folderDir(state.noteFolder, folder),
       noteQuery: "",
       zen: false,
+      panelCollapsed: false,
       noteRevealTick: state.noteRevealTick + 1,
-    })),
+    }));
+  },
   noteRevealTick: 0,
   expandedFolders: loadExpanded(),
   setFolderExpanded: (paths, open) => {
@@ -331,11 +362,11 @@ export const useApp = create<AppState>((set, get) => ({
   setUpdateDialog: (v) => set({ updateDialog: v }),
   historyFor: null,
   setHistoryFor: (target) => set({ historyFor: target }),
-  navCollapsed: initialPrefs.navCollapsed,
-  setNavCollapsed: (navCollapsed) => {
-    savePrefs({ navCollapsed });
-    // 专注模式下导航栏推在屏幕外面：在命令面板里收起 / 展开它，就是想看见它
-    set({ navCollapsed, zen: false });
+  panelCollapsed: initialPrefs.panelCollapsed,
+  setPanelCollapsed: (panelCollapsed) => {
+    savePrefs({ panelCollapsed });
+    // 专注模式下侧栏推在屏幕外面：在命令面板里收起 / 展开它，就是想看见它
+    set({ panelCollapsed, zen: false });
   },
 
   zen: false,
@@ -364,15 +395,34 @@ export function applyTheme(pref: ThemePref, animate = false): boolean {
   return animated;
 }
 
+/**
+ * 这个窗口开的是哪个仓库（main.tsx 在第一帧之前调）：换成这个仓库的「上次停在哪」和展开的文件夹，
+ * 以后都记到它的键上。`legacy`：从旧配置迁过来的那个仓库，自己的记录还没有时读旧的那份
+ */
+export function restoreVaultSession(root: string, legacy: boolean) {
+  vaultKey = root;
+  legacyFallback = legacy;
+  const session = loadSession();
+  useApp.setState({
+    workspace: session.workspace,
+    selectedNoteId: session.noteId,
+    selectedArchiveId: session.archiveId,
+    noteFolder: session.noteFolder,
+    expandedFolders: loadExpanded(),
+  });
+}
+
 /** 在 main.tsx 调一次：应用初始偏好并跟随系统变化，记下每次停在哪 */
 export function initPreferences() {
   const { theme, reduceMotion } = useApp.getState();
   applyTheme(theme);
   document.documentElement.setAttribute("data-reduce-motion", String(reduceMotion));
 
-  // 换了区、换了篇、换了文件夹就记一下（只是几个字符串，不用节流）
+  // 换了区、换了篇、换了文件夹就记一下（只是几个字符串，不用节流）。
+  // 桌面端在知道是哪个仓库之前不记：记下的会是还没换成这个仓库记录的初始值
   let last = "";
   useApp.subscribe((state) => {
+    if (isTauri && vaultKey === null) return;
     const session: Session = {
       workspace: state.workspace,
       noteId: state.selectedNoteId,
@@ -383,7 +433,7 @@ export function initPreferences() {
     if (json === last) return;
     last = json;
     try {
-      localStorage.setItem(SESSION_KEY, json);
+      localStorage.setItem(keyOf(SESSION_KEY), json);
     } catch {
       /* 忽略：下次从笔记区开始而已 */
     }
@@ -403,23 +453,20 @@ export function hasListColumn(w: WorkspaceId): boolean {
 /** 中列表栏的宽度。进出场时它要从导航栏底下滑出来 / 滑回去，位移就是这么宽（见 Shell）。 */
 export const LIST_WIDTH = 300;
 
-/** 左侧导航的宽度：展开时带文字，收起时只剩一条图标栏 */
-export const NAV_WIDTH = 240;
 /**
- * 收起后的宽度。64 是算出来的：导航项左右各留 12、图标再往里 12，图标中心落在 31.5 ——
- * 和展开时同一个 x，收起 / 展开时图标一动不动，只有右边缘和文字在变。
+ * 最左边那条窄栏（Sidebar）的宽度。64 是算出来的：导航项左右各留 12、图标再往里 12，
+ * 图标中心落在 31.5。2026-10-20 以前它能展开成 240 宽带字的导航，P11.2 起一直是窄栏
  */
-export const NAV_COLLAPSED_WIDTH = 64;
+export const NAV_WIDTH = 64;
 
 /**
- * 左侧 chrome 最宽时的总宽：导航 240 + 列表栏 300。
- * 正文的画布往它底下多铺这么宽（见 DocumentView）；导航收起时多铺的那一截压在窗口外面，不碍事。
+ * 左侧 chrome 最宽时的总宽：窄栏 64 + 列表栏 300。
+ * 正文的画布往它底下多铺这么宽（见 DocumentView）；列表栏收起时多铺的那一截压在窗口外面，不碍事。
  */
 export const RAIL_WIDTH = NAV_WIDTH + LIST_WIDTH;
 
 /** 现在左侧 chrome 有多宽：专注模式要把这一整条推出去 */
-export const chromeWidth = (navCollapsed: boolean) =>
-  (navCollapsed ? NAV_COLLAPSED_WIDTH : NAV_WIDTH) + LIST_WIDTH;
+export const chromeWidth = (listShown: boolean) => NAV_WIDTH + (listShown ? LIST_WIDTH : 0);
 
 /**
  * 零点翻页：把 todayDate 刷成新的一天，并把日历上还停在昨天的选择带过去。

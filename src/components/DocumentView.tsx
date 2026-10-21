@@ -1,6 +1,7 @@
-import { NAV_TRANSITION, ZEN_TRANSITION } from "@/app/navMotion";
+import { ZEN_TRANSITION } from "@/app/navMotion";
 import { openDocument } from "@/app/navigate";
 import { RAIL_WIDTH, useApp } from "@/app/store";
+import { useCollab } from "@/collab/store";
 import { attachFiles, attachPaths, documentFolder } from "@/data/attachments";
 import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, saveKeyOf, useData } from "@/data/store";
@@ -12,6 +13,7 @@ import { cn } from "@/lib/cn";
 import { buildOutline, renderMarkdown } from "@/lib/markdown";
 import { spring, tween } from "@/lib/motion";
 import { MOD_KEY } from "@/lib/platform";
+import { windowKind } from "@/lib/tauri";
 import {
   AlertTriangle,
   Archive,
@@ -25,6 +27,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DayTasks } from "./ActionItem";
 import { Backlinks } from "./Backlinks";
+import { CollabBanner, CollabPresence } from "./CollabDialog";
 import { ConflictBanner } from "./ConflictBanner";
 import { EmptyState } from "./EmptyArt";
 import { GuideUpdateBanner } from "./GuideUpdateBanner";
@@ -33,7 +36,6 @@ import { Outline } from "./Outline";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { Segmented } from "./Segmented";
 import { SwapFade } from "./SwapFade";
-import { VaultPlaceBanner } from "./VaultPlaceBanner";
 
 /** 目录树的指纹：标题文字或行号变了才需要重新渲染文档视图。 */
 const outlineKeyOf = (markdown: string) =>
@@ -95,8 +97,8 @@ export function DocumentView({
   const workspace = useApp((s) => s.workspace);
   const zen = useApp((s) => s.zen);
   const setZen = useApp((s) => s.setZen);
-  // 只有笔记区给这个入口：其它区要么是两栏、要么本来就没有可铺满的正文
-  const zenAvailable = workspace === "notes";
+  // 只有笔记区给这个入口：其它区要么是两栏、要么本来就没有可铺满的正文。访客窗口没有侧栏可收
+  const zenAvailable = workspace === "notes" && windowKind !== "guest";
   // 编辑器里的实时正文。doc.bodyMd 要等一次保存往返才更新，
   // 只靠它的话目录树会永远慢半拍，点条目还会跳到旧行号。
   const [liveMarkdown, setLiveMarkdown] = useState<string | null>(null);
@@ -207,7 +209,11 @@ export function DocumentView({
   const externalRevision = useData((state) =>
     doc.editor ? (state.externalRevisions[saveKey(doc)] ?? 0) : 0,
   );
-  const target = doc.editor?.target;
+  // 仓库里的那一篇（保存、历史版本、附件、在文件夹里显示都按它）。做客的那一篇（协作时别人的文档）
+  // 不在仓库里，这些都没有
+  const editorTarget = doc.editor?.target;
+  const target = editorTarget?.kind === "shared" ? undefined : editorTarget;
+  const shared = editorTarget?.kind === "shared";
   // 某一天 / 某个周期的文档能用 `/模板`（editor/templates.ts）；笔记不接。
   // 只取类型：模板本身在编辑器分包里，不进主包
   const todayDate = useApp((s) => s.todayDate);
@@ -237,14 +243,23 @@ export function DocumentView({
     (paths: string[]) => (target ? attachPaths(target, paths) : Promise.resolve([])),
     [target],
   );
+  // 做客的那一篇（设计 §7.2）：图片从主持人那里要来（解析器换了编辑器就重画那几张）；
+  // 粘贴的文件交给主持人存进他的「附件」，插进正文的是从那篇引用它的路径
+  const guestImages = useCollab((s) => s.images);
+  const guestAttachFiles = useCallback(
+    (files: File[]) => useCollab.getState().attachFiles(files),
+    [],
+  );
+  const guestAttachPaths = useCallback(
+    (paths: string[]) => useCollab.getState().attachPaths(paths),
+    [],
+  );
   const noteId = target?.kind === "note" ? target.id : null;
   noteIdRef.current = noteId;
   // 这篇是用户改过的使用指南、这个版本带着新版：标题上方问换不换
   const guideUpdate = useData((s) =>
     noteId ? s.guideUpdates.find((update) => update.id === noteId) : undefined,
   );
-  // 新装第一次打开：笔记存在哪、要不要换个位置（技术方案 §5.7）
-  const firstRunVault = useData((s) => s.firstRunVault);
 
   // 新建完光标该去哪（app/store 的 FocusRequest）。标题的那种由标题框自己接（见下面）；
   // 正文开头的要等这一篇的编辑器挂上
@@ -315,13 +330,13 @@ export function DocumentView({
                 <EmptyDocument empty={doc.empty} />
               ) : (
                 <>
+                  {/* ---------- 做客那一篇：重新连接中、只读、协作结束了 ---------- */}
+                  {shared && <CollabBanner />}
+
                   {/* ---------- 冲突副本横幅 ---------- */}
                   {doc.conflict && (
                     <ConflictBanner key={doc.conflict.copyId} conflict={doc.conflict} />
                   )}
-
-                  {/* ---------- 新装第一次打开：笔记存在哪 ---------- */}
-                  {firstRunVault && <VaultPlaceBanner root={firstRunVault} />}
 
                   {/* ---------- 使用指南有新版（用户改过这一篇） ---------- */}
                   {guideUpdate && <GuideUpdateBanner key={guideUpdate.id} update={guideUpdate} />}
@@ -370,6 +385,8 @@ export function DocumentView({
                         {doc.folder !== undefined && (
                           <NotePath folder={doc.folder} relPath={doc.relPath} />
                         )}
+                        {/* 协作中：谁在、点一下回到协作的那篇（右上角是目录树的标题，放这一行的右端） */}
+                        <CollabPresence docKey={doc.key} />
                         {/* 盒子钉成小号控件的高（30），-10 之后正好是这一行的 20：大号的（34，/GOAL 那组）
                             多出来的 4px 往下垂进 mb-2 的空里，不再把这一行撑成 24 —— 以前 /GOAL 的标题、
                             分隔线、正文都比别的页低 4px，切过去就跳一下 */}
@@ -415,7 +432,9 @@ export function DocumentView({
                         // 刚新建的这一篇：光标直接落在标题里
                         autoFocus={focusRequest?.docKey === doc.key && focusRequest.at === "title"}
                         onEnterBody={enterBody}
-                        onSave={(title) => onSaveTitle(doc.editor!.target, title)}
+                        onSave={(title) =>
+                          target ? onSaveTitle(target, title) : Promise.resolve()
+                        }
                       />
                     ) : (
                       <h1
@@ -449,11 +468,14 @@ export function DocumentView({
                       <Editor
                         key={saveKey(doc)}
                         initialMarkdown={doc.bodyMd}
-                        onSave={(markdown) => onSaveDocument(doc.editor!.target, markdown)}
+                        onSave={(markdown) =>
+                          target ? onSaveDocument(target, markdown) : Promise.resolve()
+                        }
                         outlineItems={outline}
                         onOutlineHandle={setEditorOutline}
                         onDocumentChange={handleDocumentChange}
-                        onWikiLink={handleWikiLink}
+                        // 做客的那一篇：双链指向的是主持人的笔记，不在这里打开
+                        onWikiLink={shared ? undefined : handleWikiLink}
                         // 日历当日安排跟在正文后面：编辑器别再撑 360px 把任务推到底下
                         fill={!doc.dayTasks?.length}
                         // 切走时缓存编辑器状态，切回来不用再解析全文
@@ -461,10 +483,14 @@ export function DocumentView({
                         externalRevision={externalRevision}
                         onExternalConflict={handleExternalConflict}
                         templateContext={templateContext}
-                        imageBase={imageBase}
-                        onAttachFiles={handleAttachFiles}
-                        onAttachPaths={handleAttachPaths}
-                        linkTargets={linkTargets}
+                        imageBase={shared ? guestImages : imageBase}
+                        onAttachFiles={shared ? guestAttachFiles : handleAttachFiles}
+                        onAttachPaths={shared ? guestAttachPaths : handleAttachPaths}
+                        linkTargets={shared ? undefined : linkTargets}
+                        // 双链指向的是主持人的笔记，这边没有：一律按「不存在」画
+                        linksMissing={shared}
+                        collab={doc.collab?.session ?? null}
+                        readOnly={doc.collab?.readOnly ?? false}
                         linkSelf={noteId ?? undefined}
                         onExitTop={doc.editor?.titleEditable ? exitToTitle : undefined}
                       />
@@ -512,28 +538,28 @@ export function DocumentView({
 }
 
 /**
- * 正文那一列：居中、最宽 860。进出专注模式、导航栏收起 / 展开时，它「滑」到新的居中位置，
+ * 正文那一列：居中、最宽 860。进出专注模式、列表栏收起 / 展开时，它「滑」到新的居中位置，
  * 而不是瞬间跳过去（layout="position"，只动位置不动尺寸 —— 尺寸动画是 scale，会把文字拉变形）。
  * layoutDependency 把重新测量限定在这两样变化的那一次，换笔记、正文变长都不会触发多余的位移动画。
- * 节奏和导航栏底板同一条（app/navMotion.ts）。
+ * 列表栏收起 / 展开时和它的进出场同一个节奏（Shell 里的 tween.base）。
  *
- * 单独成一个组件，是为了只让它自己订阅这两样：以前整个 DocumentView 订阅 navCollapsed，
+ * 单独成一个组件，是为了只让它自己订阅这两样：以前整个 DocumentView 订阅导航栏收起，
  * 一切换就把目录树、专注模式的刻度、编辑器外壳全部重渲染一遍 —— 长文档在 dev 构建里 68ms，
  * 4 倍降速 370ms，动画开头卡一下。现在只有这一层重渲染，children 是上层给的同一份，React 直接复用。
  */
 function CenteredColumn({ children }: { children: React.ReactNode }) {
   const zen = useApp((s) => s.zen);
-  const navCollapsed = useApp((s) => s.navCollapsed);
-  // 这一次滑动是谁引起的，就跟谁的节奏走：专注模式和导航栏收起 / 展开的曲线不一样
-  const last = useRef({ zen, navCollapsed, by: "zen" as "zen" | "nav" });
-  if (last.current.zen !== zen) last.current = { zen, navCollapsed, by: "zen" };
-  else if (last.current.navCollapsed !== navCollapsed)
-    last.current = { zen, navCollapsed, by: "nav" };
+  const panelCollapsed = useApp((s) => s.panelCollapsed);
+  // 这一次滑动是谁引起的，就跟谁的节奏走：专注模式和列表栏收起 / 展开的曲线不一样
+  const last = useRef({ zen, panelCollapsed, by: "zen" as "zen" | "panel" });
+  if (last.current.zen !== zen) last.current = { zen, panelCollapsed, by: "zen" };
+  else if (last.current.panelCollapsed !== panelCollapsed)
+    last.current = { zen, panelCollapsed, by: "panel" };
   return (
     <motion.div
       layout="position"
-      layoutDependency={`${zen}|${navCollapsed}`}
-      transition={last.current.by === "nav" ? NAV_TRANSITION : ZEN_TRANSITION}
+      layoutDependency={`${zen}|${panelCollapsed}`}
+      transition={last.current.by === "panel" ? tween.base : ZEN_TRANSITION}
       className="mx-auto flex min-h-full w-full max-w-[860px] flex-col px-8 pb-6 pt-[52px] @min-[560px]:px-14"
     >
       {children}
@@ -628,7 +654,9 @@ const DocumentPreview = memo(function DocumentPreview({ markdown }: { markdown: 
 
 /** store 里 savingDocs 的键。 */
 function saveKey(doc: DocumentModel): string {
-  return doc.editor ? saveKeyOf(doc.editor.target) : "";
+  const target = doc.editor?.target;
+  if (!target) return "";
+  return target.kind === "shared" ? `shared:${target.id}` : saveKeyOf(target);
 }
 
 /**

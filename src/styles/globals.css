@@ -79,6 +79,26 @@
 
   /* 日历选中日画出来的那一圈：比主色浅一档的蓝 */
   --color-calendar-ring: color-mix(in srgb, var(--color-accent) 50%, white);
+
+  /* 协作者的颜色（collab/session.ts 的 peerColor 按公钥挑一个）：光标、选区、名字标签。
+     不用主色那种蓝，免得和自己的光标混。名字标签是白字，底色都够深；暗色下光标和选区换成
+     浅一档的（标签底色不变） */
+  --color-peer-0: #d6453d;
+  --color-peer-1: #c2570c;
+  --color-peer-2: #9c6b00;
+  --color-peer-3: #2b8a3e;
+  --color-peer-4: #0c8599;
+  --color-peer-5: #7048e8;
+  --color-peer-6: #c2255c;
+  --color-peer-7: #8f5b3a;
+  --color-peer-0-label: #d6453d;
+  --color-peer-1-label: #c2570c;
+  --color-peer-2-label: #9c6b00;
+  --color-peer-3-label: #2b8a3e;
+  --color-peer-4-label: #0c8599;
+  --color-peer-5-label: #7048e8;
+  --color-peer-6-label: #c2255c;
+  --color-peer-7-label: #8f5b3a;
 }
 
 /* ============================================================
@@ -120,10 +140,26 @@
     --shadow-modal: 0 8px 16px rgb(0 0 0 / 0.36), 0 24px 64px rgb(0 0 0 / 0.5);
 
     --color-calendar-ring: color-mix(in srgb, var(--color-accent) 80%, white);
+    --color-peer-0: #ff7b72;
+    --color-peer-1: #ff9d4d;
+    --color-peer-2: #f2c94c;
+    --color-peer-3: #5fd47a;
+    --color-peer-4: #3cc8dc;
+    --color-peer-5: #a48bff;
+    --color-peer-6: #f477a8;
+    --color-peer-7: #d9a984;
   }
 }
 
 :root[data-theme="dark"] {
+  --color-peer-0: #ff7b72;
+  --color-peer-1: #ff9d4d;
+  --color-peer-2: #f2c94c;
+  --color-peer-3: #5fd47a;
+  --color-peer-4: #3cc8dc;
+  --color-peer-5: #a48bff;
+  --color-peer-6: #f477a8;
+  --color-peer-7: #d9a984;
   --color-ink: #eeeee9;
   --color-body: #d8d8d1;
   --color-muted: #a8a8a0;
@@ -719,13 +755,6 @@ body.odea-dragging .odea-row-actions {
    间隔留短了的话 offset 推到 ±1 时下一段虚线会从另一头探进来，
    round linecap 就在笔画尾巴上留一个点。
    ------------------------------------------------------------ */
-/* 导航栏收起 / 展开时左下角那几颗按钮在跑（Sidebar 的 FootControls）：指针停在点下去的地方，
-   悬停的底色别跟着按钮一起跑走。不放进 layer，压得住 Tailwind 的 hover: 工具类 */
-[data-foot-moving] button:hover {
-  background-color: transparent;
-  color: var(--color-muted);
-}
-
 .odea-logo-stroke {
   stroke-dasharray: 1 3;
   /* 静止态 = 写完。动画被降级掉时落在这里，而不是空白 */
@@ -753,14 +782,32 @@ body.odea-dragging .odea-row-actions {
   }
 }
 
+/* 启动器里那个大一号的字标：只写一遍，写完停着（循环到「只剩蓝点」那一段，整块空出来不好看）。
+   和上面同一条起笔曲线、同一个节奏 */
+.odea-logo-stroke-once {
+  stroke-dasharray: 1 3;
+  stroke-dashoffset: 0;
+  animation: odea-logo-write-once 0.6s cubic-bezier(0.45, 0.05, 0.35, 1) backwards;
+}
+@keyframes odea-logo-write-once {
+  from {
+    stroke-dashoffset: 1.02;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
 /* 减少动效：上面那两条全局兜底只压时长，无限循环会被压成高频闪烁，
    这里直接掐掉动画，停在写完的状态。必须排在全局规则之后。 */
 @media (prefers-reduced-motion: reduce) {
-  .odea-logo-stroke {
+  .odea-logo-stroke,
+  .odea-logo-stroke-once {
     animation: none !important;
   }
 }
-:root[data-reduce-motion="true"] .odea-logo-stroke {
+:root[data-reduce-motion="true"] .odea-logo-stroke,
+:root[data-reduce-motion="true"] .odea-logo-stroke-once {
   animation: none !important;
 }
 
@@ -816,6 +863,11 @@ body.odea-dragging .odea-row-actions {
      （已经手打了空格的地方不会再加）。依据见 docs/排版规范.md §2 */
   text-align: justify;
   text-autospace: normal;
+}
+/* 很长、中间没有断点的西文串（网址、哈希、一直按着的 kkkk）在串里任意处断行：不然浏览器把整串
+   挪到下一行，两端对齐会把前一行剩下的几个字撑满整行（editor/longRuns.ts） */
+.odea-editor .cm-odea-long-run {
+  word-break: break-all;
 }
 /* 不跟着两端对齐、不自动加间距的：标题（一般就一行，折行时左齐更像标题）、
    代码（要逐字准确）、替身（表格、目录、图表……各管各的对齐） */
@@ -936,6 +988,103 @@ body.odea-dragging .odea-row-actions {
 }
 .odea-editor .odea-caret.is-secondary {
   opacity: 0.55;
+}
+
+/* ---------- 别人的光标、选区、名字标签（collab/cursors.ts）----------
+   位置直接落位，不过渡（CLAUDE.md 动效规矩第 1 条）。名字标签只淡 opacity，一直待在自己的
+   图层上（will-change），JS 在每次开始淡之前对齐到整物理像素（规矩第 3 条）；底色是这个人
+   自己颜色的实色，不用毛玻璃（第 4 条）。新出现的光标、超时的光标整个淡入淡出 */
+.odea-peer-0 {
+  --peer: var(--color-peer-0);
+  --peer-label: var(--color-peer-0-label);
+}
+.odea-peer-1 {
+  --peer: var(--color-peer-1);
+  --peer-label: var(--color-peer-1-label);
+}
+.odea-peer-2 {
+  --peer: var(--color-peer-2);
+  --peer-label: var(--color-peer-2-label);
+}
+.odea-peer-3 {
+  --peer: var(--color-peer-3);
+  --peer-label: var(--color-peer-3-label);
+}
+.odea-peer-4 {
+  --peer: var(--color-peer-4);
+  --peer-label: var(--color-peer-4-label);
+}
+.odea-peer-5 {
+  --peer: var(--color-peer-5);
+  --peer-label: var(--color-peer-5-label);
+}
+.odea-peer-6 {
+  --peer: var(--color-peer-6);
+  --peer-label: var(--color-peer-6-label);
+}
+.odea-peer-7 {
+  --peer: var(--color-peer-7);
+  --peer-label: var(--color-peer-7-label);
+}
+.odea-editor :is(.odea-remote-caret-layer, .odea-remote-selection-layer) {
+  pointer-events: none;
+}
+.odea-editor .odea-remote-selection {
+  background: color-mix(in srgb, var(--peer) 22%, transparent);
+  transition: opacity 400ms var(--ease-out-quint);
+}
+.odea-editor .odea-remote-selection.is-leaving {
+  opacity: 0;
+}
+.odea-editor .odea-remote-caret {
+  position: absolute;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--peer);
+  will-change: opacity;
+  transition: opacity 400ms var(--ease-out-quint);
+}
+.odea-editor .odea-remote-caret:is(.is-entering, .is-leaving) {
+  opacity: 0;
+}
+.odea-editor .odea-remote-caret.is-entering {
+  transition: none;
+}
+.odea-editor .odea-remote-label {
+  position: absolute;
+  bottom: 100%;
+  left: -1px;
+  padding: 1px 6px 2px;
+  border-radius: 4px 4px 4px 0;
+  background: var(--peer-label);
+  color: #fff;
+  font: 600 11px / 14px var(--font-sans);
+  white-space: nowrap;
+  user-select: none;
+  opacity: 0;
+  will-change: opacity;
+  transition: opacity 220ms var(--ease-out-quint);
+}
+.odea-editor .odea-remote-label.is-shown {
+  opacity: 1;
+  transition-duration: 120ms;
+}
+/* 光标在最上面一行：标签放到下面，不然被切掉 */
+.odea-editor .odea-remote-caret.is-below .odea-remote-label {
+  top: 100%;
+  bottom: auto;
+  border-radius: 0 4px 4px 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .odea-editor :is(.odea-remote-caret, .odea-remote-label, .odea-remote-selection) {
+    transition: none !important;
+  }
+}
+:root[data-reduce-motion="true"]
+  .odea-editor
+  :is(.odea-remote-caret, .odea-remote-label, .odea-remote-selection) {
+  transition: none !important;
 }
 /* 拖文件进编辑器时会插在哪：一条主色竖线（editor/attachments.ts）。本身零宽，
    竖线画在伪元素上，拖动时正文一个像素都不挪 */

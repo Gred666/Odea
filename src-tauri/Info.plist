@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Tauri 打包时并进应用的 Info.plist。协作（docs/协同编辑.md §10.2）：macOS 15 起局域网要用户允许，
+     少了这两项会悄无声息地连不上 -->
+<plist version="1.0">
+<dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>和同一个网络里的人一起编辑笔记时，Odea 要在局域网里找到对方、直接连过去。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_odea-collab._udp</string>
+	</array>
+</dict>
+</plist>

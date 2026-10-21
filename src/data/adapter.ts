@@ -1,4 +1,5 @@
 import { useApp } from "@/app/store";
+import { useCollab } from "@/collab/store";
 import {
   type ISODate,
   formatDayEyebrowCN,
@@ -11,6 +12,7 @@ import {
   periodStartOf,
   toISODate,
 } from "@/lib/date";
+import { shareDocId, shareReady, useShare } from "@/share/store";
 import { useEffect, useRef } from "react";
 import { conflictOriginalTitle, conflictTarget } from "./conflicts";
 import { folderOf } from "./folders";
@@ -40,6 +42,35 @@ import {
    ============================================================ */
 
 export function useCurrentDocument(): DocumentModel {
+  return useSharedDocument(useBaseDocument());
+}
+
+/**
+ * 共享仓库（docs/协同编辑.md §20.5）：笔记、某一天、目标的编辑器绑上这一篇的 Loro 副本 —— 正文以副本为准，
+ * 由 Rust 写盘。副本还在打开（向 Rust 要快照，一般几毫秒）时先给只读预览：空着挂上的话一输入就和
+ * 副本对不上了。只读成员的编辑器是只读的
+ */
+function useSharedDocument(doc: DocumentModel): DocumentModel {
+  const info = useShare((s) => s.info);
+  const current = useShare((s) => s.current);
+  const focus = useShare((s) => s.focus);
+  const target = doc.editor?.target;
+  const ready = shareReady(info);
+  const docId = ready && target && target.kind !== "shared" ? shareDocId(target) : null;
+  useEffect(() => {
+    focus(docId);
+  }, [docId, focus]);
+  if (!docId || doc.collab) return doc;
+  const session = current?.doc === docId ? current.session : null;
+  if (!session) return { ...doc, editor: undefined };
+  return {
+    ...doc,
+    bodyMd: session.toString(),
+    collab: { session, readOnly: info?.role === "read" },
+  };
+}
+
+function useBaseDocument(): DocumentModel {
   const workspace = useApp((s) => s.workspace);
   const selectedNoteId = useApp((s) => s.selectedNoteId);
   const selectedArchiveId = useApp((s) => s.selectedArchiveId);
@@ -60,6 +91,21 @@ export function useCurrentDocument(): DocumentModel {
   const draftOr = (target: DocumentSaveTarget, stored: string) =>
     drafts[saveKeyOf(target)]?.contentMd ?? stored;
 
+  // 协作（docs/协同编辑.md）：做客时正文区换成共享的那一篇；主持的那篇笔记带上会话
+  const collabPhase = useCollab((s) => s.phase);
+  const collabSession = useCollab((s) => s.session);
+  const hostedNoteId = useCollab((s) => s.noteId);
+  const showShared = useCollab((s) => s.showShared);
+  const sharedTitle = useCollab((s) => s.title);
+  const sessionKey = useCollab((s) => s.sessionKey);
+  const permission = useCollab((s) => s.permission);
+  const ended = useCollab((s) => s.status?.state === "ended");
+  const members = useCollab((s) => s.members);
+  const hostedCollab = (noteId: string) =>
+    collabPhase === "hosting" && hostedNoteId === noteId && collabSession
+      ? { session: collabSession, readOnly: false }
+      : undefined;
+
   // 两个列表各自显示哪一篇：选中的不在了就是第一篇；正文还没取回来就先接着显示上一篇
   const shownNote = useShownNote(
     notes.find((n) => n.id === selectedNoteId) ?? notes[0],
@@ -70,6 +116,20 @@ export function useCurrentDocument(): DocumentModel {
     workspace === "archive",
   );
 
+  // 做客时正文区换成共享的那一篇（放在所有 hook 之后：提前 return 不能改变 hook 的顺序）
+  if (collabPhase === "guest" && showShared && collabSession) {
+    const host = members.find((member) => member.host)?.name;
+    return {
+      key: `shared-${sessionKey}`,
+      title: sharedTitle || "协作的笔记",
+      eyebrow: host ? `${host} 的笔记` : undefined,
+      bodyMd: collabSession.toString(),
+      statusParts: ended ? ["协作已结束"] : ["协作中", `${members.length} 人`],
+      editor: { target: { kind: "shared", id: sessionKey }, titleEditable: false },
+      // 只读：主持人给的权限；协作结束以后也不再能改（改了也传不出去），要接着写就存一份
+      collab: { session: collabSession, readOnly: permission === "read" || ended },
+    };
+  }
   switch (workspace) {
     /* ---------------- 笔记 ---------------- */
     case "notes": {
@@ -101,6 +161,7 @@ export function useCurrentDocument(): DocumentModel {
         bodyMd: draftOr({ kind: "note", id: note.id }, body ?? ""),
         statusParts: body === undefined ? ["载入中…"] : noteStatus(note, "上次更新"),
         deletable: true,
+        collab: hostedCollab(note.id),
         // 正文取回来之前不给编辑器：空着挂上的话，一输入就把原来的正文整篇覆盖了
         editor:
           body === undefined

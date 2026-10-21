@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backend } from "./backend";
-import type { DayDoc, IndexProgress, Note, NoteSummary, VaultChange } from "./types";
+import { UNSORTED, folderOf, setTreeShape } from "./folders";
+import type { DayDoc, IndexProgress, Note, NoteSummary, TreeNode, VaultChange } from "./types";
 
 const api = {
   calendarDay: vi.fn(),
@@ -37,10 +38,16 @@ const api = {
   onUpdateReady: vi.fn(),
   updateStatus: vi.fn(),
   appUpgrade: vi.fn(),
-  vaultFirstRun: vi.fn(),
   vaultChangeRoot: vi.fn(),
   indexProgress: vi.fn(),
   onIndexProgress: vi.fn(),
+  treeView: vi.fn(),
+  treePlace: vi.fn(),
+  treeMoveFolder: vi.fn(),
+  treeAddQuery: vi.fn(),
+  treeQueries: vi.fn(),
+  treeFiles: vi.fn(),
+  vaultRelayout: vi.fn(),
 };
 
 vi.mock("./backend", () => ({
@@ -140,6 +147,7 @@ const change = (extra: Partial<VaultChange>): VaultChange => ({
   conflicts: [],
   foundCopies: [],
   folders: false,
+  layout: false,
   ...extra,
 });
 
@@ -414,18 +422,6 @@ describe("initialize", () => {
     expect(api.noteGet).toHaveBeenCalledTimes(1);
     expect(useData.getState().notes.map((item) => item.id)).toEqual(["n-1", "n-2", "n-3"]);
     expect(useData.getState().bodies).toEqual({ "n-1": "正文1" });
-  });
-
-  it("says once where a fresh install keeps the notes, until told to keep them there", async () => {
-    api.noteList.mockResolvedValue([]);
-    api.calendarMarks.mockResolvedValue({ written: new Set(), open: new Set() });
-    api.vaultFirstRun.mockResolvedValue("C:\\Users\\你\\Documents\\Odea");
-    await useData.getState().initialize();
-    await vi.waitFor(() =>
-      expect(useData.getState().firstRunVault).toBe("C:\\Users\\你\\Documents\\Odea"),
-    );
-    useData.getState().dismissFirstRun();
-    expect(useData.getState().firstRunVault).toBeNull();
   });
 });
 
@@ -910,6 +906,36 @@ describe("folders", () => {
     await useData.getState().applyVaultChange(change({ folders: true }));
     expect(useData.getState().folders).toEqual(["资源管理器里建的"]);
   });
+
+  it("refreshes the images and PDFs on the tree with the folders", async () => {
+    const file = {
+      relPath: "工作/图.png",
+      folder: "工作",
+      name: "图.png",
+      kind: "image",
+      size: 3,
+      updatedAt: 1,
+    };
+    api.folderList.mockResolvedValue(["工作"]);
+    api.treeFiles.mockResolvedValue([file]);
+    await useData.getState().applyVaultChange(change({ folders: true }));
+    expect(useData.getState().files).toEqual([file]);
+    // 取不到文件：文件夹照换，文件留着上一次的
+    api.folderList.mockResolvedValue(["工作", "新的"]);
+    api.treeFiles.mockRejectedValue({ kind: "Io", message: "读不了" });
+    await useData.getState().applyVaultChange(change({ folders: true }));
+    expect(useData.getState().folders).toEqual(["工作", "新的"]);
+    expect(useData.getState().files).toEqual([file]);
+    expect(useData.getState().error).toBeNull();
+  });
+
+  it("asks before switching to a layout changed on another device", async () => {
+    await useData.getState().applyVaultChange(change({ layout: true }));
+    expect(useData.getState().layoutChanged).toBe(true);
+    expect(api.vaultRelayout).not.toHaveBeenCalled();
+    useData.getState().dismissLayoutChange();
+    expect(useData.getState().layoutChanged).toBe(false);
+  });
 });
 
 describe("resolveConflict（冲突副本的原文是某一天 / 目标）", () => {
@@ -1010,5 +1036,130 @@ describe("使用指南有新版、用户改过那一篇", () => {
     api.noteGet.mockClear();
     expect(await useData.getState().openGuide("welcome")).toBe("guide-welcome-2");
     expect(api.noteGet).not.toHaveBeenCalled();
+  });
+});
+
+/* ---------------- 逻辑目录（docs/仓库与启动器.md §7） ---------------- */
+
+describe("逻辑目录", () => {
+  const node = (id: string, parent: string, key: string, extra: Partial<TreeNode>): TreeNode => ({
+    id,
+    parent,
+    key,
+    kind: "note",
+    name: null,
+    note: null,
+    query: null,
+    ...extra,
+  });
+  const folder = node("f", ".", "i", { kind: "folder", name: "交易" });
+  const smart = node("q", ".", "r", { kind: "query", name: "复盘", query: "#复盘" });
+  const placed = (id: string, parent: string, key: string) =>
+    node(`p-${id}`, parent, key, { note: id });
+  const where = (id: string) => folderOf({ id, relPath: "" });
+
+  /** 和打开一个逻辑目录一样：树从后端取来（refreshFolders 走 treeView） */
+  async function open(nodes: TreeNode[], notes: Note[] = []) {
+    put({ notes, tree: [] });
+    api.treeView.mockResolvedValueOnce(nodes);
+    api.treeQueries.mockResolvedValue([]);
+    await useData.getState().refreshFolders();
+  }
+
+  afterEach(() => setTreeShape(null));
+
+  it("folders come from the tree, in its order, and a note is where the tree puts it", async () => {
+    await open(
+      [folder, smart, placed("n-1", "f", "i")],
+      [
+        { ...note(""), id: "n-1" },
+        { ...note(""), id: "n-2" },
+      ],
+    );
+    expect(useData.getState().folders).toEqual(["交易", "复盘"]);
+    expect(where("n-1")).toBe("交易");
+    expect(where("n-2")).toBe(UNSORTED);
+  });
+
+  it("a new note is on the tree in the same update — it never shows up in 未整理 first", async () => {
+    await open([folder]);
+    api.noteCreate.mockResolvedValue("n-9");
+    api.noteGet.mockResolvedValue({ ...note(""), id: "n-9" });
+    api.treeView.mockResolvedValue([folder, placed("n-9", "f", "i")]);
+    let seen: string | null = null;
+    const unsubscribe = useData.subscribe((state) => {
+      if (state.notes.some((item) => item.id === "n-9") && seen === null) seen = where("n-9");
+    });
+    await useData.getState().createNote("交易");
+    unsubscribe();
+    expect(seen).toBe("交易");
+    expect(api.noteCreate).toHaveBeenCalledWith("交易", "无标题笔记");
+  });
+
+  it("moving a note only changes the tree, right away, and can be undone back to its spot", async () => {
+    const notes = [
+      { ...note(""), id: "n-1" },
+      { ...note(""), id: "n-2" },
+    ];
+    await open([folder, placed("n-2", ".", "a"), placed("n-1", ".", "i")], notes);
+    api.treeView.mockClear();
+    let finish: () => void = () => {};
+    api.treePlace.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    api.treeView.mockResolvedValue([folder, placed("n-2", ".", "a"), placed("n-1", "f", "i")]);
+
+    const moving = useData.getState().moveNote("n-1", "交易");
+    expect(where("n-1")).toBe("交易");
+    // 还没做完的时候来了一次刷新（别处改了清单）：不取，免得把这一步闪回去
+    await useData.getState().refreshFolders();
+    expect(api.treeView).not.toHaveBeenCalled();
+    finish();
+    await moving;
+    expect(api.noteMove).not.toHaveBeenCalled();
+    expect(api.treePlace).toHaveBeenCalledWith("n-1", "交易", null);
+    expect(useData.getState().undoable?.message).toBe("已移到「交易」");
+
+    api.treePlace.mockResolvedValue(undefined);
+    await useData.getState().undoable?.undo();
+    // 原来在 n-2 后面
+    expect(api.treePlace).toHaveBeenLastCalledWith("n-1", "", "n-2");
+  });
+
+  it("reordering inside a folder does not offer an undo", async () => {
+    const notes = [
+      { ...note(""), id: "n-1" },
+      { ...note(""), id: "n-2" },
+    ];
+    await open([folder, placed("n-1", "f", "a"), placed("n-2", "f", "i")], notes);
+    api.treePlace.mockResolvedValue(undefined);
+    api.treeView.mockResolvedValue([folder, placed("n-2", "f", "a"), placed("n-1", "f", "i")]);
+    await useData.getState().placeNote("n-1", "交易", "n-2");
+    expect(api.treePlace).toHaveBeenCalledWith("n-1", "交易", "n-2");
+    expect(useData.getState().undoable).toBeNull();
+  });
+
+  it("smart folders are filtered by the backend; deleting one keeps its notes", async () => {
+    const notes = [{ ...note("这周 #复盘"), id: "n-1" }];
+    await open([folder, smart], notes);
+    api.treeQueries.mockResolvedValue([["n-1"]]);
+    await useData.getState().refreshSmart();
+    expect(api.treeQueries).toHaveBeenLastCalledWith(["#复盘"]);
+    expect(useData.getState().smartResults["#复盘"]).toEqual(["n-1"]);
+
+    api.folderDelete.mockResolvedValue({
+      folder: "复盘",
+      notes: [],
+      folders: ["复盘"],
+      kept: false,
+      nodes: "",
+    });
+    api.treeView.mockResolvedValue([folder]);
+    await useData.getState().deleteFolder("复盘");
+    expect(useData.getState().notes.map((item) => item.id)).toEqual(["n-1"]);
+    expect(useData.getState().folders).toEqual(["交易"]);
   });
 });

@@ -8,6 +8,8 @@
 // 正常的淡入：差异一路降到 0。有问题的：中途画面已经不动了、却和最终帧不一样，动画
 // 结束那一帧才突然归零 —— 那一下就是用户看到的「闪一下 / 重新渲染了一下」。
 // 要查别的控件，在 SCENES 里加一个：放进去的正文、要截的选择器和鼠标移到哪。
+// 不是鼠标移上去触发的（协作时别人的名字标签），场景可以自己给打开哪一页（page）、
+// 准备（setup）、触发（trigger，页面里跑的 JS），以及截多久（capture）、最终帧再等多久（settle）。
 import { launch, sleep } from "./cdp.mjs";
 
 const URL = process.argv[2] ?? "http://localhost:1420/";
@@ -32,6 +34,30 @@ const SCENES = {
     target: "aside nav [data-outline-control]",
     hover: "aside nav",
   },
+  /**
+   * 协作时别人的名字标签（collab/cursors.ts）：协作实验台里访客的选区一变，主持人那边亮起来。
+   * 标签只亮 2.5 秒（JS 定时器，不跟着放慢），截到 2 秒以内
+   */
+  remote: {
+    page: "?lab=collab&latency=0",
+    setup: `(async () => {
+      while (!window.__collabLab) await new Promise((r) => setTimeout(r, 100));
+      const guest = window.__collabLab.members[1].session;
+      const at = guest.toString().indexOf("一起进来。") + 5;
+      guest.setLocalCursor(at);
+      window.__remoteAt = at;
+      // 等新出现的光标淡入完、标签熄掉
+      await new Promise((r) => setTimeout(r, 3500));
+    })()`,
+    target: '[data-lab-peer="lab-host"] .odea-remote-label',
+    // 光标不挪，选区的另一头变一下：算「动了」，标签亮起来
+    trigger:
+      "window.__collabLab.members[1].session.setLocalCursor(window.__remoteAt - 2, window.__remoteAt)",
+    // 下边不留：紧挨着就是那一行字，选区的底色会进来
+    pad: { top: 6, right: 6, bottom: 0, left: 6 },
+    capture: 1600,
+    settle: 200,
+  },
 };
 const SCENE = SCENES[process.argv[3] ?? "image"];
 if (!SCENE) {
@@ -48,12 +74,14 @@ try {
     deviceScaleFactor: 1.5,
     mobile: false,
   });
-  await send("Page.navigate", { url: URL });
+  await send("Page.navigate", { url: SCENE.page ? new globalThis.URL(SCENE.page, URL).href : URL });
   for (let i = 0; i < 100 && !(await evaluate("!!document.querySelector('.cm-editor')")); i++) {
     await sleep(100);
   }
   await sleep(1500);
-  await evaluate(`(async () => {
+  if (SCENE.setup) await evaluate(SCENE.setup);
+  else
+    await evaluate(`(async () => {
     const { EditorView } = await import('/node_modules/.vite/deps/@codemirror_view.js');
     const view = EditorView.findFromDOM(document.querySelector('.cm-editor'));
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: ${JSON.stringify(SCENE.markdown)} } });
@@ -65,32 +93,37 @@ try {
     evaluate(`(() => { const b = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
       return { x: b.left, y: b.top, width: b.width, height: b.height }; })()`);
   const target = await rect(SCENE.target);
-  const hover = await rect(SCENE.hover);
+  const pad = SCENE.pad ?? { top: 6, right: 6, bottom: 6, left: 6 };
   const clip = {
-    x: Math.floor(target.x - 6),
-    y: Math.floor(target.y - 6),
-    width: Math.ceil(target.width + 12),
-    height: Math.ceil(target.height + 12),
+    x: Math.floor(target.x - pad.left),
+    y: Math.floor(target.y - pad.top),
+    width: Math.ceil(target.width + pad.left + pad.right),
+    height: Math.ceil(target.height + pad.top + pad.bottom),
     scale: 1,
   };
 
   await send("Animation.enable");
   await send("Animation.setPlaybackRate", { playbackRate: 0.1 });
   const start = Date.now();
-  await send("Input.dispatchMouseEvent", {
-    type: "mouseMoved",
-    x: hover.x + hover.width / 2,
-    y: hover.y + hover.height / 2,
-  });
+  if (SCENE.trigger) {
+    await evaluate(SCENE.trigger);
+  } else {
+    const hover = await rect(SCENE.hover);
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: hover.x + hover.width / 2,
+      y: hover.y + hover.height / 2,
+    });
+  }
   const frames = [];
-  while (Date.now() - start < 3600) {
+  while (Date.now() - start < (SCENE.capture ?? 3600)) {
     frames.push({
       t: Date.now() - start,
       data: (await send("Page.captureScreenshot", { format: "png", clip })).data,
     });
     await sleep(60);
   }
-  await sleep(1500);
+  await sleep(SCENE.settle ?? 1500);
   const final = (await send("Page.captureScreenshot", { format: "png", clip })).data;
   const diffs = await evaluate(`(async () => {
     const pixels = async (b64) => { const img = new Image(); img.src = 'data:image/png;base64,' + b64; await img.decode();

@@ -11,6 +11,7 @@ const platform =
   "";
 
 export const isMac = /mac/i.test(platform);
+export const IS_WINDOWS = /win/i.test(platform);
 
 /** 主修饰键的显示名：mac 上是 ⌘，其余平台是 Ctrl。 */
 export const MOD_KEY = isMac ? "⌘" : "Ctrl";

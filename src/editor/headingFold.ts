@@ -8,7 +8,7 @@ import {
   StateEffect,
   StateField,
   type Text,
-  type Transaction,
+  Transaction,
 } from "@codemirror/state";
 import { type EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { SyntaxNode, Tree } from "@lezer/common";
@@ -288,11 +288,14 @@ export const headingFolds = StateField.define<HeadingFoldState>({
           .filter((head): head is number => head !== null);
       } else {
         const touched = new Set<number>();
-        transaction.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
-          for (const section of value.sections) {
-            if (touches(before, section, fromA, toA, text.length)) touched.add(section.head);
-          }
-        });
+        // 别人（协同）改了你收起的那一节：位置照样映射，但不替你展开（docs/协同编辑.md §4.3）
+        if (!transaction.annotation(Transaction.remote)) {
+          transaction.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
+            for (const section of value.sections) {
+              if (touches(before, section, fromA, toA, text.length)) touched.add(section.head);
+            }
+          });
+        }
         heads = heads
           .filter((head) => !touched.has(head))
           .map((head) => follow(transaction, head))

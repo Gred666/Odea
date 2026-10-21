@@ -61,11 +61,11 @@ pub fn retarget(body: &str, old: &str, new: &str) -> Option<(String, usize)> {
     Some((out, hits.len()))
 }
 
-fn spans(body: &str) -> Vec<Span> {
-    let mut out = Vec::new();
+/// 不在围栏代码块里的行（开头、结尾那两行也不算）：（第几行，这一行在正文里的字节位置，这一行）
+fn prose_lines(body: &str) -> impl Iterator<Item = (usize, usize, &str)> {
     let mut fence: Option<(char, usize)> = None;
     let mut offset = 0;
-    for (index, line) in body.split('\n').enumerate() {
+    body.split('\n').enumerate().filter_map(move |(index, line)| {
         let line_start = offset;
         offset += line.len() + 1;
         let trimmed = line.trim_start_matches(' ');
@@ -75,17 +75,32 @@ fn spans(body: &str) -> Vec<Span> {
                 match fence {
                     None => {
                         fence = Some(marker);
-                        continue;
+                        return None;
                     }
                     Some((ch, len)) if marker.0 == ch && marker.1 >= len && is_closing(trimmed) => {
                         fence = None;
-                        continue;
+                        return None;
                     }
                     _ => {}
                 }
             }
         }
-        if fence.is_some() || !line.contains("[[") {
+        fence.is_none().then_some((index, line_start, line))
+    })
+}
+
+/// 正文去掉代码：围栏代码块整段拿掉、行内代码换成空格。标签、待办这些不认代码里写的
+pub fn without_code(body: &str) -> String {
+    prose_lines(body)
+        .map(|(_, _, line)| without_code_spans(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn spans(body: &str) -> Vec<Span> {
+    let mut out = Vec::new();
+    for (index, line_start, line) in prose_lines(body) {
+        if !line.contains("[[") {
             continue;
         }
         // 行内代码换成了等长的空格，字节位置和原来那一行一一对应

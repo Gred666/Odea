@@ -50,6 +50,15 @@ pub fn save(account: &str, token: &Token) -> SyncResult<()> {
     entry(SERVICE, account)?.set_password(&text).map_err(failed)
 }
 
+/// 钥匙串里的一段文字（协作的设备密钥用它，见 commands 的「协作」一节）
+pub fn load_text(account: &str) -> SyncResult<Option<String>> {
+    read(&entry(SERVICE, account)?)
+}
+
+pub fn save_text(account: &str, text: &str) -> SyncResult<()> {
+    entry(SERVICE, account)?.set_password(text).map_err(failed)
+}
+
 /// 退出登录：改名前那一份也删掉
 pub fn remove(account: &str) -> SyncResult<()> {
     for service in [SERVICE, old_name::NAME] {

@@ -6,6 +6,7 @@ import { version as APP_VERSION } from "../../package.json";
 import { backend } from "./backend";
 import { conflictOriginalContent, conflictOriginalTitle, conflictTarget } from "./conflicts";
 import {
+  UNSORTED,
   cleanFolderName,
   folderLabel,
   folderOf,
@@ -14,9 +15,21 @@ import {
   relPathIn,
   renamedPath,
   renamedRelPath,
+  setTreeLayout,
+  setTreeShape,
   uniqueChild,
   within,
 } from "./folders";
+import {
+  addBranch,
+  addShortcut,
+  moveBranch,
+  placeNote,
+  removeBranch,
+  removeShortcut,
+  renameBranch,
+  shapeOf,
+} from "./tree";
 import {
   type AppUpgrade,
   type CalendarMarks,
@@ -32,11 +45,15 @@ import {
   type JournalDoc,
   type Note,
   type NoteSummary,
+  ODEA_LAYOUT,
   SYNC_OFF,
   type SyncStatus,
   type Task,
+  type TreeFile,
+  type TreeNode,
   type UpdateInfo,
   type VaultChange,
+  type VaultLayout,
   goalKey,
 } from "./types";
 
@@ -74,6 +91,21 @@ interface DataState {
    * 按「仓库 + 文档所在的文件夹」解析，见 editor/html.ts 的 resolveImageSource。
    */
   vaultRoot: string | null;
+  /**
+   * 这个仓库怎么摆（docs/仓库与启动器.md §6）：开没开日程、文件树的根在哪。取到仓库信息之前
+   * 当它是 Odea 自己建的仓库
+   */
+  layout: VaultLayout;
+  /** 开 / 关日程：先把编辑器里的都存掉，后端按新的摆法重新认一遍文件，然后整页重载 */
+  setJournal: (on: boolean) => Promise<void>;
+  /**
+   * 别的设备开关了日程、转成了逻辑目录（同步过来，VaultChange.layout）：提示条问一句「切换过去」。
+   * 没点之前照旧按原来的摆法（用户可能正在打字）
+   */
+  layoutChanged: boolean;
+  dismissLayoutChange: () => void;
+  /** 「切换过去」：和开关日程一样，先存掉编辑器里的，后端按磁盘上的标记重新摆，整页重载 */
+  applyLayoutChange: () => Promise<void>;
   initialized: boolean;
   loading: boolean;
   /** 保存以外的操作（加载、置顶、归档、勾选…）失败的原因，由 ErrorToast 显示。 */
@@ -124,9 +156,6 @@ interface DataState {
    * 搬过去（第一次打开时的「换个位置…」）
    */
   changeVaultRoot: (mode?: ChangeRootMode) => Promise<void>;
-  /** 新装第一次打开：笔记文件夹在哪（启动时取一次），正文顶上提示一次；点了「就放这里」清掉 */
-  firstRunVault: string | null;
-  dismissFirstRun: () => void;
   /** 正在保存的文档，键为 `kind:id`。界面据此显示「保存中」。 */
   savingDocs: Set<string>;
   /**
@@ -174,7 +203,11 @@ interface DataState {
 
   /* ---- 文件夹：仓库里「笔记」下面的子目录，路径相对「笔记」（见 data/folders.ts） ---- */
   folders: string[];
+  /** 文件树上列的图片、PDF（本地目录；跟着 refreshFolders 一起取） */
+  files: TreeFile[];
   refreshFolders: () => Promise<void>;
+  /** 树上的一个文件：用系统的默认程序打开，reveal 时在文件管理器里定位它 */
+  openTreeFile: (relPath: string, reveal?: boolean) => Promise<void>;
   /** 新建文件夹，返回它的路径（重名时后端加了序号）；失败返回 null */
   createFolder: (parent: string, name: string) => Promise<string | null>;
   /** 改名，返回新路径；失败返回 null。底下笔记的路径跟着换 */
@@ -185,6 +218,41 @@ interface DataState {
   revealFolder: (folder: string) => Promise<void>;
   /** 把笔记挪到另一个文件夹，底部提示条可以撤销 */
   moveNote: (id: string, folder: string) => Promise<void>;
+
+  /* ---- 逻辑目录（docs/仓库与启动器.md §7）：文件夹在清单里，挪动、排序只改清单 ---- */
+  /**
+   * 树上的节点原样放着，界面要的样子（文件夹路径、每篇在哪、手动排序的顺序）由 data/tree.ts 摊开，
+   * 同时换给 data/folders.ts（folderOf 按它算）。folders 跟着它换。本地目录是 null
+   */
+  tree: TreeNode[] | null;
+  /** 智能文件夹筛出来的笔记：条件 → 笔记 id（置顶在前、最近改过的在前）。还没筛过的条件不在里面 */
+  smartResults: Record<string, string[]>;
+  /** 把所有智能文件夹再筛一遍（笔记变了以后，store 自己会隔一会儿调） */
+  refreshSmart: () => Promise<void>;
+  /**
+   * 把一篇放进 folder（UNSORTED 是「未整理」），排在 after 那一篇后面（null 是最前面）。
+   * 换了文件夹的话底部提示条可以撤销；只是调了顺序不提示
+   */
+  placeNote: (id: string, folder: string, after: string | null) => Promise<void>;
+  /** 在 folder 里放一个指着笔记 id 的快捷方式（逻辑目录，docs/仓库与启动器.md §7.5） */
+  addShortcut: (id: string, folder: string) => Promise<void>;
+  /** 删一个快捷方式（节点 id）：笔记不动 */
+  removeShortcut: (node: string) => Promise<void>;
+  /**
+   * 导入（docs/仓库与启动器.md §7.6）：选一个仓库外的文件夹，照原样复制进来、放在 folder 里。
+   * 返回树上新文件夹的路径；取消了、失败了返回 null
+   */
+  importFolder: (folder: string) => Promise<string | null>;
+  /** 挪文件夹：放进 parent，排在 after（同一层的路径）后面，null 是最前面。返回新路径，失败返回 null */
+  moveFolder: (folder: string, parent: string, after: string | null) => Promise<string | null>;
+  /** 新建智能文件夹，返回它的路径；失败返回 null */
+  createSmartFolder: (parent: string, name: string, query: string) => Promise<string | null>;
+  /** 改智能文件夹的名字和条件，返回新路径；失败返回 null */
+  editSmartFolder: (folder: string, name: string, query: string) => Promise<string | null>;
+  /** 本地目录转成逻辑目录（一个文件都不动）：先存掉编辑器里的，转完整页重载 */
+  makeLogical: () => Promise<void>;
+  /** 导出成真实文件夹（选位置的对话框在后端），拷完在文件管理器里打开 */
+  exportTree: () => Promise<void>;
   /**
    * 能撤销的上一个操作（移动笔记、删除文件夹、归档、恢复），和 lastDeleted 共用底部那条提示：
    * 谁后发生显示谁，另一个随之作废。
@@ -360,6 +428,16 @@ function patchTask(state: DataState, id: string, task: Task): Partial<DataState>
   };
 }
 
+/**
+ * 正文不归这里写的文档（共享仓库：编辑器上挂着 Loro 副本，正文由 Rust 写盘，share/store.ts 登记）。
+ * 不 import 共享仓库那边：免得互相引用
+ */
+let bodyOwner: ((target: DocumentSaveTarget) => boolean) | null = null;
+
+export function setBodyOwner(owner: ((target: DocumentSaveTarget) => boolean) | null): void {
+  bodyOwner = owner;
+}
+
 let initializePromise: Promise<void> | null = null;
 /** 仓库变化的订阅只装一次（initialize 失败重试时不重复装） */
 let vaultSubscription: Promise<() => void> | null = null;
@@ -393,6 +471,56 @@ function serialized<T>(key: string, write: () => Promise<T>): Promise<T> {
 }
 /** 正在进行的删除。撤销要排在它后面：删除还没落库就恢复，恢复会扑空，随后删除又生效。 */
 let pendingDelete: Promise<unknown> = Promise.resolve();
+
+/** 逻辑目录的树换成 nodes：摊开的样子先给 data/folders.ts（folderOf 按它算），再放进 store */
+function treeState(nodes: TreeNode[]): Pick<DataState, "tree" | "folders"> {
+  const shape = shapeOf(nodes);
+  setTreeShape(shape);
+  scheduleSmart();
+  return { tree: nodes, folders: shape.folders };
+}
+
+/**
+ * 正在进行的改树的操作。每一步先在这边改好（乐观），后端做完，等手上的都做完了再取后端那一份整个换上来：
+ * 做到一半取回来的那一份缺后面几步，换上去会闪回去
+ */
+let treeOps = 0;
+
+async function editTree<T>(next: TreeNode[] | null, call: () => Promise<T>): Promise<T> {
+  if (next) useData.setState(treeState(next));
+  treeOps += 1;
+  try {
+    return await call();
+  } finally {
+    treeOps -= 1;
+    if (treeOps === 0) void syncTree();
+  }
+}
+
+/** 取后端那一份树换上来（手上还有没做完的改树操作就不换，等它们做完自己会取） */
+async function syncTree() {
+  if (!useData.getState().tree || treeOps > 0) return;
+  try {
+    const nodes = await (await backend()).treeView();
+    if (treeOps === 0 && useData.getState().tree) useData.setState(treeState(nodes));
+  } catch (error) {
+    useData.setState({ error: messageOf(error) });
+  }
+}
+
+/** 笔记、树变了以后隔一会儿把智能文件夹再筛一遍：自动保存每 400ms 一次，别每次都筛 */
+let smartTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleSmart() {
+  clearTimeout(smartTimer);
+  smartTimer = setTimeout(() => void useData.getState().refreshSmart(), 600);
+}
+
+/** 仓库的摆法定下来：树根给 data/folders.ts；没开日程的话，停在日程那几页的回到文件 */
+function applyLayout(layout: VaultLayout) {
+  setTreeLayout(layout);
+  useData.setState({ layout });
+  useApp.getState().fitJournal(layout.journal);
+}
 
 export const useData = create<DataState>((set, get) => ({
   notes: [],
@@ -458,6 +586,7 @@ export const useData = create<DataState>((set, get) => ({
       conflicts: [],
       foundCopies: [],
       folders: true,
+      layout: false,
     });
     if (get().journal.length) await get().loadJournal();
     try {
@@ -476,6 +605,35 @@ export const useData = create<DataState>((set, get) => ({
     }
   },
   vaultRoot: null,
+  layout: ODEA_LAYOUT,
+  setJournal: async (on) => {
+    try {
+      const { flushAllEditors } = await import("@/editor/saveBus");
+      await flushAllEditors();
+      await get().flushDrafts();
+      await (await backend()).vaultSetJournal(on);
+      // 刚开的：重载后落在今日TODO，看得见多了什么；关掉的：日程那几页没了，回到文件
+      useApp.setState({ workspace: on ? "today" : "notes" });
+      window.location.reload();
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+  layoutChanged: false,
+  dismissLayoutChange: () => set({ layoutChanged: false }),
+  applyLayoutChange: async () => {
+    try {
+      const { flushAllEditors } = await import("@/editor/saveBus");
+      await flushAllEditors();
+      await get().flushDrafts();
+      const info = await (await backend()).vaultRelayout();
+      // 日程没了：今日TODO、目标、日历、归档那几页也没了，回到文件
+      if (!info.layout.journal) useApp.setState({ workspace: "notes" });
+      window.location.reload();
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
   initialized: false,
   loading: false,
   error: null,
@@ -487,8 +645,6 @@ export const useData = create<DataState>((set, get) => ({
   update: null,
   upgrade: null,
   clearUpgrade: () => set({ upgrade: null }),
-  firstRunVault: null,
-  dismissFirstRun: () => set({ firstRunVault: null }),
   checkUpdate: async () => {
     try {
       const update = await (await backend()).updateCheck();
@@ -621,6 +777,8 @@ export const useData = create<DataState>((set, get) => ({
     if (change.tasks) await get().refreshMarks();
 
     if (change.folders) await get().refreshFolders();
+
+    if (change.layout) set({ layoutChanged: true });
   },
 
   revealDocument: async (target) => {
@@ -696,7 +854,7 @@ export const useData = create<DataState>((set, get) => ({
             .then(() => api.noteGet(id))
             .catch(() => null);
         const early = [selectedNoteId, selectedArchiveId].filter(Boolean).map(bodyOf);
-        const [notes, archived, folders, marks, info, indexing] = await Promise.all([
+        const [notes, archived, folders, marks, info, indexing, tree] = await Promise.all([
           api.noteList(false),
           api.noteList(true),
           // 文件夹列表取不到也不耽误启动：笔记都在，只是先全摊在「全部笔记」里
@@ -711,9 +869,16 @@ export const useData = create<DataState>((set, get) => ({
           Promise.resolve()
             .then(() => api.indexProgress())
             .catch(() => null),
+          // 逻辑目录的树（本地目录会报错，当没有）
+          Promise.resolve()
+            .then(() => api.treeView())
+            .catch(() => null),
         ]);
         // 进度事件比这一问先到的话，用事件里那个新的
         set((state) => ({ indexing: state.indexing ?? indexing }));
+        // 仓库的摆法要在列表进 store 之前定：笔记在树上哪个文件夹按它算（data/folders.ts）
+        if (info) applyLayout(info.layout);
+        const logicalTree = info?.layout.logical && tree ? treeState(tree) : null;
         // 正文显示的是哪篇和 data/adapter.ts 的口径一样：选中的不在了就是列表第一篇
         let bodies: Record<string, string> = {};
         const got = (await Promise.all(early)).filter((note): note is Note => !!note);
@@ -748,11 +913,6 @@ export const useData = create<DataState>((set, get) => ({
           .then(() => Promise.all([api.updateStatus(), api.appUpgrade()]))
           .then(([update, upgrade]) => set({ update, upgrade }))
           .catch(() => {});
-        // 新装第一次打开：提示一次笔记放在哪（技术方案 §5.7）。取不到就不提示
-        void Promise.resolve()
-          .then(() => api.vaultFirstRun())
-          .then((firstRunVault) => set({ firstRunVault }))
-          .catch(() => {});
         void Promise.resolve()
           .then(() => api.guidePending())
           .then((guideUpdates) => set({ guideUpdates }))
@@ -772,11 +932,20 @@ export const useData = create<DataState>((set, get) => ({
           archived,
           bodies: { ...state.bodies, ...bodies },
           folders,
+          ...logicalTree,
           marks,
           vaultRoot: isTauri && info ? info.root : null,
           initialized: true,
           loading: false,
         }));
+        // 树上的图片、PDF 不耽误启动：画出来以后再补上
+        if (!logicalTree)
+          void Promise.resolve()
+            .then(() => api.treeFiles())
+            .then((files) => set({ files }))
+            .catch(() => {
+              // 取不到树上就只有笔记
+            });
       } catch (error) {
         set({ error: messageOf(error), loading: false });
       } finally {
@@ -829,6 +998,13 @@ export const useData = create<DataState>((set, get) => ({
      * 什么都没做；true 表示库里已经是这一版了（刚写的，或者本来就一样）。
      */
     const write = async (): Promise<boolean> => {
+      // 共享仓库：正文经编辑器上的 Loro 副本交给 Rust 写盘（docs/协同编辑.md §20.5），这里不写。
+      // 写完 Rust 照常通知变化，列表、摘要跟着刷新
+      if (bodyOwner?.(target)) {
+        if (target.kind === "note")
+          set((state) => ({ bodies: withBody(state.bodies, target.id, contentMd) }));
+        return true;
+      }
       if (target.kind === "goal") {
         const { horizon, periodStart } = target;
         const source = get().goals[goalKey(horizon, periodStart)];
@@ -925,11 +1101,15 @@ export const useData = create<DataState>((set, get) => ({
       // 新建是个一次性动作，不像输入那样每次按键都要响应。
       const id = await api.noteCreate(folder, NEW_NOTE_TITLE);
       const created = await api.noteGet(id);
+      // 逻辑目录：后端已经把它放在这个文件夹最前面了，这边同一帧放上去（不然先在「未整理」里闪一下）
+      const tree = get().tree;
       set((state) => ({
         notes: [summaryOf(created), ...state.notes].sort(noteOrder),
         bodies: withBody(state.bodies, id, created.contentMd),
+        ...(tree ? treeState(placeNote(tree, id, folder, null)) : {}),
         error: null,
       }));
+      if (tree) void syncTree();
       return id;
     } catch (error) {
       set({ error: messageOf(error) });
@@ -1262,11 +1442,28 @@ export const useData = create<DataState>((set, get) => ({
   dismissUndo: () => set({ lastDeleted: null }),
 
   folders: [],
+  files: [],
 
   refreshFolders: async () => {
+    if (get().tree) return syncTree();
     try {
-      const folders = await (await backend()).folderList();
-      set({ folders });
+      const api = await backend();
+      const [folders, files] = await Promise.all([
+        api.folderList(),
+        // 取不到文件（旧的后端、读不了目录）照样换文件夹：树上就少几张图
+        Promise.resolve()
+          .then(() => api.treeFiles())
+          .catch(() => get().files),
+      ]);
+      set({ folders, files });
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+
+  openTreeFile: async (relPath, reveal = false) => {
+    try {
+      await (await backend()).treeFileOpen(relPath, reveal);
     } catch (error) {
       set({ error: messageOf(error) });
     }
@@ -1278,6 +1475,19 @@ export const useData = create<DataState>((set, get) => ({
   createFolder: async (parent, name) => {
     const clean = cleanFolderName(name);
     if (!clean) return null;
+    const tree = get().tree;
+    if (tree) {
+      const added = addBranch(tree, parent, name);
+      if (!added) return null;
+      try {
+        return await editTree(added.nodes, async () =>
+          (await backend()).folderCreate(parent, name),
+        );
+      } catch (error) {
+        set({ error: messageOf(error) });
+        return null;
+      }
+    }
     const guess = uniqueChild(get().folders, parent, clean);
     set((state) => ({ folders: [...state.folders, guess].sort() }));
     try {
@@ -1300,6 +1510,19 @@ export const useData = create<DataState>((set, get) => ({
   renameFolder: async (folder, name) => {
     const clean = cleanFolderName(name);
     if (!clean) return null;
+    const tree = get().tree;
+    if (tree) {
+      const renamed = renameBranch(tree, folder, name);
+      if (!renamed || renamed.path === folder) return renamed ? folder : null;
+      try {
+        return await editTree(renamed.nodes, async () =>
+          (await backend()).folderRename(folder, name),
+        );
+      } catch (error) {
+        set({ error: messageOf(error) });
+        return null;
+      }
+    }
     const guess = uniqueChild(get().folders, parentOf(folder), clean, folder);
     if (guess === folder) return folder;
     const before = { folders: get().folders, notes: get().notes };
@@ -1324,11 +1547,16 @@ export const useData = create<DataState>((set, get) => ({
   },
 
   deleteFolder: async (folder) => {
-    const before = { folders: get().folders, notes: get().notes };
+    const before = { folders: get().folders, notes: get().notes, tree: get().tree };
     const name = nameOf(folder);
+    const tree = get().tree;
+    // 智能文件夹是筛选：删掉它只是拿掉那一行，里面列着的笔记都还在
+    const smart = tree ? shapeOf(tree).smart.has(folder) : false;
     set((state) => ({
-      folders: state.folders.filter((path) => !within(path, folder)),
-      notes: state.notes.filter((note) => !within(folderOf(note), folder)),
+      notes: smart ? state.notes : state.notes.filter((note) => !within(folderOf(note), folder)),
+      ...(tree
+        ? treeState(removeBranch(tree, folder))
+        : { folders: state.folders.filter((path) => !within(path, folder)) }),
     }));
     try {
       // 正在编辑的那篇也在里面的话，先把没存的存掉，进回收站的是最新的一版
@@ -1345,6 +1573,11 @@ export const useData = create<DataState>((set, get) => ({
           undo: async () => {
             const api = await backend();
             await api.folderUndelete(deletion);
+            if (get().tree) {
+              const [notes, nodes] = await Promise.all([api.noteList(false), api.treeView()]);
+              set({ notes: notes.sort(noteOrder), ...treeState(nodes) });
+              return;
+            }
             const [notes, folders] = await Promise.all([api.noteList(false), api.folderList()]);
             set({ notes: notes.sort(noteOrder), folders });
           },
@@ -1354,8 +1587,9 @@ export const useData = create<DataState>((set, get) => ({
           : {}),
       });
       if (deletion.kept) await get().refreshFolders();
+      if (before.tree) void syncTree();
     } catch (error) {
-      set({ ...before, error: messageOf(error) });
+      set({ ...before, ...(before.tree ? treeState(before.tree) : {}), error: messageOf(error) });
     }
   },
 
@@ -1368,6 +1602,8 @@ export const useData = create<DataState>((set, get) => ({
   },
 
   moveNote: async (id, folder) => {
+    // 逻辑目录：只改清单，放在那个文件夹最前面
+    if (get().tree) return get().placeNote(id, folder, null);
     const previous = get().notes.find((note) => note.id === id);
     if (!previous || folderOf(previous) === folder) return;
     const from = folderOf(previous);
@@ -1409,6 +1645,162 @@ export const useData = create<DataState>((set, get) => ({
         notes: state.notes.map((note) => (note.id === id ? previous : note)),
         error: messageOf(error),
       }));
+    }
+  },
+
+  tree: null,
+  smartResults: {},
+  refreshSmart: async () => {
+    const tree = get().tree;
+    if (!tree) return;
+    const queries = [...new Set(shapeOf(tree).smart.values())];
+    if (!queries.length) return;
+    try {
+      const found = await (await backend()).treeQueries(queries);
+      set({ smartResults: Object.fromEntries(queries.map((query, i) => [query, found[i] ?? []])) });
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+
+  placeNote: async (id, folder, after) => {
+    const tree = get().tree;
+    if (!tree) return;
+    const shape = shapeOf(tree);
+    const from = shape.placement.get(id);
+    const fromFolder = from?.folder ?? UNSORTED;
+    // 撤销时放回原处：原来排在它前面的是哪一篇
+    const before = from
+      ? ([...shape.placement.entries()]
+          .filter(([, place]) => place.folder === from.folder && place.key < from.key)
+          .sort(([, a], [, b]) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0))[0]?.[0] ?? null)
+      : null;
+    if (fromFolder === folder && after === id) return;
+    try {
+      await editTree(placeNote(tree, id, folder, after), async () =>
+        (await backend()).treePlace(id, folder, after),
+      );
+      if (fromFolder === folder) return;
+      set({
+        lastDeleted: null,
+        undoable: {
+          key: `move:${id}:${Date.now()}`,
+          kind: "move",
+          message: `已移到「${folderLabel(folder)}」`,
+          undo: async () => {
+            await get().placeNote(id, fromFolder, before);
+            set({ undoable: null });
+          },
+        },
+      });
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+
+  addShortcut: async (id, folder) => {
+    const tree = get().tree;
+    if (!tree) return;
+    try {
+      await editTree(addShortcut(tree, id, folder), async () =>
+        (await backend()).treeAddShortcut(id, folder),
+      );
+      set({ notice: `已在「${folderLabel(folder)}」放了一个快捷方式，笔记还在原处` });
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+
+  removeShortcut: async (node) => {
+    const tree = get().tree;
+    if (!tree) return;
+    try {
+      await editTree(removeShortcut(tree, node), async () =>
+        (await backend()).treeRemoveShortcut(node),
+      );
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+
+  importFolder: async (folder) => {
+    try {
+      const report = await (await backend()).vaultImport(folder);
+      if (!report) return null;
+      // 新的笔记、文件夹都进来了：列表和树整个重新取一遍
+      await get().reloadIndexed();
+      const files = report.files ? `、${report.files} 个别的文件` : "";
+      set({ notice: `导入了 ${report.notes} 篇笔记${files}，在「${folderLabel(report.folder)}」` });
+      return report.folder;
+    } catch (error) {
+      set({ error: messageOf(error) });
+      return null;
+    }
+  },
+
+  moveFolder: async (folder, parent, after) => {
+    const tree = get().tree;
+    const moved = tree ? moveBranch(tree, folder, parent, after) : null;
+    if (!moved) return null;
+    try {
+      return await editTree(moved.nodes, async () =>
+        (await backend()).treeMoveFolder(folder, parent, after),
+      );
+    } catch (error) {
+      set({ error: messageOf(error) });
+      return null;
+    }
+  },
+
+  createSmartFolder: async (parent, name, query) => {
+    const tree = get().tree;
+    const added = tree ? addBranch(tree, parent, name, query) : null;
+    if (!added) return null;
+    try {
+      return await editTree(added.nodes, async () =>
+        (await backend()).treeAddQuery(parent, name, query),
+      );
+    } catch (error) {
+      set({ error: messageOf(error) });
+      return null;
+    }
+  },
+
+  editSmartFolder: async (folder, name, query) => {
+    const tree = get().tree;
+    const renamed = tree ? renameBranch(tree, folder, name, query) : null;
+    if (!renamed) return null;
+    try {
+      return await editTree(renamed.nodes, async () =>
+        (await backend()).treeSetQuery(folder, name, query),
+      );
+    } catch (error) {
+      set({ error: messageOf(error) });
+      return null;
+    }
+  },
+
+  makeLogical: async () => {
+    try {
+      // 动态引入：saveBus 自己引用了这个 store，静态引入会成环
+      const { flushAllEditors } = await import("@/editor/saveBus");
+      await flushAllEditors();
+      await get().flushDrafts();
+      if (await (await backend()).vaultMakeLogical()) window.location.reload();
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+
+  exportTree: async () => {
+    try {
+      const { flushAllEditors } = await import("@/editor/saveBus");
+      await flushAllEditors();
+      await get().flushDrafts();
+      const path = await (await backend()).treeExport();
+      if (path) set({ notice: `已按树的结构导出到「${path}」，原来的仓库没动` });
+    } catch (error) {
+      set({ error: messageOf(error) });
     }
   },
 
@@ -1539,3 +1931,8 @@ export function saveKeyOf(target: DocumentSaveTarget): string {
   if (target.kind === "goal") return `goal:${goalKey(target.horizon, target.periodStart)}`;
   return `${target.kind}:${target.id}`;
 }
+
+// 智能文件夹按笔记筛：列表变了（存了、改了标题、别处改了文件）隔一会儿再筛一遍
+useData.subscribe((state, previous) => {
+  if (state.tree && state.notes !== previous.notes) scheduleSmart();
+});

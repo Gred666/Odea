@@ -1,9 +1,11 @@
 /* ============================================================
-笔记的文件夹 =「笔记」下面的子目录。
+文件树上的文件夹 = 树根下面的子目录。树根是「笔记」（Odea 建的仓库），或者整个仓库
+（没开日程的，比如打开的 Obsidian 库），见 layout::Layout。
 
 - 文件夹在磁盘上就是目录，资源管理器、网盘、别的编辑器看到的是同一套结构；
-  前端用的路径相对「笔记」（`工作/周报`），落盘时由 layout::folder_dir 拼成
+  前端用的路径相对树根（`工作/周报`），落盘时由 Layout::folder_dir 拼成
   `笔记/工作/周报`。
+- 日程开着时日记、目标、归档不在树上（从窄栏进）
 - 空的文件夹也是文件夹：挪走 / 删掉最后一篇时不清掉它（Vault::prune）。
 - 笔记换了文件夹，正文里相对路径的图片、链接跟着改（relink），指向的还是同一个文件。
 ============================================================ */
@@ -12,27 +14,65 @@ use std::fs;
 use std::path::Path;
 
 use super::{fsio, layout};
+use crate::domain::model::TreeFile;
 
-/// 「笔记」下面所有的子文件夹（相对「笔记」的路径），跳过隐藏的。按路径排序。
-pub fn list(root: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut stack = vec![(fsio::abs(root, layout::NOTES_DIR), String::new())];
+/// 树根下面所有的子文件夹（相对树根的路径），跳过隐藏的和日程那几个。按路径排序。
+pub fn list(root: &Path, tree: &layout::Layout) -> Vec<String> {
+    scan(root, tree, false).0
+}
+
+/// 文件树上列出来的文件：图片、PDF（Obsidian 也列）。别的文件（压缩包、表格）不列
+pub fn tree_file_kind(name: &str) -> Option<&'static str> {
+    let ext = layout::stem_and_ext(name).1.to_ascii_lowercase();
+    if super::IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        Some("image")
+    } else if ext == "pdf" {
+        Some("pdf")
+    } else {
+        None
+    }
+}
+
+/// 一遍走完树根：文件夹（同 list），want_files 时连同树上要列的图片、PDF（按路径排序）
+pub fn scan(root: &Path, tree: &layout::Layout, want_files: bool) -> (Vec<String>, Vec<TreeFile>) {
+    let hidden = tree.hidden_dirs();
+    let mut folders = Vec::new();
+    let mut files = Vec::new();
+    let mut stack = vec![(fsio::abs(root, &tree.notes), String::new())];
     while let Some((dir, rel)) = stack.pop() {
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if fsio::is_hidden_name(&name) || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            let Ok(kind) = entry.file_type() else { continue };
+            if fsio::is_hidden_name(&name) {
                 continue;
             }
             let path = layout::join(&rel, &name);
-            stack.push((entry.path(), path.clone()));
-            out.push(path);
+            if kind.is_dir() {
+                if hidden.contains(&layout::join(&tree.notes, &path).as_str()) {
+                    continue;
+                }
+                stack.push((entry.path(), path.clone()));
+                folders.push(path);
+            } else if want_files && kind.is_file() {
+                let Some(file_kind) = tree_file_kind(&name) else { continue };
+                let meta = entry.metadata().ok();
+                files.push(TreeFile {
+                    rel_path: layout::join(&tree.notes, &path),
+                    folder: rel.clone(),
+                    name,
+                    kind: file_kind.into(),
+                    size: meta.as_ref().map_or(0.0, |meta| meta.len() as f64),
+                    updated_at: meta.map_or(0, |meta| fsio::mtime_ms(&meta)) as f64,
+                });
+            }
         }
     }
-    out.sort();
-    out
+    folders.sort();
+    files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    (folders, files)
 }
 
 /// 在 parent_dir 下给文件夹找一个没被占用的名字：`工作`、`工作 2`、`工作 3`…
@@ -336,7 +376,13 @@ mod tests {
             fs::create_dir_all(fsio::abs(root, rel)).unwrap();
         }
         fsio::write_atomic(&fsio::abs(root, "笔记/工作.md"), "一篇叫工作的笔记").unwrap();
-        assert_eq!(list(root), vec!["工作", "工作/周报", "读书"]);
+        assert_eq!(list(root, &layout::Layout::odea()), vec!["工作", "工作/周报", "读书"]);
+        // 整个仓库是树根（没开日程）：日记也是一个普通文件夹
+        let plain = layout::Layout { journal: false, notes: String::new(), ..layout::Layout::odea() };
+        assert_eq!(list(root, &plain), vec!["日记", "日记/2026", "笔记", "笔记/工作", "笔记/工作/周报", "笔记/读书"]);
+        // 开了日程、树根是整个仓库：日记不在树上
+        let journal = layout::Layout { notes: String::new(), ..layout::Layout::odea() };
+        assert_eq!(list(root, &journal), vec!["笔记", "笔记/工作", "笔记/工作/周报", "笔记/读书"]);
         assert_eq!(unique_dir(root, "笔记", "工作", None), "笔记/工作 2");
         assert_eq!(
             unique_dir(root, "笔记", "工作", Some("笔记/工作")),

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Odea 主窗口的基础桌面权限",
-  "windows": ["main"],
+  "description": "Odea 各窗口的基础桌面权限：仓库窗口（main 是从旧配置迁过来的那个，别的是 vault-<路径指纹>）、启动器、协作的访客窗口",
+  "windows": ["main", "vault-*", "launcher", "guest"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

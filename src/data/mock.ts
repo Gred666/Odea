@@ -19,6 +19,7 @@ import {
 } from "@/lib/wikilinks";
 import type { Backend } from "./backend";
 import {
+  UNSORTED,
   cleanFolderName,
   fileStemFor,
   folderOf,
@@ -29,6 +30,16 @@ import {
   uniqueChild,
   within,
 } from "./folders";
+import {
+  addBranch,
+  addShortcut,
+  moveBranch,
+  placeNote,
+  removeBranch,
+  removeShortcut,
+  renameBranch,
+  shapeOf,
+} from "./tree";
 import {
   type AppUpgrade,
   type Backlink,
@@ -48,10 +59,13 @@ import {
   type Note,
   type NoteInput,
   type NoteSummary,
+  ODEA_LAYOUT,
   type Relink,
   SYNC_OFF,
   type Task,
   type TextHit,
+  type TreeFile,
+  type TreeNode,
   type UpdateInfo,
   type VaultChange,
   type VaultInfo,
@@ -92,6 +106,11 @@ interface MockState {
   trash?: MockNote[];
   /** 「笔记」下面的文件夹（相对「笔记」的路径）；旧版存档里没有这一项 */
   folders?: string[];
+  /**
+   * 逻辑目录的树（docs/仓库与启动器.md §7）：有这一项就是逻辑目录。命令面板「转成逻辑目录」建它；
+   * 地址带 `?logical` 打开时没有的话当场转一次（调界面用）
+   */
+  tree?: TreeNode[];
 }
 
 function load(): MockState {
@@ -201,6 +220,117 @@ function save(s: MockState) {
 const state: MockState = load();
 if (refreshGuides(state)) save(state);
 
+/* ---------------- 逻辑目录 ----------------
+   树的规矩用和前端乐观更新同一套（data/tree.ts，和 Rust 的 vault/tree.rs 一样）；新节点的 id 在这里
+   换成正经的。文件不挪：新建的笔记平放在树根（「笔记」）里，和桌面版转过来的老仓库一样 */
+
+if (
+  typeof location !== "undefined" &&
+  new URLSearchParams(location.search).has("logical") &&
+  !state.tree
+) {
+  state.tree = treeFromFolders();
+  save(state);
+}
+
+/** 本地目录转逻辑目录：按现在的文件夹结构建（Rust 的 tree::from_structure） */
+function treeFromFolders(): TreeNode[] {
+  let nodes: TreeNode[] = [];
+  const folders = [...(state.folders ?? [])].sort(
+    (a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b),
+  );
+  // 一个个加在最前面：反着加，摆出来的顺序和名字顺序一样
+  for (const path of [...folders].reverse()) {
+    const added = addBranch(nodes, parentOf(path), path.slice(path.lastIndexOf("/") + 1));
+    if (added) nodes = added.nodes;
+  }
+  for (const note of [...listed(false)].reverse())
+    nodes = placeNote(nodes, note.id, folderOf(note), null);
+  return realIds(nodes);
+}
+
+/** 乐观更新用的临时 id（`~1`）换成正经的 */
+function realIds(nodes: TreeNode[]): TreeNode[] {
+  const ids = new Map<string, string>();
+  for (const node of nodes)
+    if (node.id.startsWith("~"))
+      ids.set(node.id, crypto.randomUUID().replace(/-/g, "").slice(0, 6));
+  return nodes.map((node) => ({
+    ...node,
+    id: ids.get(node.id) ?? node.id,
+    parent: ids.get(node.parent) ?? node.parent,
+  }));
+}
+
+function editTree(next: TreeNode[]) {
+  state.tree = realIds(next);
+  save(state);
+}
+
+/** 逻辑目录里这一篇在哪个文件夹（没放进树里是 UNSORTED） */
+function placedIn(note: Pick<Note, "id">): string {
+  return state.tree ? (shapeOf(state.tree).placement.get(note.id)?.folder ?? UNSORTED) : "";
+}
+
+/** 智能文件夹的条件（Rust 的 vault/query.rs 的简化版：词、title:、#标签、in:、updated: / created:、is:pinned、has:todo、-不要） */
+function matchesQuery(query: string, note: MockNote, folder: string, now: number): boolean {
+  const words = query.match(/"[^"]*"|\S+/g) ?? [];
+  const title = note.title.toLowerCase();
+  const body = note.contentMd.toLowerCase();
+  // 标签、待办不认代码里写的：围栏代码块整段、行内代码拿掉
+  const prose = body
+    .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ {0,3}\1[^\S\n]*$|(?![\s\S]))/gm, "")
+    .replace(/(`+)[^`]*?\1/g, " ");
+  return words.every((raw) => {
+    const negate = raw.startsWith("-") && raw.length > 1;
+    const word = (negate ? raw.slice(1) : raw).replace(/^"|"$/g, "").toLowerCase();
+    const [key, value = ""] = word.includes(":")
+      ? [word.slice(0, word.indexOf(":")), word.slice(word.indexOf(":") + 1)]
+      : [word, ""];
+    const span = (text: string) => {
+      const match = /^(\d+)([dwmy])$/.exec(text);
+      if (!match) return null;
+      return Number(match[1]) * { d: 1, w: 7, m: 30, y: 365 }[match[2] as "d"] * 86_400_000;
+    };
+    let hit: boolean;
+    if (word.startsWith("#") && word.length > 1)
+      hit = new RegExp(
+        `(^|[^\\p{L}\\p{N}_#-])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_-])`,
+        "u",
+      ).test(prose);
+    else if (key === "title" && value) hit = title.includes(value);
+    else if (key === "in")
+      hit =
+        value === "未整理"
+          ? folder === UNSORTED
+          : folder === value || folder.startsWith(`${value}/`);
+    else if ((key === "updated" || key === "created") && span(value) !== null)
+      hit = (key === "updated" ? note.updatedAt : note.createdAt) >= now - (span(value) as number);
+    else if (word === "is:pinned") hit = note.isPinned;
+    else if (word === "has:todo" || word === "has:task")
+      hit = /^\s*(?:[-*+]|\d+[.)]) \[ \]/m.test(prose);
+    else if ((key === "updated" || key === "created") && span(value) === null) return true;
+    else hit = title.includes(word) || body.includes(word);
+    return hit !== negate;
+  });
+}
+
+/* ---------------- 日程开关 ----------------
+   浏览器预览里只管窄栏上有没有日程那几项：日记、目标照旧是日记、目标，树根照旧是「笔记」。
+   关了日程以后「整个仓库是一棵树」的样子要在桌面版里看（Rust 的 vault/layout.rs） */
+
+const JOURNAL_KEY = "odea.mock.journal";
+
+function mockLayout() {
+  let journal = true;
+  try {
+    journal = localStorage.getItem(JOURNAL_KEY) !== "off";
+  } catch {
+    /* 隐私模式：开着 */
+  }
+  return { ...ODEA_LAYOUT, journal, hiddenDirs: journal ? ODEA_LAYOUT.hiddenDirs : [] };
+}
+
 /** 文件夹在不在（空串是「笔记」本身，总在） */
 const hasFolder = (folder: string) => folder === "" || (state.folders ?? []).includes(folder);
 
@@ -255,6 +385,7 @@ function announce(change: Partial<VaultChange>) {
     conflicts: [],
     foundCopies: [],
     folders: false,
+    layout: false,
     ...change,
   };
   setTimeout(() => {
@@ -602,8 +733,8 @@ export const mockBackend: Backend = {
     await tick();
     const n = state.notes.find((x) => x.id === id);
     if (!n) notFound(`note ${id}`);
-    // relPath 归档时没动：恢复回原来的文件夹，文件夹没了就建上（和 Rust 侧一样）
-    ensureFolder(folderOf(n));
+    // relPath 归档时没动：恢复回原来的文件夹，文件夹没了就建上（和 Rust 侧一样）。逻辑目录的节点一直留着
+    if (!state.tree) ensureFolder(folderOf(n));
     n.isArchived = false;
     n.archivedAt = null;
     n.updatedAt = Date.now();
@@ -625,14 +756,17 @@ export const mockBackend: Backend = {
     const i = trash.findIndex((x) => x.id === id);
     if (i < 0) notFound(`deleted note ${id}`);
     const [restored] = trash.splice(i, 1);
-    ensureFolder(folderOf(restored!));
+    if (!state.tree) ensureFolder(folderOf(restored!));
     state.notes.push(restored!);
     save(state);
   },
 
   async noteCreate(folder, title) {
     await tick();
-    if (!hasFolder(folder)) notFound(`文件夹「${folder}」不在了`);
+    const logical = state.tree;
+    if (logical && folder !== UNSORTED && !shapeOf(logical).nodeOf.has(folder))
+      notFound(`文件夹「${folder}」不在了`);
+    if (!logical && !hasFolder(folder)) notFound(`文件夹「${folder}」不在了`);
     const now = Date.now();
     const id = crypto.randomUUID();
     state.notes.unshift({
@@ -647,9 +781,11 @@ export const mockBackend: Backend = {
       archivedAt: null,
       createdAt: now,
       updatedAt: now,
-      relPath: relPathIn({ relPath: "", title }, folder),
+      // 逻辑目录：文件平放在树根，树上放在这个文件夹最前面
+      relPath: relPathIn({ relPath: "", title }, logical ? "" : folder),
       conflictOf: null,
     });
+    if (logical) editTree(placeNote(logical, id, folder, null));
     save(state);
     return id;
   },
@@ -659,6 +795,10 @@ export const mockBackend: Backend = {
     const n = state.notes.find((x) => x.id === id);
     if (!n) notFound(`note ${id}`);
     if (n.isArchived) throw { kind: "Invalid", message: "归档里的笔记先恢复再移动" };
+    if (state.tree) {
+      editTree(placeNote(state.tree, id, folder, null));
+      return present(n);
+    }
     if (!hasFolder(folder)) notFound(`文件夹「${folder}」不在了`);
     n.relPath = relPathIn(n, folder);
     save(state);
@@ -667,11 +807,21 @@ export const mockBackend: Backend = {
 
   async folderList() {
     await tick();
+    if (state.tree) {
+      const shape = shapeOf(state.tree);
+      return shape.folders.filter((path) => !shape.smart.has(path));
+    }
     return [...(state.folders ?? [])].sort();
   },
 
   async folderCreate(parent, name) {
     await tick();
+    if (state.tree) {
+      const added = addBranch(state.tree, parent, name);
+      if (!added) notFound(`文件夹「${parent}」不在了`);
+      editTree(added.nodes);
+      return added.path;
+    }
     if (!hasFolder(parent)) notFound(`文件夹「${parent}」不在了`);
     const clean = cleanFolderName(name);
     if (!clean) throw { kind: "Invalid", message: "文件夹名不能是空的" };
@@ -683,6 +833,12 @@ export const mockBackend: Backend = {
 
   async folderRename(folder, name) {
     await tick();
+    if (state.tree) {
+      const renamed = renameBranch(state.tree, folder, name);
+      if (!renamed) notFound(`文件夹「${folder}」不在了`);
+      editTree(renamed.nodes);
+      return renamed.path;
+    }
     if (!folder || !hasFolder(folder)) notFound(`文件夹「${folder}」不在了`);
     const clean = cleanFolderName(name);
     if (!clean) throw { kind: "Invalid", message: "文件夹名不能是空的" };
@@ -698,6 +854,25 @@ export const mockBackend: Backend = {
 
   async folderDelete(folder): Promise<FolderDeletion> {
     await tick();
+    if (state.tree) {
+      const shape = shapeOf(state.tree);
+      if (!folder || !shape.nodeOf.has(folder)) notFound(`文件夹「${folder}」不在了`);
+      const kept = removeBranch(state.tree, folder);
+      const removed = state.tree.filter((node) => !kept.includes(node));
+      const ids = new Set(removed.filter((node) => node.kind === "note").map((node) => node.note));
+      const gone = state.notes.filter((n) => !n.isArchived && ids.has(n.id));
+      state.notes = state.notes.filter((n) => !gone.includes(n));
+      state.trash = [...(state.trash ?? []), ...gone];
+      const folders = shape.folders.filter((path) => within(path, folder));
+      editTree(kept);
+      return {
+        folder,
+        notes: gone.map((n) => n.id),
+        folders,
+        kept: false,
+        nodes: JSON.stringify(removed),
+      };
+    }
     if (!folder || !hasFolder(folder)) notFound(`文件夹「${folder}」不在了`);
     const gone = state.notes.filter((n) => !n.isArchived && within(folderOf(n), folder));
     state.notes = state.notes.filter((n) => !gone.includes(n));
@@ -705,12 +880,16 @@ export const mockBackend: Backend = {
     const folders = (state.folders ?? []).filter((path) => within(path, folder));
     state.folders = (state.folders ?? []).filter((path) => !within(path, folder));
     save(state);
-    return { folder, notes: gone.map((n) => n.id), folders, kept: false };
+    return { folder, notes: gone.map((n) => n.id), folders, kept: false, nodes: null };
   },
 
   async folderUndelete(deletion) {
     await tick();
-    for (const path of deletion.folders) ensureFolder(path);
+    if (state.tree && deletion.nodes) {
+      const back = JSON.parse(deletion.nodes) as TreeNode[];
+      const taken = new Set(state.tree.map((node) => node.id));
+      editTree([...state.tree, ...back.filter((node) => !taken.has(node.id))]);
+    } else for (const path of deletion.folders) ensureFolder(path);
     const ids = new Set(deletion.notes);
     const back = (state.trash ?? []).filter((n) => ids.has(n.id));
     state.trash = (state.trash ?? []).filter((n) => !ids.has(n.id));
@@ -719,6 +898,121 @@ export const mockBackend: Backend = {
   },
 
   async folderReveal() {
+    desktopOnly();
+  },
+
+  // 浏览器预览里没有本地文件。带 `?files` 打开时放两份示例（public/ 里的那张图、一份不存在的 PDF），
+  // 看树上的文件行；逻辑目录、Odea 的仓库（树根是「笔记」）本来就不列
+  async treeFiles(): Promise<TreeFile[]> {
+    await tick();
+    if (state.tree || !new URLSearchParams(window.location.search).has("files")) return [];
+    const file = (relPath: string, folder: string, kind: string): TreeFile => ({
+      relPath,
+      folder,
+      name: relPath.slice(relPath.lastIndexOf("/") + 1),
+      kind,
+      size: 1024,
+      updatedAt: Date.now(),
+    });
+    const first = [...(state.folders ?? [])].sort()[0] ?? "";
+    return [
+      file("favicon.svg", "", "image"),
+      file(`${first ? `${first}/` : ""}说明.pdf`, first, "pdf"),
+    ];
+  },
+
+  async treeFileOpen() {
+    desktopOnly();
+  },
+
+  async treeView() {
+    await tick();
+    if (!state.tree) throw { kind: "Invalid", message: "这个仓库不是逻辑目录" };
+    const alive = new Set(state.notes.map((note) => note.id));
+    return state.tree.filter((node) => node.kind !== "note" || (node.note && alive.has(node.note)));
+  },
+
+  async treePlace(id, folder, after) {
+    await tick();
+    if (!state.tree) throw { kind: "Invalid", message: "这个仓库不是逻辑目录" };
+    if (!state.notes.some((note) => note.id === id)) notFound(`note ${id}`);
+    editTree(placeNote(state.tree, id, folder, after));
+  },
+
+  async treeAddShortcut(id, folder) {
+    await tick();
+    if (!state.tree) throw { kind: "Invalid", message: "这个仓库不是逻辑目录" };
+    if (!state.notes.some((note) => note.id === id)) notFound(`note ${id}`);
+    const next = addShortcut(state.tree, id, folder);
+    const added = next.find(
+      (node) =>
+        node.kind === "shortcut" &&
+        node.note === id &&
+        node.parent === shapeOf(next).nodeOf.get(folder),
+    );
+    if (!added) throw { kind: "Invalid", message: "这里放不了快捷方式" };
+    // 乐观更新用的临时 id（~1）换成清单里像样的
+    const id6 = added.id.startsWith("~") ? Math.random().toString(36).slice(2, 8) : added.id;
+    editTree(next.map((node) => (node === added ? { ...node, id: id6 } : node)));
+    return id6;
+  },
+
+  async treeRemoveShortcut(node) {
+    await tick();
+    if (!state.tree?.some((item) => item.id === node && item.kind === "shortcut"))
+      notFound("快捷方式不在了");
+    editTree(removeShortcut(state.tree, node));
+  },
+
+  async vaultImport() {
+    await tick();
+    desktopOnly();
+  },
+
+  async treeMoveFolder(folder, parent, after) {
+    await tick();
+    const moved = state.tree ? moveBranch(state.tree, folder, parent, after) : null;
+    if (!moved) throw { kind: "Invalid", message: "文件夹不能挪进它自己里面" };
+    editTree(moved.nodes);
+    return moved.path;
+  },
+
+  async treeAddQuery(parent, name, query) {
+    await tick();
+    const added = state.tree ? addBranch(state.tree, parent, name, query) : null;
+    if (!added) notFound(`文件夹「${parent}」不在了`);
+    editTree(added.nodes);
+    return added.path;
+  },
+
+  async treeSetQuery(folder, name, query) {
+    await tick();
+    const renamed = state.tree ? renameBranch(state.tree, folder, name, query) : null;
+    if (!renamed) notFound(`文件夹「${folder}」不在了`);
+    editTree(renamed.nodes);
+    return renamed.path;
+  },
+
+  async treeQueries(queries) {
+    await tick();
+    const now = Date.now();
+    const notes = listed(false) as MockNote[];
+    return queries.map((query) =>
+      notes.filter((note) => matchesQuery(query, note, placedIn(note), now)).map((note) => note.id),
+    );
+  },
+
+  async vaultMakeLogical() {
+    await tick();
+    if (!state.tree) {
+      state.tree = treeFromFolders();
+      save(state);
+    }
+    return mockBackend.vaultInfo();
+  },
+
+  async treeExport() {
+    await tick();
     desktopOnly();
   },
 
@@ -1076,7 +1370,24 @@ export const mockBackend: Backend = {
       days: Object.keys(state.days).length,
       goals: Object.keys(state.goals).length,
       tasks: Object.values(state.tasks).filter((t) => t.dueDate).length,
+      layout: { ...mockLayout(), logical: !!state.tree },
     };
+  },
+
+  async vaultSetJournal(on: boolean): Promise<VaultInfo> {
+    await tick();
+    try {
+      localStorage.setItem(JOURNAL_KEY, on ? "" : "off");
+    } catch {
+      /* 忽略：刷新后又是开着的 */
+    }
+    return mockBackend.vaultInfo();
+  },
+
+  // 浏览器预览里没有别的设备：摆法不会在别处变
+  async vaultRelayout(): Promise<VaultInfo> {
+    await tick();
+    return mockBackend.vaultInfo();
   },
 
   async vaultReveal() {
@@ -1099,14 +1410,9 @@ export const mockBackend: Backend = {
     desktopOnly();
   },
 
-  async vaultFirstRun() {
-    const root = readMock(MOCK_FIRST_RUN_KEY);
-    if (root === null) return null;
-    // 只给一次，和桌面版一样
-    try {
-      localStorage.removeItem(MOCK_FIRST_RUN_KEY);
-    } catch {}
-    return root || "C:\\Users\\你\\Documents\\Odea";
+  // 浏览器里在新标签页打开启动器的预览
+  async showLauncher() {
+    window.open("/?launcher", "_blank");
   },
 
   // 浏览器里没有仓库文件夹：粘贴的图片直接写成 data: 地址插进正文
@@ -1228,12 +1534,10 @@ export const mockBackend: Backend = {
 /* ---------------- 新版本 ----------------
    调界面用：
      localStorage["odea.mock.update"] = "0.2.0"       有一个下好了的新版本（写 "0.2.0 manual" 是只能手动装的）
-     localStorage["odea.mock.upgradeFrom"] = "0.0.9"  这一次是从 0.0.9 升上来的（空串 = 不知道从哪一版），取一次就清掉
-     localStorage["odea.mock.firstRun"] = ""           新装第一次打开，提示笔记放在哪（写路径就显示那个路径），取一次就清掉 */
+     localStorage["odea.mock.upgradeFrom"] = "0.0.9"  这一次是从 0.0.9 升上来的（空串 = 不知道从哪一版），取一次就清掉 */
 
 const MOCK_UPDATE_KEY = "odea.mock.update";
 const MOCK_UPGRADE_KEY = "odea.mock.upgradeFrom";
-const MOCK_FIRST_RUN_KEY = "odea.mock.firstRun";
 
 function readMock(key: string): string | null {
   try {

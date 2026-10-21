@@ -1,5 +1,7 @@
 import { openDocument } from "@/app/navigate";
 import { useApp } from "@/app/store";
+import { useRelays } from "@/collab/relayStore";
+import { useCollab } from "@/collab/store";
 import { releaseOf } from "@/content/changelog";
 import { backend } from "@/data/backend";
 import { folderLabel, folderOf } from "@/data/folders";
@@ -18,37 +20,47 @@ import { runEditorCommand } from "@/lib/editorCommands";
 import { popoverCard, spring, tween } from "@/lib/motion";
 import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/paletteSearch";
 import { isMac } from "@/lib/platform";
+import { useShare } from "@/share/store";
 import {
   Archive,
   ArrowDown,
   ArrowUp,
   BookOpen,
+  CalendarCheck,
   CalendarDays,
+  CalendarOff,
   CircleFadingArrowUp,
   Cloud,
   CornerDownLeft,
   FileText,
   FolderInput,
   FolderOpen,
+  FolderOutput,
+  FolderPlus,
   FolderSearch,
+  FolderTree,
   History,
+  Import,
   Keyboard,
+  Library,
   ListCollapse,
   ListTree,
+  LogOut,
   Monitor,
   Moon,
-  NotebookPen,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   RefreshCw,
   ScrollText,
   Search,
+  Server,
   Sparkles,
   SquareCheckBig,
   Sun,
   Target,
   TextSearch,
+  Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -63,6 +75,7 @@ type Group =
   | "跳转"
   | "外观"
   | "文件"
+  | "协作"
   | "同步"
   | "帮助"
   | "新建"
@@ -141,8 +154,16 @@ export function CommandPalette({
   const notes = useData((s) => s.notes);
   const archived = useData((s) => s.archived);
   const journal = useData((s) => s.journal);
-  const navCollapsed = useApp((s) => s.navCollapsed);
-  const setNavCollapsed = useApp((s) => s.setNavCollapsed);
+  const panelCollapsed = useApp((s) => s.panelCollapsed);
+  const setPanelCollapsed = useApp((s) => s.setPanelCollapsed);
+  // 这个仓库开没开日程（docs/仓库与启动器.md §6）：没开的话没有今日TODO、目标、日历、归档
+  const journalOn = useData((s) => s.layout.journal);
+  const setJournal = useData((s) => s.setJournal);
+  // 逻辑目录（§7）：本地目录能转过去；转过去的能导出成真实文件夹
+  const logical = useData((s) => s.layout.logical);
+  const makeLogical = useData((s) => s.makeLogical);
+  const exportTree = useData((s) => s.exportTree);
+  const importFolder = useData((s) => s.importFolder);
   const revealDocument = useData((s) => s.revealDocument);
   const openVaultFolder = useData((s) => s.openVaultFolder);
   const changeVaultRoot = useData((s) => s.changeVaultRoot);
@@ -155,6 +176,10 @@ export function CommandPalette({
   const checkUpdate = useData((s) => s.checkUpdate);
   const setUpdateDialog = useApp((s) => s.setUpdateDialog);
   const setFindOpen = useApp((s) => s.setFindOpen);
+  const collabPhase = useCollab((s) => s.phase);
+  // 共享仓库（docs/协同编辑.md §20）：这个仓库共享了的话，会话式的「邀请协作」不给（一篇不能同时
+  // 绑两个 CRDT），换成「共享仓库…」
+  const shared = useShare((s) => s.info !== null);
 
   const [query, setQuery] = useState("");
   const searched = useTextSearch(open ? query : "", NOTE_RESULTS * 2);
@@ -274,11 +299,15 @@ export function CommandPalette({
           ]
         : []),
 
-      nav("notes", "笔记", NotebookPen, "notes 列表"),
-      nav("today", "今日TODO", SquareCheckBig, "today 今天 待办 todo"),
-      nav("goal", "/GOAL", Target, "goal 目标 周 月 年"),
-      nav("calendar", "日历", CalendarDays, "calendar 日期 某天"),
-      nav("archive", "归档", Archive, "archive 存档"),
+      nav("notes", "文件", FolderTree, "notes files 笔记 列表 文件树 文件夹"),
+      ...(journalOn
+        ? [
+            nav("today", "今日TODO", SquareCheckBig, "today 今天 待办 todo"),
+            nav("goal", "/GOAL", Target, "goal 目标 周 月 年"),
+            nav("calendar", "日历", CalendarDays, "calendar 日期 某天"),
+            nav("archive", "归档", Archive, "archive 存档"),
+          ]
+        : []),
 
       themeItem("light", "切换到亮色", Sun, "light 浅色 白天 日间 亮"),
       themeItem("dark", "切换到暗色", Moon, "dark 深色 夜间 黑 暗"),
@@ -293,15 +322,69 @@ export function CommandPalette({
         run: () => setReduceMotion(!reduceMotion),
       },
       {
-        id: "toggle-nav",
+        id: "toggle-panel",
         group: "外观",
-        icon: navCollapsed ? PanelLeftOpen : PanelLeftClose,
-        label: navCollapsed ? "展开导航栏" : "收起导航栏",
-        hint: navCollapsed ? undefined : "窄窗口里给正文让地方",
-        keywords: "导航 侧栏 侧边栏 sidebar collapse 收起 展开 图标",
-        run: () => setNavCollapsed(!navCollapsed),
+        icon: panelCollapsed ? PanelLeftOpen : PanelLeftClose,
+        label: panelCollapsed ? "展开侧栏" : "收起侧栏",
+        hint: panelCollapsed ? undefined : "文件树那一栏，窄窗口里给正文让地方",
+        keywords: "侧栏 侧边栏 文件树 列表栏 导航 sidebar collapse 收起 展开 隐藏",
+        run: () => setPanelCollapsed(!panelCollapsed),
       },
 
+      {
+        id: "switch-vault",
+        group: "文件",
+        icon: Library,
+        label: "打开别的仓库…",
+        hint: "用过的仓库、新建、打开文件夹；在新窗口里打开",
+        keywords: "vault 仓库 切换 switch 启动器 launcher 新建 打开文件夹 窗口 obsidian",
+        run: () => void backend().then((api) => api.showLauncher()),
+      },
+      {
+        id: "toggle-journal",
+        group: "文件",
+        icon: journalOn ? CalendarOff : CalendarCheck,
+        label: journalOn ? "关闭日程" : "启用日程",
+        hint: journalOn
+          ? "窄栏上不再有今日TODO、目标、日历、归档，文件都留着"
+          : "今日TODO、目标、日历、归档；放在这个仓库的日记、目标文件夹里",
+        keywords:
+          "journal 日程 日记 今日 todo 目标 goal 日历 calendar 归档 启用 开启 关闭 obsidian",
+        run: () => void setJournal(!journalOn),
+      },
+      logical
+        ? {
+            id: "export-tree",
+            group: "文件",
+            icon: FolderOutput,
+            label: "导出成真实文件夹…",
+            hint: "按树的结构拷一份出去，离开 Odea 时结构不丢；原来的不动",
+            keywords: "export 导出 逻辑目录 树 文件夹 结构 备份 迁移 obsidian",
+            run: () => void exportTree(),
+          }
+        : {
+            id: "make-logical",
+            group: "文件",
+            icon: FolderTree,
+            label: "转成逻辑目录…",
+            hint: "文件树自己摆：手动排序、随便挪，和文件放在哪无关；一个文件都不动",
+            keywords: "logical 逻辑目录 树 手动排序 文件夹 整理 转换 智能文件夹",
+            run: () => void makeLogical(),
+          },
+      {
+        id: "import-folder",
+        group: "文件",
+        icon: Import,
+        label: "导入文件夹…",
+        hint: "把别处的一个文件夹复制进来，照原来的结构摆好；原来的不动",
+        keywords: "import 导入 复制 文件夹 迁移 obsidian typora markdown",
+        run: () => {
+          setWorkspace("notes");
+          void importFolder("").then((folder) => {
+            if (folder !== null) useApp.getState().setNoteFolder(folder);
+          });
+        },
+      },
       {
         id: "open-vault",
         group: "文件",
@@ -321,6 +404,93 @@ export function CommandPalette({
         keywords: "vault 仓库 位置 网盘 迁移 搬 移动 C盘 D盘 换盘 存在哪",
         run: () => void changeVaultRoot(),
       },
+      // 协作（docs/协同编辑.md §8）：没在协作时是邀请 / 加入，协作中是打开对话框、停止
+      ...(collabPhase === "idle"
+        ? [
+            ...(docTarget?.kind === "note" && !shared
+              ? [
+                  {
+                    id: "collab-invite",
+                    group: "协作",
+                    icon: Users,
+                    label: "邀请协作…",
+                    hint: "发一个链接，和别人一起编辑这篇",
+                    keywords: "collab invite share 协作 协同 一起编辑 多人 邀请 分享 共享 链接",
+                    run: () => {
+                      const id = docTarget.id;
+                      const title = useData.getState().notes.find((note) => note.id === id)?.title;
+                      void useCollab.getState().startHosting(id, title ?? "");
+                    },
+                  } satisfies Item,
+                ]
+              : []),
+            {
+              id: "collab-join",
+              group: "协作",
+              icon: Users,
+              label: "加入协作…",
+              hint: "粘贴别人发来的链接",
+              keywords: "collab join 协作 协同 加入 一起编辑 多人 链接 odea",
+              run: () => useCollab.getState().openDialog(""),
+            } satisfies Item,
+            {
+              id: "collab-nearby",
+              group: "协作",
+              icon: Users,
+              label: "附近的协作…",
+              hint: "同一个网络里正在分享的人",
+              keywords: "collab nearby lan 协作 协同 附近 局域网 同一个网络 wifi 加入",
+              run: () => useCollab.getState().openDialog(""),
+            } satisfies Item,
+          ]
+        : [
+            {
+              id: "collab-open",
+              group: "协作",
+              icon: Users,
+              label: "协作…",
+              hint: collabPhase === "guest" ? "做客中" : "主持中",
+              keywords: "collab 协作 协同 成员 邀请 链接 权限",
+              run: () => useCollab.getState().openDialog(),
+            } satisfies Item,
+            {
+              id: "collab-stop",
+              group: "协作",
+              icon: LogOut,
+              label: collabPhase === "guest" ? "离开协作" : "停止协作",
+              keywords: "collab stop leave 协作 停止 离开 结束",
+              run: () => void useCollab.getState().stop(),
+            } satisfies Item,
+          ]),
+      // 共享仓库（docs/协同编辑.md §20）：整个仓库和别人、和自己的别的设备一直同步
+      {
+        id: "share-vault",
+        group: "协作",
+        icon: Users,
+        label: shared ? "共享仓库…" : "共享这个仓库…",
+        hint: shared ? "成员、邀请链接、谁在线" : "整个仓库和别人一直同步，不经过服务器",
+        keywords: "share vault team 共享 仓库 团队 成员 邀请 多设备 同步 一起",
+        run: () => useShare.getState().openDialog(),
+      } satisfies Item,
+      {
+        id: "share-join",
+        group: "协作",
+        icon: FolderPlus,
+        label: "加入共享仓库…",
+        hint: "粘贴别人发来的共享仓库链接",
+        keywords: "share join vault 共享 仓库 加入 团队 链接 odea",
+        run: () => useShare.getState().openJoin(),
+      } satisfies Item,
+      // 自己配的中继（docs/协同编辑.md §6.4）：不在同一个网络的人靠它连上。不做设置页（技术方案 §16）
+      {
+        id: "collab-relays",
+        group: "协作",
+        icon: Server,
+        label: "协作中继…",
+        hint: "不在同一个网络时靠它连上",
+        keywords: "collab relay 中继 协作 协同 服务器 互联网 外网 打洞 转发 令牌 iroh",
+        run: () => useRelays.getState().openRelays(),
+      } satisfies Item,
       // 同步（技术方案 §5.9.9）：没开时是开启的入口，开了是状态 + 立即同步
       {
         id: "sync",
@@ -417,13 +587,21 @@ export function CommandPalette({
     setTheme,
     reduceMotion,
     setReduceMotion,
-    navCollapsed,
-    setNavCollapsed,
+    panelCollapsed,
+    setPanelCollapsed,
+    journalOn,
+    setJournal,
+    logical,
+    makeLogical,
+    exportTree,
+    importFolder,
     docTarget,
     revealDocument,
     openVaultFolder,
     syncState,
     setSyncOpen,
+    collabPhase,
+    shared,
     setHistoryFor,
     changeVaultRoot,
     vaultRoot,

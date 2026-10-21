@@ -4,6 +4,9 @@
 - 事件先攒 300ms，安静下来再处理一批：保存一个文件往往是好几个事件
   （建临时文件、改名覆盖），网盘同步更是一阵一阵的。
 - 以点开头的路径不管：应用自己的临时文件、.odea/（改名前的 .ontheway/）、.git/、.obsidian/。
+  只有逻辑目录的清单 .odea/tree（和网盘给它留的冲突副本）例外：别处改了它要重读，应用自己写了它
+  同步也要被戳到（docs/仓库与启动器.md §7）；仓库标记 .odea/vault.json 也是：别的设备开关了日程、
+  网盘同步过来，前端要问一句「切换过去」（Vault::check_layout）
 - 一批里全是 .md 文件：只重读这几个；有目录或别的东西（整个文件夹被挪走、改名）：
   整个仓库增量扫一遍（按修改时间和大小，没变的不读）。
 - 应用自己写的文件扫描时指纹对得上，不会被当成外部改动，也不会发通知。
@@ -95,11 +98,13 @@ pub fn start(vault: Arc<Mutex<Vault>>, on_batch: Option<OnBatch>) -> Result<Vaul
 struct Batch {
     files: Vec<String>,
     full: bool,
+    /// 逻辑目录的清单、仓库标记变了
+    tree: bool,
 }
 
 impl Batch {
     fn is_empty(&self) -> bool {
-        !self.full && self.files.is_empty()
+        !self.full && !self.tree && self.files.is_empty()
     }
 
     fn add(&mut self, root: &Path, event: notify::Result<notify::Event>) {
@@ -112,6 +117,10 @@ impl Batch {
             return;
         }
         for path in &event.paths {
+            if is_tree_file(root, path) || is_marker_file(root, path) {
+                self.tree = true;
+                continue;
+            }
             let Some(rel) = relative(root, path) else {
                 continue;
             };
@@ -125,6 +134,24 @@ impl Batch {
             }
         }
     }
+}
+
+/// .odea/ 下面以 tree 开头的文件：清单本身（tree）和网盘的冲突副本（`tree (1)` 之类）
+fn is_tree_file(root: &Path, path: &Path) -> bool {
+    let Ok(rel) = path.strip_prefix(root) else { return false };
+    let parts: Vec<_> = rel.components().collect();
+    matches!(
+        parts.as_slice(),
+        [Component::Normal(dir), Component::Normal(name)]
+            if dir.to_string_lossy() == super::layout::APP_DIR
+                && name.to_string_lossy().starts_with(super::tree::TREE_NAME)
+    )
+}
+
+/// 仓库标记 .odea/vault.json
+fn is_marker_file(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root)
+        .is_ok_and(|rel| rel == Path::new(super::layout::APP_DIR).join("vault.json"))
 }
 
 /// 仓库里的相对路径（正斜杠）；在仓库外或者路径里有隐藏的一层时返回 None
@@ -159,7 +186,16 @@ mod tests {
         batch.add(root, event("/vault/.odea/trash/x.md"));
         batch.add(root, event("/vault/笔记/.周报.md.1-0.tmp"));
         batch.add(root, event("/elsewhere/a.md"));
+        batch.add(root, event("/vault/.odea/.tree.12-0.tmp"));
         assert!(batch.is_empty());
+        // 逻辑目录的清单和它的冲突副本
+        batch.add(root, event("/vault/.odea/tree (1)"));
+        assert!(batch.tree && batch.files.is_empty() && !batch.full);
+        // 仓库标记
+        let mut batch = Batch::default();
+        batch.add(root, event("/vault/.odea/vault.json"));
+        assert!(batch.tree && !batch.is_empty());
+        let mut batch = Batch::default();
 
         batch.add(root, event("/vault/笔记/周报.md"));
         batch.add(root, event("/vault/笔记/周报.md"));

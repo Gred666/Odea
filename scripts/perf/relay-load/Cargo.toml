@@ -1,0 +1,25 @@
+# 中继压测（docs/协同编辑.md 附录 A.2、A.3）。单独一个工程，不进 Odea 的依赖树：
+#   cargo run --release --bin relay -- --port 3443 --token 换成令牌      # 本机起一台（自签名证书）
+#   cargo run --release --bin load  -- --url https://127.0.0.1:3443 --insecure --token 换成令牌 --clients 1000 --rate 2
+# 在真实云主机上：服务器跑官方 iroh-relay（docs/自建中继.md），压测程序在另一台机器上跑 load
+[package]
+name = "odea-relay-load"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+iroh-relay = { version = "~1.3", features = ["server", "test-utils"] }
+iroh-base = "~1.3"
+iroh-dns = "~1.3"
+tokio = { version = "1", features = ["full"] }
+n0-future = "0.3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+bytes = "1"
+data-encoding = "2"
+ring = "0.17"
+
+[profile.release]
+opt-level = 3

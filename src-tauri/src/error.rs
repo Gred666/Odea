@@ -49,7 +49,7 @@ impl From<std::io::Error> for AppError {
     }
 }
 
-#[cfg(feature = "desktop-runtime")]
+#[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 impl From<tauri::Error> for AppError {
     fn from(e: tauri::Error) -> Self {
         AppError::Internal(e.to_string())

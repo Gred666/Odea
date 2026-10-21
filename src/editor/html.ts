@@ -132,11 +132,23 @@ const LOCAL_PATH_RE = /^(?:[a-zA-Z]:[\\/]|\/(?!\/)|\\\\)/;
 const SCHEME_RE = /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|#)/;
 
 /**
+ * 自己解析图片地址：做客时（协作，collab/attachments.ts）图片在主持人那台，要来缓存在本机。
+ * 每次要到新图片换一个新的对象，编辑器按引用比较，换了才重画
+ */
+export interface ImageResolver {
+  /** 正文里写的地址 → <img> 用的；空串 = 还没有（显示占位） */
+  resolve(source: string): string;
+}
+
+/** 文件夹（绝对路径），或者自己解析的 */
+export type ImageBase = string | ImageResolver | null;
+
+/**
  * 这篇文档所在的文件夹（绝对路径，正斜杠）。正文里的相对图片路径（附件，
  * `../附件/截图.png`）以它为基准 —— 和 Typora、Obsidian、VS Code 的解析一样。
- * 由 MarkdownEditor 按文档配置；浏览器预览里没有仓库文件夹，是 null。
+ * 由 MarkdownEditor 按文档配置；浏览器预览里没有仓库文件夹，是 null。做客的那一篇是解析器
  */
-export const imageBaseDir = Facet.define<string | null, string | null>({
+export const imageBaseDir = Facet.define<ImageBase, ImageBase>({
   combine: (values) => values[0] ?? null,
 });
 
@@ -145,8 +157,9 @@ export const imageBaseDir = Facet.define<string | null, string | null>({
  * 路径转成 asset 协议，WebView 才读得到；网络地址和 data: 原样返回。
  * 没有基准目录（浏览器预览、HTML 块里的 <img>）时相对路径只能原样交给 <img>。
  */
-export function resolveImageSource(source: string, base: string | null = null): string {
+export function resolveImageSource(source: string, base: ImageBase = null): string {
   const trimmed = source.trim();
+  if (base && typeof base === "object") return base.resolve(trimmed);
   const fileUrl = /^file:\/\//i.test(trimmed);
   if (!fileUrl && !LOCAL_PATH_RE.test(trimmed)) {
     if (!base || !trimmed || SCHEME_RE.test(trimmed) || !isTauri) return trimmed;
@@ -197,10 +210,7 @@ function decodeFilePath(path: string): string {
 }
 
 /** `<img src>` 只放行图片能来的地方；不合规的返回 null，替身会显示 alt。 */
-export function safeImageSource(
-  source: string | undefined,
-  base: string | null = null,
-): string | null {
+export function safeImageSource(source: string | undefined, base: ImageBase = null): string | null {
   if (!source) return null;
   const trimmed = source.trim();
   if (/^(?:javascript|vbscript):/i.test(trimmed)) return null;

@@ -13,8 +13,8 @@ export const commands = {
  * tauri.conf.json 里 `visible: false`，等前端首帧渲染完再 show() ——
  * 否则用户会先看到一个空窗口闪一下，这是桌面应用最常见的廉价感来源。
  * 
- * 这时前端也订阅好了事件：开着同步的话，第一轮从这里开始（技术方案 §5.9.6）；
- * 检查更新也从这里开始计时（update.rs，过一会儿才查第一次）。
+ * 这时前端也订阅好了事件：这个仓库开着同步的话，第一轮从这里开始（技术方案 §5.9.6）；
+ * 检查更新也从这里开始计时（update.rs，过一会儿才查第一次）。启动器在等这个窗口的话，这时关掉
  */
 async ready() : Promise<void> {
     await TAURI_INVOKE("ready");
@@ -203,6 +203,152 @@ async folderReveal(folder: string) : Promise<Result<null, AppError>> {
 }
 },
 /**
+ * 文件树上列的图片、PDF（本地目录；逻辑目录是空的）
+ */
+async treeFiles() : Promise<Result<TreeFile[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_files") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 树上的一个文件：`reveal` 在文件管理器里定位它，否则用系统的默认程序打开（PDF 交给阅读器）
+ */
+async treeFileOpen(relPath: string, reveal: boolean) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_file_open", { relPath, reveal }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 逻辑目录的树：文件夹、智能文件夹、放在树上的笔记各一个节点（不是逻辑目录报错）
+ */
+async treeView() : Promise<Result<TreeNode[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_view") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 把一篇放进 folder（`/` 是「未整理」），排在 after 那一篇后面，null 是最前面。只改清单，文件不动
+ */
+async treePlace(id: string, folder: string, after: string | null) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_place", { id, folder, after }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 在文件夹 folder 里放一个快捷方式，指向笔记 id（一篇只在一个位置，快捷方式另算）。返回快捷方式的节点 id
+ */
+async treeAddShortcut(id: string, folder: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_add_shortcut", { id, folder }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 删一个快捷方式（节点 id）：只拿掉那一行，笔记不动
+ */
+async treeRemoveShortcut(node: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_remove_shortcut", { node }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 挪文件夹 / 智能文件夹：放进 parent，排在 after（同一层的路径）后面，null 是最前面。返回新路径
+ */
+async treeMoveFolder(folder: string, parent: string, after: string | null) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_move_folder", { folder, parent, after }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 新建智能文件夹（条件的写法见 vault/query.rs），返回它的路径
+ */
+async treeAddQuery(parent: string, name: string, query: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_add_query", { parent, name, query }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 改智能文件夹的名字和条件，返回新路径
+ */
+async treeSetQuery(folder: string, name: string, query: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_set_query", { folder, name, query }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 按几个智能文件夹的条件各筛一遍，每个给出命中的笔记 id
+ */
+async treeQueries(queries: string[]) : Promise<Result<string[][], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_queries", { queries }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 本地目录转成逻辑目录：先问一句，按现在的文件夹结构生成清单，一个文件都不动。
+ * 取消了返回 null；转好了前端整页重载
+ */
+async vaultMakeLogical() : Promise<Result<VaultInfo | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_make_logical") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 逻辑目录导出成真实文件夹（离开 Odea 时的退路，docs/仓库与启动器.md §7.5）：选一个位置，在下面建
+ * 「仓库名（导出）」，按树的结构拷进去，拷完在文件管理器里打开。原来的仓库不动。取消了返回 null
+ */
+async treeExport() : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("tree_export") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 导入（docs/仓库与启动器.md §7.6）：弹选文件夹的对话框，把仓库外的一个文件夹照原样复制进来，
+ * 放在树上的 folder 里（逻辑目录在树上照原来的结构摆好）。原来的不动。取消了返回 null
+ */
+async vaultImport(folder: string) : Promise<Result<ImportReport | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_import", { folder }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 搜正文：大小写不敏感的子串，笔记（含归档）和日记、目标各自最多 limit 条；archived_only
  * 只搜归档里的笔记（归档的搜索框）。被同一处后来的搜索顶掉的这一次返回空结果（前端只认最后一次的）
  */
@@ -334,6 +480,30 @@ async guideOpen(name: string) : Promise<Result<string, AppError>> {
 async vaultInfo() : Promise<Result<VaultInfo, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("vault_info") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 开 / 关日程（docs/仓库与启动器.md §6）：改仓库标记，每个文件按新的摆法重新认一遍（文件一个都不动）。
+ * 文件多的话剩下的在后台读，和打开仓库时一样报进度。前端拿到结果后整页重载
+ */
+async vaultSetJournal(on: boolean) : Promise<Result<VaultInfo, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_set_journal", { on }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 别的设备开关了日程、转成了逻辑目录（同步过来，VaultChange.layout）：用户点了「切换过去」，
+ * 按磁盘上的仓库标记重新摆。前端随后整页重载
+ */
+async vaultRelayout() : Promise<Result<VaultInfo, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_relayout") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -477,12 +647,124 @@ async vaultChangeRoot(mode: ChangeRootMode) : Promise<Result<VaultInfo | null, A
 }
 },
 /**
- * 新装第一次打开（放了示例内容的那一次）：笔记文件夹在哪。只给一次 —— 前端拿去提示
- * 「笔记存在这里，要不要换个位置」，换完整页重载后不会再出（技术方案 §5.7）
+ * 用过的仓库，最近打开的在前
  */
-async vaultFirstRun() : Promise<Result<string | null, AppError>> {
+async launcherVaults() : Promise<Result<VaultEntry[], AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("vault_first_run") };
+    return { status: "ok", data: await TAURI_INVOKE("launcher_vaults") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 点了左边的一条
+ */
+async launcherOpen(path: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_open", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 「打开文件夹」：系统的选择文件夹对话框，选了就打开（不往别人的文件夹里放指南）。取消了返回 false
+ */
+async launcherOpenFolder() : Promise<Result<boolean, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_open_folder") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 新建时默认放在哪（「文档」）
+ */
+async launcherDefaultParent() : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_default_parent") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 新建时换个位置：选一个文件夹，新仓库建在它下面。取消了返回 null
+ */
+async launcherPickParent(from: string) : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_pick_parent", { from }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 新建：在 parent 下面建一个叫 name 的文件夹，放使用指南，打开。同名的文件夹已经有了、里面有东西就不建
+ */
+async launcherCreate(parent: string, name: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_create", { parent, name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 「从同步仓库拉一份」（换电脑时最常用，技术方案 §5.9.7）：用登录过的账号把云端的仓库 clone 到
+ * parent 下面一个叫 name 的新文件夹，打开它（同步跟着开着）。云端还是空的不拉 ——
+ * 那就用「新建」建一个，再在里面开启同步把它推上去
+ */
+async launcherClone(provider: string, cloneUrl: string, parent: string, name: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_clone", { provider, cloneUrl, parent, name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 从列表里拿掉（不碰文件）
+ */
+async launcherForget(path: string) : Promise<Result<VaultEntry[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_forget", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 在资源管理器里打开这个仓库的文件夹
+ */
+async launcherReveal(path: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_reveal", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 「加入协同编辑」：开一个不带仓库的访客窗口去加入（访客那篇本来就不落进仓库，docs/协同编辑.md §3）。
+ * 访客窗口画出来以后启动器自己关
+ */
+async launcherJoin(link: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_join", { link }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 仓库窗口里「打开别的仓库…」：弹启动器
+ */
+async launcherShow() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("launcher_show") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -694,6 +976,531 @@ async appUpgrade() : Promise<Result<AppUpgrade | null, AppError>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async collabIdentity() : Promise<Result<CollabIdentity, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_identity") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async collabSetName(name: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_name", { name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 开始协作（主持人）：起端点、返回邀请链接。第一次在网络上接受连接时 Windows 会弹防火墙
+ * note 是主持的那篇笔记的 id（落盘、存访客粘贴的附件用）；resume = 继续上次没正常结束的那一次
+ * （同一个会话 id、邀请密钥、端口，允许过的人不再问）
+ */
+async collabHost(title: string, permission: Permission, note: string, resume: boolean) : Promise<Result<CollabHosting, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_host", { title, permission, note, resume }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 换掉邀请链接：旧的作废，已经在里面的人不受影响
+ */
+async collabResetInvite() : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_reset_invite") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 链接认不认得出（加入之前先问一句：坏链接当场说清楚，不用等连接）；带没带中继
+ */
+async collabCheckLink(link: string) : Promise<Result<InvitePreview, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_check_link", { link }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 加入（访客）：马上返回，进展从 CollabEvent 的 status 里出来。
+ * direct_only：不经链接里主持人的中继（访客的 IP 不让那台机器看到，设计 §6.5）
+ */
+async collabJoin(link: string, directOnly: boolean) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_join", { link, directOnly }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 主持人回答加入请求：allow 是给的权限，None 是拒绝
+ */
+async collabAnswer(request: number, allow: Permission | null) : Promise<Result<boolean, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_answer", { request, allow }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async collabSetPermission(member: number, permission: Permission) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_permission", { member, permission }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async collabKick(member: number) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_kick", { member }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 主持人记住的人
+ */
+async collabTrusted() : Promise<Result<TrustedPeer[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_trusted") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 记住一个人：下次拿着链接或者从「附近」进来不问，按这个权限进来。返回整张表
+ */
+async collabRemember(id: string, name: string, permission: Permission) : Promise<Result<TrustedPeer[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_remember", { id, name, permission }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 不再记住：下次进来照样问。返回整张表
+ */
+async collabForget(id: string) : Promise<Result<TrustedPeer[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_forget", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 主持人改了标题：之后进来的人看到新的
+ */
+async collabSetTitle(title: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_title", { title }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 停止协作（主持人）/ 离开（访客）
+ */
+async collabStop() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_stop") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 冷启动时点进来的 odea:// 链接（取一次就清掉）
+ */
+async collabPendingLink() : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_pending_link") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客窗口（没开仓库）里「存一份到我的笔记」：交给最近用过的仓库窗口去存 —— 一个都没开着就先打开
+ * 最近的仓库。那个窗口收到 CollabCopyReady 以后来取（collab_take_copy），新建一篇、存图片、存正文
+ */
+async collabCopyToVault(copy: SharedCopy) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_copy_to_vault", { copy }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客窗口交过来、等着存的那一份（取一次就清掉）
+ */
+async collabTakeCopy() : Promise<Result<SharedCopy | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_take_copy") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客连不上主持人时：生成回连链接发给主持人（设计 §8.4）。要等端口映射、中继有个结果，最多五秒
+ */
+async collabCallback() : Promise<Result<CollabCallback, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_callback") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客：转发链接（设计 §20.9）。发给连不上主持人、却连得上我的人，他经我加入（主持人照样确认）。
+ * 和回连链接一样先看我能不能被连进来
+ */
+async collabForwardLink() : Promise<Result<CollabCallback, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_forward_link") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 这个仓库的共享状态（不是共享仓库是 null）
+ */
+async shareInfo() : Promise<Result<ShareInfo | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_info") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 把这个仓库共享出去（设计 §20.8 最后一条）：逻辑目录、没开同步、不在网盘里
+ */
+async shareCreate() : Promise<Result<ShareInfo, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_create") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 邀请链接（管理员）
+ */
+async shareInviteLink() : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_invite_link") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 重置邀请链接（以前发出去的作废），顺便定进来以后默认的角色
+ */
+async shareResetInvite(role: Role) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_reset_invite", { role }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 回答加入请求：role 是 null 就是拒绝
+ */
+async shareAnswer(request: number, role: Role | null) : Promise<Result<boolean, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_answer", { request, role }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 改成员的角色；role 是 null 就是移出
+ */
+async shareSetRole(member: string, role: Role | null) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_set_role", { member, role }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 看一眼邀请链接：是哪个仓库、进去以后是什么角色
+ */
+async shareCheckLink(link: string) : Promise<Result<SharePreview, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_check_link", { link }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 加入一个共享仓库：选一个文件夹，在里面新建一个以仓库名命名的空文件夹，摆好、在新窗口里打开。
+ * 之后那个窗口的后台服务拿着链接去拨邀请人、等他同意。取消选文件夹返回 null，否则返回窗口标签
+ */
+async shareJoin(link: string) : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_join", { link }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 这台设备不再共享：停掉服务、删掉 .odea/share。文件都留着，成了一个普通的逻辑目录。
+ * 别人那里我还在成员表里（管理员可以把我移出）
+ */
+async shareLeave() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_leave") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 共享仓库里一篇的历史（P10.3.4）：同一台设备、停顿不超过 5 分钟的改动并成一版，旧的在前
+ */
+async shareHistory(doc: string) : Promise<Result<ShareVersion[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_history", { doc }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 某一版时的全文
+ */
+async shareVersionText(doc: string, version: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_version_text", { doc, version }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 恢复到某一版（一次新的改动，别人那里也恢复）
+ */
+async shareRestore(doc: string, version: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_restore", { doc, version }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 关掉一篇（前端那份扔了）
+ */
+async shareDocClose(doc: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("share_doc_close", { doc }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 主持人打开了回连链接：往访客那边拨。拨的结果从 CollabEvent 的 dialBack 里出来
+ */
+async collabDialBack(link: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_dial_back", { link }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async collabRelays() : Promise<Result<RelayInfo[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_relays") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 中继码里是哪一台（添加之前给用户看一眼、确认）
+ */
+async collabRelayInspect(code: string) : Promise<Result<RelayInfo, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_relay_inspect", { code }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 添加中继：粘的中继码（code），或者手填的地址、令牌、指纹、名字
+ */
+async collabRelayAdd(code: string | null, url: string | null, token: string | null, fingerprint: string | null, name: string | null) : Promise<Result<RelayInfo[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_relay_add", { code, url, token, fingerprint, name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async collabRelayRemove(url: string) : Promise<Result<RelayInfo[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_relay_remove", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 这台中继的中继码（带令牌）：发给团队里的其他人
+ */
+async collabRelayCode(url: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_relay_code", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 测试一台中继：连一下，报延迟、令牌对不对、UDP 7842 通不通（最多等八秒）
+ */
+async collabRelayTest(url: string) : Promise<Result<RelayCheck, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_relay_test", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 开始看同一个网络里谁在分享（加入对话框开着时）。列表从 CollabEvent 的 nearby 里出来
+ */
+async collabNearbyStart() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_nearby_start") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async collabNearbyStop() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_nearby_stop") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 点了「附近」列表里的一位：不用链接，请求加入（主持人照样确认）
+ */
+async collabJoinNearby(id: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_join_nearby", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 上次没正常结束的协作（主持、做客各最多一份）
+ */
+async collabResumeInfo() : Promise<Result<CollabResume, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_resume_info") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客：继续上次没正常结束的做客（前端先读走了落盘的状态，用它建好了会话）
+ */
+async collabRejoin() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_rejoin") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 不接着来了：落盘的那一份删掉
+ */
+async collabDiscardResume(host: boolean) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_discard_resume", { host }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 主持人：这篇正文里引用的附件（正文一变前端就给一份新的）。只有在这里面的访客才要得到
+ */
+async collabSetAttachmentRefs(refs: AttachmentRef[]) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_attachment_refs", { refs }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客：向主持人要正文里引用的一个附件，缓存下来，返回本机的路径（前端转成 asset 地址显示）
+ */
+async collabFetchAttachment(path: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_fetch_attachment", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客：粘贴的文件交给主持人存进他的「附件」，返回从那篇引用它的路径（编辑器插进正文）
+ */
+async collabPutAttachment(name: string, dataBase64: string) : Promise<Result<Attachment, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment", { name, dataBase64 }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 访客：从系统拖进来的文件（只有路径）
+ */
+async collabPutAttachmentPath(path: string) : Promise<Result<Attachment, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment_path", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -701,13 +1508,21 @@ async appUpgrade() : Promise<Result<AppUpgrade | null, AppError>> {
 
 
 export const events = __makeEvents__<{
+collabCopyReady: CollabCopyReady,
+collabEvent: CollabEvent,
+collabLink: CollabLink,
 indexProgress: IndexProgress,
+shareChanged: ShareChanged,
 syncNotice: SyncNotice,
 syncStatusChanged: SyncStatusChanged,
 updateReady: UpdateReady,
 vaultChanged: VaultChanged
 }>({
+collabCopyReady: "collab-copy-ready",
+collabEvent: "collab-event",
+collabLink: "collab-link",
 indexProgress: "index-progress",
+shareChanged: "share-changed",
 syncNotice: "sync-notice",
 syncStatusChanged: "sync-status-changed",
 updateReady: "update-ready",
@@ -751,6 +1566,18 @@ link: string;
  * 文件名
  */
 name: string; isImage: boolean }
+/**
+ * 主持人这篇正文里引用的一个附件
+ */
+export type AttachmentRef = { 
+/**
+ * 正文里写的（访客按它来要）
+ */
+path: string; 
+/**
+ * 仓库里的相对路径（前端按这篇所在的文件夹算好）
+ */
+vaultPath: string }
 /**
  * 反向链接：一篇正文里写了 `[[这篇的标题]]` 的文档
  */
@@ -796,6 +1623,39 @@ written: string[];
  * 还有没做完的任务的日子
  */
 open: string[] }
+export type Cause = 
+/**
+ * 我这边没有网络
+ */
+{ kind: "offline" } | 
+/**
+ * 中继不收这个令牌
+ */
+{ kind: "relayDenied"; reason: string } | { kind: "relayDown"; error: string } | 
+/**
+ * 中继的版本和 Odea 不配套（§6.6）
+ */
+{ kind: "relayOutdated" } | 
+/**
+ * 中继连上了，但主持人不在上面
+ */
+{ kind: "hostAway" } | 
+/**
+ * 同一个网络里却连不进去
+ */
+{ kind: "blocked" } | 
+/**
+ * 主持人只能经 IPv6 连，我这边没有
+ */
+{ kind: "noIpv6" } | 
+/**
+ * 主持人有公网地址，但他的路由器 / 防火墙不放行
+ */
+{ kind: "hostFirewalled" } | 
+/**
+ * 不在同一个网络，主持人也没有能从外面连进来的地址
+ */
+{ kind: "differentNetwork" }
 /**
  * 换位置的时候，现在的笔记怎么办
  */
@@ -808,6 +1668,69 @@ export type ChangeRootMode =
  * 不问，直接搬过去（新装第一次打开时的「换个位置…」）
  */
 "move"
+/**
+ * 访客的回连链接，和这时自己能不能被连进来
+ */
+export type CollabCallback = { link: string; reach: Reach }
+/**
+ * 访客窗口交过来一份要存进仓库的（collab_copy_to_vault）：收到的仓库窗口去取（collab_take_copy）
+ */
+export type CollabCopyReady = null
+/**
+ * 加入请求、成员变了、连接状态
+ */
+export type CollabEvent = Control
+export type CollabHosting = { link: string; id: string; members: MemberInfo[] }
+export type CollabIdentity = { 
+/**
+ * 设备公钥（十六进制）：别人那里按它给我挑颜色
+ */
+id: string; name: string }
+/**
+ * 点开了一个 odea:// 链接（应用已经开着时）
+ */
+export type CollabLink = string
+/**
+ * 上次没正常结束的协作（崩溃、强退）：重启后问一句要不要接着来
+ */
+export type CollabResume = { host: HostResume | null; guest: GuestResume | null }
+/**
+ * 控制消息：命令层转成 tauri-specta 的事件
+ */
+export type Control = 
+/**
+ * 有人想加入（主持人）。invited = 拿着邀请链接（不是从「附近」点进来的）
+ */
+{ type: "joinRequest"; request: number; id: string; name: string; invited: boolean; via: string | null } | 
+/**
+ * 有人想加入，可两边的 Odea 版本对不上，直接拒了（主持人）。guest_older = 对方的旧
+ */
+{ type: "joinOutdated"; name: string; guestOlder: boolean } | 
+/**
+ * 等确认的那位自己走了
+ */
+{ type: "joinCancelled"; request: number } | { type: "members"; members: MemberInfo[] } | 
+/**
+ * 主持人改了我的权限（访客）
+ */
+{ type: "permission"; permission: Permission } | { type: "status"; status: Status } | 
+/**
+ * 能不能被连进来变了（主持人：分享前自检、端口映射到了、换了网络）。
+ * link 是主持人这时的邀请链接（地址变了，链接跟着变）
+ */
+{ type: "reach"; reach: Reach; link: string | null } | 
+/**
+ * 访客：现在走的是直连还是中继（会变：先经中继、打洞成功后换成直连）
+ */
+{ type: "route"; relayed: boolean } | 
+/**
+ * 主持人按回连链接往访客那边拨的结果（成功的话接着就是那位的加入请求）
+ */
+{ type: "dialBack"; ok: boolean; detail: string | null } | 
+/**
+ * 同一个网络里正在分享的人（「附近」列表开着时，变了就报一次整张表）
+ */
+{ type: "nearby"; hosts: NearbyHost[] }
 export type DayDoc = { date: string; title: string; tasks: Task[]; noteMd: string; updatedAt: number; 
 /**
  * 这一天还没写过、内容是从之前最近一天延续来的：那一天的日期。
@@ -818,6 +1741,27 @@ carriedFrom: string | null;
  * 在仓库里的相对路径；还没写过的日子是它将来的位置
  */
 relPath: string }
+export type Diagnosis = { 
+/**
+ * 链接里主持人的路
+ */
+lan: string[]; ipv6: string[]; ipv4: string[]; 
+/**
+ * 中继（名字或主机名）；选了「只直连」的话不算
+ */
+relay: string | null; 
+/**
+ * 主持人的局域网地址在我的网段里
+ */
+sameNetwork: boolean; 
+/**
+ * mDNS 在同一个网络里看到了主持人
+ */
+seenNearby: boolean; 
+/**
+ * 我这边有公网 IPv6
+ */
+hasIpv6: boolean; cause: Cause }
 /**
  * 一篇文档的历史版本：同步用的 git 仓库里每次改过它的提交（技术方案 §5.9.11）
  */
@@ -863,6 +1807,31 @@ mine: boolean;
  * 这一版时的标题（笔记改过标题才和现在不一样；某一天、目标是空串）
  */
 title: string }
+export type EndReason = 
+/**
+ * 主持人没让进（拒绝、链接作废……）
+ */
+{ kind: "rejected"; reason: RejectReason } | 
+/**
+ * 两边的 Odea 版本对不上（设计 §7.4）：host_older = 主持人的旧（该他升级），否则是我的旧
+ */
+{ kind: "outdated"; hostOlder: boolean } | 
+/**
+ * 被移出了
+ */
+{ kind: "kicked" } | 
+/**
+ * 主持人停止了协作
+ */
+{ kind: "hostStopped" } | 
+/**
+ * 还没进去，主持人那边就断开了（他关了 Odea、停止了协作）
+ */
+{ kind: "dropped" } | 
+/**
+ * 自己走的
+ */
+{ kind: "left" }
 /**
  * 全局搜索里命中了的一篇
  */
@@ -915,6 +1884,23 @@ truncated: boolean;
  * 正则写错了：给人看的原因（这时 files 是空的）
  */
 error: string | null }
+export type Firewall = 
+/**
+ * 不是 Windows，或者查不了
+ */
+{ state: "unknown" } | 
+/**
+ * 防火墙关着，或者这种网络上放行了 Odea。public：当前网络是「公用」
+ */
+{ state: "allowed"; public: boolean } | 
+/**
+ * 这种网络上 Odea 被挡着（只勾了另一种，或者点了取消）：局域网里的人连不进来
+ */
+{ state: "blocked"; public: boolean } | 
+/**
+ * 还没问过：Windows 会弹窗问
+ */
+{ state: "notAsked"; public: boolean }
 /**
  * 删掉一个文件夹的结果，原样交回 folder_undelete 就能撤销
  */
@@ -934,7 +1920,11 @@ folders: string[];
 /**
  * 文件夹里还有别的文件（图片、PDF），目录留着没删
  */
-kept: boolean }
+kept: boolean; 
+/**
+ * 逻辑目录：从清单里拿掉的那些行（文件夹、智能文件夹、笔记的位置），撤销时放回去
+ */
+nodes: string | null }
 /**
  * 某个周期（某一周 / 某个月 / 某一年）的目标。
  * 一个周期一篇；还没写过的周期返回空文档（id 为空、updated_at 为 0），
@@ -957,6 +1947,7 @@ periodStart: string; contentMd: string; createdAt: number; updatedAt: number;
  * 在仓库里的相对路径；还没写过的周期是它将来的位置
  */
 relPath: string }
+export type GuestResume = { title: string; hostName: string; savedAt: number }
 /**
  * 用户改过、而这个版本的应用带着新版的使用指南（vault/guide.rs）：前端在那一篇上问换不换
  */
@@ -973,10 +1964,43 @@ name: string;
  * 这个版本的应用带的正文
  */
 body: string }
+export type HostResume = { 
+/**
+ * 主持的那篇笔记的 id
+ */
+note: string; title: string; 
+/**
+ * 有几位访客（允许过的）
+ */
+guests: number; 
+/**
+ * 最后一次落盘（Unix 毫秒）
+ */
+savedAt: number }
+/**
+ * 导入一个文件夹的结果（Vault::import_folder）
+ */
+export type ImportReport = { 
+/**
+ * 树上新文件夹的路径（相对树根）
+ */
+folder: string; notes: number; 
+/**
+ * 别的文件（图片、PDF …）
+ */
+files: number }
 /**
  * 后台把文件读进索引的进度。读完的那一次 done == total，前端据此整个重新取一遍列表
  */
 export type IndexProgress = { done: number; total: number }
+/**
+ * 加入之前看一眼链接：带没带中继（访客要知情，设计 §6.5）
+ */
+export type InvitePreview = { 
+/**
+ * 主持人配的中继（名字或主机名）
+ */
+relay: string | null }
 /**
  * 写过的某一天 / 某个周期的目标（不带正文）：命令面板拿它按标题搜日记和目标，正文走 search_text
  */
@@ -990,6 +2014,26 @@ kind: string;
  */
 title: string; updatedAt: number }
 export type LinkRewrite = { relPath: string; before: string; after: string }
+/**
+ * 一个成员（给界面看）
+ */
+export type MemberInfo = { member: number; 
+/**
+ * 设备公钥（十六进制）：前端按它认人、挑颜色
+ */
+id: string; name: string; permission: Permission; host: boolean; 
+/**
+ * 经哪位访客转发进来的（成员号，设计 §20.9）；自己连上主持人的是 None
+ */
+via: number | null }
+/**
+ * 列表里的一位
+ */
+export type NearbyHost = { 
+/**
+ * 设备公钥（十六进制）：点哪一个就按它拨，也按它挑颜色
+ */
+id: string; name: string }
 export type Note = { id: string; title: string; contentMd: string; excerpt: string; wordCount: number; isPinned: boolean; isArchived: boolean; archiveCategory: string | null; archivedAt: number | null; createdAt: number; updatedAt: number; 
 /**
  * 在仓库里的相对路径（正斜杠）。正文里的相对图片路径以它所在的文件夹为基准
@@ -1010,6 +2054,138 @@ export type NoteInput = { id: string | null; title: string; contentMd: string }
  */
 export type NoteSummary = { id: string; title: string; excerpt: string; wordCount: number; isPinned: boolean; isArchived: boolean; archiveCategory: string | null; archivedAt: number | null; createdAt: number; updatedAt: number; relPath: string; conflictOf: string | null }
 /**
+ * 权限：能改，或者只读（主持人随时能改）
+ */
+export type Permission = "edit" | "read"
+export type Portmap = { state: "checking" } | 
+/**
+ * 路由器给了一个公网端口
+ */
+{ state: "mapped"; addr: string } | 
+/**
+ * 路由器给了，但它自己也在运营商的 NAT 后面（100.64.x.x / 私有地址）：外面还是进不来
+ */
+{ state: "shared"; addr: string } | 
+/**
+ * 路由器不支持、或者关了 UPnP / NAT-PMP / PCP
+ */
+{ state: "unavailable" }
+export type Reach = { 
+/**
+ * 还在查（端口映射要等路由器回话，中继要连一下）
+ */
+checking: boolean; 
+/**
+ * 局域网地址（私有 IPv4、ULA）
+ */
+lan: string[]; 
+/**
+ * 公网 IPv6
+ */
+ipv6: string[]; 
+/**
+ * 网卡上直接就是公网 IPv4（没有 NAT）
+ */
+publicV4: string[]; portmap: Portmap; relays: RelayReach[]; 
+/**
+ * Windows 防火墙在当前网络上放不放行（主持人；别的系统、访客是 Unknown）
+ */
+firewall: Firewall }
+export type Refusal = 
+/**
+ * 不是成员、也没拿邀请链接（或者链接作废了）
+ */
+"notMember" | 
+/**
+ * 管理员拒绝了
+ */
+"declined" | 
+/**
+ * 被移出了
+ */
+"removed" | 
+/**
+ * 对面没有这个共享（开着的不是这个仓库）
+ */
+"unknownShare" | 
+/**
+ * 协议版本对不上
+ */
+{ version: { theirs: number } }
+export type RejectReason = 
+/**
+ * 主持人拒绝了
+ */
+"declined" | 
+/**
+ * 被移出了这次协作
+ */
+"kicked" | 
+/**
+ * 链接不对：会话已经结束、链接被重置过
+ */
+"badInvite" | 
+/**
+ * 协议版本对不上
+ */
+{ version: { theirs: number } } | 
+/**
+ * 主持人停止了协作
+ */
+"ended"
+export type RelayCheck = { connected: boolean; 
+/**
+ * 到它的延迟（毫秒，网络报告量的）
+ */
+latencyMs: number | null; 
+/**
+ * 令牌被拒：中继给的原因
+ */
+denied: string | null; 
+/**
+ * 连不上：最近一次的错误
+ */
+error: string | null; 
+/**
+ * QUIC 地址发现（UDP 7842）通不通。不通的话转发照样能用，但打洞没人介绍了。None = 没量出来
+ */
+udp: boolean | null; 
+/**
+ * 中继的版本和 Odea 不配套（§6.6）：它支持的协议版本（问出来了的话，比如 `iroh-relay-v3`），
+ * 问不出来是空串
+ */
+outdated: string | null }
+/**
+ * 一台配好的中继（给界面看：令牌只说有没有）
+ */
+export type RelayInfo = { url: string; 
+/**
+ * 主机名（不是默认端口的带端口）
+ */
+host: string; name: string | null; hasToken: boolean; 
+/**
+ * 自签名证书、按指纹认的
+ */
+pinned: boolean }
+export type RelayReach = { url: string; 
+/**
+ * 名字（没起名字的是主机名）
+ */
+label: string; state: RelayState }
+export type RelayState = { state: "connecting" } | 
+/**
+ * latency：到它的延迟（毫秒，网络报告量的）
+ */
+{ state: "connected"; latency: number | null } | 
+/**
+ * 令牌被拒
+ */
+{ state: "denied"; reason: string } | 
+/**
+ * 中继的版本和 Odea 不配套（§6.6，relays::upgrade_refused）：error 是 iroh 给的原话
+ */
+{ state: "outdated"; error: string } | { state: "failed"; error: string }
+/**
  * 笔记改了标题之后，别处的 `[[旧标题]]` 改成了新标题（Vault::relink）
  */
 export type Relink = { 
@@ -1029,6 +2205,101 @@ skipped: string | null;
  * 每篇改之前、之后的全文，原样交给 note_relink_undo 就能撤销
  */
 rewrites: LinkRewrite[] }
+/**
+ * 成员的角色
+ */
+export type Role = "read" | "edit" | "admin"
+/**
+ * 共享仓库的成员、连接、加入请求、状态变了
+ */
+export type ShareChanged = null
+export type ShareInfo = { 
+/**
+ * 共享 id
+ */
+id: string; 
+/**
+ * 仓库名
+ */
+name: string; 
+/**
+ * 我（这台设备在这个共享里的公钥）
+ */
+me: string; role: Role | null; state: ShareState; members: ShareMember[]; 
+/**
+ * 等管理员确认的加入请求
+ */
+requests: ShareRequest[]; 
+/**
+ * 我手里有邀请链接（管理员）
+ */
+canInvite: boolean }
+export type ShareMember = { id: string; name: string; role: Role; 
+/**
+ * 现在连着（自己算连着）
+ */
+online: boolean; me: boolean }
+export type SharePreview = { 
+/**
+ * 仓库名
+ */
+name: string; role: Role }
+export type ShareRequest = { request: number; id: string; name: string }
+export type ShareState = 
+/**
+ * 正在加入：waiting = 连上了邀请人，等他同意
+ */
+{ state: "joining"; waiting: boolean } | { state: "rejected"; reason: Refusal } | 
+/**
+ * 被移出了
+ */
+{ state: "removed" } | { state: "ready" }
+/**
+ * 共享仓库里一篇的一版（P10.3.4）
+ */
+export type ShareVersion = { 
+/**
+ * 这一版第一次、最后一次改动的时间（毫秒）
+ */
+from: number; to: number; 
+/**
+ * 谁改的（成员表里的名字；认不出的是 None）
+ */
+name: string | null; device: string | null; 
+/**
+ * 这一版的样子（base64），看全文、恢复时交回来
+ */
+version: string }
+/**
+ * 访客窗口里共享的那一篇，存一份到仓库里
+ */
+export type SharedCopy = { title: string; markdown: string; 
+/**
+ * 正文里的图片：写的地址 → 从主持人那里要来的（本机缓存的文件，或者 base64）
+ */
+images: SharedImage[] }
+export type SharedImage = { source: string; file: string | null; data: string | null }
+/**
+ * 访客这边的连接状态（主持人只有 Ended）
+ */
+export type Status = 
+/**
+ * 正在拨主持人
+ */
+{ state: "connecting" } | 
+/**
+ * 还没进去、连不上（3 秒内给结论）。不算结束：后台接着试（换了网络会自己连上），
+ * 也等着主持人按回连链接拨过来
+ */
+{ state: "unreachable"; diagnosis: Diagnosis } | 
+/**
+ * 连上了，等主持人确认
+ */
+{ state: "waiting" } | { state: "connected"; member: number; permission: Permission; title: string } | 
+/**
+ * 断了，正在重连（本地照常编辑）
+ */
+{ state: "reconnecting" } | { state: "ended"; reason: EndReason }
 /**
  * 一个登录过的同步账号
  */
@@ -1174,6 +2445,67 @@ line: string }
  */
 export type TextSearch = { notes: TextHit[]; journal: TextHit[] }
 /**
+ * 文件树上的一个不是笔记的文件：图片、PDF（docs/仓库与启动器.md §11：整个仓库当树根时和 Obsidian 一样列出来）
+ */
+export type TreeFile = { 
+/**
+ * 仓库里的相对路径
+ */
+relPath: string; 
+/**
+ * 在树上哪个文件夹（相对树根，空串是根）
+ */
+folder: string; name: string; 
+/**
+ * `image` / `pdf`
+ */
+kind: string; size: number; 
+/**
+ * 修改时间（Unix 毫秒）
+ */
+updatedAt: number }
+/**
+ * 逻辑目录的树（vault/tree.rs）上的一个节点，给前端的样子。按路径引用的笔记已经换成了 id，
+ * 引用的笔记不在了的不给
+ */
+export type TreeNode = { id: string; 
+/**
+ * 父节点的 id，根是 `.`
+ */
+parent: string; 
+/**
+ * 排序键：同一层按它排，一样时按 id（data/tree.ts）
+ */
+key: string; 
+/**
+ * folder / query / note
+ */
+kind: string; 
+/**
+ * 文件夹、智能文件夹的名字
+ */
+name: string | null; 
+/**
+ * 笔记的 id
+ */
+note: string | null; 
+/**
+ * 智能文件夹的条件（vault/query.rs）
+ */
+query: string | null }
+/**
+ * 主持人「记住」的一个人（设计 §8.2）：下次进来不问，权限照这个
+ */
+export type TrustedPeer = { 
+/**
+ * 设备公钥（十六进制）
+ */
+id: string; 
+/**
+ * 上次见到的名字
+ */
+name: string; permission: Permission }
+/**
  * 一个等着装的新版本
  */
 export type UpdateInfo = { version: string; 
@@ -1229,16 +2561,65 @@ foundCopies: string[];
 /**
  * 「笔记」下面的文件夹变了（在资源管理器里建了、删了、改了名）
  */
-folders: boolean }
+folders: boolean; 
+/**
+ * 仓库的摆法在别处变了（另一台设备开关了日程、转成了逻辑目录，同步过来）：要按新的摆法重新认文件、
+ * 整页重载，前端问一句「切换过去」（vault_relayout）。没切换之前照旧按原来的摆法
+ */
+layout: boolean }
 /**
  * 仓库里别处发生的变化（外部程序改了文件、勾任务改了别的文档），前端据此刷新
  */
 export type VaultChanged = VaultChange
+/**
+ * 启动器左边的一条
+ */
+export type VaultEntry = { path: string; 
+/**
+ * 文件夹名
+ */
+name: string; 
+/**
+ * 上次打开（Unix 毫秒）
+ */
+lastOpened: number; 
+/**
+ * 正在某个窗口里开着
+ */
+open: boolean; 
+/**
+ * 文件夹找不到了（移动硬盘没插、被删了、被改名了）
+ */
+missing: boolean; 
+/**
+ * 逻辑目录（docs/仓库与启动器.md §7）：列表上前面一个小图标
+ */
+logical: boolean }
 export type VaultInfo = { 
 /**
  * 仓库文件夹的绝对路径
  */
-root: string; notes: number; archived: number; days: number; goals: number; tasks: number }
+root: string; notes: number; archived: number; days: number; goals: number; tasks: number; layout: VaultLayout }
+/**
+ * 这个仓库怎么摆（vault/layout.rs 的 Layout）：前端据此决定窄栏上有哪几项、一篇笔记在树上哪个文件夹
+ */
+export type VaultLayout = { 
+/**
+ * 逻辑目录（docs/仓库与启动器.md §7）：文件树是清单里摆的那一棵（tree_view），不按文件夹
+ */
+logical: boolean; 
+/**
+ * 开没开日程（今日TODO、目标、日历、归档）
+ */
+journal: boolean; 
+/**
+ * 文件树的根：「笔记」，或者整个仓库（空串）
+ */
+notesDir: string; daysDir: string; goalsDir: string; archiveDir: string; 
+/**
+ * 不在树上的文件夹（日程开着时的日记、目标、归档）：里面的笔记算在树根这一层
+ */
+hiddenDirs: string[] }
 
 /** tauri-specta globals **/
 

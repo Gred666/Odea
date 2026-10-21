@@ -344,12 +344,23 @@ pub async fn update_install<R: Runtime>(
             eprintln!("记窗口位置失败: {error}");
         }
     }
-    // 和关窗口一样：窗口先藏起来，开着同步就把最后的改动推上去，最多等 3 秒
+    // 和关窗口一样：窗口都先藏起来，开着同步的仓库各自把最后的改动推上去（一起推），最多等 3 秒。
+    // 别的仓库窗口里编辑器的自动保存是停手 400ms 就存的，用户在这个窗口里点的「重启」，那边早存完了
+    let windows: Vec<_> = app.webview_windows().into_values().collect();
+    for other in &windows {
+        let _ = other.hide();
+    }
     let _ = window.hide();
-    let synced = state.sync.is_running();
-    if synced {
-        let hub = state.sync.clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || hub.close(Duration::from_secs(3))).await;
+    let synced: Vec<_> = state.all_workspaces().into_iter().filter(|workspace| workspace.sync.is_running()).collect();
+    let closing: Vec<_> = synced
+        .iter()
+        .map(|workspace| {
+            let hub = workspace.sync.clone();
+            tauri::async_runtime::spawn_blocking(move || hub.close(Duration::from_secs(3)))
+        })
+        .collect();
+    for close in closing {
+        let _ = close.await;
     }
 
     let update = pending.update.clone();
@@ -361,18 +372,20 @@ pub async fn update_install<R: Runtime>(
         Ok(()) => app.restart(),
         Err(error) => {
             *lock(&state.update.pending) = Some(pending);
-            let _ = window.show();
-            if synced {
-                restart_sync(&app, &state);
+            for other in &windows {
+                let _ = other.show();
+            }
+            for workspace in &synced {
+                restart_sync(&app, &state, workspace);
             }
             Err(update_error(error))
         }
     }
 }
 
-fn restart_sync<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
-    let hooks = crate::commands::sync_hooks(app.clone(), state.data_dir.clone());
-    if let Err(error) = state.sync.start(state.vault.clone(), hooks) {
+fn restart_sync<R: Runtime>(app: &AppHandle<R>, state: &AppState, workspace: &crate::state::Workspace) {
+    let hooks = crate::commands::sync_hooks(app.clone(), workspace.label.clone(), state.data_dir.clone());
+    if let Err(error) = workspace.sync.start(workspace.vault.clone(), hooks) {
         eprintln!("同步没能重新开起来: {error}");
     }
 }

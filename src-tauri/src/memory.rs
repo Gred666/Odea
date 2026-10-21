@@ -5,21 +5,41 @@
 //! 页面文件；回到 Normal 后用到哪画到哪。微软的说明是应用不在前台时才设：看得见的时候设
 //! Low 会卡。所以只在最小化时设，还原就撤。运行时太旧（< 114）时这个接口不存在，什么也不做。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashSet;
+use std::sync::Mutex;
 
 use tauri::{Manager, Runtime, Window};
 
-/// 现在设的是不是 Low。窗口事件来得很密（拖动改大小每一帧都是 Resized），只在变了时才去设
-static LOW: AtomicBool = AtomicBool::new(false);
+/// 哪些窗口现在设的是 Low（一个窗口一个仓库，各自最小化）。窗口事件来得很密（拖动改大小每一帧
+/// 都是 Resized），只在变了时才去设
+static LOW: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 /// 窗口事件里调：最小化了就 Low，还原了就 Normal
 pub fn follow_window<R: Runtime>(window: &Window<R>) {
     let minimized = window.is_minimized().unwrap_or(false);
-    if LOW.swap(minimized, Ordering::SeqCst) == minimized {
+    let changed = {
+        let Ok(mut low) = LOW.lock() else { return };
+        let low = low.get_or_insert_with(HashSet::new);
+        if minimized {
+            low.insert(window.label().to_string())
+        } else {
+            low.remove(window.label())
+        }
+    };
+    if !changed {
         return;
     }
     if let Some(webview) = window.get_webview_window(window.label()) {
         set_low(&webview, minimized);
+    }
+}
+
+/// 窗口没了：忘掉它的状态（同一个标签以后再开，从 Normal 算起）
+pub fn forget_window(label: &str) {
+    if let Ok(mut low) = LOW.lock() {
+        if let Some(low) = low.as_mut() {
+            low.remove(label);
+        }
     }
 }
 

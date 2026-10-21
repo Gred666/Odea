@@ -13,8 +13,9 @@ use std::path::Path;
 use super::guide;
 use crate::error::Result;
 
-pub fn write(root: &Path) -> Result<()> {
-    guide::write_all(root)
+/// dir：指南放在哪（「笔记」；新建的逻辑目录是仓库根）
+pub fn write(root: &Path, dir: &str) -> Result<()> {
+    guide::write_all(root, dir)
 }
 
 #[cfg(test)]
@@ -25,7 +26,7 @@ mod tests {
     #[test]
     fn seeds_only_the_guides() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path()).unwrap();
+        write(dir.path(), crate::vault::layout::NOTES_DIR).unwrap();
         let vault = Vault::open_in_memory(dir.path());
 
         let titles: Vec<_> = vault

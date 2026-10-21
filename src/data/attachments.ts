@@ -45,12 +45,12 @@ export async function attachPaths(
 }
 
 /** 剪贴板里的截图没有文件名：按类型起一个，后端会换成「粘贴-时间」 */
-function fallbackName(type: string): string {
+export function fallbackName(type: string): string {
   const ext = type.split("/")[1]?.replace("jpeg", "jpg").replace("svg+xml", "svg") || "png";
   return `image.${ext}`;
 }
 
-function base64Of(file: File): Promise<string> {
+export function base64Of(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {

@@ -6,6 +6,7 @@
 )]
 
 mod boot;
+mod collab;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod commands;
 mod db;
@@ -14,12 +15,15 @@ mod error;
 #[cfg(feature = "desktop-runtime")]
 mod memory;
 mod old_name;
+mod share;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod state;
 mod sync;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod update;
 mod vault;
+#[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
+mod workspace;
 
 #[cfg(feature = "desktop-runtime")]
 use std::sync::{Arc, Mutex};
@@ -36,8 +40,8 @@ use state::AppState;
 /// tauri.conf.json 里 `visible: false`，等前端首帧渲染完再 show() ——
 /// 否则用户会先看到一个空窗口闪一下，这是桌面应用最常见的廉价感来源。
 ///
-/// 这时前端也订阅好了事件：开着同步的话，第一轮从这里开始（技术方案 §5.9.6）；
-/// 检查更新也从这里开始计时（update.rs，过一会儿才查第一次）。
+/// 这时前端也订阅好了事件：这个仓库开着同步的话，第一轮从这里开始（技术方案 §5.9.6）；
+/// 检查更新也从这里开始计时（update.rs，过一会儿才查第一次）。启动器在等这个窗口的话，这时关掉
 #[cfg(feature = "desktop-runtime")]
 #[tauri::command]
 #[specta::specta]
@@ -46,9 +50,10 @@ fn ready(window: WebviewWindow) {
     use_app_icon_resource(&window);
     let _ = window.show();
     let _ = window.set_focus();
-    if let Some(state) = window.try_state::<AppState>() {
-        state.sync.sync_now();
+    if let Some(workspace) = window.try_state::<AppState>().and_then(|state| state.workspace(window.label())) {
+        workspace.sync.sync_now();
     }
+    workspace::on_ready(window.app_handle(), window.label());
     update::start(window.app_handle());
 }
 
@@ -134,9 +139,11 @@ async fn win_force_close(
     window: WebviewWindow,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), error::AppError> {
-    if state.sync.is_running() {
-        let _ = window.hide();
-        let hub = state.sync.clone();
+    // 这个窗口正在协作：告诉别人、删掉落盘的记录（关窗口算正常结束，重启后不再问「继续上次的协作」）
+    let _ = window.hide();
+    commands::end_collab(&state, window.label()).await;
+    if let Some(workspace) = state.workspace(window.label()).filter(|workspace| workspace.sync.is_running()) {
+        let hub = workspace.sync.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
             hub.close(std::time::Duration::from_secs(3))
         })
@@ -158,6 +165,47 @@ fn win_is_maximized(window: WebviewWindow) -> bool {
 #[specta::specta]
 fn win_start_dragging(window: WebviewWindow) -> bool {
     window.start_dragging().is_ok()
+}
+
+/// 协作的 odea:// 链接（docs/协同编辑.md §8.1）。冷启动带进来的先存着，前端起来以后取
+/// （collab_pending_link）；应用开着时点的直接发 CollabLink。Windows 的安装包注册了 scheme；
+/// 开发构建在这里现注册（正式版不注册：会把关联改成当前这个 exe，跑一次 debug 版就抢走了
+/// 已安装应用的链接）。Linux 的 AppImage 没有安装这一步，运行时注册
+#[cfg(feature = "desktop-runtime")]
+fn collab_hub(app: &tauri::App) -> Arc<commands::CollabHub> {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    let hub = Arc::new(commands::CollabHub::default());
+    #[cfg(any(all(windows, debug_assertions), target_os = "linux"))]
+    if let Err(error) = app.deep_link().register_all() {
+        eprintln!("注册 odea:// 链接失败: {error}");
+    }
+    let is_join = |url: &tauri::Url| url.scheme() == "odea";
+    if let Ok(Some(urls)) = app.deep_link().get_current() {
+        if let Some(url) = urls.iter().find(|url| is_join(url)) {
+            hub.set_pending_link(url.to_string());
+        }
+    }
+    let handle = app.handle().clone();
+    // 交给最近用过的仓库窗口（一次只有一个会话、属于一个窗口，docs/仓库与启动器.md §4.3）
+    app.deep_link().on_open_url(move |event| {
+        for url in event.urls().iter().filter(|url| is_join(url)) {
+            workspace::deliver_link(&handle, url.to_string());
+        }
+    });
+    hub
+}
+
+/// 协作收发字节的两个命令（不经 tauri-specta）。返回类型写明，生成的闭包才推得出参数类型
+#[cfg(feature = "desktop-runtime")]
+fn collab_raw_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![
+        commands::collab_send,
+        commands::collab_pipe,
+        commands::collab_resume_state,
+        commands::share_send,
+        commands::share_pipe,
+        commands::share_doc_open
+    ]
 }
 
 #[cfg(feature = "desktop-runtime")]
@@ -186,6 +234,19 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::folder_delete,
         commands::folder_undelete,
         commands::folder_reveal,
+        commands::tree_files,
+        commands::tree_file_open,
+        commands::tree_view,
+        commands::tree_place,
+        commands::tree_add_shortcut,
+        commands::tree_remove_shortcut,
+        commands::tree_move_folder,
+        commands::tree_add_query,
+        commands::tree_set_query,
+        commands::tree_queries,
+        commands::vault_make_logical::<tauri::Wry>,
+        commands::tree_export::<tauri::Wry>,
+        commands::vault_import::<tauri::Wry>,
         commands::search_text,
         commands::find_in_vault,
         commands::task_toggle,
@@ -199,6 +260,8 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::guide_settle,
         commands::guide_open,
         commands::vault_info,
+        commands::vault_set_journal::<tauri::Wry>,
+        commands::vault_relayout::<tauri::Wry>,
         commands::index_progress,
         commands::vault_reveal,
         commands::vault_open_folder,
@@ -211,7 +274,17 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::vault_attach,
         commands::vault_attach_path,
         commands::vault_change_root::<tauri::Wry>,
-        commands::vault_first_run,
+        workspace::launcher_vaults,
+        workspace::launcher_open::<tauri::Wry>,
+        workspace::launcher_open_folder::<tauri::Wry>,
+        workspace::launcher_default_parent::<tauri::Wry>,
+        workspace::launcher_pick_parent::<tauri::Wry>,
+        workspace::launcher_create::<tauri::Wry>,
+        workspace::launcher_clone::<tauri::Wry>,
+        workspace::launcher_forget,
+        workspace::launcher_reveal,
+        workspace::launcher_join::<tauri::Wry>,
+        workspace::launcher_show::<tauri::Wry>,
         commands::sync_status,
         commands::sync_now,
         commands::sync_accounts,
@@ -231,12 +304,65 @@ fn command_builder() -> Builder<tauri::Wry> {
         update::update_check::<tauri::Wry>,
         update::update_install::<tauri::Wry>,
         update::app_upgrade,
+        commands::collab_identity,
+        commands::collab_set_name,
+        commands::collab_host::<tauri::Wry>,
+        commands::collab_reset_invite,
+        commands::collab_check_link,
+        commands::collab_join::<tauri::Wry>,
+        commands::collab_answer,
+        commands::collab_set_permission,
+        commands::collab_kick,
+        commands::collab_trusted,
+        commands::collab_remember,
+        commands::collab_forget,
+        commands::collab_set_title,
+        commands::collab_stop,
+        commands::collab_pending_link,
+        commands::collab_copy_to_vault::<tauri::Wry>,
+        commands::collab_take_copy,
+        commands::collab_callback,
+        commands::collab_forward_link,
+        commands::share_info,
+        commands::share_create::<tauri::Wry>,
+        commands::share_invite_link,
+        commands::share_reset_invite,
+        commands::share_answer,
+        commands::share_set_role,
+        commands::share_check_link,
+        commands::share_join::<tauri::Wry>,
+        commands::share_leave,
+        commands::share_history,
+        commands::share_version_text,
+        commands::share_restore,
+        commands::share_doc_close,
+        commands::collab_dial_back,
+        commands::collab_relays,
+        commands::collab_relay_inspect,
+        commands::collab_relay_add,
+        commands::collab_relay_remove,
+        commands::collab_relay_code,
+        commands::collab_relay_test,
+        commands::collab_nearby_start::<tauri::Wry>,
+        commands::collab_nearby_stop,
+        commands::collab_join_nearby::<tauri::Wry>,
+        commands::collab_resume_info,
+        commands::collab_rejoin::<tauri::Wry>,
+        commands::collab_discard_resume,
+        commands::collab_set_attachment_refs,
+        commands::collab_fetch_attachment,
+        commands::collab_put_attachment,
+        commands::collab_put_attachment_path,
     ])
     .events(collect_events![
         commands::IndexProgress,
         commands::VaultChanged,
         commands::SyncStatusChanged,
         commands::SyncNotice,
+        commands::CollabEvent,
+        commands::CollabLink,
+        commands::CollabCopyReady,
+        commands::ShareChanged,
         update::UpdateReady
     ])
 }
@@ -265,6 +391,19 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::folder_delete,
         commands::folder_undelete,
         commands::folder_reveal,
+        commands::tree_files,
+        commands::tree_file_open,
+        commands::tree_view,
+        commands::tree_place,
+        commands::tree_add_shortcut,
+        commands::tree_remove_shortcut,
+        commands::tree_move_folder,
+        commands::tree_add_query,
+        commands::tree_set_query,
+        commands::tree_queries,
+        commands::vault_make_logical::<tauri::test::MockRuntime>,
+        commands::tree_export::<tauri::test::MockRuntime>,
+        commands::vault_import::<tauri::test::MockRuntime>,
         commands::search_text,
         commands::find_in_vault,
         commands::task_toggle,
@@ -278,6 +417,8 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::guide_settle,
         commands::guide_open,
         commands::vault_info,
+        commands::vault_set_journal::<tauri::test::MockRuntime>,
+        commands::vault_relayout::<tauri::test::MockRuntime>,
         commands::index_progress,
         commands::vault_reveal,
         commands::vault_open_folder,
@@ -290,7 +431,17 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::vault_attach,
         commands::vault_attach_path,
         commands::vault_change_root::<tauri::test::MockRuntime>,
-        commands::vault_first_run,
+        workspace::launcher_vaults,
+        workspace::launcher_open::<tauri::test::MockRuntime>,
+        workspace::launcher_open_folder::<tauri::test::MockRuntime>,
+        workspace::launcher_default_parent::<tauri::test::MockRuntime>,
+        workspace::launcher_pick_parent::<tauri::test::MockRuntime>,
+        workspace::launcher_create::<tauri::test::MockRuntime>,
+        workspace::launcher_clone::<tauri::test::MockRuntime>,
+        workspace::launcher_forget,
+        workspace::launcher_reveal,
+        workspace::launcher_join::<tauri::test::MockRuntime>,
+        workspace::launcher_show::<tauri::test::MockRuntime>,
         commands::sync_status,
         commands::sync_now,
         commands::sync_accounts,
@@ -310,12 +461,65 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         update::update_check::<tauri::test::MockRuntime>,
         update::update_install::<tauri::test::MockRuntime>,
         update::app_upgrade,
+        commands::collab_identity,
+        commands::collab_set_name,
+        commands::collab_host::<tauri::test::MockRuntime>,
+        commands::collab_reset_invite,
+        commands::collab_check_link,
+        commands::collab_join::<tauri::test::MockRuntime>,
+        commands::collab_answer,
+        commands::collab_set_permission,
+        commands::collab_kick,
+        commands::collab_trusted,
+        commands::collab_remember,
+        commands::collab_forget,
+        commands::collab_set_title,
+        commands::collab_stop,
+        commands::collab_pending_link,
+        commands::collab_copy_to_vault::<tauri::test::MockRuntime>,
+        commands::collab_take_copy,
+        commands::collab_callback,
+        commands::collab_forward_link,
+        commands::share_info,
+        commands::share_create::<tauri::test::MockRuntime>,
+        commands::share_invite_link,
+        commands::share_reset_invite,
+        commands::share_answer,
+        commands::share_set_role,
+        commands::share_check_link,
+        commands::share_join::<tauri::test::MockRuntime>,
+        commands::share_leave,
+        commands::share_history,
+        commands::share_version_text,
+        commands::share_restore,
+        commands::share_doc_close,
+        commands::collab_dial_back,
+        commands::collab_relays,
+        commands::collab_relay_inspect,
+        commands::collab_relay_add,
+        commands::collab_relay_remove,
+        commands::collab_relay_code,
+        commands::collab_relay_test,
+        commands::collab_nearby_start::<tauri::test::MockRuntime>,
+        commands::collab_nearby_stop,
+        commands::collab_join_nearby::<tauri::test::MockRuntime>,
+        commands::collab_resume_info,
+        commands::collab_rejoin::<tauri::test::MockRuntime>,
+        commands::collab_discard_resume,
+        commands::collab_set_attachment_refs,
+        commands::collab_fetch_attachment,
+        commands::collab_put_attachment,
+        commands::collab_put_attachment_path,
     ])
     .events(collect_events![
         commands::IndexProgress,
         commands::VaultChanged,
         commands::SyncStatusChanged,
         commands::SyncNotice,
+        commands::CollabEvent,
+        commands::CollabLink,
+        commands::CollabCopyReady,
+        commands::ShareChanged,
         update::UpdateReady
     ]);
 
@@ -351,32 +555,57 @@ pub fn run() {
 
     #[cfg(desktop)]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
+        // 已经在运行时再启动一次（双击图标、开始菜单）：弹启动器（docs/仓库与启动器.md §3.1）。
+        // 带着 odea:// 链接来的不弹：deep-link 插件接住链接，交给仓库窗口（collab_hub 里的 on_open_url）
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if argv.iter().any(|arg| arg.starts_with("odea:")) {
+                return;
             }
+            let app = app.clone();
+            // 回调在主线程上：建窗口挪到别处
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = workspace::show_launcher(&app) {
+                    eprintln!("打开启动器失败: {error}");
+                }
+            });
         }));
     }
 
-    builder
+    let app = builder
+        // single-instance 之后：应用开着时点 odea:// 链接，交给这个实例（见下面 on_open_url）
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // 每个仓库窗口记着自己的位置（标签按仓库定）；启动器每次都在屏幕中间
+        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&[workspace::LAUNCHER]).build())
         // 只在 Rust 里用（update.rs），前端没有它的权限
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(specta_builder.invoke_handler())
+        .invoke_handler({
+            // 协作的两个收发字节的命令不经 tauri-specta（原始请求体 / 二进制 Channel，见 commands.rs「协作」）
+            let typed = specta_builder.invoke_handler();
+            let raw = collab_raw_handler();
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| match invoke.message.command() {
+                "collab_send" | "collab_pipe" | "collab_resume_state" | "share_send" | "share_pipe"
+                | "share_doc_open" => raw(invoke),
+                _ => typed(invoke),
+            }
+        })
         .on_window_event(|window, event| {
-            // 窗口获得焦点：可能刚在别的设备上写过，拉一次（距上一轮不到 1 分钟的不拉）
+            // 窗口获得焦点：这个仓库可能刚在别的设备上写过，拉一次（距上一轮不到 1 分钟的不拉）；
+            // 记下最近用的仓库窗口（odea:// 链接交给它）
             if let tauri::WindowEvent::Focused(true) = event {
-                if let Some(state) = window.try_state::<AppState>() {
-                    state.sync.focus();
+                if let Some(workspace) = window.try_state::<AppState>().and_then(|state| state.workspace(window.label())) {
+                    workspace.sync.focus();
                 }
+                workspace::on_focused(window.app_handle(), window.label());
             }
             // 最小化 / 还原：前者也会失焦，还原时会改大小
             if matches!(event, tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_)) {
                 memory::follow_window(window);
+            }
+            if let tauri::WindowEvent::Destroyed = event {
+                memory::forget_window(window.label());
+                workspace::on_destroyed(window.app_handle(), window.label());
             }
         })
         .setup(move |app| {
@@ -385,66 +614,48 @@ pub fn run() {
             let data_dir = boot::data_dir(app.path().app_data_dir().expect("拿不到应用数据目录"));
             // 之前没有配置文件 = 这台机器上第一次打开：新装的不算升级
             let fresh = !data_dir.join("config.json").exists();
-            let mut config = boot::Config::load(&data_dir);
-            // 升级后第一次打开：前端拿去提示一次更新说明（update.rs 的 app_upgrade）。下面存配置时一起记下这一版
-            let upgrade = boot::note_version(&mut config, fresh, &app.package_info().version.to_string());
-            let root = boot::vault_root(&config, app.path().document_dir().ok(), &data_dir);
-
-            // 第一次启动：旧库有东西就搬进文件夹，否则放示例内容。搬家失败时不能带着
-            // 一个空仓库启动 —— 用户会以为笔记全没了，还可能在空仓库里接着写。
-            // 新装第一次打开（放了示例内容）：前端提示一次笔记放在哪、要不要换个位置（技术方案 §5.7）
-            let mut first_run = None;
-            match boot::prepare(&root, &data_dir, &mut config, true) {
-                Ok(boot::Prepared::Imported(report)) => eprintln!("旧数据已搬进 {}: {report:?}", root.display()),
-                Ok(boot::Prepared::Seeded) => first_run = Some(root.display().to_string()),
-                Ok(_) => {}
-                Err(error) => panic!("准备笔记文件夹 {} 失败: {error}", root.display()),
-            }
-            if std::env::var_os("ODEA_VAULT").is_none() {
-                config.vault_root = Some(root.clone());
-            }
-            if let Err(error) = config.save(&data_dir) {
+            // 升级后第一次打开：前端拿去提示一次更新说明（update.rs 的 app_upgrade）。
+            // 旧配置只记着一个仓库：变成仓库列表的第一条（docs/仓库与启动器.md §5）
+            let (upgrade, config) = boot::edit_config(&data_dir, |config| {
+                let upgrade = boot::note_version(config, fresh, &app.package_info().version.to_string());
+                config.migrate_vaults(db::now_ms());
+                Ok((upgrade, config.clone()))
+            })
+            .unwrap_or_else(|error| {
                 eprintln!("保存配置失败: {error}");
-            }
+                (None, boot::Config::load(&data_dir))
+            });
+            // SQLite 时代的旧库里有东西、还没搬过：直接在「文档/Odea」建仓库搬进去，不弹启动器
+            let legacy = !config.legacy_imported && vault::legacy::has_data(&data_dir.join("ontheway.db"));
+            let plan = boot::startup(
+                &config,
+                boot::env_vault(),
+                boot::default_root(app.path().document_dir().ok(), &data_dir),
+                legacy,
+            );
 
-            // 文件很多（第一次打开一个大文件夹、索引的结构升级了）的话剩下的在后台读，窗口不等它
-            let (mut vault, backlog) = vault::Vault::open_quick(&root, &boot::index_path(&data_dir, &root))
-                .expect("打开笔记文件夹失败");
-            // 应用升级了：用户没改过的使用指南换成这一版带的（vault/guide.rs）。前端还没起来，不用通知
-            if let Err(error) = vault.guide_refresh() {
-                eprintln!("更新使用指南失败: {error}");
-            }
-            vault.set_announcer(commands::announcer(app.handle().clone()));
-            let vault = Arc::new(Mutex::new(vault));
-            let sync = Arc::new(sync::engine::SyncHub::default());
-            let watcher = match vault::watch::start(vault.clone(), Some(commands::sync_poke(&sync))) {
-                Ok(watcher) => Some(watcher),
-                Err(error) => {
-                    // 监听不上只是外部改动不能实时同步，重启时的扫描还会补上
-                    eprintln!("{error}");
-                    None
-                }
-            };
-            // 仓库开了同步就起同步线程：先来一轮完整的（技术方案 §5.9.6）
-            let hooks = commands::sync_hooks(app.handle().clone(), data_dir.clone());
-            if let Err(error) = sync.start(vault.clone(), hooks) {
-                eprintln!("同步没能启动: {error}");
-            }
-            let indexing = Arc::new(Mutex::new(commands::Indexing::default()));
-            commands::spawn_backlog(app.handle().clone(), vault.clone(), indexing.clone(), backlog);
             app.manage(AppState {
-                vault,
-                watcher: Mutex::new(watcher),
+                workspaces: Mutex::new(std::collections::HashMap::new()),
+                focused: Mutex::new(None),
+                launcher_waits_for: Mutex::new(None),
                 data_dir,
-                sync,
                 sync_login: Mutex::new(sync::account::LoginSlot::default()),
                 update: Arc::new(update::UpdateHub::new(upgrade)),
-                indexing,
-                first_run: Mutex::new(first_run),
+                collab: collab_hub(app),
             });
-
+            // 上次开着的仓库各开一个窗口；一个都打不开（新装、文件夹都找不到了）弹启动器
+            workspace::startup(app.handle(), plan);
             Ok(())
         })
-        .run(context)
-        .expect("error while running Odea");
+        .build(context)
+        .expect("error while building Odea");
+
+    app.run(|handle, event| {
+        // macOS 点 Dock：一个窗口都没有时打开最近的仓库，没有就弹启动器（docs/仓库与启动器.md §3.1）
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
+            workspace::reopen(handle);
+        }
+        let _ = (handle, event);
+    });
 }

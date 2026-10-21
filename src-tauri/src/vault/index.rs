@@ -79,6 +79,8 @@ pub fn open_in_memory() -> Connection {
 }
 
 fn prepare(conn: &Connection) -> Result<()> {
+    // 记几个和表结构无关的值（这个索引按哪种摆法建的，见 sync_layout）。后加的，不升 VERSION
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version == VERSION {
         return Ok(());
@@ -90,6 +92,27 @@ fn prepare(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
     conn.pragma_update(None, "user_version", VERSION)?;
     Ok(())
+}
+
+/// 仓库的摆法（layout::Layout::fingerprint）和建这份索引时不一样了（开关了日程、换了日记文件夹）：
+/// 清空，下次扫描每个文件按新的摆法重新认。`assumed` = 还没记过时当它是哪一种（P11.2 以前的索引
+/// 都是按 Odea 的老规矩建的，那样的仓库不用重读）。清空了返回 true
+pub fn sync_layout(conn: &Connection, fingerprint: &str, assumed: &str) -> Result<bool> {
+    let stored: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key = 'layout'", [], |r| r.get(0))
+        .optional()?;
+    let stale = stored.as_deref().unwrap_or(assumed) != fingerprint;
+    if stale {
+        conn.execute_batch("DELETE FROM task; DELETE FROM doc;")?;
+    }
+    if stale || stored.is_none() {
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('layout', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![fingerprint],
+        )?;
+    }
+    Ok(stale)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,6 +326,28 @@ pub fn note_titles(conn: &Connection) -> Result<Vec<(String, String)>> {
     let mut stmt = conn.prepare("SELECT id, title FROM doc WHERE kind = 'note'")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// 所有笔记（含归档）的 (id, 路径, 属性块里写着的 id)：逻辑目录的清单按它找笔记（vault/logical.rs）
+pub fn note_refs(conn: &Connection) -> Result<Vec<(String, String, Option<String>)>> {
+    let mut stmt = conn.prepare("SELECT id, rel_path, file_id FROM doc WHERE kind = 'note'")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// meta 表里记着的一个值
+pub fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0))
+        .optional()?)
+}
+
+pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
 }
 
 /// 扫描用：已索引的每个文件的 (路径, mtime, size)

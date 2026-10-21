@@ -8,6 +8,8 @@
 - 合并在内存里做（merge_commits），工作区里永远不会出现 `<<<<<<<`：
   冲突的文件原处留本机的版本，对方的版本连同路径交回去，由调用方另存成冲突副本；
   一边删、一边改，留改过的。
+- 逻辑目录的清单（.odea/tree）两边都改了：不出冲突副本，按节点三方合并（vault::tree::merge3）——
+  git 逐行合上了也照样重合一遍：两边各把同一篇放进了不同的文件夹、互相挪进了对方，逐行看不出来
 - 超过上限的文件不进库；进过库、后来变大的，停在上一次的版本 ——
   从索引里删掉，等于在别的设备上把它删了。
 - libgit2 不会自己 gc：零散对象有多少（loose_objects）、什么时候 repack，调用方定。
@@ -30,7 +32,7 @@ use git2::{
 };
 
 use crate::old_name;
-use crate::vault::fsio;
+use crate::vault::{fsio, tree};
 
 /// `.git/config` 里应用自己的小节（`odea.autosync` 之类）
 const APP_SECTION: &str = "odea";
@@ -568,6 +570,7 @@ impl SyncRepo {
 
         let ours = head.ok_or_else(|| SyncError::Local("本地没有提交，却需要合并".into()))?;
         let mut index = self.repo.merge_commits(&ours, &theirs, None)?;
+        self.merge_tree_file(&mut index, &ours, &theirs)?;
         let mut conflicts = Vec::new();
         if index.has_conflicts() {
             let list: Vec<IndexConflict> = index.conflicts()?.collect::<Result<_, _>>()?;
@@ -592,6 +595,41 @@ impl SyncRepo {
             conflicts,
             merged: true,
         })
+    }
+
+    /// 逻辑目录的清单两边都改过（docs/仓库与启动器.md §7.4）：按节点三方合并，结果放进合并的索引，
+    /// 不管 git 自己合没合上。只有一边改了的 git 已经合对了，不动
+    fn merge_tree_file(&self, index: &mut Index, ours: &Commit, theirs: &Commit) -> SyncResult<()> {
+        let path = Path::new(tree::TREE_FILE);
+        let read = |commit: &Commit| -> SyncResult<Option<Vec<u8>>> {
+            let Ok(entry) = commit.tree()?.get_path(path) else { return Ok(None) };
+            Ok(self.repo.find_blob(entry.id()).ok().map(|blob| blob.content().to_vec()))
+        };
+        let (mine, other) = (read(ours)?, read(theirs)?);
+        if mine == other {
+            return Ok(());
+        }
+        let base = match self.repo.merge_base(ours.id(), theirs.id()) {
+            Ok(id) => read(&self.repo.find_commit(id)?)?,
+            Err(_) => None,
+        };
+        if base == mine || base == other {
+            return Ok(());
+        }
+        let text = |bytes: &Option<Vec<u8>>| String::from_utf8_lossy(bytes.as_deref().unwrap_or_default()).into_owned();
+        let merged = tree::merge3(&text(&base), &text(&mine), &text(&other));
+        // 合并的索引里这一项：合上了是第 0 方，冲突了是第 2 / 3 方。拿一项改成合并的结果放回去
+        let Some(mut entry) = [0, 2, 3].into_iter().find_map(|stage| index.get_path(path, stage)) else {
+            return Ok(());
+        };
+        if index.has_conflicts() {
+            let _ = index.conflict_remove(path);
+        }
+        entry.flags &= !STAGE_MASK;
+        entry.id = self.repo.blob(merged.as_bytes())?;
+        entry.file_size = merged.len() as u32;
+        index.add(&entry)?;
+        Ok(())
     }
 
     /// 把当前分支推上去。远端比本地新时返回 Rejected，不算出错

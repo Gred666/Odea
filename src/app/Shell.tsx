@@ -1,17 +1,21 @@
-import { ZEN_TRANSITION, navLayoutWidth, navPanelWidth } from "@/app/navMotion";
+import { ZEN_TRANSITION } from "@/app/navMotion";
 import { selectNeighbor } from "@/app/navigate";
 import { LIST_WIDTH, chromeWidth, hasListColumn, startTodayTicker, useApp } from "@/app/store";
+import { CollabDialog, CollabRequests, CollabResume } from "@/components/CollabDialog";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DocumentView } from "@/components/DocumentView";
-import { ErrorToast, NoticeToast } from "@/components/ErrorToast";
+import { ErrorToast, LayoutChangeToast, NoticeToast } from "@/components/ErrorToast";
 import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
+import { RelayDialog } from "@/components/RelayDialog";
+import { ShareDialog, ShareJoinDialog, ShareRequests } from "@/components/ShareDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SyncDialog } from "@/components/SyncDialog";
 import { TitleBar } from "@/components/TitleBar";
 import { UndoToast } from "@/components/UndoToast";
 import { UpdateDialog } from "@/components/UpdateDialog";
+import { VaultSwitcher } from "@/components/VaultSwitcher";
 import { labelToHorizon, labelToScope, useCurrentDocument } from "@/data/adapter";
 import { useData } from "@/data/store";
 import { cn } from "@/lib/cn";
@@ -21,7 +25,7 @@ import { ArchiveList } from "@/views/ArchiveView";
 import { CalendarPanel } from "@/views/CalendarView";
 import { ExtensionsView } from "@/views/ExtensionsView";
 import { NotesList } from "@/views/NotesView";
-import { AnimatePresence, MotionConfig, motion, useTransform } from "motion/react";
+import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { useEffect } from "react";
 
 /**
@@ -43,6 +47,8 @@ export function Shell() {
   const todayDate = useApp((s) => s.todayDate);
   const calendarScope = useApp((s) => s.calendarScope);
   const goalHorizon = useApp((s) => s.goalHorizon);
+  const panelCollapsed = useApp((s) => s.panelCollapsed);
+  const journal = useData((s) => s.layout.journal);
 
   const notes = useData((s) => s.notes);
   const archived = useData((s) => s.archived);
@@ -57,17 +63,13 @@ export function Shell() {
   const saveTitle = useData((s) => s.saveTitle);
 
   const doc = useCurrentDocument();
-  const showList = hasListColumn(workspace);
-
-  // 导航栏收起 / 展开时，列表栏贴着导航栏底板的右边缘走（app/navMotion.ts）：
-  // 排版上它已经在新位置了，这里把它推回底板边缘那儿，跟着底板一起滑过去
-  const listOverhang = useTransform([navPanelWidth, navLayoutWidth], ([panel, layout]) =>
-    Math.round((panel as number) - (layout as number)),
-  );
-  // 专注模式要把整条 chrome 推出去有多远。这里不订阅 navCollapsed：Shell 一重渲染，
-  // 列表栏里带 layout 的笔记卡片也跟着测一遍、自己再播一段位移，和上面那段叠在一起。
-  // 专注模式开着时切换导航栏会先退出专注模式（app/store），所以读当时的值就够了
-  const zenShift = zen ? -chromeWidth(useApp.getState().navCollapsed) : 0;
+  // 命令面板里那些「这一篇」的命令只认仓库里的文档（做客的那一篇不算）
+  const editorTarget = doc.editor?.target;
+  const docTarget = editorTarget?.kind === "shared" ? undefined : editorTarget;
+  // 列表栏收起了（像 VS Code 的侧栏）：和今日TODO、目标一样只剩窄栏和正文
+  const showList = hasListColumn(workspace) && !panelCollapsed;
+  // 专注模式要把整条 chrome 推出去有多远
+  const zenShift = zen ? -chromeWidth(showList) : 0;
 
   // 零点翻页
   useEffect(() => startTodayTicker(), []);
@@ -76,9 +78,11 @@ export function Shell() {
   // 日历和 /GOAL，不给今日TODO 单独取。
   // 跨过零点后，昨天那份「延续来的」缓存不再作数（它从来不是昨天自己的内容）。
   useEffect(() => {
+    // 没开日程的仓库没有今日TODO（docs/仓库与启动器.md §6）
+    if (!journal) return;
     forgetCarriedDays(todayDate);
     void loadDay(todayDate, true);
-  }, [forgetCarriedDays, loadDay, todayDate]);
+  }, [forgetCarriedDays, journal, loadDay, todayDate]);
 
   // 日历：选中的那一天 / 那一天所在周期的目标；/GOAL：今天所在周期的目标
   useEffect(() => {
@@ -158,7 +162,7 @@ export function Shell() {
             一帧（90Hz 屏上只有三分之一帧率），这就是「拉出来时掉帧」。
             而主内容那一头用的也是 popLayout（见下），退场的旧正文被冻结在原
             尺寸上淡出，不会因为这次重排而跳版。 */}
-          <motion.div style={{ x: listOverhang }} className="relative z-10 flex h-full shrink-0">
+          <div className="relative z-10 flex h-full shrink-0">
             <AnimatePresence initial={false} mode="popLayout">
               {showList && (
                 // key 只跟「有没有列表栏」走，不跟具体工作区走 ——
@@ -169,28 +173,33 @@ export function Shell() {
                   animate={{ x: 0 }}
                   exit={{ x: -LIST_WIDTH }}
                   transition={tween.base}
-                  className="z-10 h-full shrink-0 overflow-hidden"
+                  className="z-10 flex h-full shrink-0 flex-col overflow-hidden bg-panel"
                 >
-                  <AnimatePresence mode="wait" initial={false}>
-                    <motion.div
-                      key={workspace}
-                      initial={{ opacity: 0, x: 10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -8 }}
-                      transition={tween.base}
-                      className="h-full"
-                    >
-                      {workspace === "notes" && <NotesList notes={notes} />}
-                      {workspace === "calendar" && <CalendarPanel marks={marks} />}
-                      {workspace === "archive" && (
-                        <ArchiveList items={archived} onRestore={restoreNote} />
-                      )}
-                    </motion.div>
-                  </AnimatePresence>
+                  <div className="relative min-h-0 flex-1">
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.div
+                        key={workspace}
+                        initial={{ opacity: 0, x: 10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -8 }}
+                        transition={tween.base}
+                        className="h-full"
+                      >
+                        {workspace === "notes" && <NotesList notes={notes} />}
+                        {workspace === "calendar" && <CalendarPanel marks={marks} />}
+                        {workspace === "archive" && (
+                          <ArchiveList items={archived} onRestore={restoreNote} />
+                        )}
+                      </motion.div>
+                    </AnimatePresence>
+                  </div>
+                  {/* 仓库名 ⌄：换仓库、开关日程（Obsidian 也放在这里）。在换内容的那一层外面，
+                      切工作区时它不跟着淡出淡入 */}
+                  <VaultSwitcher />
                 </motion.div>
               )}
             </AnimatePresence>
-          </motion.div>
+          </div>
         </motion.div>
 
         {/* ---------- 主内容 ----------
@@ -262,12 +271,21 @@ export function Shell() {
           <div className="pointer-events-none absolute inset-x-0 bottom-[72px] z-40 flex flex-col items-center gap-2 px-6">
             <ErrorToast />
             <NoticeToast />
+            <LayoutChangeToast />
+            <CollabRequests />
+            <ShareRequests />
+            <CollabResume />
             <UndoToast />
           </div>
         </div>
-        <CommandPalette docTarget={doc.editor?.target} />
+        <CommandPalette docTarget={docTarget} />
         <FindDialog />
         <SyncDialog />
+        <CollabDialog />
+        {/* 在协作对话框之上：连不上时从协作对话框里「配中继…」打开 */}
+        <RelayDialog />
+        <ShareDialog />
+        <ShareJoinDialog />
         <HistoryDialog />
         <UpdateDialog />
         {/* 开场：冷启动时盖在最上面，写一个「O」再把它送回侧栏（components/Intro.tsx） */}

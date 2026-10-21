@@ -190,12 +190,12 @@ fn new_file(guide: &Guide, id: &str, created: i64) -> String {
     frontmatter::render(&meta, guide.body)
 }
 
-/// 新仓库：每份指南放一篇（seed::write 调，这时候还没有索引）
-pub fn write_all(root: &Path) -> Result<()> {
+/// 新仓库：每份指南放一篇，放在 dir 里（「笔记」；新建的逻辑目录是仓库根）。seed::write 调，这时候还没有索引
+pub fn write_all(root: &Path, dir: &str) -> Result<()> {
     let created = now_ms();
     for guide in &GUIDES {
         let stem = layout::file_stem_for_title(guide.title);
-        let rel = fsio::unique_rel(root, layout::NOTES_DIR, &stem, None);
+        let rel = fsio::unique_rel(root, dir, &stem, None);
         let id = format!("{}{}", id_prefix(guide.name), new_id());
         fsio::write_atomic(&fsio::abs(root, &rel), &new_file(guide, &id, created))?;
     }
@@ -241,6 +241,7 @@ impl Vault {
         if rel != row.rel_path {
             fsio::move_file(&self.root, &row.rel_path, &rel)?;
             index::rename(&self.db, &row.id, &rel)?;
+            self.tree_follow(&row.rel_path, &row.id);
         }
         meta.title = super::title_meta(&rel, guide.title);
         Ok(rel)
@@ -309,10 +310,12 @@ impl Vault {
             }
         }
         let stem = layout::file_stem_for_title(guide.title);
-        let rel = fsio::unique_rel(&self.root, layout::NOTES_DIR, &stem, None);
+        let rel = fsio::unique_rel(&self.root, &self.layout.notes, &stem, None);
         let id = format!("{prefix}{}", new_id());
         let mut change = VaultChange::default();
         let row = self.write_and_index(&rel, &new_file(guide, &id, now_ms()), &mut change)?;
+        // 逻辑目录：放在树根上，不落进「未整理」
+        self.tree_adopt(&row, "")?;
         self.log.record("note", &row.id, "created");
         self.announce(change.without(&row));
         Ok(row.id)
@@ -352,7 +355,7 @@ mod tests {
     #[test]
     fn a_new_vault_gets_every_guide_up_to_date() {
         let dir = tempfile::tempdir().unwrap();
-        write_all(dir.path()).unwrap();
+        write_all(dir.path(), layout::NOTES_DIR).unwrap();
         let mut vault = open(dir.path());
 
         let notes = vault.note_list_full(false).unwrap();
@@ -480,7 +483,7 @@ mod tests {
     #[test]
     fn a_deleted_guide_stays_gone_until_asked_for() {
         let dir = tempfile::tempdir().unwrap();
-        write_all(dir.path()).unwrap();
+        write_all(dir.path(), layout::NOTES_DIR).unwrap();
         let mut vault = open(dir.path());
         let id = vault.guide_open("welcome").unwrap();
         vault.note_delete(&id).unwrap();

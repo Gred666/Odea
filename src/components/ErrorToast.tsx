@@ -1,6 +1,6 @@
 import { useData } from "@/data/store";
 import { tween } from "@/lib/motion";
-import { AlertTriangle, Info, X } from "lucide-react";
+import { AlertTriangle, Info, RefreshCw, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 
@@ -123,6 +123,60 @@ export function NoticeToast() {
             type="button"
             aria-label="关闭提示"
             onClick={clearNotice}
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-canvas/70
+                       transition-colors duration-[140ms] hover:bg-canvas/15 hover:text-canvas"
+          >
+            <X size={12} strokeWidth={2.2} />
+          </button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/**
+ * 别的设备开关了日程、转成了逻辑目录，同步过来了（VaultChange.layout）。要按新的摆法重新认文件、
+ * 整页重载，用户可能正在打字：不自己换，常驻一条提示，点「切换过去」才换（重载前先存掉编辑器里的）
+ */
+export function LayoutChangeToast() {
+  const changed = useData((s) => s.layoutChanged);
+  const dismiss = useData((s) => s.dismissLayoutChange);
+  const apply = useData((s) => s.applyLayoutChange);
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <AnimatePresence>
+      {changed && (
+        <motion.div
+          role="status"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 8, transition: tween.fast }}
+          transition={tween.slow}
+          className="pointer-events-auto flex max-w-[560px] items-center gap-3 rounded-xl
+                     bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
+        >
+          <RefreshCw size={13} strokeWidth={2} className="shrink-0 text-accent" />
+          <span className="min-w-0 truncate">
+            这个仓库的设置在别的设备上改了（日程、目录的样子）
+          </span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              void apply().finally(() => setBusy(false));
+            }}
+            className="shrink-0 rounded-md px-2 py-1 font-semibold text-canvas
+                       transition-colors duration-[140ms] hover:bg-canvas/15 disabled:opacity-60"
+          >
+            切换过去
+          </button>
+          <button
+            type="button"
+            aria-label="先不切换"
+            title="先不切换（下次打开这个仓库时会换过去）"
+            onClick={dismiss}
             className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-canvas/70
                        transition-colors duration-[140ms] hover:bg-canvas/15 hover:text-canvas"
           >

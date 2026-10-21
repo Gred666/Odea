@@ -46,6 +46,56 @@
         "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; pnpm tauri dev"
       ],
       "port": 1420
+    },
+    {
+      "name": "odea-desktop-temp",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-dev\\data\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-dev\\vault\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9333'; pnpm tauri dev"
+      ],
+      "port": 1420
+    },
+    {
+      "name": "odea-desktop-launcher",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-dev\\launcher-data\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9335'; pnpm tauri dev"
+      ],
+      "port": 1420
+    },
+    {
+      "name": "odea-desktop-p112",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-p112\\data\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-p112\\obsidian\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9337'; pnpm tauri dev"
+      ],
+      "port": 1420
+    },
+    {
+      "name": "odea-b",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:ODEA_DATA_DIR=\"$env:TEMP\\odea-dev\\data-b\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-dev\\vault-b\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9334'; Start-Process -Wait -FilePath 'D:\\OnTheWay\\src-tauri\\target\\release\\odea.exe'"
+      ],
+      "port": 9334
+    },
+    {
+      "name": "odea-desktop-p113",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-p113\\data\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9339'; pnpm tauri dev"
+      ],
+      "port": 1420
     }
   ]
 }

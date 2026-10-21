@@ -1,3 +1,4 @@
+import { commonEnds } from "@/lib/lineDiff";
 import { MOD_KEY } from "@/lib/platform";
 import { redo, undo } from "@codemirror/commands";
 import type { ChangeSpec } from "@codemirror/state";
@@ -53,6 +54,8 @@ const states = new WeakMap<HTMLElement, TableState>();
 const renderedValues = new WeakMap<HTMLTableCellElement, string>();
 /** 正在把这个格子里的输入写回源码：这一轮 updateDOM 别去动它 */
 let writingFrom: HTMLTableCellElement | null = null;
+/** 正在用输入法组字的格子：别人（协同）这时改了表，这一格先不动，免得打断组字 */
+let composingIn: HTMLTableCellElement | null = null;
 
 export class TableWidget extends OtwWidget {
   private readonly key: string;
@@ -149,7 +152,9 @@ export class TableWidget extends OtwWidget {
     ) {
       return false;
     }
+    const previous = state.widget;
     state.widget = this;
+    alignTo(dom, previous, this);
     fill(dom, this);
     syncToolbar(dom);
     const meta = dom.querySelector(".cm-odea-table-meta");
@@ -201,6 +206,65 @@ const metaText = (widget: TableWidget) =>
 
 /* ---------------- DOM：建 / 同步格子 ---------------- */
 
+/**
+ * 别处插了 / 删了一行或一列（协同时别人改的、撤销）：DOM 里在同一个位置插 / 删，后面的跟着挪。
+ * fill 按位置复用格子，不先挪的话，正在编辑的那一格会变成别的行、别的列的内容（docs/协同编辑.md §15.1）
+ */
+function alignTo(block: HTMLElement, before: TableWidget, after: TableWidget) {
+  const editing = states.get(block)?.editing;
+  const at = editing ? cellIndex(editing) : null;
+  const body = block.querySelector("tbody")!;
+  const rowKey = (row: string[]) => row.join("\u0000");
+  const row = shiftedAt(
+    before.table.rows.map(rowKey),
+    after.table.rows.map(rowKey),
+    at && at.row > 0 ? at.row - 1 : null,
+  );
+  if (row !== null) {
+    if (after.table.rows.length > before.table.rows.length) {
+      body.insertBefore(document.createElement("tr"), body.children[row] ?? null);
+    } else body.children[row]?.remove();
+  }
+  const columns = (widget: TableWidget) =>
+    widget.table.header.map((head, col) =>
+      [head, ...widget.table.rows.map((cells) => cells[col] ?? "")].join("\u0000"),
+    );
+  const col = shiftedAt(columns(before), columns(after), at?.col ?? null);
+  if (col === null) return;
+  const head = block.querySelector("thead")!.firstElementChild!;
+  for (const tr of [head, ...body.children]) {
+    if (after.columnCount < before.columnCount) {
+      tr.children[col]?.remove();
+      continue;
+    }
+    const cell = document.createElement(tr === head ? "th" : "td");
+    if (tr === head) cell.scope = "col";
+    tr.insertBefore(cell, tr.children[col] ?? null);
+  }
+}
+
+/**
+ * 前后两份只差插进 / 删掉一个（行或列）时，那一个在哪；不是这种改法（同时还改了别处）返回 null，
+ * 照旧按位置对。插 / 删的落在一串一模一样的里面时哪一处都对，挑一处不挪 keep（正在编辑的那个）
+ */
+export function shiftedAt(before: string[], after: string[], keep: number | null): number | null {
+  const delta = after.length - before.length;
+  if (Math.abs(delta) !== 1) return null;
+  const [short, long] = delta > 0 ? [before, after] : [after, before];
+  // 前面相同的有几个、后面相同的有几个（各算各的，可以重叠：重叠的那一段就是「哪一处都行」）
+  let start = 0;
+  while (start < short.length && short[start] === long[start]) start += 1;
+  let end = 0;
+  while (end < short.length && short[short.length - 1 - end] === long[long.length - 1 - end])
+    end += 1;
+  if (start + end < short.length) return null;
+  // 插 / 删的那一个在 [low, start] 里哪一处都行
+  const low = short.length - end;
+  if (keep === null || keep < low || keep > start) return start;
+  if (delta > 0) return keep < start ? keep + 1 : start;
+  return keep < start ? start : start > low ? start - 1 : start;
+}
+
 /** 按 widget 的内容建出 / 更新表格的每一格。正在编辑的格子只在内容是别处改的（撤销）时才动 */
 function fill(block: HTMLElement, widget: TableWidget) {
   const state = states.get(block)!;
@@ -232,9 +296,14 @@ function fill(block: HTMLElement, widget: TableWidget) {
       cell.classList.toggle("is-num", numeric[col]!);
       cell.style.textAlign = widget.table.alignments[col] ?? (numeric[col] ? "right" : "left");
       if (cell === state.editing) {
-        if (writingFrom !== cell) {
-          cell.textContent = widget.sourceAt(row, col);
-          placeCaret(cell, cell.textContent.length);
+        // 源码被别处改了（撤销、协同时别人改了这张表）：格子跟着换，光标按改动挪，不丢焦点。
+        // 别处的格子变了、这一格的源码没变：一个字都不动（正在组字的话更不能动）
+        const source = widget.sourceAt(row, col);
+        if (writingFrom !== cell && composingIn !== cell && cell.textContent !== source) {
+          const before = cell.textContent ?? "";
+          const offset = caretOffset(cell);
+          cell.textContent = source;
+          placeCaret(cell, offset === null ? source.length : mapThrough(before, source, offset));
         }
         continue;
       }
@@ -523,8 +592,8 @@ function cellChange(
   const range = layout.cells[row]?.[col];
   if (range) {
     const from = base + range[0];
-    const to = base + range[1];
-    return view.state.sliceDoc(from, to) === insert ? null : { from, to, insert };
+    const current = view.state.sliceDoc(from, base + range[1]);
+    return current === insert ? null : minimalChange(from, current, insert);
   }
   // 短行里缺的格子：在行尾把中间空着的格子也补上
   const line = layout.lines[row];
@@ -541,6 +610,27 @@ function cellChange(
   return text.endsWith("|") && !text.endsWith("\\|")
     ? { from: at, insert: `${"   |".repeat(missing)} ${insert} |` }
     : { from: at, insert: `${" |".repeat(missing)} | ${insert}` };
+}
+
+/**
+ * 只换掉真正变了的那一段（掐掉两头相同的部分）。整格替换在协同时等于「删光再插一遍」：
+ * 别人同时在这一格里打的字会落到莫名其妙的地方、光标也塌到一处（docs/协同编辑.md §4.3）
+ */
+function minimalChange(from: number, before: string, after: string): ChangeSpec {
+  const [head, tail] = commonEnds(before, after);
+  return {
+    from: from + head,
+    to: from + before.length - tail,
+    insert: after.slice(head, after.length - tail),
+  };
+}
+
+/** 格子里的文字从 before 换成 after，原来在 offset 的光标该到哪：改动前面的不动，后面的跟着挪 */
+export function mapThrough(before: string, after: string, offset: number): number {
+  const [head, tail] = commonEnds(before, after);
+  if (offset <= head) return offset;
+  if (offset >= before.length - tail) return offset + after.length - before.length;
+  return after.length - tail;
 }
 
 /** 把正在编辑的格子里的文字写回源码 */
@@ -779,7 +869,11 @@ function listen(view: EditorView, block: HTMLElement, frame: HTMLElement, table:
     const cell = editingCell(event.target);
     if (cell && !(event as InputEvent).isComposing) commit(view, block, cell);
   });
+  table.addEventListener("compositionstart", (event) => {
+    composingIn = editingCell(event.target);
+  });
   table.addEventListener("compositionend", (event) => {
+    composingIn = null;
     const cell = editingCell(event.target);
     if (cell) commit(view, block, cell);
   });

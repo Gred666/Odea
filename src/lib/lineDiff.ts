@@ -106,3 +106,26 @@ export function diffStats(lines: DiffLine[]): { added: number; removed: number }
   }
   return { added, removed };
 }
+
+/**
+ * 两段文字开头、结尾各有多少一样：中间那一截才是改了的。不切开代理对，两头不重叠。
+ * 表格格子写回源码只换这一截、外部改动进协作会话按它细化到字（collab/external.ts）
+ */
+export function commonEnds(before: string, after: string): [number, number] {
+  const limit = Math.min(before.length, after.length);
+  let head = 0;
+  while (head < limit && before.charCodeAt(head) === after.charCodeAt(head)) head += 1;
+  if (head > 0 && head < limit && isHighSurrogate(before.charCodeAt(head - 1))) head -= 1;
+  let tail = 0;
+  while (
+    tail < limit - head &&
+    before.charCodeAt(before.length - 1 - tail) === after.charCodeAt(after.length - 1 - tail)
+  ) {
+    tail += 1;
+  }
+  if (tail > 0 && isLowSurrogate(before.charCodeAt(before.length - tail))) tail -= 1;
+  return [head, tail];
+}
+
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
