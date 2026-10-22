@@ -1,6 +1,6 @@
 [package]
 name = "odea"
-version = "0.4.1"
+version = "0.4.2"
 description = "笔记、待办、目标与日历一体的个人效率工具"
 authors = ["Odea"]
 edition = "2021"
