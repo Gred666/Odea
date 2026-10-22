@@ -401,12 +401,13 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - [x] 全仓库换名：产品名、窗口标题、包名（`odea` / `odea_lib`）、环境变量 `ODEA_*`、提交署名、默认笔记文件夹「文档/Odea」、使用指南、文档、CI；新标识 `dev.odea.editor`（旧的以 `.app` 结尾，打包时 Tauri 会警告和 macOS 的程序包后缀撞）
   - [x] 旧名留下的东西新版认、读到就换（`old_name.rs`）：数据目录、WebView 数据、仓库里的 `.ontheway/`、`.git/config` 的键、`.gitignore` 那一段、钥匙串、提交署名、指南的记号和标题；单测各一条
   - [x] Windows 安装包装完清掉旧的安装（`src-tauri/windows/hooks.nsh`）
+  - [x] 自动更新上来的没有快捷方式（2026-10-22 用户发现：「OnTheWay 被删了」）：钩子删了 OnTheWay 的快捷方式，Odea 的没人建 —— 自动更新带着 `/UPDATE`，Tauri 的安装包这时只改已有的快捷方式、不新建（`installer.nsi` 的 `CreateOrUpdateStartMenuShortcut`）。开始菜单、桌面、搜索里都找不到，程序其实装在 `%LOCALAPPDATA%\Odea`。0.4.1 起钩子在原来的位置建上 Odea 的（开始菜单总建、桌面原来有才建，带和 Tauri 一样的 AppUserModelID）；0.3.0、0.4.0 上来已经没有的，下次更新补一个开始菜单的，卸载项里记 `OdeaShortcutChecked`，以后用户自己删了不再补。任务栏的固定建不回来（Windows 不让程序自己固定）。测法：换个产品名打一个测试包、钩子里的旧名换成假的，在 MSIX 容器外面（WMI 起进程，Claude 起的进程写 AppData、HKCU 会被重定向）像自动更新那样 `/P /UPDATE` 跑四种情况。教训：下面「真的升级一次」没做就发了
   - [x] Logo 重做：「起笔一点」—— 字标的 O 本来就开口、带蓝点（就是图标），蓝点一直在，笔画照旧循环；开场先落蓝点再写 O；蓝点改半径不用 scale
   - [x] **需要你**：GitHub 上把仓库 `Gred666/OnTheWay` 改名成 `Odea`（2026-10-21 查过：旧地址 301 跳到新名字），**在发 0.3.0 之前**：新版的更新地址已经指向新名字，旧版靠 GitHub 的跳转拿到新版（以后别再建一个叫 OnTheWay 的仓库，跳转会断）
   - [x] **需要你**：GitHub 的 OAuth App 改名成 Odea（2026-10-21 改了）（用户授权同步时看到的名字；client_id 不变，不用改代码）
   - [x] 发 0.3.0 时在 `changelog.md` 写一条改名（更新说明卡片里用户会看到）（2026-10-21）
   - [ ] 在 Windows 上真的升级一次：装 0.2.0、登录同步 → 自动更新到 0.3.0 → 开始菜单 / 桌面只剩 Odea，「应用和功能」里没有 OnTheWay；主题、侧栏收起这些设置还在，同步不用重新登录，笔记文件夹还是原来那个
-  - [ ] 所有设备都升级上来以后（0.4 前后）：删 `old_name.rs` 和各处引用它的地方、`lib/legacyStorage.ts`、`index.html` 里的 `otw.theme`、`.gitignore` / `.gitattributes` 那一段里的 `.ontheway` 两行、`hooks.nsh`
+  - [ ] 所有设备都升级上来以后（0.4 前后）：删 `old_name.rs` 和各处引用它的地方、`lib/legacyStorage.ts`、`index.html` 里的 `otw.theme`、`.gitignore` / `.gitattributes` 那一段里的 `.ontheway` 两行、`hooks.nsh` 里清旧安装的那一段（补快捷方式的那段留到 0.3.0、0.4.0 的人都更新过以后）
   - [x] 内部前缀 `otw` 换成 `odea`（CSS 类名、`data-` 属性、存储键、表情短码、扩展文件后缀）：存储键启动时搬（`lib/legacyStorage.ts`），旧短码 `:otw_fire:` 和旧的 `.otwx` 扩展文件照样认
   - [ ] 本机的项目文件夹 `D:\OnTheWay` 要不要跟着改名（`.claude/launch.json` 里有一条绝对路径）
 
