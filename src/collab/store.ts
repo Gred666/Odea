@@ -643,10 +643,22 @@ async function answerCreate(request: number, folder: string, title: string) {
 }
 
 /** 主持人：范围里的树（笔记的标题、在范围里的哪个文件夹），笔记一变就再给一份 */
+/** 树里按文件夹、标题排（比 localeCompare 快一倍） */
+const collator = new Intl.Collator();
+
 function watchTree(scope: Scope, current: CollabNet): () => void {
   let last = "";
+  /** 上一次的 id → 标题、文件夹：笔记列表一变（打字存盘也变）先比这个，标题、文件夹都没变就不重排。
+   * 5000 篇时整棵排一遍、转 JSON 要 10ms 上下（两万篇 40ms），比一遍不到 1ms（docs/协同编辑.md §23.5） */
+  let seen = new Map<string, string>();
+  const changed = () => {
+    const notes = useData.getState().notes;
+    if (notes.length !== seen.size) return true;
+    return notes.some((note) => seen.get(note.id) !== `${note.title} ${folderOf(note)}`);
+  };
   const push = () => {
     const notes = useData.getState().notes;
+    seen = new Map(notes.map((note) => [note.id, `${note.title} ${folderOf(note)}`]));
     const docs: CollabTreeDoc[] = [];
     for (const note of notes) {
       const folder = folderOf(note);
@@ -661,7 +673,7 @@ function watchTree(scope: Scope, current: CollabNet): () => void {
         docs.push({ id: note.id, title: note.title, folder });
       }
     }
-    docs.sort((a, b) => a.folder.localeCompare(b.folder) || a.title.localeCompare(b.title));
+    docs.sort((a, b) => collator.compare(a.folder, b.folder) || collator.compare(a.title, b.title));
     const tree = JSON.stringify({ docs } satisfies CollabTree);
     if (tree === last) return;
     last = tree;
@@ -673,7 +685,7 @@ function watchTree(scope: Scope, current: CollabNet): () => void {
     if (state.notes === previous.notes || timer) return;
     timer = setTimeout(() => {
       timer = null;
-      push();
+      if (changed()) push();
     }, 300);
   });
   return () => {

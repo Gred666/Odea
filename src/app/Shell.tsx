@@ -13,6 +13,7 @@ import { RelayDialog } from "@/components/RelayDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SyncDialog } from "@/components/SyncDialog";
 import { TeamDialog } from "@/components/TeamDialog";
+import { TeamRelayToast } from "@/components/TeamRelayToast";
 import { TitleBar } from "@/components/TitleBar";
 import { UndoToast } from "@/components/UndoToast";
 import { UpdateDialog } from "@/components/UpdateDialog";
@@ -311,6 +312,7 @@ export function Shell() {
             <ErrorToast />
             <NoticeToast />
             <LayoutChangeToast />
+            <TeamRelayToast />
             <CollabRequests />
             <CollabResume />
             <UndoToast />

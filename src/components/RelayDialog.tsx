@@ -4,6 +4,7 @@ import { openExternal } from "@/editor/links";
 import type { RelayInfo } from "@/lib/bindings";
 import { cn } from "@/lib/cn";
 import { popoverCard, tween } from "@/lib/motion";
+import { refreshTeamRelays, shareTeamRelay, useTeam } from "@/team/store";
 import { Check, Copy, LoaderCircle, Server, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
@@ -25,6 +26,10 @@ const GUIDE =
 export function RelayDialog() {
   const open = useRelays((s) => s.open);
   const close = useRelays((s) => s.close);
+
+  useEffect(() => {
+    if (open) void refreshTeamRelays();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -208,6 +213,9 @@ function ConfirmCard({ info }: { info: RelayInfo }) {
 }
 
 function RelayRow({ relay }: { relay: RelayInfo }) {
+  // 团队仓库（docs/协同编辑.md §22.4）：这台给不给团队用（写进仓库，成员打开时问一句用不用）
+  const teamActive = useTeam((s) => s.active);
+  const forTeam = useTeam((s) => s.relays.some((item) => item.url === relay.url));
   const check = useRelays((s) => s.checks[relay.url]);
   const test = useRelays((s) => s.test);
   const remove = useRelays((s) => s.remove);
@@ -240,6 +248,19 @@ function RelayRow({ relay }: { relay: RelayInfo }) {
           {copied ? <Check size={12} strokeWidth={2.2} /> : <Copy size={12} strokeWidth={2} />}
           {copied ? "已复制" : "中继码"}
         </BannerButton>
+        {teamActive && (
+          <BannerButton
+            onClick={() => void shareTeamRelay(relay.url, !forTeam)}
+            title={
+              forTeam
+                ? "团队仓库里写着这台：成员打开时会问用不用。点一下拿出来"
+                : "写进这个团队仓库：成员打开时会问一句用不用（中继码里带着令牌，成员都能用）"
+            }
+          >
+            {forTeam && <Check size={12} strokeWidth={2.2} />}
+            {forTeam ? "团队在用" : "给团队用"}
+          </BannerButton>
+        )}
         <BannerButton danger onClick={() => void remove(relay.url)}>
           删除
         </BannerButton>

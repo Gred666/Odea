@@ -61,13 +61,15 @@ desktop.ini
 
 /// .gitattributes 里应用维护的那一段：附件一个字节都不改，Markdown 统一 LF，
 /// 只追加的行为日志两台设备的行都留下（还没升级的设备写在改名前的 .ontheway/ 里）；
-/// 团队仓库的设备名单每台设备只改自己那一行，两边同时改了相邻的行也都留下（vault/team.rs）
+/// 团队仓库的设备名单每台设备只改自己那一行，两边同时改了相邻的行也都留下（vault/team.rs）；
+/// 团队的中继一行一个，两边各加了一台也都留下
 const ATTRIBUTES: &str = "\
 * -text
 *.md text eol=lf
 .odea/activity/*.jsonl text eol=lf merge=union
 .ontheway/activity/*.jsonl text eol=lf merge=union
 .odea/devices text eol=lf merge=union
+.odea/relays text eol=lf merge=union
 ";
 
 /// 要进库的小文件到这么多个，就先成批放进包里（stage_bulk）

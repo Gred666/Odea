@@ -354,3 +354,45 @@ async fn a_member_who_cannot_reach_the_host_goes_through_another_member() {
         node.net.stop().await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn members_find_each_other_through_a_relay_added_later() {
+    // 两台都没配中继、互相不知道地址、没有 mDNS：连不上。加上同一台中继（团队仓库里写着的）以后连上
+    let (server, url, pin) = crate::collab::tests::start_relay("secret").await;
+    let relay = crate::collab::tests::relay_at(&url, Some("secret"), &pin);
+    let (a, _) = device().await;
+    let (b, _) = device().await;
+    let all = listed(&[&a, &b]);
+    let a = join(a, "张三", all.clone());
+    let b = join(b, "李四", all);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(a.net.online(TEAM), 0);
+    a.net.add_relay(relay.clone()).await;
+    b.net.add_relay(relay).await;
+    until("经中继连上", || a.net.online(TEAM) == 1 && b.net.online(TEAM) == 1).await;
+    a.net.stop().await;
+    b.net.stop().await;
+    drop(server);
+}
+
+/// 团队端点一直开着时的后台流量（设计 §22.9 第一条）：两台连着、什么都不干，量一分钟。平时不跑：
+/// cargo test --no-default-features --lib idle_link_traffic -- --ignored --nocapture
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn idle_link_traffic() {
+    let devices = team(&["张三", "李四"]).await;
+    until("连上", || devices.iter().all(|device| device.net.online(TEAM) == 1)).await;
+    settle().await;
+    let before = devices[0].net.sent_bytes(TEAM);
+    let seconds = 60;
+    tokio::time::sleep(Duration::from_secs(seconds)).await;
+    let sent = devices[0].net.sent_bytes(TEAM) - before;
+    println!(
+        "一条连接、一边：{seconds} 秒发了 {sent} 字节，{:.1} 字节/秒，一小时约 {:.0} KB",
+        sent as f64 / seconds as f64,
+        sent as f64 / seconds as f64 * 3600.0 / 1024.0
+    );
+    for device in devices {
+        device.net.stop().await;
+    }
+}

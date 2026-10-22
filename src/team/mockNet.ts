@@ -136,6 +136,7 @@ export function createMockTeamHub(): MockTeamHub {
       member: me.member,
       name: me.name,
       peers: peersOf(me),
+      firewall: { state: "unknown" },
     }),
     presence: async (docs) => {
       me.presence = docs;
@@ -220,7 +221,14 @@ export function createMockTeamHub(): MockTeamHub {
       announce();
       return {
         net: netOf(device),
-        self: () => ({ team: "mock", id, member: device.member, name, peers: peersOf(device) }),
+        self: () => ({
+          team: "mock",
+          id,
+          member: device.member,
+          name,
+          peers: peersOf(device),
+          firewall: { state: "unknown" },
+        }),
       };
     },
     setOnline(id, online) {

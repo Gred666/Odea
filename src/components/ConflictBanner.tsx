@@ -161,18 +161,22 @@ export function BannerButton({
   disabled,
   danger,
   strong,
+  title,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
   danger?: boolean;
   strong?: boolean;
+  /** 悬停时多说一句 */
+  title?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={cn(
         "flex items-center gap-1 rounded-md px-2 py-[3px] text-[12px] transition-colors duration-[140ms]",
         "disabled:opacity-50",

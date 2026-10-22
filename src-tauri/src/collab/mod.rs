@@ -34,7 +34,7 @@ pub mod reach;
 pub mod record;
 pub mod relays;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 pub mod ticket;
 
 use serde::{Deserialize, Serialize};

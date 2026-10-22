@@ -17,6 +17,12 @@ use super::{fsio, layout};
 use crate::error::Result;
 
 pub const DEVICES_FILE: &str = ".odea/devices";
+/// 团队的中继（docs/协同编辑.md §22.4）：一行一个中继码，随 git 走。成员打开时问一句用不用
+pub const RELAYS_FILE: &str = ".odea/relays";
+
+const RELAYS_HEADER: &str = "\
+# Odea 团队仓库的中继（docs/协同编辑.md §22.4）：一行一个中继码。成员打开这个仓库时会问一句用不用
+";
 
 const HEADER: &str = "\
 # Odea 团队仓库的设备名单（docs/协同编辑.md §22.3）
@@ -169,6 +175,42 @@ pub fn remove_account(root: &Path, account: &str) -> Result<usize> {
     Ok(removed)
 }
 
+/// 仓库里写的中继码（坏行、注释跳过，重复的只留一行）
+pub fn read_relays(root: &Path) -> Vec<String> {
+    let text = std::fs::read_to_string(fsio::abs(root, RELAYS_FILE)).unwrap_or_default();
+    let mut codes: Vec<String> = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if !line.is_empty() && !line.starts_with('#') && !codes.iter().any(|code| code == line) {
+            codes.push(line.to_string());
+        }
+    }
+    codes
+}
+
+/// 换成这几行（没变不写）。返回写了没有
+pub fn write_relays(root: &Path, codes: &[String]) -> Result<bool> {
+    if read_relays(root) == codes {
+        return Ok(false);
+    }
+    let path = fsio::abs(root, RELAYS_FILE);
+    if codes.is_empty() {
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        return Ok(true);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut out = String::from(RELAYS_HEADER);
+    for code in codes {
+        out.push_str(code);
+        out.push('\n');
+    }
+    fsio::write_atomic(&path, &out)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +294,25 @@ mod tests {
         assert!(layout::Layout::load(root).journal);
         assert_eq!(split_account("github:Gred666"), Some(("github", "Gred666")));
         assert_eq!(split_account("Gred666"), None);
+    }
+
+    #[test]
+    fn team_relays_are_one_code_per_line_and_an_empty_list_removes_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(read_relays(root).is_empty());
+        let codes = vec!["odea:relay/aaa".to_string(), "odea:relay/bbb".to_string()];
+        assert!(write_relays(root, &codes).unwrap());
+        assert!(!write_relays(root, &codes).unwrap(), "没变不写");
+        // union 合并以后重复的行只算一次；注释、空行跳过
+        let path = root.join(RELAYS_FILE);
+        let text = std::fs::read_to_string(&path).unwrap() + "odea:relay/aaa
+
+# 备注
+";
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(read_relays(root), codes);
+        assert!(write_relays(root, &[]).unwrap());
+        assert!(!path.exists());
     }
 }

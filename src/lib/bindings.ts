@@ -1576,6 +1576,39 @@ async teamBase(target: DocTarget) : Promise<Result<string | null, AppError>> {
 }
 },
 /**
+ * 这个团队仓库里写着的中继
+ */
+async teamRelays() : Promise<Result<TeamRelay[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_relays") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 回答「这个团队仓库用中继 X，要用吗」
+ */
+async teamRelayAnswer(url: string, accept: boolean) : Promise<Result<TeamRelay[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_relay_answer", { url, accept }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 我配的一台中继给不给这个团队用（写进 / 拿出仓库里的 .odea/relays，随下一轮同步推上去）
+ */
+async teamRelayShare(url: string, share: boolean) : Promise<Result<TeamRelay[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_relay_share", { url, share }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 访客：向主持人要正文里引用的一个附件，缓存下来，返回本机的路径（前端转成 asset 地址显示）
  */
 async collabFetchAttachment(doc: string, path: string) : Promise<Result<string, AppError>> {
@@ -2660,6 +2693,23 @@ login: string; me: boolean;
  */
 devices: TeamDevice[]; access: TeamAccess }
 /**
+ * 团队仓库里写着的一台中继（令牌不出 Rust）
+ */
+export type TeamRelay = { url: string; name: string | null; host: string; hasToken: boolean; state: TeamRelayState }
+export type TeamRelayState = 
+/**
+ * 我也在用（在我自己的中继里）
+ */
+"using" | 
+/**
+ * 还没问过
+ */
+"ask" | 
+/**
+ * 说过不用
+ */
+"declined"
+/**
  * 团队仓库里的我
  */
 export type TeamSelf = { team: string; 
@@ -2670,7 +2720,11 @@ id: string;
 /**
  * 我在管道帧里的编号
  */
-member: number; name: string; peers: TeamPeer[] }
+member: number; name: string; peers: TeamPeer[]; 
+/**
+ * Windows 防火墙（设计 §22.4）：还没问过的话 Windows 马上会弹窗，前端先说一句；挡着的话说怎么改
+ */
+firewall: Firewall }
 /**
  * search_text 的一条：正文里出现了要找的字的文档
  */

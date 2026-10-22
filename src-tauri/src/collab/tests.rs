@@ -970,8 +970,8 @@ impl iroh_relay::server::AccessControl for TokenGate {
     }
 }
 
-/// 起一台中继：自签名证书，返回地址和证书指纹（十六进制）
-async fn start_relay(token: &'static str) -> (iroh_relay::server::Server, String, String) {
+/// 起一台中继：自签名证书，返回地址和证书指纹（十六进制）。团队端点的测试也用
+pub(crate) async fn start_relay(token: &'static str) -> (iroh_relay::server::Server, String, String) {
     use iroh_relay::server::{CertConfig, RelayConfig, Server, ServerConfig, TlsConfig};
     let (certs, server_config) = iroh_relay::server::testing::self_signed_tls_certs_and_config();
     let mut relay = RelayConfig::new((Ipv4Addr::LOCALHOST, 0));
@@ -988,7 +988,7 @@ async fn start_relay(token: &'static str) -> (iroh_relay::server::Server, String
     (server, url, pin)
 }
 
-fn relay_at(url: &str, token: Option<&str>, pin: &str) -> Relay {
+pub(crate) fn relay_at(url: &str, token: Option<&str>, pin: &str) -> Relay {
     Relay::new(
         url,
         token.map(Into::into),

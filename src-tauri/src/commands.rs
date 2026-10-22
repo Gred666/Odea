@@ -2637,11 +2637,17 @@ pub async fn collab_relay_add(
             .map_err(|error| AppError::Invalid(error.to_string()))?,
     };
     let data_dir = state.data_dir.clone();
-    blocking(move || {
+    let added = relay.clone();
+    let infos = blocking(move || {
         save_relay(&data_dir, &relay)?;
         Ok(relay_infos(&data_dir))
     })
-    .await
+    .await?;
+    // 团队端点开着：当场接上这台（不用重开）
+    if let Some(net) = state.team.net() {
+        net.add_relay(added).await;
+    }
+    Ok(infos)
 }
 
 #[tauri::command]
@@ -3183,6 +3189,8 @@ pub struct TeamSelf {
     pub member: u16,
     pub name: String,
     pub peers: Vec<crate::team::TeamPeer>,
+    /// Windows 防火墙（设计 §22.4）：还没问过的话 Windows 马上会弹窗，前端先说一句；挡着的话说怎么改
+    pub firewall: collab::firewall::Firewall,
 }
 
 /// 团队仓库的窗口起来了：起团队端点（一个应用一个）、登记这个团队。不是团队仓库是 None
@@ -3201,11 +3209,20 @@ pub async fn team_start<R: Runtime>(app: AppHandle<R>, ws: Ws, state: State<'_, 
             .iter()
             .filter_map(crate::team::Device::from_row)
             .collect();
-        Ok(Some((team, account, devices, root, collab_name(&data_dir), team_key(&data_dir), load_relays(&data_dir))))
+        Ok(Some((
+            team,
+            account,
+            devices,
+            root,
+            collab_name(&data_dir),
+            team_key(&data_dir),
+            load_relays(&data_dir),
+            collab::firewall::check(),
+        )))
     })
     .await?;
     let hub = state.team.clone();
-    let Some((team, account, devices, root, name, key, relays)) = prepared else {
+    let Some((team, account, devices, root, name, key, relays, firewall)) = prepared else {
         end_team(&state, &ws.label).await;
         return Ok(None);
     };
@@ -3250,6 +3267,7 @@ pub async fn team_start<R: Runtime>(app: AppHandle<R>, ws: Ws, state: State<'_, 
         peers: net.peers(&team),
         team,
         name,
+        firewall,
     }))
 }
 
@@ -3383,4 +3401,118 @@ pub fn team_send(window: tauri::WebviewWindow, state: State<'_, AppState>, reque
         _ => {}
     }
     Ok(())
+}
+
+/* ---------------- 团队的中继（docs/协同编辑.md §22.4） ----------------
+仓库里的 .odea/relays（vault/team.rs）一行一个中继码，随 git 走。成员打开时没用过、没说过不用的问一句；
+用了就存进自己的中继（collab_relays，令牌进钥匙串），团队端点当场接上。自己配的中继可以给团队用（写进去） */
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum TeamRelayState {
+    /// 我也在用（在我自己的中继里）
+    Using,
+    /// 还没问过
+    Ask,
+    /// 说过不用
+    Declined,
+}
+
+/// 团队仓库里写着的一台中继（令牌不出 Rust）
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamRelay {
+    pub url: String,
+    pub name: Option<String>,
+    pub host: String,
+    pub has_token: bool,
+    pub state: TeamRelayState,
+}
+
+fn team_relays_of(root: &std::path::Path, data_dir: &std::path::Path) -> Vec<TeamRelay> {
+    let mine: Vec<String> = load_relays(data_dir).into_iter().map(|relay| relay.url).collect();
+    let declined = boot::Config::load(data_dir).declined_team_relays;
+    crate::vault::team::read_relays(root)
+        .iter()
+        .filter_map(|code| Relay::parse_code(code).ok())
+        .map(|relay| TeamRelay {
+            state: if mine.contains(&relay.url) {
+                TeamRelayState::Using
+            } else if declined.contains(&relay.url) {
+                TeamRelayState::Declined
+            } else {
+                TeamRelayState::Ask
+            },
+            host: relay.host(),
+            has_token: relay.token.is_some(),
+            name: relay.name.clone(),
+            url: relay.url,
+        })
+        .collect()
+}
+
+/// 这个团队仓库里写着的中继
+#[tauri::command]
+#[specta::specta]
+pub async fn team_relays(ws: Ws, state: State<'_, AppState>) -> Result<Vec<TeamRelay>> {
+    let (root, data_dir) = (ws.root(), state.data_dir.clone());
+    blocking(move || Ok(team_relays_of(&root, &data_dir))).await
+}
+
+/// 回答「这个团队仓库用中继 X，要用吗」
+#[tauri::command]
+#[specta::specta]
+pub async fn team_relay_answer(ws: Ws, state: State<'_, AppState>, url: String, accept: bool) -> Result<Vec<TeamRelay>> {
+    let (root, data_dir) = (ws.root(), state.data_dir.clone());
+    let (relay, relays) = blocking(move || {
+        let relay = crate::vault::team::read_relays(&root)
+            .iter()
+            .filter_map(|code| Relay::parse_code(code).ok())
+            .find(|relay| relay.url == url)
+            .ok_or_else(|| AppError::NotFound("仓库里已经没有这台中继了".into()))?;
+        let mut config = boot::Config::load(&data_dir);
+        config.declined_team_relays.retain(|known| *known != relay.url);
+        if !accept {
+            config.declined_team_relays.push(relay.url.clone());
+        }
+        config.save(&data_dir).map_err(|error| AppError::Io(error.to_string()))?;
+        if accept {
+            save_relay(&data_dir, &relay)?;
+        }
+        Ok((accept.then_some(relay), team_relays_of(&root, &data_dir)))
+    })
+    .await?;
+    if let (Some(relay), Some(net)) = (relay, state.team.net()) {
+        net.add_relay(relay).await;
+    }
+    Ok(relays)
+}
+
+/// 我配的一台中继给不给这个团队用（写进 / 拿出仓库里的 .odea/relays，随下一轮同步推上去）
+#[tauri::command]
+#[specta::specta]
+pub async fn team_relay_share(ws: Ws, state: State<'_, AppState>, url: String, share: bool) -> Result<Vec<TeamRelay>> {
+    let (root, data_dir, sync) = (ws.root(), state.data_dir.clone(), ws.sync.clone());
+    blocking(move || {
+        if crate::vault::team::team_id(&root).is_none() {
+            return Err(AppError::Invalid("这不是团队仓库".into()));
+        }
+        let mut codes = crate::vault::team::read_relays(&root);
+        let same = |code: &String| Relay::parse_code(code).is_ok_and(|relay| relay.url == url);
+        if share {
+            let relay = load_relays(&data_dir)
+                .into_iter()
+                .find(|relay| relay.url == url)
+                .ok_or_else(|| AppError::NotFound("没有这台中继".into()))?;
+            codes.retain(|code| !same(code));
+            codes.push(relay.to_code());
+        } else {
+            codes.retain(|code| !same(code));
+        }
+        if crate::vault::team::write_relays(&root, &codes)? {
+            sync.poke();
+        }
+        Ok(team_relays_of(&root, &data_dir))
+    })
+    .await
 }

@@ -246,7 +246,10 @@ struct StoredPlace {
 struct Inner {
     me: [u8; 32],
     endpoint: Endpoint,
-    relays: Vec<Relay>,
+    /// 用着的中继（起端点时的，加上后来加的：团队的中继、自己新配的）
+    relays: Mutex<Vec<Relay>>,
+    /// 自签名证书中继的指纹（后来加的中继也往里放）
+    pins: relays::Pins,
     _mdns: Option<MdnsAddressLookup>,
     teams: Mutex<HashMap<String, Team>>,
     places: Mutex<HashMap<[u8; 32], Place>>,
@@ -265,7 +268,14 @@ fn hex(key: &[u8; 32]) -> String {
     data_encoding::HEXLOWER.encode(key)
 }
 
-async fn bind(key: SecretKey, relays: &[Relay], mdns: bool) -> Result<(Endpoint, Option<MdnsAddressLookup>), String> {
+async fn bind(
+    key: SecretKey,
+    relays: &[Relay],
+    pins: relays::Pins,
+    mdns: bool,
+) -> Result<(Endpoint, Option<MdnsAddressLookup>), String> {
+    // 和会话式一样 5 秒保活、12 秒认出断了（接手要快）。空闲时的流量大头是 iroh 自己的多路径探测，
+    // 保活拉长到 15 秒几乎不变（docs/协同编辑.md §23.5）
     let idle = IdleTimeout::try_from(Duration::from_secs(12)).map_err(|error| error.to_string())?;
     let transport = QuicTransportConfig::builder()
         .keep_alive_interval(Duration::from_secs(5))
@@ -274,8 +284,12 @@ async fn bind(key: SecretKey, relays: &[Relay], mdns: bool) -> Result<(Endpoint,
     let endpoint = Endpoint::builder(presets::Minimal)
         .secret_key(key)
         .alpns(vec![wire::ALPN.to_vec()])
-        .relay_mode(relays::relay_mode(relays))
-        .ca_tls_config(relays::tls_config(relays::pins(relays)))
+        // 一台都没配时也用「自己的中继表」（空的）：后来加的中继（insert_relay）才接得上；默认一台都不连
+        .relay_mode(match relays::relay_mode(relays) {
+            iroh::RelayMode::Disabled => iroh::RelayMode::Custom(iroh::RelayMap::empty()),
+            mode => mode,
+        })
+        .ca_tls_config(relays::tls_config(pins))
         .transport_config(transport)
         .bind()
         .await
@@ -327,11 +341,13 @@ fn load_places(file: Option<&PathBuf>) -> HashMap<[u8; 32], Place> {
 impl TeamNet {
     pub async fn start(options: TeamOptions) -> Result<TeamNet, String> {
         let me = *options.key.public().as_bytes();
-        let (endpoint, mdns) = bind(options.key, &options.relays, options.mdns).await?;
+        let pins = relays::pins(&options.relays);
+        let (endpoint, mdns) = bind(options.key, &options.relays, pins.clone(), options.mdns).await?;
         let inner = Arc::new(Inner {
             me,
             endpoint,
-            relays: options.relays,
+            relays: Mutex::new(options.relays),
+            pins,
             _mdns: mdns,
             teams: Mutex::new(HashMap::new()),
             places: Mutex::new(load_places(options.places_file.as_ref())),
@@ -348,6 +364,19 @@ impl TeamNet {
             inner,
             tasks: Mutex::new(tasks),
         })
+    }
+
+    /// 加一台中继（团队的中继选了「用」、自己新配了一台）：当场接上，拨号时也带着它
+    pub async fn add_relay(&self, relay: Relay) {
+        if self.inner.relays.lock().unwrap().iter().any(|known| known.url == relay.url) {
+            return;
+        }
+        relays::add_pin(&self.inner.pins, &relay);
+        if let (Ok(url), Some(config)) = (relay.relay_url(), relay.config()) {
+            self.inner.endpoint.insert_relay(url, Arc::new(config)).await;
+        }
+        self.inner.relays.lock().unwrap().push(relay);
+        self.inner.redial.notify_one();
     }
 
     /// 这台设备的公钥（十六进制）
@@ -615,6 +644,17 @@ impl TeamNet {
         self.inner.me
     }
 
+    /// 测试用：这个团队的连接一共发出去多少字节（UDP 层，含保活、重传）
+    #[cfg(test)]
+    pub fn sent_bytes(&self, team: &str) -> u64 {
+        self.inner
+            .teams
+            .lock()
+            .unwrap()
+            .get(team)
+            .map_or(0, |team| team.links.values().map(|link| link.conn.stats().udp_tx.bytes).sum())
+    }
+
     #[cfg(test)]
     pub fn online(&self, team: &str) -> usize {
         self.inner.teams.lock().unwrap().get(team).map_or(0, |team| team.links.len())
@@ -637,10 +677,20 @@ impl Inner {
     }
 
     fn where_am_i(&self) -> Place {
+        // 我连着的那台中继（home relay）；还没连上就报第一台
+        let home = self.endpoint.addr().addrs.iter().find_map(|addr| match addr {
+            TransportAddr::Relay(url) => Some(url.to_string()),
+            _ => None,
+        });
+        let relays = self.relays.lock().unwrap();
+        let relay = home
+            .and_then(|home| relays.iter().find(|relay| relay.relay_url().is_ok_and(|url| url.to_string() == home)))
+            .or_else(|| relays.first())
+            .cloned();
         Place {
             key: self.me,
             addrs: crate::collab::reach::endpoint_addrs(&self.endpoint),
-            relay: self.relays.first().cloned(),
+            relay,
         }
     }
 
@@ -731,19 +781,29 @@ impl Inner {
 
     async fn dial(self: Arc<Self>, team: &str, device: [u8; 32]) -> Result<(), String> {
         let place = self.places.lock().unwrap().get(&device).cloned();
-        let (addrs, relay) = match place {
-            Some(place) => (place.addrs, place.relay.or_else(|| self.relays.first().cloned())),
-            // 不知道在哪：靠 mDNS 按公钥找，或者经自己配的中继
-            None => (Vec::new(), self.relays.first().cloned()),
+        // 他上次在哪：直连地址、他连着的中继；再加上我这边的每一台中继（他可能连着其中一台）。
+        // 都不知道的话靠 mDNS 按公钥找
+        let (addrs, mut relays) = match place {
+            Some(place) => (place.addrs, place.relay.into_iter().collect::<Vec<_>>()),
+            None => (Vec::new(), Vec::new()),
         };
+        for relay in self.relays.lock().unwrap().iter() {
+            if !relays.iter().any(|known| known.url == relay.url) {
+                relays.push(relay.clone());
+            }
+        }
         let id = PublicKey::from_bytes(&device).map_err(|_| "公钥不对")?;
-        let relay = relay.and_then(|relay| relay.relay_url().ok());
         let addr = EndpointAddr {
             id,
             addrs: addrs
                 .into_iter()
                 .map(TransportAddr::Ip)
-                .chain(relay.map(TransportAddr::Relay))
+                .chain(
+                    relays
+                        .iter()
+                        .filter_map(|relay| relay.relay_url().ok())
+                        .map(TransportAddr::Relay),
+                )
                 .collect(),
         };
         let conn = tokio::time::timeout(DIAL_TIMEOUT, self.endpoint.connect(addr, wire::ALPN))

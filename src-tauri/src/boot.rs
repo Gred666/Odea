@@ -53,6 +53,9 @@ pub struct Config {
     /// 主持协作时「记住」的人（docs/协同编辑.md §8.2）：下次拿着链接或者从「附近」进来不用再问
     #[serde(default)]
     pub collab_trusted: Vec<SavedPeer>,
+    /// 团队仓库里写着、问过以后选了「不用」的中继（地址）。不再问
+    #[serde(default)]
+    pub declined_team_relays: Vec<String>,
 }
 
 /// config.json 里记着的一个仓库
