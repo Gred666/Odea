@@ -361,7 +361,7 @@ export class TeamController {
       .sort((a, b) => (a.peer.id < b.peer.id ? -1 : 1));
     switch (entry.role) {
       case "solo": {
-        if (Date.now() < entry.retryAt) return;
+        if (this.waitRetry(entry)) return;
         const host = hosts[0];
         if (host) {
           entry.relaySince = 0;
@@ -390,10 +390,28 @@ export class TeamController {
         return;
       }
       case "host": {
+        // 协作借着、对方又不是同一份会话：不让（让了外人那边要合重），两个主持人各存各的，git 同步时合。
+        // 要在这里挡住：放进 yieldTo 里再返回的话，做完马上再判断、又去让，微任务一直转，页面卡死
         const rival = hosts[0];
-        if (rival && rival.peer.id < this.self.id) {
+        if (
+          rival &&
+          rival.peer.id < this.self.id &&
+          (!entry.holds || rival.state.session === entry.lineage)
+        ) {
           this.run(entry, () => this.yieldTo(entry, rival.peer, rival.state.session));
           return;
+        }
+        // 看不到主持人、先自己主持了一份（开这一篇时别人在会话里的 Presence 还没到）：看到经转发能到的
+        // 另一份会话、根的公钥比我小，就不主持、经他加入（本机的改动按加入的规矩合进去）。只在没人连着我、
+        // 协作也没借着时这样做 —— 有访客的话他们也得跟着换，两份各写各的、git 同步时合
+        if (!entry.guests.size && !entry.holds) {
+          const via = this.relays(entry, others).find(
+            ({ state }) => state.session !== entry.lineage && state.root! < this.self.id,
+          );
+          if (via) {
+            this.run(entry, () => this.yieldTo(entry, via.peer, via.state.session));
+            return;
+          }
         }
         // 身边没人了：过一会儿收掉（协作借着的不收）
         if (!entry.guests.size && !others.length && !entry.holds) {
@@ -410,7 +428,7 @@ export class TeamController {
         return;
       }
       case "orphan": {
-        if (Date.now() < entry.retryAt) return;
+        if (this.waitRetry(entry)) return;
         const same = hosts.find(({ state }) => state.session === entry.lineage);
         if (same) {
           this.run(entry, () => this.rejoin(entry, same.peer));
@@ -449,7 +467,7 @@ export class TeamController {
       }
       case "guest": {
         // 我连着的上游也丢了主持人（同一份会话、他不主持、也没有根）：他在等这份会话里公钥最小的接手。
-        // 轮到的是我的话，我在他下面做客、自己不会知道 —— 两边一直等（2026-10-22 发 0.4.1 时 CI 卡住：
+        // 轮到的是我的话，我在他下面做客、自己不会知道 —— 两边一直等（2026-10-22 消息先后打乱时复现：
         // 主持人刚断，我看到他过时的 Presence、经他接上，随后他也丢了主持人）。先等一会儿：他也许在等
         // 旧主持人回来（orphan 的 dropGrace），接回去了根就回来了；还是这样就断开他、自己接手，他看到我主持再连过来
         const upstream = this.peerOf(entry.host);
@@ -460,6 +478,16 @@ export class TeamController {
           !!state && !state.hosting && !state.root && state.session === entry.lineage;
         if (!stranded) {
           entry.strandedSince = 0;
+          // 有人在主持另一份会话、公钥比我这份的根小（我先看到了公钥大的那位在主持、加入了他）：换过去。
+          // 原来那位看不到他的话，没人连着他以后会看到我在根更小的那份里、经我加入（host 分支）。协作借着的不换
+          const root = state ? (state.hosting ? upstream!.id : state.root) : null;
+          const smaller = hosts.find(
+            ({ peer, state: theirs }) =>
+              theirs.session !== entry.lineage && root !== null && peer.id < root,
+          );
+          if (smaller && !entry.holds) {
+            this.run(entry, () => this.join(entry, smaller.peer, smaller.state.session));
+          }
           return;
         }
         entry.strandedSince ||= Date.now();
@@ -576,8 +604,7 @@ export class TeamController {
 
   /** 两边都在主持，对方公钥小：让给他 */
   private async yieldTo(entry: Entry, rival: TeamPeer, lineage: string | null): Promise<void> {
-    // 协作借着、对方又不是同一份会话：不让（让了外人那边要合重）。两个主持人各存各的，git 同步时合
-    if (entry.holds && lineage !== entry.lineage) return;
+    // 协作借着、对方不是同一份会话的，evaluate 里就不来让了
     if (lineage && lineage === entry.lineage) {
       // 同一份会话（两位都接了手）：不主持了，照旧连过去
       const link = entry.link;
@@ -825,6 +852,17 @@ export class TeamController {
     entry.role = role;
     entry.epoch += 1;
     return entry.epoch;
+  }
+
+  /**
+   * 被拒过、还没到再试的时候：到那时再判断一次。定时器偶尔比 Date.now() 早一两毫秒到，到了一看「还没到」
+   * 就返回、又没再排的话，这一篇再也不判断了（2026-10-22 主持人断线后两边都卡在 orphan，CI 上那次多半是它）
+   */
+  private waitRetry(entry: Entry): boolean {
+    const wait = entry.retryAt - Date.now();
+    if (wait <= 0) return false;
+    if (!entry.timer) this.later(entry, wait);
+    return true;
   }
 
   private clearTimer(entry: Entry): void {

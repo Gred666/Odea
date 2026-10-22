@@ -1,6 +1,6 @@
 import type { CollabScheduler } from "@/collab/session";
 import type { DocumentSaveTarget } from "@/data/types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TeamController, type TeamIO, type TeamSnapshot } from "./controller";
 import { type MockTeamHub, createMockTeamHub } from "./mockNet";
 
@@ -196,6 +196,55 @@ describe("团队：同一篇谁主持（设计 §22.4）", () => {
     expect(text.split("# 周会").length).toBe(2);
   });
 
+  it("定时器比 Date.now() 早一点到：被拒以后照样再试，主持人断线照样有人接手", async () => {
+    // 2026-10-22：主持人断线，李四、王五先按旧的 Presence 去连他、被拒，40ms 后再试；定时器偶尔比 Date.now()
+    // 早一两毫秒到，一看「还没到」就返回、没再排，两边都卡在 orphan。这里让 Date.now() 只走一半的速度，每次都早到
+    const realNow = Date.now.bind(Date);
+    const start = realNow();
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => start + Math.floor((realNow() - start) * 0.5));
+    try {
+      const hub = createMockTeamHub();
+      const a = device(hub, "a1", "张三");
+      const b = device(hub, "b2", "李四");
+      const c = device(hub, "c3", "王五");
+      open(a);
+      open(b);
+      open(c);
+      await until("都进来了", () => sessionOf(b)?.remote === true && sessionOf(c)?.remote === true);
+      hub.setOnline("a1", false);
+      await until("李四接手", () => sessionOf(b)?.remote === false);
+      await until("王五连他", () => sessionOf(c)?.remote === true);
+    } finally {
+      clock.mockRestore();
+    }
+    // Date.now() 慢一半，until 的 3 秒是 6 秒：等不到时报的是卡在哪一步，不是测试超时
+  }, 10_000);
+
+  it("协作借着的不让给另一份会话的主持人（也不会一直空转）", async () => {
+    // 让不了（yieldTo 里直接返回）还每次都去让：做完马上再判断、又去让，微任务一直转，页面卡死
+    const hub = createMockTeamHub();
+    const a = device(hub, "a1", "张三");
+    const b = device(hub, "b2", "李四");
+    hub.setOnline("b2", false);
+    // 各自借给协作：一个人也主持一份
+    const held = await Promise.all([
+      a.controller.hold({ doc: DOC, target: TARGET }),
+      b.controller.hold({ doc: DOC, target: TARGET }),
+    ]);
+    expect(held.every(Boolean)).toBe(true);
+    hub.setOnline("b2", true);
+    await until("互相看到对方在主持", () =>
+      b.snapshot.peers.some((peer) => peer.id === "a1" && peer.docs.some((item) => item.hosting)),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(sessionOf(a)?.remote).toBe(false);
+    expect(sessionOf(b)?.remote).toBe(false);
+    a.controller.release(DOC);
+    b.controller.release(DOC);
+  });
+
   it("访客走了：主持人那边过一会儿收掉会话", async () => {
     const hub = createMockTeamHub();
     const a = device(hub, "a1", "张三");
@@ -224,7 +273,8 @@ describe("团队：同一篇谁主持（设计 §22.4）", () => {
     await until("张三存下王五写的", () => a.disk.get("n1")?.endsWith("王五写的") === true);
     append(a, "\n张三写的");
     await until("王五看到张三的", () => textOf(c)?.endsWith("张三写的") === true);
-    expect(textOf(b)).toBe(textOf(a));
+    // 李四转给王五的同时自己也收着，前端那边可能晚一拍
+    await until("李四和张三一样", () => textOf(b) === textOf(a));
     expect(c.saves).toBe(0);
 
     // 李四走了：王五谁都连不上（看不到张三），自己接手、存盘 —— 张三那边还在写同一篇，git 同步时再合
@@ -261,5 +311,26 @@ describe("团队：同一篇谁主持（设计 §22.4）", () => {
     append(c, "\n接手以后");
     await until("李四存盘", () => b.disk.get("n1")?.endsWith("接手以后") === true);
     expect(c.saves).toBe(0);
+  });
+
+  it("看不到主持人、先自己主持了一份：看到经转发能到的会话、根的公钥更小，就不主持、经转发加入", async () => {
+    const hub = createMockTeamHub();
+    const a = device(hub, "a1", "张三");
+    const b = device(hub, "b2", "李四");
+    const c = device(hub, "c3", "王五");
+    hub.block("a1", "b2");
+    // 张三、李四先开：互相看不到，各自一个人。王五一开，两边都看到他、都是公钥最小的，都主持；
+    // 王五加入公钥更小的张三 —— 李四先自己主持了一份
+    open(a);
+    open(b);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    open(c);
+    await until("王五加入张三", () => sessionOf(c)?.remote === true);
+    await until("李四经王五加入", () => sessionOf(b)?.remote === true);
+    // 不主持之前自己那份先存过一次；加入以后不再存
+    const saves = b.saves;
+    append(b, "\n李四写的");
+    await until("张三存下李四写的", () => a.disk.get("n1")?.endsWith("李四写的") === true);
+    expect(b.saves).toBe(saves);
   });
 });
