@@ -233,4 +233,33 @@ describe("团队：同一篇谁主持（设计 §22.4）", () => {
     append(c, "\n接手以后");
     await until("王五存盘", () => c.disk.get("n1")?.endsWith("接手以后") === true);
   });
+
+  it("主持人走了，公钥最小的那位正经我转：他断开我、自己接手，我改连他", async () => {
+    // 2026-10-22 发 0.4.1 时 CI 偶发卡住：主持人刚断，李四看到王五过时的 Presence（还连着张三），经王五接上；
+    // 王五随后也丢了主持人，等公钥最小的李四接手，李四在他下面做客、不知道要接手 —— 两边一直等
+    const hub = createMockTeamHub();
+    const a = device(hub, "a1", "张三");
+    const b = device(hub, "b2", "李四");
+    const c = device(hub, "c3", "王五");
+    hub.block("a1", "b2");
+    open(a);
+    open(c);
+    await until("王五加入了", () => sessionOf(c)?.remote === true);
+    // 李四先看到王五在张三的会话里再开（不然他看不到张三、也看不到会话，自己主持一份）
+    await until("李四看到王五连着张三", () =>
+      b.snapshot.peers.some(
+        (peer) => peer.id === "c3" && peer.docs.some((item) => item.root === "a1"),
+      ),
+    );
+    open(b);
+    await until("李四经王五加入", () => sessionOf(b)?.remote === true);
+    hub.setOnline("a1", false);
+    await until(
+      "李四接手、王五连他",
+      () => sessionOf(b)?.remote === false && sessionOf(c)?.remote === true,
+    );
+    append(c, "\n接手以后");
+    await until("李四存盘", () => b.disk.get("n1")?.endsWith("接手以后") === true);
+    expect(c.saves).toBe(0);
+  });
 });

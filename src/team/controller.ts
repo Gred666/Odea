@@ -119,6 +119,8 @@ interface Entry {
   serving: boolean;
   /** 只看得到连着主持人的成员，从什么时候起（0 = 没有这回事） */
   relaySince: number;
+  /** 做客：我连着的上游也丢了主持人，从什么时候起（0 = 没有这回事） */
+  strandedSince: number;
   /** 协作借着这一篇（hold）几次 */
   holds: number;
   /** 正在做的转换（hold 要等它） */
@@ -308,6 +310,11 @@ export class TeamController {
     return ids.every((id) => this.self.id < id);
   }
 
+  /** 和我在同一份会话里的（主持人走了，这些人里公钥最小的接手）。orphan、做客的都按这一份算，不然各说各的 */
+  private sessionMembers(others: { peer: TeamPeer; state: PresenceDoc }[], entry: Entry): string[] {
+    return others.filter(({ state }) => state.session === entry.lineage).map(({ peer }) => peer.id);
+  }
+
   /**
    * 能经他转的：在会话里、连着主持人（root 有、不是我）、不是连着我的下游，顺着他的上游往上找不到我。
    * 公钥小的在前
@@ -436,10 +443,35 @@ export class TeamController {
           }
           return;
         }
-        const peers = others
-          .filter(({ state }) => state.session === entry.lineage)
-          .map(({ peer }) => peer.id);
-        if (this.smallest(peers)) this.run(entry, () => this.takeover(entry));
+        if (this.smallest(this.sessionMembers(others, entry)))
+          this.run(entry, () => this.takeover(entry));
+        return;
+      }
+      case "guest": {
+        // 我连着的上游也丢了主持人（同一份会话、他不主持、也没有根）：他在等这份会话里公钥最小的接手。
+        // 轮到的是我的话，我在他下面做客、自己不会知道 —— 两边一直等（2026-10-22 发 0.4.1 时 CI 卡住：
+        // 主持人刚断，我看到他过时的 Presence、经他接上，随后他也丢了主持人）。先等一会儿：他也许在等
+        // 旧主持人回来（orphan 的 dropGrace），接回去了根就回来了；还是这样就断开他、自己接手，他看到我主持再连过来
+        const upstream = this.peerOf(entry.host);
+        const state = upstream?.online
+          ? upstream.docs.find((item) => item.doc === entry.doc)
+          : undefined;
+        const stranded =
+          !!state && !state.hosting && !state.root && state.session === entry.lineage;
+        if (!stranded) {
+          entry.strandedSince = 0;
+          return;
+        }
+        entry.strandedSince ||= Date.now();
+        const wait = entry.strandedSince + this.timing.dropGrace - Date.now();
+        if (wait > 0) {
+          if (!entry.timer) this.later(entry, wait);
+          return;
+        }
+        if (this.smallest(this.sessionMembers(others, entry))) {
+          entry.strandedSince = 0;
+          this.run(entry, () => this.leaveUpstreamAndTakeOver(entry));
+        }
         return;
       }
       default:
@@ -471,6 +503,13 @@ export class TeamController {
     this.setRole(entry, "host");
     entry.host = null;
     await this.startHosting(entry, true);
+  }
+
+  /** 做客，上游也丢了主持人、在等我接手：断开他（我的下游照旧连着我），照常接手 */
+  private async leaveUpstreamAndTakeOver(entry: Entry): Promise<void> {
+    this.setRole(entry, "orphan");
+    await this.net.close(entry.doc).catch(() => {});
+    await this.takeover(entry);
   }
 
   private async startHosting(entry: Entry, writeNow: boolean): Promise<void> {
@@ -732,6 +771,7 @@ export class TeamController {
       busy: false,
       serving: false,
       relaySince: 0,
+      strandedSince: 0,
       holds: 0,
       pending: null,
     };
