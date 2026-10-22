@@ -681,7 +681,11 @@ export interface DocumentModel {
    * 正在协作（docs/协同编辑.md）：编辑器接到这个会话上，正文以会话为准。
    * 主持人那篇是普通的笔记带上它；访客那篇的保存目标是 shared
    */
-  collab?: { session: CollabSession; readOnly: boolean };
+  /**
+   * 这一篇在协作会话里：编辑器绑它。remote = 团队仓库里别人在主持（docs/协同编辑.md §22.2 规矩 1）：
+   * 这边不存这一篇，主持人存
+   */
+  collab?: { session: CollabSession; readOnly: boolean; remote?: boolean };
   /** 所有持久化文档都由同一个 Markdown 编辑器编辑。 */
   editor?: {
     target: EditorTarget;

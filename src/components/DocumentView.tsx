@@ -37,6 +37,7 @@ import { Outline } from "./Outline";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { Segmented } from "./Segmented";
 import { SwapFade } from "./SwapFade";
+import { TeamPresence } from "./TeamPresence";
 
 /** 目录树的指纹：标题文字或行号变了才需要重新渲染文档视图。 */
 const outlineKeyOf = (markdown: string) =>
@@ -392,6 +393,8 @@ export function DocumentView({
                         )}
                         {/* 协作中：谁在、点一下回到协作的那篇（右上角是目录树的标题，放这一行的右端） */}
                         <CollabPresence docKey={doc.key} />
+                        {/* 团队仓库：别人也开着这一篇（docs/协同编辑.md §22.4） */}
+                        <TeamPresence doc={doc} />
                         {/* 盒子钉成小号控件的高（30），-10 之后正好是这一行的 20：大号的（34，/GOAL 那组）
                             多出来的 4px 往下垂进 mb-2 的空里，不再把这一行撑成 24 —— 以前 /GOAL 的标题、
                             分隔线、正文都比别的页低 4px，切过去就跳一下 */}
@@ -473,8 +476,11 @@ export function DocumentView({
                       <Editor
                         key={saveKey(doc)}
                         initialMarkdown={doc.bodyMd}
+                        // 团队仓库里别人在主持这一篇：他存，这边不存（docs/协同编辑.md §22.2 规矩 1）
                         onSave={(markdown) =>
-                          target ? onSaveDocument(target, markdown) : Promise.resolve()
+                          target && !doc.collab?.remote
+                            ? onSaveDocument(target, markdown)
+                            : Promise.resolve()
                         }
                         outlineItems={outline}
                         onOutlineHandle={setEditorOutline}

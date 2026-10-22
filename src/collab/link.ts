@@ -18,18 +18,21 @@ export interface SessionLink {
   readonly session: CollabSession;
   /** 收到一帧 */
   receive(frame: Frame): void;
-  /** 成员变了：成员号 → 是谁（光标按它认人）；走了的人光标马上收起 */
-  setMembers(members: readonly MemberInfo[]): void;
+  /** 成员变了：成员号 → 是谁（光标按它认人）；走了的人光标马上收起。团队那边给的是 TeamPeer，也有这几样 */
+  setMembers(members: readonly LinkMember[]): void;
   peerOf(member: number): Peer | undefined;
   destroy(): void;
 }
 
-export function peerOfMember(member: MemberInfo): Peer {
+/** 认人用的几样：会话的成员（MemberInfo）、团队里的设备（TeamPeer）都有 */
+export type LinkMember = Pick<MemberInfo, "member" | "id" | "name">;
+
+export function peerOfMember(member: LinkMember): Peer {
   return { id: member.id, name: member.name, color: peerColor(member.id) };
 }
 
 export function linkSession(
-  net: CollabNet,
+  net: Pick<CollabNet, "send">,
   options: {
     doc: string;
     self: Peer;

@@ -826,6 +826,18 @@ async teamInfo() : Promise<Result<TeamInfo, AppError>> {
 }
 },
 /**
+ * 团队仓库的窗口起来了：起团队端点（一个应用一个）、登记这个团队。不是团队仓库是 None
+ * （登记过的退出：仓库标记被改掉了）
+ */
+async teamStart() : Promise<Result<TeamSelf | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_start") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 邀请成员：在托管方那边拉他当协作者（GitHub 发一封邀请），标成团队仓库、把这台设备写进名单，
  * 返回发给他的链接
  */
@@ -1503,6 +1515,67 @@ async collabCreateDoc(folder: string, title: string) : Promise<Result<string, Ap
 }
 },
 /**
+ * 我开着哪几篇、主持着哪几篇
+ */
+async teamPresence(docs: PresenceDoc[]) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_presence", { docs }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async teamPeers() : Promise<Result<TeamPeer[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_peers") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 开始 / 不再主持一篇
+ */
+async teamHost(doc: string, on: boolean) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_host", { doc, on }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 连这一篇的主持人（编号 member）
+ */
+async teamOpen(doc: string, member: number) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_open", { doc, member }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async teamClose(doc: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_close", { doc }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 这一篇在 git 里最近一次提交的正文（不含属性块）：加入别人的会话时，本机没提交的改动按它算出来合进去
+ * （设计 §22.2 规矩 2）。没开同步、没提交过是 None
+ */
+async teamBase(target: DocTarget) : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("team_base", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 访客：向主持人要正文里引用的一个附件，缓存下来，返回本机的路径（前端转成 asset 地址显示）
  */
 async collabFetchAttachment(doc: string, path: string) : Promise<Result<string, AppError>> {
@@ -1549,6 +1622,7 @@ journalGoto: JournalGoto,
 launcherLink: LauncherLink,
 syncNotice: SyncNotice,
 syncStatusChanged: SyncStatusChanged,
+teamChanged: TeamChanged,
 updateReady: UpdateReady,
 vaultChanged: VaultChanged
 }>({
@@ -1560,6 +1634,7 @@ journalGoto: "journal-goto",
 launcherLink: "launcher-link",
 syncNotice: "sync-notice",
 syncStatusChanged: "sync-status-changed",
+teamChanged: "team-changed",
 updateReady: "update-ready",
 vaultChanged: "vault-changed"
 })
@@ -2162,6 +2237,23 @@ export type Portmap = { state: "checking" } |
  * 路由器不支持、或者关了 UPnP / NAT-PMP / PCP
  */
 { state: "unavailable" }
+/**
+ * 我开着的一篇
+ */
+export type PresenceDoc = { 
+/**
+ * 文档 id：笔记是相对路径，某一天 `day-日期`，目标 `goal-周期-开始日期`
+ */
+doc: string; 
+/**
+ * 这一篇由我主持（别人要开就连我）
+ */
+hosting: boolean; 
+/**
+ * 我在这一篇的哪一份会话里（主持人建会话时起的 id，访客跟着主持人的）；没在会话里是 None。
+ * 主持人走了，同一份会话里留下的人才能接着连新的主持人（CRDT 历史相同）；不是同一份的要重新加入
+ */
+session: string | null }
 export type Reach = { 
 /**
  * 还在查（端口映射要等路由器回话，中继要连一下）
@@ -2483,6 +2575,15 @@ export type TeamAccess =
  * 问不到托管方
  */
 "unknown"
+export type TeamChanged = TeamControl
+/**
+ * 谁在线变了、一篇的流断了
+ */
+export type TeamControl = { type: "peers"; peers: TeamPeer[] } | 
+/**
+ * 一篇的流断了。做客的：主持人不给（refused）、不主持了、断线；主持的：这位访客走了
+ */
+{ type: "docClosed"; doc: string; member: number; refused: string | null }
 export type TeamDevice = { name: string; 
 /**
  * 名单里这一行上次改的时间（毫秒）
@@ -2524,6 +2625,22 @@ link: string;
  * 他本来就有这个仓库的权限（不用等他接受邀请）
  */
 already: boolean }
+/**
+ * 给界面看的一台设备
+ */
+export type TeamPeer = { 
+/**
+ * 这台设备在管道帧里的编号（会话的成员号，前端按它认人）
+ */
+member: number; 
+/**
+ * 设备公钥（十六进制）
+ */
+id: string; account: string; name: string; online: boolean; 
+/**
+ * 他开着的那几篇（在线才有）
+ */
+docs: PresenceDoc[] }
 export type TeamPerson = { 
 /**
  * 账号（login）
@@ -2533,6 +2650,18 @@ login: string; me: boolean;
  * 名单（.odea/devices）里他的设备，最近更新的在前
  */
 devices: TeamDevice[]; access: TeamAccess }
+/**
+ * 团队仓库里的我
+ */
+export type TeamSelf = { team: string; 
+/**
+ * 设备公钥（十六进制）
+ */
+id: string; 
+/**
+ * 我在管道帧里的编号
+ */
+member: number; name: string; peers: TeamPeer[] }
 /**
  * search_text 的一条：正文里出现了要找的字的文档
  */

@@ -2112,6 +2112,11 @@ pub async fn collab_set_name(state: State<'_, AppState>, name: String) -> Result
         Some(Active::Guest(guest)) => guest.set_name(&name),
         None => {}
     }
+    if let Some(net) = state.team.net() {
+        for team in state.team.windows.lock().unwrap().values() {
+            net.set_name(team, &name);
+        }
+    }
     Ok(())
 }
 
@@ -3126,4 +3131,256 @@ pub async fn sync_accept_invitation(state: State<'_, AppState>, provider: String
     let data_dir = state.data_dir.clone();
     blocking(move || Ok(with_token(&data_dir, provider, |http, token| provider.accept_invitation(http, token, id))?))
         .await
+}
+
+/* ---------------- 团队：成员之间自动连上（docs/协同编辑.md §22.4） ----------------
+一个应用一个团队端点（team/mod.rs 的 TeamNet），团队仓库的窗口起来时登记（team_start），关了退出。
+谁当主持人、什么时候开哪一篇由前端按 Presence 定；这里只把命令转过去，事件、字节发给登记它的窗口：
+- 谁在线、开着哪几篇变了、一篇的流断了：tauri-specta 的事件 TeamChanged
+- 文档的字节：和协作一样的管道帧，经 team_pipe 登记的 Channel 推给前端，前端经 team_send 发
+  （PIPE_UPDATE / CURSOR / SYNC_REPLY / SYNC_VECTOR，成员号是这台设备在团队里的编号） */
+
+#[derive(Default)]
+pub struct TeamHub {
+    net: Mutex<Option<Arc<crate::team::TeamNet>>>,
+    /// 起端点要两三秒：两个窗口同时起来时只起一个
+    starting: tokio::sync::Mutex<()>,
+    /// 窗口标签 → 它登记的团队 id
+    windows: Mutex<std::collections::HashMap<String, String>>,
+    pipes: Mutex<std::collections::HashMap<String, Channel<InvokeResponseBody>>>,
+}
+
+impl TeamHub {
+    fn net(&self) -> Option<Arc<crate::team::TeamNet>> {
+        self.net.lock().unwrap().clone()
+    }
+
+    fn team_of(&self, label: &str) -> Option<String> {
+        self.windows.lock().unwrap().get(label).cloned()
+    }
+}
+
+/// 谁在线变了、一篇的流断了
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum TeamControl {
+    Peers { peers: Vec<crate::team::TeamPeer> },
+    /// 一篇的流断了。做客的：主持人不给（refused）、不主持了、断线；主持的：这位访客走了
+    DocClosed { doc: String, member: u16, refused: Option<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+pub struct TeamChanged(pub TeamControl);
+
+/// 团队仓库里的我
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamSelf {
+    pub team: String,
+    /// 设备公钥（十六进制）
+    pub id: String,
+    /// 我在管道帧里的编号
+    pub member: u16,
+    pub name: String,
+    pub peers: Vec<crate::team::TeamPeer>,
+}
+
+/// 团队仓库的窗口起来了：起团队端点（一个应用一个）、登记这个团队。不是团队仓库是 None
+/// （登记过的退出：仓库标记被改掉了）
+#[tauri::command]
+#[specta::specta]
+pub async fn team_start<R: Runtime>(app: AppHandle<R>, ws: Ws, state: State<'_, AppState>) -> Result<Option<TeamSelf>> {
+    let root = ws.root();
+    let data_dir = state.data_dir.clone();
+    let prepared = blocking(move || {
+        let Some(team) = crate::vault::team::team_id(&root) else { return Ok(None) };
+        let account = sync_target(&root)
+            .map(|(provider, login, _)| provider.account_key(&login))
+            .unwrap_or_default();
+        let devices: Vec<crate::team::Device> = crate::vault::team::read(&root)
+            .iter()
+            .filter_map(crate::team::Device::from_row)
+            .collect();
+        Ok(Some((team, account, devices, root, collab_name(&data_dir), team_key(&data_dir), load_relays(&data_dir))))
+    })
+    .await?;
+    let hub = state.team.clone();
+    let Some((team, account, devices, root, name, key, relays)) = prepared else {
+        end_team(&state, &ws.label).await;
+        return Ok(None);
+    };
+    // 起端点、登记都在这把锁里：别的窗口这时候关掉最后一个团队，不会把刚起的端点关了
+    let _starting = hub.starting.lock().await;
+    let net = match hub.net() {
+        Some(net) => net,
+        None => {
+            let net = crate::team::TeamNet::start(crate::team::TeamOptions {
+                key,
+                relays,
+                mdns: true,
+                places_file: Some(collab_dir(&state.data_dir).join("team-places.json")),
+            })
+            .await
+            .map_err(AppError::Io)?;
+            let net = Arc::new(net);
+            *hub.net.lock().unwrap() = Some(net.clone());
+            net
+        }
+    };
+    // 这个窗口之前登记的是别的团队（换了仓库）：先退出那个
+    let previous = hub.windows.lock().unwrap().insert(ws.label.clone(), team.clone());
+    if let Some(previous) = previous.filter(|previous| *previous != team) {
+        net.leave(&previous);
+    }
+    let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
+    net.join(
+        crate::team::TeamSpec {
+            id: team.clone(),
+            name: name.clone(),
+            account,
+            devices,
+            root: Some(root),
+        },
+        events,
+    );
+    forward_team(app, hub.clone(), ws.label.clone(), team.clone(), receiver);
+    Ok(Some(TeamSelf {
+        member: net.my_member(&team),
+        id: net.me(),
+        peers: net.peers(&team),
+        team,
+        name,
+    }))
+}
+
+fn forward_team<R: Runtime>(
+    app: AppHandle<R>,
+    hub: Arc<TeamHub>,
+    label: String,
+    team: String,
+    mut receiver: tokio::sync::mpsc::UnboundedReceiver<crate::team::TeamEvent>,
+) {
+    use crate::team::TeamEvent;
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = receiver.recv().await {
+            let (kind, member, doc, bytes) = match event {
+                TeamEvent::Peers => {
+                    let peers = hub.net().map(|net| net.peers(&team)).unwrap_or_default();
+                    let _ = TeamChanged(TeamControl::Peers { peers }).emit_to(&app, label.as_str());
+                    continue;
+                }
+                TeamEvent::DocClosed { doc, member, refused } => {
+                    let _ = TeamChanged(TeamControl::DocClosed { doc, member, refused }).emit_to(&app, label.as_str());
+                    continue;
+                }
+                TeamEvent::Update { from, doc, bytes } => (PIPE_UPDATE, from, doc, bytes),
+                TeamEvent::Cursor { from, doc, bytes } => (PIPE_CURSOR, from, doc, bytes),
+                TeamEvent::SyncRequest { from, doc, vector } => (PIPE_SYNC_REPLY, from, doc, vector),
+                TeamEvent::SyncStart { with, doc } => (PIPE_SYNC_VECTOR, with, doc, Vec::new()),
+            };
+            let frame = pipe_frame(kind, member, &doc, &bytes);
+            if let Some(pipe) = hub.pipes.lock().unwrap().get(&label) {
+                let _ = pipe.send(InvokeResponseBody::Raw(frame));
+            }
+        }
+    });
+}
+
+/// 窗口关了、换了仓库、不再是团队仓库：退出这个团队；一个团队都不剩了就关端点
+pub async fn end_team(state: &AppState, label: &str) {
+    let hub = &state.team;
+    hub.pipes.lock().unwrap().remove(label);
+    let Some(team) = hub.windows.lock().unwrap().remove(label) else { return };
+    let Some(net) = hub.net() else { return };
+    net.leave(&team);
+    let _starting = hub.starting.lock().await;
+    if net.is_idle() {
+        *hub.net.lock().unwrap() = None;
+        net.stop().await;
+    }
+}
+
+fn team_call<T>(ws: &Ws, state: &AppState, f: impl FnOnce(&crate::team::TeamNet, &str) -> T) -> Result<T> {
+    let team = state
+        .team
+        .team_of(&ws.label)
+        .ok_or_else(|| AppError::Invalid("这个窗口没登记团队仓库".into()))?;
+    let net = state.team.net().ok_or_else(|| AppError::Invalid("团队端点没开着".into()))?;
+    Ok(f(&net, &team))
+}
+
+/// 我开着哪几篇、主持着哪几篇
+#[tauri::command]
+#[specta::specta]
+pub async fn team_presence(ws: Ws, state: State<'_, AppState>, docs: Vec<crate::team::PresenceDoc>) -> Result<()> {
+    team_call(&ws, &state, |net, team| net.set_presence(team, docs))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn team_peers(ws: Ws, state: State<'_, AppState>) -> Result<Vec<crate::team::TeamPeer>> {
+    team_call(&ws, &state, |net, team| net.peers(team))
+}
+
+/// 开始 / 不再主持一篇
+#[tauri::command]
+#[specta::specta]
+pub async fn team_host(ws: Ws, state: State<'_, AppState>, doc: String, on: bool) -> Result<()> {
+    team_call(&ws, &state, |net, team| net.host(team, &doc, on))
+}
+
+/// 连这一篇的主持人（编号 member）
+#[tauri::command]
+#[specta::specta]
+pub async fn team_open(ws: Ws, state: State<'_, AppState>, doc: String, member: u16) -> Result<()> {
+    team_call(&ws, &state, |net, team| net.open(team, &doc, member))?.map_err(AppError::Invalid)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn team_close(ws: Ws, state: State<'_, AppState>, doc: String) -> Result<()> {
+    team_call(&ws, &state, |net, team| net.close(team, &doc))
+}
+
+/// 这一篇在 git 里最近一次提交的正文（不含属性块）：加入别人的会话时，本机没提交的改动按它算出来合进去
+/// （设计 §22.2 规矩 2）。没开同步、没提交过是 None
+#[tauri::command]
+#[specta::specta]
+pub async fn team_base(ws: Ws, target: DocTarget) -> Result<Option<String>> {
+    let Ok((root, rel, id)) = with_vault(&ws, move |v| v.history_source(&target)).await else { return Ok(None) };
+    blocking(move || {
+        if !root.join(".git").exists() {
+            return Ok(None);
+        }
+        let history = crate::sync::history::versions(&root, &rel, id.as_deref(), 1)?;
+        let Some(version) = history.versions.first() else { return Ok(None) };
+        let text = crate::sync::history::text(&root, &version.blob.to_string())?;
+        Ok(Some(crate::vault::frontmatter::split(&text).1))
+    })
+    .await
+}
+
+/// 前端登记接收团队字节的 Channel（不经 tauri-specta）
+#[tauri::command]
+pub fn team_pipe(window: tauri::WebviewWindow, state: State<'_, AppState>, channel: Channel<InvokeResponseBody>) {
+    state.team.pipes.lock().unwrap().insert(window.label().to_string(), channel);
+}
+
+/// 前端发出来的团队字节（原始请求体，帧格式和 collab_send 一样）
+#[tauri::command]
+pub fn team_send(window: tauri::WebviewWindow, state: State<'_, AppState>, request: Request<'_>) -> std::result::Result<(), String> {
+    let InvokeBody::Raw(frame) = request.body() else {
+        return Err("team_send 要原始字节".into());
+    };
+    let (kind, member, doc, payload) = split_pipe_frame(frame)?;
+    let Some(team) = state.team.team_of(window.label()) else { return Ok(()) };
+    let Some(net) = state.team.net() else { return Ok(()) };
+    match kind {
+        PIPE_UPDATE => net.send_update(&team, doc, payload.to_vec()),
+        PIPE_CURSOR => net.send_cursor(&team, doc, payload),
+        PIPE_SYNC_VECTOR => net.send_sync(&team, member, doc, SyncKind::Vector, payload.to_vec()),
+        PIPE_SYNC_REPLY => net.send_sync(&team, member, doc, SyncKind::Reply, payload.to_vec()),
+        _ => {}
+    }
+    Ok(())
 }

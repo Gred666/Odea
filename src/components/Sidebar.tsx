@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { shortcut } from "@/lib/platform";
 import { describeSync } from "@/lib/syncText";
+import { useTeam } from "@/team/store";
 import {
   Archive,
   CalendarDays,
@@ -235,6 +236,14 @@ function SyncRow({ reduce }: { reduce: boolean }) {
   }, [status]);
 
   const { label, detail } = describeSync(status, now);
+  // 团队仓库（docs/协同编辑.md §22.4）：谁在线（连着的成员）
+  const teamActive = useTeam((s) => s.active);
+  const peers = useTeam((s) => s.peers);
+  const online = [...new Set(peers.filter((peer) => peer.online).map((peer) => peer.name))];
+  const team = teamActive
+    ? `
+${online.length ? `${online.join("、")} 在线` : "团队里别人都不在线"}`
+    : "";
   const Icon = SYNC_ICON[status.state];
   const tone =
     status.state === "auth" || status.state === "error"
@@ -249,8 +258,8 @@ function SyncRow({ reduce }: { reduce: boolean }) {
       <button
         type="button"
         onClick={() => setSyncOpen(true)}
-        title={`${label}：${detail}`}
-        aria-label={`${label}：${detail}`}
+        title={`${label}：${detail}${team}`}
+        aria-label={`${label}：${detail}${team}`}
         className={cn(ROW, "h-8 text-muted hover:text-ink")}
       >
         <span

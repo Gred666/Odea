@@ -23,12 +23,13 @@ import { useData } from "@/data/store";
 import { cn } from "@/lib/cn";
 import { periodStartOf } from "@/lib/date";
 import { tween } from "@/lib/motion";
+import { initTeam, setTeamView, teamDocId } from "@/team/store";
 import { ArchiveList } from "@/views/ArchiveView";
 import { CalendarPanel } from "@/views/CalendarView";
 import { ExtensionsView } from "@/views/ExtensionsView";
 import { NotesList } from "@/views/NotesView";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 /**
  * 专注模式的进出。
@@ -75,6 +76,19 @@ export function Shell() {
 
   // 零点翻页
   useEffect(() => startTodayTicker(), []);
+
+  // 团队仓库（docs/协同编辑.md §22.4）：起团队端点；编辑器里换了哪一篇告诉它（别人也开着就进同一个会话）
+  const team = useData((s) => s.team);
+  useEffect(() => {
+    if (team) void initTeam();
+  }, [team]);
+  const teamDoc = teamDocId(doc);
+  const teamTarget = useRef(docTarget);
+  teamTarget.current = docTarget;
+  useEffect(() => {
+    const target = teamTarget.current;
+    setTeamView(teamDoc && target ? { doc: teamDoc, target } : null);
+  }, [teamDoc]);
 
   // 今天这一篇一进应用就取：今日TODO 页渲染的就是它，而下面那个 effect 只管
   // 日历和 /GOAL，不给今日TODO 单独取。

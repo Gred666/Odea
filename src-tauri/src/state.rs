@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use tauri::ipc::{CommandArg, CommandItem, InvokeError};
 use tauri::Runtime;
 
-use crate::commands::{CollabHub, Indexing};
+use crate::commands::{CollabHub, Indexing, TeamHub};
 use crate::error::AppError;
 use crate::sync::account::LoginSlot;
 use crate::sync::engine::SyncHub;
@@ -55,6 +55,8 @@ pub struct AppState {
     pub update: Arc<UpdateHub>,
     /// 协作：正在主持 / 做客的会话（一次一个，记着属于哪个窗口）、给前端推字节的 Channel（docs/协同编辑.md）
     pub collab: Arc<CollabHub>,
+    /// 团队仓库：成员之间自动连上的端点（一个应用一个）、哪个窗口登记了哪个团队（docs/协同编辑.md §22.4）
+    pub team: Arc<TeamHub>,
 }
 
 impl AppState {

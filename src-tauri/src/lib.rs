@@ -18,6 +18,7 @@ mod old_name;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod state;
 mod sync;
+mod team;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod update;
 mod vault;
@@ -142,6 +143,7 @@ async fn win_force_close(
     // 这个窗口正在协作：告诉别人、删掉落盘的记录（关窗口算正常结束，重启后不再问「继续上次的协作」）
     let _ = window.hide();
     commands::end_collab(&state, window.label()).await;
+    commands::end_team(&state, window.label()).await;
     if let Some(workspace) = state.workspace(window.label()).filter(|workspace| workspace.sync.is_running()) {
         let hub = workspace.sync.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
@@ -201,7 +203,9 @@ fn collab_raw_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
     tauri::generate_handler![
         commands::collab_send,
         commands::collab_pipe,
-        commands::collab_resume_state
+        commands::collab_resume_state,
+        commands::team_send,
+        commands::team_pipe
     ]
 }
 
@@ -287,6 +291,7 @@ fn command_builder() -> Builder<tauri::Wry> {
         workspace::journal_vaults,
         workspace::journal_switch::<tauri::Wry>,
         commands::team_info,
+        commands::team_start::<tauri::Wry>,
         commands::team_invite,
         commands::team_remove,
         commands::sync_invitations,
@@ -350,6 +355,12 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::collab_open_doc,
         commands::collab_close_doc,
         commands::collab_create_doc,
+        commands::team_presence,
+        commands::team_peers,
+        commands::team_host,
+        commands::team_open,
+        commands::team_close,
+        commands::team_base,
         commands::collab_fetch_attachment,
         commands::collab_put_attachment,
         commands::collab_put_attachment_path,
@@ -360,6 +371,7 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::SyncStatusChanged,
         commands::SyncNotice,
         commands::CollabEvent,
+        commands::TeamChanged,
         commands::CollabLink,
         workspace::JournalGoto,
         workspace::LauncherLink,
@@ -448,6 +460,7 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         workspace::journal_vaults,
         workspace::journal_switch::<tauri::test::MockRuntime>,
         commands::team_info,
+        commands::team_start::<tauri::test::MockRuntime>,
         commands::team_invite,
         commands::team_remove,
         commands::sync_invitations,
@@ -511,6 +524,12 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::collab_open_doc,
         commands::collab_close_doc,
         commands::collab_create_doc,
+        commands::team_presence,
+        commands::team_peers,
+        commands::team_host,
+        commands::team_open,
+        commands::team_close,
+        commands::team_base,
         commands::collab_fetch_attachment,
         commands::collab_put_attachment,
         commands::collab_put_attachment_path,
@@ -521,6 +540,7 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::SyncStatusChanged,
         commands::SyncNotice,
         commands::CollabEvent,
+        commands::TeamChanged,
         commands::CollabLink,
         workspace::JournalGoto,
         workspace::LauncherLink,
@@ -590,7 +610,7 @@ pub fn run() {
             let typed = specta_builder.invoke_handler();
             let raw = collab_raw_handler();
             move |invoke: tauri::ipc::Invoke<tauri::Wry>| match invoke.message.command() {
-                "collab_send" | "collab_pipe" | "collab_resume_state" => raw(invoke),
+                "collab_send" | "collab_pipe" | "collab_resume_state" | "team_send" | "team_pipe" => raw(invoke),
                 _ => typed(invoke),
             }
         })
@@ -648,6 +668,7 @@ pub fn run() {
                 sync_login: Mutex::new(sync::account::LoginSlot::default()),
                 update: Arc::new(update::UpdateHub::new(upgrade)),
                 collab: collab_hub(app),
+                team: Arc::default(),
             });
             // 上次开着的仓库各开一个窗口；一个都打不开（新装、文件夹都找不到了）弹启动器
             workspace::startup(app.handle(), plan);

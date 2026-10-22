@@ -12,6 +12,7 @@ import {
   periodStartOf,
   toISODate,
 } from "@/lib/date";
+import { teamDocId, useTeam } from "@/team/store";
 import { useEffect, useRef } from "react";
 import { conflictOriginalTitle, conflictTarget } from "./conflicts";
 import { folderOf } from "./folders";
@@ -41,6 +42,15 @@ import {
    ============================================================ */
 
 export function useCurrentDocument(): DocumentModel {
+  const doc = useVaultDocument();
+  // 团队仓库（docs/协同编辑.md §22.4）：别人也开着这一篇、在一份会话里，编辑器绑上它；别人主持的不存盘
+  const teamId = teamDocId(doc);
+  const team = useTeam((s) => (teamId ? s.sessions[teamId] : undefined));
+  if (!team || doc.collab) return doc;
+  return { ...doc, collab: { session: team.session, readOnly: false, remote: team.remote } };
+}
+
+function useVaultDocument(): DocumentModel {
   const workspace = useApp((s) => s.workspace);
   const selectedNoteId = useApp((s) => s.selectedNoteId);
   const selectedArchiveId = useApp((s) => s.selectedArchiveId);
