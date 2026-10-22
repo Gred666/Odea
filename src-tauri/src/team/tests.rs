@@ -78,6 +78,12 @@ async fn team(names: &[&str]) -> Vec<Node> {
     out
 }
 
+/// 连上以后等一会儿：两边同时互拨时先有两条连接，随后关掉一条，开在那条上的文档流会断
+/// （前端会重试，测试里不重试）
+async fn settle() {
+    tokio::time::sleep(Duration::from_millis(800)).await;
+}
+
 async fn until(what: &str, mut check: impl FnMut() -> bool) {
     for _ in 0..400 {
         if check() {
@@ -118,6 +124,8 @@ async fn members_connect_and_see_each_others_presence() {
             doc: DOC.into(),
             hosting: false,
             session: None,
+            upstream: None,
+            root: None,
         }],
     );
     let zhang = data_encoding::HEXLOWER.encode(&devices[0].net.key());
@@ -169,6 +177,7 @@ async fn a_device_not_in_the_list_is_refused() {
 async fn a_doc_session_runs_through_the_host() {
     let mut devices = team(&["张三", "李四", "王五"]).await;
     until("三台都连上", || devices.iter().all(|device| device.net.online(TEAM) == 2)).await;
+    settle().await;
     let [a, b, c] = &mut devices[..] else { unreachable!() };
 
     // 没人主持：开不了，说为什么
@@ -262,6 +271,7 @@ async fn a_doc_session_runs_through_the_host() {
 async fn a_dropped_link_closes_the_doc_and_comes_back() {
     let mut devices = team(&["张三", "李四"]).await;
     until("连上", || devices.iter().all(|device| device.net.online(TEAM) == 1)).await;
+    settle().await;
     let [a, b] = &mut devices[..] else { unreachable!() };
     a.net.host(TEAM, DOC, true);
     let host = member_of(&b.net, &a.net);
@@ -286,5 +296,61 @@ async fn a_dropped_link_closes_the_doc_and_comes_back() {
     until("又连上了", || a.net.online(TEAM) == 1 && b.net.online(TEAM) == 1).await;
     for device in devices {
         device.net.stop().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_member_who_cannot_reach_the_host_goes_through_another_member() {
+    // 张三的名单里没有王五（他连不进张三那里，就像隔着 NAT 连不上一样）；李四两边都连得上
+    let (a, _) = device().await;
+    let (b, _) = device().await;
+    let (c, _) = device().await;
+    let all = listed(&[&a, &b, &c]);
+    let addrs = [a.addr(), b.addr(), c.addr()];
+    let mut a = join(a, "张三", vec![all[0].clone(), all[1].clone()]);
+    let mut b = join(b, "李四", all.clone());
+    let mut c = join(c, "王五", all.clone());
+    for (node, own) in [(&a, 0), (&b, 1), (&c, 2)] {
+        for (index, addr) in addrs.iter().enumerate() {
+            if index != own {
+                node.net.learn(addr);
+            }
+        }
+    }
+    until("李四连着两边", || b.net.online(TEAM) == 2).await;
+    settle().await;
+    assert_eq!(a.net.online(TEAM), 1);
+
+    a.net.host(TEAM, DOC, true);
+    let host_for_b = member_of(&b.net, &a.net);
+    b.net.open(TEAM, DOC, host_for_b).unwrap();
+    next(&mut b, "李四接上张三", |event| matches!(event, TeamEvent::SyncStart { .. })).await;
+    next(&mut a, "张三这边李四进来", |event| matches!(event, TeamEvent::SyncStart { .. })).await;
+    // 李四接下游
+    b.net.host(TEAM, DOC, true);
+    let b_for_c = member_of(&c.net, &b.net);
+    c.net.open(TEAM, DOC, b_for_c).unwrap();
+    next(&mut c, "王五接上李四", |event| matches!(event, TeamEvent::SyncStart { .. })).await;
+    let c_on_b = member_of(&b.net, &c.net);
+    next(&mut b, "李四这边王五进来", |event| matches!(event, TeamEvent::SyncStart { with, .. } if *with == c_on_b)).await;
+
+    // 张三的到王五，王五的到张三，都经李四
+    a.net.send_update(TEAM, DOC, b"from-a".to_vec());
+    next(&mut b, "李四收到张三的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-a")).await;
+    next(&mut c, "王五收到张三的（经李四）", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-a")).await;
+    c.net.send_update(TEAM, DOC, b"from-c".to_vec());
+    next(&mut b, "李四收到王五的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-c")).await;
+    next(&mut a, "张三收到王五的（经李四）", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-c")).await;
+    // 李四自己打的两头都到
+    b.net.send_update(TEAM, DOC, b"from-b".to_vec());
+    next(&mut a, "张三收到李四的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-b")).await;
+    next(&mut c, "王五收到李四的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-b")).await;
+
+    // 不转成环：李四不往自己的下游开流；王五接下游以后，李四开过去也不接
+    let c_for_b = member_of(&b.net, &c.net);
+    assert!(b.net.open(TEAM, DOC, c_for_b).is_err());
+
+    for node in [a, b, c] {
+        node.net.stop().await;
     }
 }

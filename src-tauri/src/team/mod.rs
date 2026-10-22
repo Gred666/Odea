@@ -12,8 +12,12 @@
   记在应用数据目录的 team-places.json
 - Presence：我开着哪几篇、主持着哪几篇，变了就发。谁当主持人由前端按 Presence 定（§22.4 的规矩），
   这里只认「这一篇我在主持」（host）：在主持的才接 Open，别的回 DocErr
-- 每一篇是星形：访客开一条文档流连主持人（第一帧 Open{文档 id}），主持人把一位访客的更新、光标
+- 每一篇是一棵树：访客开一条文档流连主持人（第一帧 Open{文档 id}），主持人把一位访客的更新、光标
   转给这一篇的其他访客。光标数据报里带着是谁的，转过去别人也认得出
+- 经 B 转（设计 §22.4）：做客的那位也能接别人开来的这一篇（前端 host 了它），连不上主持人的 C 就经他。
+  这台设备把上下游的改动、光标两头转：上游（主持人）来的转给下游，下游来的转给上游和别的下游；
+  Sync2 也按更新转（重复收到没关系，CRDT 认得出）。不会转成环：不接自己上游开来的流，也不往自己的
+  下游开流
 
 CRDT 在前端，这里只搬字节。一个团队一个事件通道（登记它的那个窗口）：文档的字节、谁在线变了、
 一篇的流断了（DocClosed：主持人不给、不主持了、断线；主持人这边是这位访客走了）
@@ -198,6 +202,37 @@ impl Team {
 
     fn emit(&self, event: TeamEvent) {
         let _ = self.events.send(event);
+    }
+
+    /// 这一篇的更新发给两头：下游的访客、上游的主持人（我在做客的话）。except 是它从哪来的
+    fn relay_update(&self, doc: &str, bytes: &[u8], except: Option<[u8; 32]>) {
+        if let Some(guests) = self.guests.get(doc) {
+            for (key, stream) in guests {
+                if Some(*key) != except {
+                    let _ = stream.tx.send((kind::UPDATE, bytes.to_vec()));
+                }
+            }
+        }
+        if let Some(attached) = self.attached.get(doc).filter(|attached| Some(attached.host) != except) {
+            if let Some(tx) = &attached.tx {
+                let _ = tx.send((kind::UPDATE, bytes.to_vec()));
+            }
+        }
+    }
+
+    /// 光标数据报：同上，两头都发
+    fn relay_cursor(&self, doc: &str, datagram: &Bytes, except: Option<[u8; 32]>) {
+        let mut to: Vec<[u8; 32]> = self
+            .guests
+            .get(doc)
+            .map(|guests| guests.keys().copied().collect())
+            .unwrap_or_default();
+        to.extend(self.attached.get(doc).map(|attached| attached.host));
+        for key in to.into_iter().filter(|key| Some(*key) != except) {
+            if let Some(link) = self.links.get(&key) {
+                let _ = link.conn.send_datagram(datagram.clone());
+            }
+        }
     }
 }
 
@@ -438,6 +473,10 @@ impl TeamNet {
             let team = teams.get_mut(team_id).ok_or("这个团队仓库没开着")?;
             let host = team.key_of(member).ok_or("不认识这台设备")?;
             let conn = team.links.get(&host).map(|link| link.conn.clone()).ok_or("他不在线")?;
+            // 他正连着我看这一篇（我是他的上游）：再连过去就成了环
+            if team.guests.get(doc).is_some_and(|guests| guests.contains_key(&host)) {
+                return Err("他这一篇是连着我的".into());
+            }
             if let Some(old) = team.attached.insert(
                 doc.to_string(),
                 Attached {
@@ -484,13 +523,8 @@ impl TeamNet {
     /// 前端的一个更新：主持着的发给这一篇的每位访客，做客的发给主持人
     pub fn send_update(&self, team: &str, doc: &str, bytes: Vec<u8>) {
         let teams = self.inner.teams.lock().unwrap();
-        let Some(team) = teams.get(team) else { return };
-        if let Some(guests) = team.guests.get(doc) {
-            for guest in guests.values() {
-                let _ = guest.tx.send((kind::UPDATE, bytes.clone()));
-            }
-        } else if let Some(tx) = team.attached.get(doc).and_then(|attached| attached.tx.as_ref()) {
-            let _ = tx.send((kind::UPDATE, bytes));
+        if let Some(team) = teams.get(team) {
+            team.relay_update(doc, &bytes, None);
         }
     }
 
@@ -516,15 +550,8 @@ impl TeamNet {
         let Some(datagram) = wire::tag_cursor(doc, &self.inner.me, payload) else { return };
         let datagram = Bytes::from(datagram);
         let teams = self.inner.teams.lock().unwrap();
-        let Some(team) = teams.get(team) else { return };
-        let to: Vec<[u8; 32]> = match team.guests.get(doc) {
-            Some(guests) => guests.keys().copied().collect(),
-            None => team.attached.get(doc).map(|attached| vec![attached.host]).unwrap_or_default(),
-        };
-        for key in to {
-            if let Some(link) = team.links.get(&key) {
-                let _ = link.conn.send_datagram(datagram.clone());
-            }
+        if let Some(team) = teams.get(team) {
+            team.relay_cursor(doc, &datagram, None);
         }
     }
 
@@ -1002,12 +1029,11 @@ impl Inner {
             },
             _ => return,
         };
+        // 在主持（或者在做客、接下游）的才接；我连着他看这一篇的不接（成了环）
         let hosted = |me: &Inner| {
-            me.teams
-                .lock()
-                .unwrap()
-                .get(&team_id)
-                .is_some_and(|team| team.hosted.contains(&doc))
+            me.teams.lock().unwrap().get(&team_id).is_some_and(|team| {
+                team.hosted.contains(&doc) && !team.attached.get(&doc).is_some_and(|attached| attached.host == guest)
+            })
         };
         if !hosted(&self) {
             let _ = frames::write_frame(&mut send, kind::DOC_ERR, "这一篇不是他在主持".as_bytes()).await;
@@ -1043,20 +1069,9 @@ impl Inner {
                     doc: doc.clone(),
                     vector: payload,
                 }),
-                kind::SYNC2 => team.emit(TeamEvent::Update {
-                    from: member,
-                    doc: doc.clone(),
-                    bytes: payload,
-                }),
-                kind::UPDATE => {
-                    // 星形：转给这一篇的其他访客
-                    if let Some(guests) = team.guests.get(&doc) {
-                        for (key, stream) in guests {
-                            if *key != guest {
-                                let _ = stream.tx.send((kind::UPDATE, payload.clone()));
-                            }
-                        }
-                    }
+                kind::SYNC2 | kind::UPDATE => {
+                    // 转给这一篇的其他访客、我的上游（我也在做客的话）
+                    team.relay_update(&doc, &payload, Some(guest));
                     team.emit(TeamEvent::Update {
                         from: member,
                         doc: doc.clone(),
@@ -1121,11 +1136,17 @@ impl Inner {
                         doc: doc.clone(),
                         vector: payload,
                     },
-                    kind::SYNC2 | kind::UPDATE => TeamEvent::Update {
-                        from: member,
-                        doc: doc.clone(),
-                        bytes: payload,
-                    },
+                    kind::SYNC2 | kind::UPDATE => {
+                        // 上游来的转给我的下游
+                        if let Some(team) = self.teams.lock().unwrap().get(&team_id) {
+                            team.relay_update(&doc, &payload, Some(host));
+                        }
+                        TeamEvent::Update {
+                            from: member,
+                            doc: doc.clone(),
+                            bytes: payload,
+                        }
+                    }
                     kind::DOC_ERR => {
                         refused = Some(String::from_utf8_lossy(&payload).into_owned());
                         break;
@@ -1152,20 +1173,11 @@ impl Inner {
             let Some(team) = teams.get_mut(&team_id) else { return };
             let from_guest = team.guests.get(doc).is_some_and(|guests| guests.contains_key(&from));
             let from_host = team.attached.get(doc).is_some_and(|attached| attached.host == from);
-            if from_guest {
-                // 访客只能发自己的光标
-                if origin != from {
-                    continue;
-                }
-                let others: Vec<[u8; 32]> = team.guests[doc].keys().copied().filter(|key| *key != from).collect();
-                for key in others {
-                    if let Some(link) = team.links.get(&key) {
-                        let _ = link.conn.send_datagram(datagram.clone());
-                    }
-                }
-            } else if !from_host || origin == self.me {
+            // 只认这一篇上下游来的、名单里的人的（经 B 转来的光标是 C 的，不是 B 的）
+            if !(from_guest || from_host) || origin == self.me || !team.devices.contains_key(&origin) {
                 continue;
             }
+            team.relay_cursor(doc, &datagram, Some(from));
             let member = team.number(&origin);
             team.emit(TeamEvent::Cursor {
                 from: member,

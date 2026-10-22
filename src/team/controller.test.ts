@@ -60,6 +60,7 @@ function device(hub: MockTeamHub, id: string, name: string, text = ORIGINAL): De
       saveDelay: 10,
       syncWait: 30,
       retryAfter: 40,
+      relayGrace: 60,
     },
     scheduler,
   );
@@ -205,5 +206,31 @@ describe("团队：同一篇谁主持（设计 §22.4）", () => {
     b.controller.view(null);
     await until("张三回到一个人", () => sessionOf(a) === undefined);
     expect(sessionOf(b)).toBeUndefined();
+  });
+
+  it("连不上主持人：经一位连着他的成员转；他走了，自己接手", async () => {
+    const hub = createMockTeamHub();
+    const a = device(hub, "a1", "张三");
+    const b = device(hub, "b2", "李四");
+    const c = device(hub, "c3", "王五");
+    // 王五和张三之间连不上（隔着 NAT），都连得上李四
+    hub.block("a1", "c3");
+    open(a);
+    open(b);
+    await until("李四加入了", () => sessionOf(b)?.remote === true);
+    open(c);
+    await until("王五经李四加入", () => sessionOf(c)?.remote === true);
+    append(c, "\n王五写的");
+    await until("张三存下王五写的", () => a.disk.get("n1")?.endsWith("王五写的") === true);
+    append(a, "\n张三写的");
+    await until("王五看到张三的", () => textOf(c)?.endsWith("张三写的") === true);
+    expect(textOf(b)).toBe(textOf(a));
+    expect(c.saves).toBe(0);
+
+    // 李四走了：王五谁都连不上（看不到张三），自己接手、存盘 —— 张三那边还在写同一篇，git 同步时再合
+    b.controller.view(null);
+    await until("王五接手", () => sessionOf(c)?.remote === false);
+    append(c, "\n接手以后");
+    await until("王五存盘", () => c.disk.get("n1")?.endsWith("接手以后") === true);
   });
 });

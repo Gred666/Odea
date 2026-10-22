@@ -46,8 +46,12 @@ export function useCurrentDocument(): DocumentModel {
   // 团队仓库（docs/协同编辑.md §22.4）：别人也开着这一篇、在一份会话里，编辑器绑上它；别人主持的不存盘
   const teamId = teamDocId(doc);
   const team = useTeam((s) => (teamId ? s.sessions[teamId] : undefined));
-  if (!team || doc.collab) return doc;
-  return { ...doc, collab: { session: team.session, readOnly: false, remote: team.remote } };
+  if (!team) return doc;
+  // 协作借着团队这份会话（请了外人）时两边是同一份：存不存盘听团队的（别人主持就是他存）
+  return {
+    ...doc,
+    collab: { session: team.session, readOnly: doc.collab?.readOnly ?? false, remote: team.remote },
+  };
 }
 
 function useVaultDocument(): DocumentModel {

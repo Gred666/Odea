@@ -23,6 +23,12 @@ import type { TeamNet } from "./net";
      别人同一份会话照旧连新主持人，CRDT 状态向量一换就补齐，不重新合
    - 两边都在主持（断网时各自开了，连上以后）：公钥大的让。同一份会话的照旧连过去；不是同一份的
      先把自己的存下去，再按「加入」合
+   - 经 B 转：在会话里的人（做客的也算）都接下游（TeamNet.host 了这一篇，Rust 把改动上下游两头转）。
+     看不到主持人、却看得到一位连着主持人的成员（Presence 里有 root）：等一会儿（也许马上能直连上），
+     再经他加入。Presence 里写着各自连着谁（upstream），顺着往上找到自己的不连（会成环）
+   - 借用（hold）：协作要主持团队仓库里的一篇（「邀请协作…」请外人，设计 §22.5 最后一段）时借这一篇的会话，
+     外人那条链路接在同一份上（collab/link.ts 的 attachSession）。没人在会话里就自己当主持人；借着的时候
+     不收掉、不换成别的一份会话（换了外人那边就合重了）
    - 主持人身边没人了（访客都走了、也没人开着）：过一会儿收掉会话，回到 solo
    - 主持人自己切走了、还有访客：先存、推一轮 git，再不主持（访客那边接手时拉得到）
 
@@ -53,6 +59,8 @@ export interface TeamTiming {
   syncWait: number;
   /** 加入被拒（Presence 还没跟上）以后多久再试 */
   retryAfter: number;
+  /** 看不到主持人、只看得到连着他的成员：等多久再经他转（也许马上能直连上） */
+  relayGrace: number;
 }
 
 const DEFAULT_TIMING: TeamTiming = {
@@ -62,6 +70,7 @@ const DEFAULT_TIMING: TeamTiming = {
   saveDelay: 400,
   syncWait: 10000,
   retryAfter: 2000,
+  relayGrace: 3000,
 };
 
 export interface TeamView {
@@ -105,6 +114,14 @@ interface Entry {
   timer: ReturnType<typeof setTimeout> | null;
   /** 加入：主持人那份到了 */
   synced: (() => void) | null;
+  /** 接着下游（TeamNet.host 了这一篇）：主持的、做客的都接 */
+  serving: boolean;
+  /** 只看得到连着主持人的成员，从什么时候起（0 = 没有这回事） */
+  relaySince: number;
+  /** 协作借着这一篇（hold）几次 */
+  holds: number;
+  /** 正在做的转换（hold 要等它） */
+  pending: Promise<void> | null;
   /** 主持人断线后等够了 */
   graceOver: boolean;
   /** 加入被拒过：这之前不再试 */
@@ -150,7 +167,7 @@ export class TeamController {
       if (entry.viewing && entry.doc !== next?.doc) {
         entry.viewing = false;
         // 正在加入、做客：马上断开（加入的那个异步做到一半回来看到 epoch 变了就停）。主持人要交接，等它做完
-        if (entry.busy && entry.role !== "host") this.leave(entry);
+        if (entry.busy && entry.role !== "host" && !this.isOpen(entry)) this.leave(entry);
         else this.evaluate(entry);
       }
     }
@@ -170,10 +187,10 @@ export class TeamController {
   receive(frame: Frame): void {
     const entry = this.entries.get(frame.doc);
     if (!entry?.link) return;
-    // 主持人这边：有人接上这一篇了（Rust 说「把你的状态向量发给他」）
-    if (entry.role === "host" && frame.kind === PIPE.syncVector) {
+    // 有人连着我接上这一篇了（Rust 说「把你的状态向量发给他」）。我连上游时也是这一帧，那个不算
+    if (frame.kind === PIPE.syncVector && frame.member !== entry.host) {
       entry.guests.add(frame.member);
-      this.clearTimer(entry);
+      if (entry.role === "host") this.clearTimer(entry);
     }
     entry.link.receive(frame);
     if (entry.role === "joining" && frame.kind === PIPE.update) entry.synced?.();
@@ -185,17 +202,19 @@ export class TeamController {
       this.peers = control.peers;
       for (const entry of this.entries.values()) entry.link?.setMembers(this.peers);
       for (const entry of [...this.entries.values()]) this.evaluate(entry);
+      // 上游的根变了，我的也跟着变
+      this.publish();
       this.emit();
       return;
     }
     const entry = this.entries.get(control.doc);
     if (!entry) return;
-    if (entry.role === "host") {
+    // 连着我的那位走了（主持的、接下游的都会收到）
+    if (entry.role === "host" || entry.host !== control.member) {
       entry.guests.delete(control.member);
       this.evaluate(entry);
       return;
     }
-    if (entry.host !== control.member) return;
     if (entry.role === "joining") {
       // 主持人说不是他在主持（Presence 还没跟上）、连不上：过一会儿再按 Presence 来
       this.toSolo(entry);
@@ -215,6 +234,42 @@ export class TeamController {
       this.publish();
       this.evaluate(entry);
     }
+  }
+
+  /**
+   * 协作借这一篇的会话（设计 §22.5 最后一段）：有就给，别人在主持就先加入，谁都没有就自己主持。
+   * 借着的时候不收掉。给不了（加入不了、读不到正文）是 null
+   */
+  async hold(view: TeamView): Promise<CollabSession | null> {
+    if (this.destroyed) return null;
+    let entry = this.entries.get(view.doc);
+    if (!entry) {
+      entry = this.newEntry(view);
+      entry.viewing = false;
+      this.entries.set(view.doc, entry);
+    }
+    entry.holds += 1;
+    entry.target = view.target;
+    entry.retryAt = 0;
+    this.evaluate(entry);
+    this.publish();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (entry.pending) await entry.pending;
+      if (entry.link && entry.role !== "joining" && entry.role !== "solo")
+        return entry.link.session;
+      if (!entry.busy && entry.role === "solo") await this.run(entry, () => this.becomeHost(entry));
+    }
+    this.release(view.doc);
+    return null;
+  }
+
+  /** 协作不借了 */
+  release(doc: string): void {
+    const entry = this.entries.get(doc);
+    if (!entry || !entry.holds) return;
+    entry.holds -= 1;
+    this.evaluate(entry);
+    this.publish();
   }
 
   snapshot(): TeamSnapshot {
@@ -252,9 +307,43 @@ export class TeamController {
     return ids.every((id) => this.self.id < id);
   }
 
+  /**
+   * 能经他转的：在会话里、连着主持人（root 有、不是我）、不是连着我的下游，顺着他的上游往上找不到我。
+   * 公钥小的在前
+   */
+  private relays(entry: Entry, others: { peer: TeamPeer; state: PresenceDoc }[]) {
+    return others
+      .filter(
+        ({ peer, state }) =>
+          !state.hosting &&
+          !!state.session &&
+          !!state.root &&
+          state.root !== this.self.id &&
+          !entry.guests.has(peer.member) &&
+          !this.reachesMe(peer, entry.doc),
+      )
+      .sort((a, b) => (a.peer.id < b.peer.id ? -1 : 1));
+  }
+
+  /** 顺着 peer 这一篇的上游往上找（只看得到的那几位），找得到我就是会成环 */
+  private reachesMe(peer: TeamPeer, doc: string): boolean {
+    const seen = new Set<string>();
+    let current: TeamPeer | undefined = peer;
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id);
+      const upstream: string | null | undefined = current.docs.find(
+        (item) => item.doc === doc,
+      )?.upstream;
+      if (!upstream) return false;
+      if (upstream === this.self.id) return true;
+      current = this.peers.find((item) => item.id === upstream && item.online);
+    }
+    return false;
+  }
+
   private evaluate(entry: Entry): void {
     if (this.destroyed || this.entries.get(entry.doc) !== entry || entry.busy) return;
-    if (!entry.viewing) {
+    if (!this.isOpen(entry)) {
       this.leave(entry);
       return;
     }
@@ -267,9 +356,24 @@ export class TeamController {
         if (Date.now() < entry.retryAt) return;
         const host = hosts[0];
         if (host) {
+          entry.relaySince = 0;
           this.run(entry, () => this.join(entry, host.peer, host.state.session));
           return;
         }
+        // 看不到主持人，看得到连着他的成员：等一会儿（也许马上能直连上），再经他转
+        const via = this.relays(entry, others)[0];
+        if (via) {
+          entry.relaySince ||= Date.now();
+          const wait = entry.relaySince + this.timing.relayGrace - Date.now();
+          if (wait > 0) {
+            if (!entry.timer) this.later(entry, wait);
+            return;
+          }
+          entry.relaySince = 0;
+          this.run(entry, () => this.join(entry, via.peer, via.state.session));
+          return;
+        }
+        entry.relaySince = 0;
         // 别人在一份会话里（主持人刚走、正在接手）：等他们接好再加入
         if (others.some(({ state }) => state.session)) return;
         if (others.length && this.smallest(others.map(({ peer }) => peer.id))) {
@@ -283,8 +387,8 @@ export class TeamController {
           this.run(entry, () => this.yieldTo(entry, rival.peer, rival.state.session));
           return;
         }
-        // 身边没人了：过一会儿收掉
-        if (!entry.guests.size && !others.length) {
+        // 身边没人了：过一会儿收掉（协作借着的不收）
+        if (!entry.guests.size && !others.length && !entry.holds) {
           if (!entry.timer) {
             this.later(entry, this.timing.aloneGrace, () => {
               if (entry.role === "host" && !entry.guests.size && !this.others(entry.doc).length) {
@@ -305,8 +409,15 @@ export class TeamController {
           return;
         }
         const other = hosts[0];
-        if (other) {
+        // 借着的不换成别的一份会话（外人那边会合重）：自己接手，两个主持人以后 git 合
+        if (other && !entry.holds) {
           this.run(entry, () => this.join(entry, other.peer, other.state.session));
+          return;
+        }
+        // 同一份会话里还有人连着主持人（我看不到主持人）：经他接上
+        const via = this.relays(entry, others).find(({ state }) => state.session === entry.lineage);
+        if (via) {
+          this.run(entry, () => this.rejoin(entry, via.peer));
           return;
         }
         const old = this.peers.find((peer) => peer.member === entry.host);
@@ -394,6 +505,7 @@ export class TeamController {
     if (writeNow) await save();
     if (entry.epoch !== epoch) return;
     await this.net.host(entry.doc, true).catch(() => {});
+    entry.serving = true;
     this.publish();
     this.emit();
   }
@@ -409,24 +521,27 @@ export class TeamController {
     // 先说不主持了，再收掉流：访客那边看到的是「他自己关掉的」，不用等 10 秒
     this.publishNow();
     await this.net.host(entry.doc, false).catch(() => {});
+    entry.serving = false;
     if (entry.epoch !== epoch) return;
     entry.link?.destroy();
     entry.link = null;
     entry.lineage = null;
     entry.guests.clear();
-    if (!entry.viewing) this.entries.delete(entry.doc);
+    if (!this.isOpen(entry)) this.entries.delete(entry.doc);
     this.publish();
     this.emit();
   }
 
   /** 两边都在主持，对方公钥小：让给他 */
   private async yieldTo(entry: Entry, rival: TeamPeer, lineage: string | null): Promise<void> {
+    // 协作借着、对方又不是同一份会话：不让（让了外人那边要合重）。两个主持人各存各的，git 同步时合
+    if (entry.holds && lineage !== entry.lineage) return;
     if (lineage && lineage === entry.lineage) {
       // 同一份会话（两位都接了手）：不主持了，照旧连过去
       const link = entry.link;
       entry.link = null;
       await this.stopHosting(entry);
-      if (!link || !entry.viewing) {
+      if (!link || !this.isOpen(entry)) {
         link?.destroy();
         return;
       }
@@ -438,7 +553,7 @@ export class TeamController {
     }
     // 不是同一份：自己的先存下去（stopHosting 里存），再按「加入」合
     await this.stopHosting(entry);
-    if (entry.viewing) await this.join(entry, rival, lineage);
+    if (this.isOpen(entry)) await this.join(entry, rival, lineage);
   }
 
   /* ---------------- 做客 ---------------- */
@@ -453,6 +568,7 @@ export class TeamController {
     entry.host = host.member;
     if (previous) {
       await this.io.save(entry.target, previous.session.toString()).catch(() => {});
+      await this.unserve(entry);
       previous.destroy();
       entry.link = null;
       this.emit();
@@ -502,8 +618,23 @@ export class TeamController {
     }
     this.setRole(entry, "guest");
     entry.lineage = lineage ?? this.lineageOf(host, entry.doc);
+    await this.serve(entry);
     this.publish();
     this.emit();
+  }
+
+  /** 在会话里了：也接下游（连不上主持人的人经我转） */
+  private async serve(entry: Entry): Promise<void> {
+    if (entry.serving) return;
+    entry.serving = true;
+    await this.net.host(entry.doc, true).catch(() => {});
+  }
+
+  private async unserve(entry: Entry): Promise<void> {
+    if (!entry.serving) return;
+    entry.serving = false;
+    entry.guests.clear();
+    await this.net.host(entry.doc, false).catch(() => {});
   }
 
   /** 同一份会话的新主持人：连过去，状态向量一换就补齐 */
@@ -521,6 +652,7 @@ export class TeamController {
       }
       return;
     }
+    await this.serve(entry);
     this.publish();
   }
 
@@ -551,7 +683,7 @@ export class TeamController {
     const epoch = entry.epoch;
     await entry.saveNow?.();
     await this.net.syncNow(this.timing.syncWait).catch(() => {});
-    if (entry.epoch !== epoch || entry.viewing || entry.role !== "host") return;
+    if (entry.epoch !== epoch || this.isOpen(entry) || entry.role !== "host") return;
     await this.stopHosting(entry);
   }
 
@@ -561,6 +693,8 @@ export class TeamController {
     entry.epoch += 1;
     if (entry.role !== "solo" && entry.role !== "host")
       void this.net.close(entry.doc).catch(() => {});
+    // 连着我的下游那边断开，他们自己再找
+    if (entry.serving) void this.unserve(entry);
     entry.link?.destroy();
     entry.link = null;
     entry.lineage = null;
@@ -593,6 +727,10 @@ export class TeamController {
       graceOver: false,
       retryAt: 0,
       busy: false,
+      serving: false,
+      relaySince: 0,
+      holds: 0,
+      pending: null,
     };
   }
 
@@ -608,10 +746,10 @@ export class TeamController {
   }
 
   /** 做一个转换：同一篇同一时刻只有一个，做完再按 Presence 判断一次 */
-  private run(entry: Entry, transition: () => Promise<void>): void {
-    if (entry.busy) return;
+  private run(entry: Entry, transition: () => Promise<void>): Promise<void> {
+    if (entry.busy) return entry.pending ?? Promise.resolve();
     entry.busy = true;
-    void transition().then(
+    const pending = transition().then(
       () => {
         entry.busy = false;
         this.evaluate(entry);
@@ -629,6 +767,15 @@ export class TeamController {
         this.later(entry, this.timing.retryAfter);
       },
     );
+    entry.pending = pending;
+    void pending.finally(() => {
+      if (entry.pending === pending) entry.pending = null;
+    });
+    return pending;
+  }
+
+  private isOpen(entry: Entry): boolean {
+    return entry.viewing || entry.holds > 0;
   }
 
   private setRole(entry: Entry, role: Role): number {
@@ -655,12 +802,29 @@ export class TeamController {
 
   private presenceDocs(): PresenceDoc[] {
     return [...this.entries.values()]
-      .filter((entry) => entry.viewing || entry.role === "host")
-      .map((entry) => ({
-        doc: entry.doc,
-        hosting: entry.role === "host" && !!entry.stopHosting,
-        session: entry.role === "joining" || entry.role === "solo" ? null : entry.lineage,
-      }));
+      .filter((entry) => this.isOpen(entry) || entry.role === "host")
+      .map((entry) => {
+        const hosting = entry.role === "host" && !!entry.stopHosting;
+        const upstream = entry.role === "guest" ? this.peerOf(entry.host) : undefined;
+        return {
+          doc: entry.doc,
+          hosting,
+          session: entry.role === "joining" || entry.role === "solo" ? null : entry.lineage,
+          upstream: upstream?.id ?? null,
+          root: hosting ? this.self.id : upstream ? this.rootVia(upstream, entry.doc) : null,
+        };
+      });
+  }
+
+  private peerOf(member: number | null): TeamPeer | undefined {
+    return member === null ? undefined : this.peers.find((peer) => peer.member === member);
+  }
+
+  /** 我连着 upstream 看这一篇：主持人是谁（他主持就是他，不然是他那边的根） */
+  private rootVia(upstream: TeamPeer, doc: string): string | null {
+    const state = upstream.docs.find((item) => item.doc === doc);
+    if (!state) return null;
+    return state.hosting ? upstream.id : (state.root ?? null);
   }
 
   private publish(): void {

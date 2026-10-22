@@ -1,3 +1,4 @@
+import type { CollabSession } from "@/collab/session";
 import { useData } from "@/data/store";
 import { type DocumentModel, type DocumentSaveTarget, goalKey } from "@/data/types";
 import { flushAllEditors } from "@/editor/saveBus";
@@ -43,13 +44,41 @@ const utf8 = new TextEncoder();
 export function teamDocId(doc: DocumentModel): string | null {
   const target = doc.editor?.target;
   if (!target || target.kind === "shared") return null;
+  return teamIdOf(target, doc.relPath);
+}
+
+function teamIdOf(target: DocumentSaveTarget, relPath: string | undefined): string | null {
   const id =
     target.kind === "note"
-      ? (doc.relPath ?? null)
+      ? (relPath ?? null)
       : target.kind === "day"
         ? `day-${target.id}`
         : `goal-${target.horizon}-${target.periodStart}`;
   return id && utf8.encode(id).length <= MAX_DOC_ID ? id : null;
+}
+
+/**
+ * 协作要主持团队仓库里的一篇（「邀请协作…」请外人，设计 §22.5 最后一段）：借团队那份会话。
+ * 不是团队仓库、算不出 id、借不到是 null（协作照旧自己建一份）
+ */
+export async function holdTeamDoc(
+  target: DocumentSaveTarget,
+  relPath: string | undefined,
+): Promise<{ session: CollabSession; release: () => void } | null> {
+  const doc = teamIdOf(target, relPath);
+  const owner = controller;
+  if (!doc || !owner) return null;
+  const session = await owner.hold({ doc, target });
+  if (!session) return null;
+  let released = false;
+  return {
+    session,
+    release: () => {
+      if (released) return;
+      released = true;
+      owner.release(doc);
+    },
+  };
 }
 
 /** 数据层里这一篇现在的正文 */

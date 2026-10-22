@@ -22,6 +22,7 @@ import type {
   TrustedPeer,
 } from "@/lib/bindings";
 import { windowKind } from "@/lib/tauri";
+import { holdTeamDoc } from "@/team/store";
 import { create } from "zustand";
 import { GuestImages, copyImages, dataUrlBase64, imageRefs, vaultPathOf } from "./attachments";
 import { peerColor } from "./colors";
@@ -510,11 +511,39 @@ function refusalOf(doc: string): string | null {
     : "这一篇不在共享的文件夹里";
 }
 
-/** 主持人：建这一篇的会话（正文从磁盘上的这一版开始；继续上次的话用落盘的状态，磁盘上后来的改动合进来） */
+/**
+ * 主持人：建这一篇的会话（正文从磁盘上的这一版开始；继续上次的话用落盘的状态，磁盘上后来的改动合进来）。
+ * 团队仓库里的一篇（设计 §22.5 最后一段）：借团队那份会话，外人这条链路接在同一份上 —— 存盘、外部改动
+ * 都归团队那边（团队里别人主持的话是他存）
+ */
 async function hostDoc(doc: string, resumeState?: Uint8Array): Promise<DocLink> {
   const known = docs.get(doc);
   if (known) return known;
   const current = await ensureNet();
+  const note = useData.getState().notes.find((item) => item.id === doc);
+  const borrowed = await holdTeamDoc({ kind: "note", id: doc }, note?.relPath);
+  if (borrowed) {
+    heavyModules ??= await heavy();
+    const again = docs.get(doc);
+    if (again) {
+      borrowed.release();
+      return again;
+    }
+    const link = heavyModules[0].attachSession(current, { doc, session: borrowed.session });
+    link.setMembers(useCollab.getState().members);
+    const stopHosted = watchHosted(link.session, doc, current, heavyModules[1], false);
+    const entry: DocLink = {
+      link,
+      images: null,
+      cleanup: () => {
+        stopHosted();
+        borrowed.release();
+      },
+    };
+    docs.set(doc, entry);
+    useCollab.setState((state) => ({ hostedDocs: { ...state.hostedDocs, [doc]: link.session } }));
+    return entry;
+  }
   // 编辑器里还没存的先存下去：会话从磁盘上的这一版开始，外部改动才有准确的分叉点
   await flushAllEditors();
   const disk = await useData.getState().loadBody(doc);
@@ -1241,6 +1270,8 @@ function watchHosted(
   noteId: string,
   current: CollabNet,
   { snapshot, mergeExternal }: typeof import("./external"),
+  /** false：会话是借团队的，存盘、外部改动归团队那边，这里只管附件引用和标题 */
+  writes = true,
 ): () => void {
   let saved: SavedSnapshot = snapshot(session);
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -1278,8 +1309,10 @@ function watchHosted(
   pushRefs();
 
   const onUpdate = () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => void save(), 400);
+    if (writes) {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void save(), 400);
+    }
     refsTimer ??= setTimeout(pushRefs, 200);
   };
   const stopChanges = session.onChange(onUpdate);
@@ -1287,7 +1320,7 @@ function watchHosted(
   const key = `note:${noteId}`;
   let title = useData.getState().notes.find((note) => note.id === noteId)?.title;
   const unsubscribe = useData.subscribe((state, previous) => {
-    if (state.externalRevisions[key] !== previous.externalRevisions[key]) {
+    if (writes && state.externalRevisions[key] !== previous.externalRevisions[key]) {
       const disk = state.bodies[noteId];
       if (disk !== undefined && disk !== session.toString()) mergeExternal(session, saved, disk);
     }

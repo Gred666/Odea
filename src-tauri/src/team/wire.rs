@@ -61,6 +61,11 @@ pub struct PresenceDoc {
     /// 我在这一篇的哪一份会话里（主持人建会话时起的 id，访客跟着主持人的）；没在会话里是 None。
     /// 主持人走了，同一份会话里留下的人才能接着连新的主持人（CRDT 历史相同）；不是同一份的要重新加入
     pub session: Option<String>,
+    /// 我连着谁看这一篇（他的设备公钥，十六进制）；主持人自己、不在会话里的是 None
+    pub upstream: Option<String>,
+    /// 这一份会话的主持人（写盘的那位）是谁；主持人写自己。主持人走了、还没接上新的是 None。
+    /// 连不上主持人的人看它找一位连着主持人的成员经他转
+    pub root: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
