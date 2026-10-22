@@ -702,6 +702,8 @@ fn deliver_jump<R: Runtime>(app: &AppHandle<R>, label: &str) {
 #[specta::specta]
 pub async fn journal_vaults(caller: Caller, state: State<'_, AppState>) -> Result<Vec<JournalVault>> {
     let current = caller.workspace.map(|workspace| workspace.root());
+    // 开着窗口的仓库也算（ODEA_VAULT 打开的、刚打开还没记进列表的）
+    let open: Vec<PathBuf> = state.all_workspaces().iter().map(|workspace| workspace.root()).collect();
     let data_dir = state.data_dir.clone();
     blocking(move || {
         let mut paths: Vec<PathBuf> = boot::Config::load(&data_dir)
@@ -709,10 +711,9 @@ pub async fn journal_vaults(caller: Caller, state: State<'_, AppState>) -> Resul
             .into_iter()
             .map(|saved| saved.path)
             .collect();
-        // ODEA_VAULT 打开的不在列表里
-        if let Some(current) = &current {
-            if !paths.iter().any(|path| boot::same_vault(path, current)) {
-                paths.push(current.clone());
+        for root in open.into_iter().chain(current.clone()) {
+            if !paths.iter().any(|path| boot::same_vault(path, &root)) {
+                paths.push(root);
             }
         }
         let mut vaults: Vec<JournalVault> = paths

@@ -654,11 +654,11 @@ function watchTree(scope: Scope, current: CollabNet): () => void {
   const changed = () => {
     const notes = useData.getState().notes;
     if (notes.length !== seen.size) return true;
-    return notes.some((note) => seen.get(note.id) !== `${note.title} ${folderOf(note)}`);
+    return notes.some((note) => seen.get(note.id) !== `${note.title}\u0000${folderOf(note)}`);
   };
   const push = () => {
     const notes = useData.getState().notes;
-    seen = new Map(notes.map((note) => [note.id, `${note.title} ${folderOf(note)}`]));
+    seen = new Map(notes.map((note) => [note.id, `${note.title}\u0000${folderOf(note)}`]));
     const docs: CollabTreeDoc[] = [];
     for (const note of notes) {
       const folder = folderOf(note);
@@ -708,6 +708,14 @@ export const useCollab = create<CollabState>((set, get) => ({
   trusted: [],
 
   openDialog: (joinLink) => {
+    // 要加入新的（命令面板「加入协作…」、点了链接），上一次做客已经结束了：先收掉那一次，打开的才是加入那一页
+    const { phase, status } = get();
+    if (joinLink !== undefined && phase === "guest" && status?.state === "ended") {
+      void get()
+        .stop()
+        .then(() => get().openDialog(joinLink));
+      return;
+    }
     set({ dialogOpen: true });
     if (joinLink !== undefined) get().setJoinLink(joinLink);
     void ensureNet()

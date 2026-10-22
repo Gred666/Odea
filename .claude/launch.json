@@ -4,37 +4,77 @@
     {
       "name": "odea",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev"],
+      "runtimeArgs": [
+        "dev"
+      ],
       "port": 1420
     },
     {
       "name": "odea-browser",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["exec", "vite", "--port", "1431"],
+      "runtimeArgs": [
+        "exec",
+        "vite",
+        "--port",
+        "1431"
+      ],
       "port": 1431
     },
     {
       "name": "odea-browser-v4",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["exec", "vite", "--host", "127.0.0.1", "--port", "1434", "--strictPort"],
+      "runtimeArgs": [
+        "exec",
+        "vite",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "1434",
+        "--strictPort"
+      ],
       "port": 1434
     },
     {
       "name": "odea-preview",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["exec", "vite", "preview", "--port", "1432", "--strictPort"],
+      "runtimeArgs": [
+        "exec",
+        "vite",
+        "preview",
+        "--port",
+        "1432",
+        "--strictPort"
+      ],
       "port": 1432
     },
     {
       "name": "odea-preview-v4",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["exec", "vite", "preview", "--host", "127.0.0.1", "--port", "1433", "--strictPort"],
+      "runtimeArgs": [
+        "exec",
+        "vite",
+        "preview",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "1433",
+        "--strictPort"
+      ],
       "port": 1433
     },
     {
       "name": "odea-mem-app",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["exec", "vite", "preview", "--outDir", "C:/Users/Gred/AppData/Local/Temp/claude/D--OnTheWay/0ed682fa-015f-44da-9936-f5ad0b3c37c0/scratchpad/dist-new", "--port", "1450", "--strictPort"],
+      "runtimeArgs": [
+        "exec",
+        "vite",
+        "preview",
+        "--outDir",
+        "C:/Users/Gred/AppData/Local/Temp/claude/D--OnTheWay/0ed682fa-015f-44da-9936-f5ad0b3c37c0/scratchpad/dist-new",
+        "--port",
+        "1450",
+        "--strictPort"
+      ],
       "port": 1450
     },
     {
@@ -96,6 +136,26 @@
         "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-p113\\data\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9339'; pnpm tauri dev"
       ],
       "port": 1420
+    },
+    {
+      "name": "odea-team-a",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-p104\\data-a\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-p104\\vault-a\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9333'; pnpm tauri dev"
+      ],
+      "port": 1420
+    },
+    {
+      "name": "odea-team-b",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:ODEA_DATA_DIR=\"$env:TEMP\\odea-p104\\data-b\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-p104\\vault-b\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9334'; Start-Process -Wait -FilePath 'D:\\OnTheWay\\src-tauri\\target\\release\\odea.exe'"
+      ],
+      "port": 9334
     }
   ]
 }

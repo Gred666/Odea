@@ -142,6 +142,7 @@ export function createMockTeamHub(): MockTeamHub {
       me.presence = docs;
       announce();
     },
+    peers: async () => peersOf(me),
     host: async (doc, on) => {
       if (on) me.hosted.add(doc);
       else {

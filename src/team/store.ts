@@ -3,7 +3,7 @@ import { FIREWALL_FIX } from "@/collab/reach";
 import type { CollabSession } from "@/collab/session";
 import { useData } from "@/data/store";
 import { type DocumentModel, type DocumentSaveTarget, goalKey } from "@/data/types";
-import { flushAllEditors } from "@/editor/saveBus";
+import { flushAllEditors, registerBeforeClose } from "@/editor/saveBus";
 import { type Firewall, type TeamPeer, type TeamRelay, commands } from "@/lib/bindings";
 import { isTauri } from "@/lib/tauri";
 import { create } from "zustand";
@@ -186,8 +186,14 @@ export async function initTeam(net: TeamNet = tauriTeamNet): Promise<void> {
     );
     await net.openPipe((frame) => controller?.receive(frame));
     await net.onControl((control) => controller?.control(control));
-    useTeam.setState({ active: true, me: self.id, peers: self.peers });
+    // 起端点到开始听之间连上的人、发的 Presence 没听到：要一次现在的
+    const peers = await net.peers().catch(() => null);
+    if (peers) controller.control({ type: "peers", peers });
+    useTeam.setState({ active: true, me: self.id, peers: controller.snapshot().peers });
     controller.view(pendingView);
+    // 关窗口：主持着的先存、先说不主持了再断开 —— 别人马上接手，不用等 10 秒（当成断线）
+    const owner = controller;
+    registerBeforeClose(() => owner.destroy());
     const notice = firewallNotice(self.firewall);
     if (notice) useData.setState({ notice });
     if (net === tauriTeamNet) {

@@ -165,7 +165,7 @@ describe("团队：同一篇谁主持（设计 §22.4）", () => {
     await until("回到一个人", () => sessionOf(b) === undefined);
   });
 
-  it("主持人断线：等一会儿再接手；他回来了、还在主持（同一份会话），让给公钥小的", async () => {
+  it("主持人断线：不在线了就接手；他回来了、还在主持（同一份会话），让给公钥小的", async () => {
     const hub = createMockTeamHub();
     const a = device(hub, "a1", "张三");
     const b = device(hub, "b2", "李四");

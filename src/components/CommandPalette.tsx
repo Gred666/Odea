@@ -179,6 +179,10 @@ export function CommandPalette({
   const setUpdateDialog = useApp((s) => s.setUpdateDialog);
   const setFindOpen = useApp((s) => s.setFindOpen);
   const collabPhase = useCollab((s) => s.phase);
+  // 上一次做客已经结束（主持人停了、被移出）：和没在协作一样给「邀请 / 加入」，开始新的时候先收掉那一次
+  const collabFree = useCollab(
+    (s) => s.phase === "idle" || (s.phase === "guest" && s.status?.state === "ended"),
+  );
   // 共享仓库（docs/协同编辑.md §20）：这个仓库共享了的话，会话式的「邀请协作」不给（一篇不能同时
   // 绑两个 CRDT），换成「共享仓库…」
 
@@ -416,7 +420,7 @@ export function CommandPalette({
         run: () => void changeVaultRoot(),
       },
       // 协作（docs/协同编辑.md §8）：没在协作时是邀请 / 加入，协作中是打开对话框、停止
-      ...(collabPhase === "idle"
+      ...(collabFree
         ? [
             ...(docTarget?.kind === "note"
               ? [
@@ -639,6 +643,7 @@ export function CommandPalette({
     syncState,
     setSyncOpen,
     collabPhase,
+    collabFree,
     setHistoryFor,
     changeVaultRoot,
     vaultRoot,

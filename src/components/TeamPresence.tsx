@@ -9,7 +9,8 @@ import { PeerAvatar } from "./CollabDialog";
 export function TeamPresence({ doc }: { doc: DocumentModel }) {
   const id = teamDocId(doc);
   const peers = useTeam((s) => s.peers);
-  const together = useTeam((s) => (id ? !!s.sessions[id] : false));
+  // 在不在一个会话里、谁存盘：undefined = 还在连
+  const remote = useTeam((s) => (id ? s.sessions[id]?.remote : undefined));
   if (!id) return null;
   const viewers = peers.filter((peer) => peer.online && peer.docs.some((item) => item.doc === id));
   if (!viewers.length) return null;
@@ -19,7 +20,13 @@ export function TeamPresence({ doc }: { doc: DocumentModel }) {
   return (
     <span
       data-team-presence
-      title={together ? "一起编辑：改动实时同步，他那边存盘" : "正在连上他那边…"}
+      title={
+        remote === undefined
+          ? "正在连上他那边…"
+          : remote
+            ? "一起编辑：改动实时同步，他那边存盘"
+            : "一起编辑：改动实时同步，你这边存盘"
+      }
       className="-my-[5px] ml-auto flex h-[30px] shrink-0 items-center gap-2 px-2 text-[12px] text-muted"
     >
       <span className="flex -space-x-1.5">

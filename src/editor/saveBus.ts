@@ -15,6 +15,22 @@ export async function flushAllEditors(): Promise<void> {
   await Promise.all([...flushers].map((flush) => flush()));
 }
 
+/** 关窗口前（编辑器存完以后）还要做的：团队仓库里主持着的先说一声不主持了（team/store.ts） */
+const beforeClose = new Set<() => Promise<void>>();
+
+export function registerBeforeClose(run: () => Promise<void>): () => void {
+  beforeClose.add(run);
+  return () => beforeClose.delete(run);
+}
+
+/** 最多等 2 秒：卡住了也照样关 */
+function runBeforeClose(): Promise<unknown> {
+  return Promise.race([
+    Promise.all([...beforeClose].map((run) => run().catch(() => undefined))),
+    new Promise((resolve) => setTimeout(resolve, 2000)),
+  ]);
+}
+
 const messageOf = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -60,6 +76,7 @@ export async function installCloseGuard(): Promise<() => void> {
           .catch(() => undefined),
         new Promise((resolve) => setTimeout(resolve, 2000)),
       ]);
+      await runBeforeClose();
       await win.forceClose();
       return;
     }
@@ -69,6 +86,7 @@ export async function installCloseGuard(): Promise<() => void> {
       // 编辑器已经卸载、保存失败留下的草稿也再试一次。放在编辑器之后：开着的那篇
       // 如果刚存成功，它的草稿已经清掉了，不会用旧草稿盖掉新内容。
       await useData.getState().flushDrafts();
+      await runBeforeClose();
       closing = true;
       await win.forceClose();
     } catch (error) {

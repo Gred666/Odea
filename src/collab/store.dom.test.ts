@@ -246,6 +246,24 @@ describe("访客", () => {
     expect(useData.getState().error).toBeNull();
   });
 
+  it("上一次做客结束了：「加入协作…」打开的是加入那一页，不是那次结束的样子", async () => {
+    await net.onControl(handleControl);
+    await useCollab.getState().join("odea://join/abcdefghijklmnop");
+    await until("进来了", () => useCollab.getState().phase === "guest");
+    handleControl({ type: "status", status: { state: "ended", reason: { kind: "hostStopped" } } });
+    // 点协作标签（不带链接）：还是那次结束的样子，可以存一份
+    useCollab.getState().openDialog();
+    expect(useCollab.getState().phase).toBe("guest");
+    useCollab.getState().closeDialog();
+    // 命令面板「加入协作…」：收掉那一次，打开加入
+    useCollab.getState().openDialog("");
+    await until(
+      "回到加入那一页",
+      () => useCollab.getState().phase === "idle" && useCollab.getState().dialogOpen,
+    );
+    expect(useCollab.getState().session).toBeNull();
+  });
+
   it("认不出的链接当场说清楚，不去连", async () => {
     await useCollab.getState().join("https://example.com/x");
     expect(useCollab.getState().phase).toBe("idle");

@@ -18,7 +18,8 @@ import type { TeamNet } from "./net";
    - 有人在主持：加入（joining → guest）。先把自己的存下去，等主持人那份到了，本机没提交的改动
      （相对 git 里最近一次提交，TeamNet.base）三方合进会话（规矩 2）。访客不存这一篇（remote）
    - 没人主持、开着的都是 solo：公钥最小的那位主持（host），别人等他的 Presence 再加入
-   - 主持人走了（orphan）：自己关掉的马上接手，断线的等 10 秒（可能马上回来）。同一份会话里留下的人里
+   - 主持人走了（orphan）：自己关掉的、已经不在线的马上接手；还在线、还说在主持、流却断了的等 10 秒
+     （可能马上接回来）。同一份会话里留下的人里
      公钥最小的接手（takeover）：先同步一轮 git（拉下旧主持人推上去的，规矩 4），再开始主持、存盘。
      别人同一份会话照旧连新主持人，CRDT 状态向量一换就补齐，不重新合
    - 两边都在主持（断网时各自开了，连上以后）：公钥大的让。同一份会话的照旧连过去；不是同一份的
@@ -421,10 +422,12 @@ export class TeamController {
           return;
         }
         const old = this.peers.find((peer) => peer.member === entry.host);
-        // 旧主持人还在线、Presence 里已经不主持了：是他自己关掉的，马上接手；断线的等一会儿
-        const graceful =
-          !!old?.online && !old.docs.some((item) => item.doc === entry.doc && item.hosting);
-        if (!graceful && !entry.graceOver) {
+        // 旧主持人还在线、还说自己在主持，流却断了：也许马上接回来，等一会儿。自己关掉的（不主持了）、
+        // 已经不在线的（QUIC 12 秒没动静才认出断了）马上接手 —— 他回来了还在主持的话，两边是同一份会话，
+        // 公钥大的让，不丢字
+        const lingering =
+          !!old?.online && old.docs.some((item) => item.doc === entry.doc && item.hosting);
+        if (lingering && !entry.graceOver) {
           if (!entry.timer) {
             this.later(entry, this.timing.dropGrace, () => {
               entry.graceOver = true;

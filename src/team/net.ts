@@ -6,6 +6,7 @@ import type {
   PresenceDoc,
   SyncStatus,
   TeamControl,
+  TeamPeer,
   TeamSelf,
 } from "@/lib/bindings";
 import { events, commands } from "@/lib/bindings";
@@ -26,6 +27,8 @@ export interface TeamNet {
   start(): Promise<TeamSelf | null>;
   /** 我开着哪几篇、主持着哪几篇 */
   presence(docs: PresenceDoc[]): Promise<void>;
+  /** 现在谁在线（开始听事件以后要一次：之前发的那几次可能没听到） */
+  peers(): Promise<TeamPeer[]>;
   /** 开始 / 不再主持一篇（不再主持时访客那边是 docClosed） */
   host(doc: string, on: boolean): Promise<void>;
   /** 连这一篇的主持人：连上了从管道上来 syncVector，不给、断了是 docClosed */
@@ -72,6 +75,7 @@ export const tauriTeamNet: TeamNet = {
   presence: async (docs) => {
     await unwrap(commands.teamPresence(docs));
   },
+  peers: () => unwrap(commands.teamPeers()),
   host: async (doc, on) => {
     await unwrap(commands.teamHost(doc, on));
   },
