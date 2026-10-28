@@ -37,6 +37,11 @@ export interface NoteSummary {
    * 某一天（`day:2026-10-07`）或某个周期的目标（`goal:week:2026-09-21`），见 data/conflicts.ts
    */
   conflictOf: string | null;
+  /**
+   * id 写在这个文件的属性块里（不是索引临时给的）：换台设备、重建索引都还是它。
+   * 团队协作按它认同一篇（team/store.ts 的 teamDocId），没写的按相对路径
+   */
+  idInFile: boolean;
 }
 
 /** 完整笔记（含正文）。对应 Rust 的 domain::model::Note：noteGet 取一篇时才有 */
@@ -45,11 +50,16 @@ export interface Note extends NoteSummary {
   contentMd: string;
 }
 
-export interface NoteInput {
-  /** null 是新建 */
-  id: string | null;
+/** 回收站里的一篇（Rust 的 TrashedNote）：回收站对话框列它们，恢复走 noteUndelete */
+export interface TrashedNote {
+  id: string;
   title: string;
-  contentMd: string;
+  /** 删之前在仓库里的位置（相对路径）：恢复时放回这里 */
+  from: string;
+  excerpt: string;
+  deletedAt: number;
+  /** 到这个时候就被清掉了（打开仓库时清） */
+  purgeAt: number;
 }
 
 /* ---------------- 任务 ----------------
@@ -595,21 +605,24 @@ export interface VaultInfo {
 export interface VaultLayout {
   /** 逻辑目录（§7）：文件树是清单里摆的那一棵（treeView），文件夹不在硬盘上 */
   logical: boolean;
-  /** 开没开日程（今日TODO、目标、日历、归档） */
+  /** 开没开日程（今日TODO、目标、日历） */
   journal: boolean;
+  /** 开没开归档：和日程分开，只写笔记的人也能归档旧资料 */
+  archive: boolean;
   /** 文件树的根：「笔记」，或者整个仓库（空串） */
   notesDir: string;
   daysDir: string;
   goalsDir: string;
   archiveDir: string;
-  /** 不在树上的文件夹（日程开着时的日记、目标、归档）：里面的笔记算在树根这一层 */
+  /** 不在树上的文件夹（日程开着时的日记、目标，归档开着时的归档）：里面的笔记算在树根这一层 */
   hiddenDirs: string[];
 }
 
-/** Odea 自己建的仓库：日程开着，树根是「笔记」。取到仓库的真实摆法之前先当它是这样 */
+/** Odea 自己建的仓库：日程、归档开着，树根是「笔记」。取到仓库的真实摆法之前先当它是这样 */
 export const ODEA_LAYOUT: VaultLayout = {
   logical: false,
   journal: true,
+  archive: true,
   notesDir: "笔记",
   daysDir: "日记",
   goalsDir: "目标",
@@ -663,6 +676,8 @@ export interface DocumentModel {
   empty?: { art: "notes" | "archive"; title: string; hint: string; action?: "createNote" };
   /** 在仓库里的相对路径：正文里的相对图片路径（附件）以它所在的文件夹为基准 */
   relPath?: string;
+  /** 笔记：id 写在属性块里了（NoteSummary.idInFile）。团队协作按它认同一篇，没写的按相对路径 */
+  idInFile?: boolean;
   /** 标题上方的分段控件。short：正文区窄的时候每一项换成的短字（日历那四段） */
   segments?: { group: string; options: string[]; short?: string[]; active: string };
   /** 统一的 Markdown 正文 */

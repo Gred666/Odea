@@ -8,7 +8,7 @@ import { SwapFade } from "./SwapFade";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /*
- * 换文档时的交叉淡化：旧内容留一份快照在原处淡出，新内容淡入。
+ * 换文档时的溶解：旧内容留一份铺着底色的快照盖在原处退掉，新内容就在底下、不动。
  * happy-dom 不排版也不跑动画，所以包围盒和 animate() 都换成假的：
  * 这里测的是快照拍没拍、拍的是不是旧的那一份、什么时候收掉。
  */
@@ -68,7 +68,7 @@ function render(swapKey: string, title: string) {
   act(() =>
     root.render(
       <div data-swap-host>
-        <SwapFade swapKey={swapKey} exitLift={4}>
+        <SwapFade swapKey={swapKey}>
           <h1 id="doc-top">{title}</h1>
           <textarea aria-label="标题" defaultValue={title} />
         </SwapFade>
@@ -82,7 +82,7 @@ const ghosts = () => [...host().querySelectorAll<HTMLElement>(".odea-swap-ghost"
 const ghostAnimation = (ghost: HTMLElement) => animations.find((a) => a.target === ghost);
 
 describe("SwapFade", () => {
-  it("leaves a snapshot of the old content in place while the new one fades in", () => {
+  it("lays a snapshot of the old content over the new one and fades only the snapshot", () => {
     render("a", "旧的一篇");
     // 输入框里打了一半、还没存的字不在属性里，快照也得带上
     container.querySelector("textarea")!.value = "旧的一篇（改了一半）";
@@ -104,12 +104,11 @@ describe("SwapFade", () => {
     // 快照挡不住点击、读屏器也不念
     expect(ghost!.getAttribute("aria-hidden")).toBe("true");
 
-    // 新内容已经是新的，并且从透明淡入；快照往上飘着淡出
+    // 新内容已经是新的，而且不动（不提成单独一层、淡完不用重画）；只有快照原地退掉，不飘
     expect(container.querySelector("h1")!.textContent).toBe("新的一篇");
-    const fadeIn = animations.find((a) => a.target !== ghost)!;
-    expect(fadeIn.keyframes.map((frame) => frame.opacity)).toEqual([0, 1]);
+    expect(animations).toHaveLength(1);
     const fadeOut = ghostAnimation(ghost!)!;
-    expect(fadeOut.keyframes.at(-1)).toMatchObject({ opacity: 0, transform: "translateY(-4px)" });
+    expect(fadeOut.keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
 
     // 淡完就收掉
     act(() => fadeOut.onfinish?.());
@@ -123,20 +122,24 @@ describe("SwapFade", () => {
     expect(animations).toHaveLength(0);
   });
 
-  it("keeps only the latest snapshot when switching again before the last one faded", () => {
+  it("tucks a new snapshot under the one still fading when switching again", () => {
     render("a", "第一篇");
     render("b", "第二篇");
     const [first] = ghosts();
-    const firstFadeIn = animations.find((a) => a.target !== first)!;
 
     render("c", "第三篇");
-    expect(ghosts()).toHaveLength(1);
-    expect(ghosts()[0]!.textContent).toContain("第二篇");
-    expect(firstFadeIn.cancelled).toBe(true);
+    // 上一份接着退，这一份垫在它底下：换的那一帧画面不跳
+    expect(ghosts().map((ghost) => ghost.textContent)).toEqual([
+      expect.stringContaining("第二篇"),
+      expect.stringContaining("第一篇"),
+    ]);
+    const second = ghosts()[0]!;
 
-    // 上一份的淡出回调晚到了，也不能把新的这份收掉
+    // 各退各的：第一份退完只收它自己
     act(() => ghostAnimation(first!)?.onfinish?.());
-    expect(ghosts()).toHaveLength(1);
+    expect(ghosts()).toEqual([second]);
+    act(() => ghostAnimation(second)?.onfinish?.());
+    expect(ghosts()).toHaveLength(0);
   });
 
   it("switches instantly when motion is reduced", () => {

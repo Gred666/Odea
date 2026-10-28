@@ -4,17 +4,16 @@ import { type NoteSummary, ODEA_LAYOUT, type VaultLayout } from "./types";
 /* ============================================================
    文件树上文件夹的路径小工具。
 
-   文件夹路径相对树根：`工作/周报`；空串是树根本身（全部笔记）。树根是仓库里的「笔记」
+   文件夹路径相对树根：`工作/周报`；空串是树根本身。树根是仓库里的「笔记」
    （Odea 建的仓库），或者整个仓库（没开日程的，比如打开的 Obsidian 库），见 VaultLayout。
    一篇笔记在哪个文件夹由它的 relPath 决定（`笔记/工作/周报/第 40 周.md`）；
-   不在树根底下的（仓库根上、别的工具建的目录里）、在日程那几个文件夹里的都算在「全部笔记」这一层。
+   不在树根底下的（仓库根上、别的工具建的目录里）、在日程那几个文件夹里的都算在树根这一层。
 
    逻辑目录（docs/仓库与启动器.md §7）：文件夹在清单里（data/tree.ts 摊开的 TreeShape），
    一篇在哪个文件夹看它在树上的位置、和文件在哪无关；没放进树里的在「未整理」（UNSORTED）。
    文件夹按手动排的顺序，不按名字
    ============================================================ */
 
-export const ROOT_LABEL = "全部笔记";
 /** 「未整理」在界面上的路径：真的文件夹路径不会以 / 开头（Rust 的 tree::UNSORTED） */
 export const UNSORTED = "/";
 export const UNSORTED_LABEL = "未整理";
@@ -47,6 +46,13 @@ export function setTreeLayout(layout: Pick<VaultLayout, "notesDir" | "hiddenDirs
 /** 树根在仓库里的路径：「笔记」，或者整个仓库（空串） */
 export const treeRoot = () => tree.notesDir;
 
+/**
+ * 树根叫什么：它在仓库里的文件夹名（Odea 建的仓库是「笔记」），整个仓库当树根时也叫「笔记」。
+ * 以前叫「全部笔记」，可列表栏在树根上列的只是这一层，不是全部（docs/仓库与启动器.md §17）。
+ * 不用仓库名：列表栏底下的「仓库名 ⌄」已经是它，一栏里两个一样的名字点了却做不同的事
+ */
+export const rootLabel = () => (tree.notesDir ? nameOf(tree.notesDir) : "笔记");
+
 /** 树上的文件夹 → 仓库里的目录 */
 const dirOf = (folder: string) =>
   tree.notesDir && folder ? `${tree.notesDir}/${folder}` : tree.notesDir || folder;
@@ -59,13 +65,13 @@ export const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 export const within = (folder: string, path: string) =>
   path === "" || folder === path || folder.startsWith(`${path}/`);
 
-/** 给人看的路径：`工作 / 周报`，空串是「全部笔记」 */
+/** 给人看的路径：`工作 / 周报`，空串是树根（rootLabel） */
 export const folderLabel = (path: string) =>
-  path === UNSORTED ? UNSORTED_LABEL : path ? path.split("/").join(" / ") : ROOT_LABEL;
+  path === UNSORTED ? UNSORTED_LABEL : path ? path.split("/").join(" / ") : rootLabel();
 
-/** 文件夹自己的名字：空串是「全部笔记」，UNSORTED 是「未整理」 */
+/** 文件夹自己的名字：空串是树根（rootLabel），UNSORTED 是「未整理」 */
 export const folderName = (path: string) =>
-  path === UNSORTED ? UNSORTED_LABEL : path ? nameOf(path) : ROOT_LABEL;
+  path === UNSORTED ? UNSORTED_LABEL : path ? nameOf(path) : rootLabel();
 
 /** 笔记所在的文件夹（和 Rust 的 Layout::folder_of_dir 一样）。逻辑目录看它在树上的位置 */
 export function folderOf(note: Pick<NoteSummary, "relPath"> & { id?: string }): string {

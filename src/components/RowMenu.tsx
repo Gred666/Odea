@@ -14,6 +14,11 @@ export interface MenuAction {
    * 单选渲染：右侧留出勾选位，选中项打勾。
    */
   checked?: boolean;
+  /**
+   * 开关（排序菜单里的「显示摘要」）：不算单选的一项，画在一条分隔线下面，checked 是开没开。
+   * 开着打勾，和单选的勾在同一列
+   */
+  toggle?: boolean;
   onSelect: () => void;
 }
 
@@ -49,7 +54,11 @@ export function ActionMenu({
   useEffect(() => {
     if (defaultOpen) onOpenChange?.(true);
   }, []);
-  const radio = actions.some((a) => a.checked !== undefined);
+  const choices = actions.filter((a) => !a.toggle);
+  const toggles = actions.filter((a) => a.toggle);
+  const radio = choices.some((a) => a.checked !== undefined);
+  /** 右边留不留勾选位：单选的、开关都在同一列打勾 */
+  const checkColumn = radio || toggles.length > 0;
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
@@ -71,7 +80,7 @@ export function ActionMenu({
       <>
         <Icon size={13} strokeWidth={1.9} className="shrink-0" />
         <span className="flex-1">{a.label}</span>
-        {radio && (
+        {checkColumn && (
           <Check
             size={12}
             strokeWidth={2.4}
@@ -96,8 +105,8 @@ export function ActionMenu({
                      shadow-float outline-none ring-1 ring-line-strong"
         >
           {radio ? (
-            <DropdownMenu.RadioGroup value={actions.find((a) => a.checked)?.id}>
-              {actions.map((a) => (
+            <DropdownMenu.RadioGroup value={choices.find((a) => a.checked)?.id}>
+              {choices.map((a) => (
                 <DropdownMenu.RadioItem
                   key={a.id}
                   value={a.id}
@@ -109,11 +118,26 @@ export function ActionMenu({
               ))}
             </DropdownMenu.RadioGroup>
           ) : (
-            actions.map((a) => (
+            choices.map((a) => (
               <DropdownMenu.Item key={a.id} onSelect={a.onSelect} className={itemClass(a)}>
                 {itemBody(a)}
               </DropdownMenu.Item>
             ))
+          )}
+          {toggles.length > 0 && (
+            <>
+              <DropdownMenu.Separator className="mx-1 my-1 h-px bg-line" />
+              {toggles.map((a) => (
+                <DropdownMenu.CheckboxItem
+                  key={a.id}
+                  checked={!!a.checked}
+                  onSelect={a.onSelect}
+                  className={itemClass(a)}
+                >
+                  {itemBody(a)}
+                </DropdownMenu.CheckboxItem>
+              ))}
+            </>
           )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
@@ -167,11 +191,15 @@ export function RowMenu({
             }
           : undefined
       }
+      // 悬停才出现的淡的是颜色，不是 opacity：列表里一行一个，进合成层的话淡完那一帧
+      // 退回页面会挪半个像素（CLAUDE.md 动效规矩第 3 条，同右侧目录树的收起箭头）
       className={cn(
-        "grid h-5 w-5 place-items-center rounded text-faint",
-        "transition-[background-color,color,opacity] duration-[150ms] hover:bg-raised hover:text-ink",
-        "data-[state=open]:bg-raised data-[state=open]:text-ink data-[state=open]:opacity-100",
-        alwaysVisible ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        "grid h-5 w-5 place-items-center rounded",
+        "transition-[background-color,color] duration-[150ms] hover:bg-raised group-hover:hover:text-ink",
+        "data-[state=open]:bg-raised data-[state=open]:text-ink",
+        alwaysVisible
+          ? "text-faint hover:text-ink"
+          : "text-transparent group-hover:text-faint focus-visible:text-faint",
       )}
     >
       <MoreHorizontal size={13} strokeWidth={2} />

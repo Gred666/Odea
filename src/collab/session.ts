@@ -384,6 +384,23 @@ export class CollabSession {
   }
 
   /**
+   * 对方的版本向量盖住了这边有的全部改动（每个 peer 对方都有到这边这么多）：这边的字对方都有了。
+   * 访客拿主持人存盘后发来的向量问它，盖住了就是自己打的字都存下了（keep.ts）。认不出的向量算没盖住
+   */
+  coveredBy(vector: Uint8Array): boolean {
+    let theirs: VersionVector;
+    try {
+      theirs = VersionVector.decode(vector);
+    } catch {
+      return false;
+    }
+    for (const [peer, counter] of this.doc.oplogVersion().toJSON()) {
+      if ((theirs.get(peer) ?? 0) < counter) return false;
+    }
+    return true;
+  }
+
+  /**
    * 对方发来 Sync1：回它缺的（Sync2）。
    * - 收件箱里还排着没应用的（等下一帧的）先应用掉再回：那些包网络层收到时已经转给了当时
    *   连着的人，刚重连的这位没收到；Sync2 再不带上，他就永远缺这几个字（模糊测试种子 622）

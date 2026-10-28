@@ -1,6 +1,7 @@
 import { ZEN_TRANSITION } from "@/app/navMotion";
 import { openDocument } from "@/app/navigate";
-import { RAIL_WIDTH, useApp } from "@/app/store";
+import { RAIL_WIDTH, hasListColumn, useApp } from "@/app/store";
+import { type GuestCopyState, useGuestCopies } from "@/collab/keep";
 import { useCollab } from "@/collab/store";
 import { attachFiles, attachPaths, documentFolder } from "@/data/attachments";
 import { folderLabel, folderOf } from "@/data/folders";
@@ -21,6 +22,8 @@ import {
   History,
   Maximize2,
   Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Trash2,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -101,6 +104,13 @@ export function DocumentView({
   const setZen = useApp((s) => s.setZen);
   // 只有笔记区给这个入口：其它区要么是两栏、要么本来就没有可铺满的正文。访客窗口没有侧栏可收
   const zenAvailable = workspace === "notes" && windowKind !== "guest";
+  // 状态栏最左端的侧栏开关：只有有那一栏的几页（文件、日历、归档）才有。专注模式下那一栏推在屏幕外，也不给
+  const panelCollapsed = useApp((s) => s.panelCollapsed);
+  const setPanelCollapsed = useApp((s) => s.setPanelCollapsed);
+  const panelToggle =
+    hasListColumn(workspace) && windowKind !== "guest" && !zen
+      ? { collapsed: panelCollapsed, onToggle: () => setPanelCollapsed(!panelCollapsed) }
+      : undefined;
   // 编辑器里的实时正文。doc.bodyMd 要等一次保存往返才更新，
   // 只靠它的话目录树会永远慢半拍，点条目还会跳到旧行号。
   const [liveMarkdown, setLiveMarkdown] = useState<string | null>(null);
@@ -180,6 +190,11 @@ export function DocumentView({
   }, [pendingAnchor, doc.key, editorOutline, outline, setPendingAnchor]);
 
   const saving = useData((state) => (doc.editor ? state.savingDocs.has(saveKey(doc)) : false));
+  // 做客的这一篇：主持人还没存下的字本机留着一份，还是都存下了（collab/keep.ts）
+  const collabSession = doc.collab?.session;
+  const guestCopy = useGuestCopies((state) =>
+    collabSession ? state.states.get(collabSession) : undefined,
+  );
   // 只显示这一篇自己的保存失败（以及不属于某一篇的，比如关窗时那次）。
   // saveError 只有一格，别的文档后来又失败会把它覆盖；这一篇还有草稿没落盘的话照样提示。
   const saveError = useData((state) => {
@@ -299,257 +314,394 @@ export function DocumentView({
   }, [Editor]);
 
   return (
-    <div className="relative flex h-full min-w-0 flex-1 bg-canvas">
-      {/* 定位基准必须是滚动容器自己这一层。挂到外面那行上的话，
+    // 上面一行是正文（+ 右侧目录树），底下贴着状态栏（StatusBar）
+    <div className="relative flex h-full min-w-0 flex-1 flex-col bg-canvas">
+      <div className="relative flex min-h-0 flex-1">
+        {/* 定位基准必须是滚动容器自己这一层。挂到外面那行上的话，
           absolute right-0 贴的是「正文 + 大纲栏」的右边 ——
           滑块会跑到大纲栏外侧去，离它真正在滚的那块内容隔着一整栏。 */}
-      {/* data-swap-host：切换文档时旧内容的快照放在这一层（见 SwapFade）——
+        {/* data-swap-host：切换文档时旧内容的快照放在这一层（见 SwapFade）——
           它不滚动、就是正文的可视区，快照按它裁切。 */}
-      <div className="relative min-w-0 flex-1" data-swap-host>
-        {/* 画布往左 chrome 底下多铺 RAIL_WIDTH：负外边距把盒子拉过去，等宽的
+        <div className="relative min-w-0 flex-1" data-swap-host>
+          {/* 画布往左 chrome 底下多铺 RAIL_WIDTH：负外边距把盒子拉过去，等宽的
             内边距把内容留在原位，所以排版一点没变，只是底色和裁切边界往左
             延到了窗口边缘。退出专注模式时 chrome 滑回来的那段时间，正文能
             一直完整地显示在白底上、往右滑到新位置 —— 否则滚动容器（overflow-y
             一设，横向也必然裁切）会在 chrome 的右边缘把正在位移的正文切掉。
             平时这一截压在 z-30 的 chrome 底下，看不见也摸不着。 */}
-        <div
-          ref={scrollRef}
-          onScroll={(event) => {
-            scrolledRef.current = event.currentTarget.scrollTop;
-          }}
-          // 查找面板（editor/searchPanel.ts）按它的右边缘贴边
-          data-doc-scroller
-          // @container：正文区多宽（容器查询量的是内容盒，多铺到 chrome 底下的那截内边距不算），
-          // 窄的时候左右留白、大标题、分段控件的字跟着收（窗口窄、列表栏开着的时候）
-          className="@container scroll-none h-full overflow-y-auto bg-canvas"
-          style={{ marginLeft: -RAIL_WIDTH, paddingLeft: RAIL_WIDTH }}
-        >
-          <CenteredColumn>
-            {/* 换文档时整块交叉淡化：旧的一份快照原地淡出，新的一份淡入（见 SwapFade）。
+          <div
+            ref={scrollRef}
+            onScroll={(event) => {
+              scrolledRef.current = event.currentTarget.scrollTop;
+            }}
+            // 查找面板（editor/searchPanel.ts）按它的右边缘贴边
+            data-doc-scroller
+            // @container：正文区多宽（容器查询量的是内容盒，多铺到 chrome 底下的那截内边距不算），
+            // 窄的时候左右留白、大标题、分段控件的字跟着收（窗口窄、列表栏开着的时候）
+            className="@container scroll-none h-full overflow-y-auto bg-canvas"
+            style={{ marginLeft: -RAIL_WIDTH, paddingLeft: RAIL_WIDTH }}
+          >
+            <CenteredColumn className="min-h-full flex-col pb-16 pt-[52px]">
+              {/* 换文档（也包括今日TODO ↔ /GOAL 这种同一个版面的两页）时整块溶解：旧的一份快照
+                铺着底色盖在原处退掉，新的一份就在底下（见 SwapFade）。
                 标题、分隔线、正文、状态栏都在里面，一起换，不再各播各的入场动画。 */}
-            <SwapFade swapKey={doc.key} exitLift={4} className="flex flex-1 flex-col">
-              {doc.empty ? (
-                <EmptyDocument empty={doc.empty} />
-              ) : (
-                <>
-                  {/* ---------- 做客那一篇：重新连接中、只读、协作结束了 ---------- */}
-                  {shared && <CollabBanner />}
+              <SwapFade swapKey={doc.key} className="flex flex-1 flex-col">
+                {doc.empty ? (
+                  <EmptyDocument empty={doc.empty} />
+                ) : (
+                  <>
+                    {/* ---------- 做客那一篇：重新连接中、只读、协作结束了 ---------- */}
+                    {shared && <CollabBanner />}
 
-                  {/* ---------- 冲突副本横幅 ---------- */}
-                  {doc.conflict && (
-                    <ConflictBanner key={doc.conflict.copyId} conflict={doc.conflict} />
-                  )}
+                    {/* ---------- 冲突副本横幅 ---------- */}
+                    {doc.conflict && (
+                      <ConflictBanner key={doc.conflict.copyId} conflict={doc.conflict} />
+                    )}
 
-                  {/* ---------- 使用指南有新版（用户改过这一篇） ---------- */}
-                  {guideUpdate && <GuideUpdateBanner key={guideUpdate.id} update={guideUpdate} />}
+                    {/* ---------- 使用指南有新版（用户改过这一篇） ---------- */}
+                    {guideUpdate && <GuideUpdateBanner key={guideUpdate.id} update={guideUpdate} />}
 
-                  {/* ---------- 归档横幅 ----------
+                    {/* ---------- 归档横幅 ----------
                   key 固定：在两篇归档笔记之间切换时横幅本身不动，文字跟着整块一起淡换。
                   原来按文字做 key，日期不同的两篇一切，旧条往上退、新条从上落，
                   两条叠在一起错开几像素 —— 看起来就是在抖。
                   中性色：归档不是出错，以前的红底看着像是这篇出了什么问题。 */}
-                  <AnimatePresence mode="popLayout" initial={false}>
-                    {doc.banner && (
-                      <motion.div
-                        key="banner"
-                        initial={{ opacity: 0, y: -6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -4 }}
-                        transition={tween.base}
-                        className="mb-7 flex items-center gap-2 rounded-lg bg-raised/70 px-3.5 py-2.5"
-                      >
-                        <Archive size={12.5} strokeWidth={1.9} className="shrink-0 text-muted" />
-                        <span className="text-[12px] text-body">{doc.banner.text}</span>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                    <AnimatePresence mode="popLayout" initial={false}>
+                      {doc.banner && (
+                        <motion.div
+                          key="banner"
+                          initial={{ opacity: 0, y: -6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -4 }}
+                          transition={tween.base}
+                          className="mb-7 flex items-center gap-2 rounded-lg bg-raised/70 px-3.5 py-2.5"
+                        >
+                          <Archive size={12.5} strokeWidth={1.9} className="shrink-0 text-muted" />
+                          <span className="text-[12px] text-body">{doc.banner.text}</span>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
 
-                  {/* ---------- 标题行 ---------- */}
-                  <header id="doc-top" data-outline-id="doc-top">
-                    {/* 标题上方那一行：左边是小字（日历某天的日期），右边是分段控件。
+                    {/* ---------- 标题行 ---------- */}
+                    <header id="doc-top" data-outline-id="doc-top">
+                      {/* 标题上方那一行：左边是小字（日历某天的日期、笔记的文件夹），右边是分段控件。
+                    跟着正文滚：往下滚到大标题钻进窗口最上面那条底下，那里出现一行「路径 / 标题」
+                    （TitleStrip），顶上不多占地方。2026-10-28 试过把这一行固定在正文上方，一直占着 80px，太挤。
                     分段控件原来和标题并排在同一行、分掉一截宽度，日历某天的标题
                     稍长就被它截掉。挪上来之后标题独占整行；这一行的高度钉在小字
                     的一行高，控件比它高出来的部分往上溢进顶部留白里（负外边距），
                     标题的位置不受影响，切「日TODO ↔ 周/GOAL」时控件也不挪窝。 */}
-                    {(doc.eyebrow ||
-                      doc.folder !== undefined ||
-                      (doc.segments && onSegmentChange)) && (
-                      <div className="mb-2 flex min-h-[20px] items-end justify-between gap-8">
-                        {doc.eyebrow && (
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <p
-                              className="min-w-0 truncate text-[12px] font-medium leading-[20px]
+                      {(doc.eyebrow ||
+                        doc.folder !== undefined ||
+                        (doc.segments && onSegmentChange)) && (
+                        <div className="mb-2 flex min-h-[20px] items-end justify-between gap-8">
+                          {doc.eyebrow && (
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              <p
+                                className="min-w-0 truncate text-[12px] font-medium leading-[20px]
                                      tracking-[0.02em] text-muted"
-                            >
-                              {doc.eyebrow}
-                            </p>
-                            {/* 日程切换器（docs/协同编辑.md §22.6）：开着日程的仓库有两个以上时才有 */}
-                            {journalPageOf(workspace) && <JournalSwitcher />}
-                          </div>
-                        )}
-                        {/* 笔记：这篇在哪个文件夹（列表栏退回上层后，深处那篇在列表里看不见） */}
-                        {doc.folder !== undefined && (
-                          <NotePath folder={doc.folder} relPath={doc.relPath} />
-                        )}
-                        {/* 协作中：谁在、点一下回到协作的那篇（右上角是目录树的标题，放这一行的右端） */}
-                        <CollabPresence docKey={doc.key} />
-                        {/* 团队仓库：别人也开着这一篇（docs/协同编辑.md §22.4） */}
-                        <TeamPresence doc={doc} />
-                        {/* 盒子钉成小号控件的高（30），-10 之后正好是这一行的 20：大号的（34，/GOAL 那组）
+                              >
+                                {doc.eyebrow}
+                              </p>
+                              {/* 日程切换器（docs/协同编辑.md §22.6）：开着日程的仓库有两个以上时才有 */}
+                              {journalPageOf(workspace) && <JournalSwitcher />}
+                            </div>
+                          )}
+                          {/* 笔记：这篇在哪个文件夹（列表栏退回上层后，深处那篇在列表里看不见） */}
+                          {doc.folder !== undefined && (
+                            <NotePath folder={doc.folder} relPath={doc.relPath} />
+                          )}
+                          {/* 协作中：谁在、点一下回到协作的那篇（右上角是目录树的标题，放这一行的右端） */}
+                          <CollabPresence docKey={doc.key} />
+                          {/* 团队仓库：别人也开着这一篇（docs/协同编辑.md §22.4） */}
+                          <TeamPresence doc={doc} />
+                          {/* 盒子钉成小号控件的高（30），-10 之后正好是这一行的 20：大号的（34，/GOAL 那组）
                             多出来的 4px 往下垂进 mb-2 的空里，不再把这一行撑成 24 —— 以前 /GOAL 的标题、
                             分隔线、正文都比别的页低 4px，切过去就跳一下 */}
-                        {doc.segments && onSegmentChange && (
-                          <div className="-mt-2.5 ml-auto h-[30px] shrink-0">
-                            <Segmented
-                              group={doc.segments.group}
-                              options={doc.segments.options.map((o, i) => {
-                                const short = doc.segments?.short?.[i];
-                                return {
-                                  value: o,
-                                  title: short ? o : undefined,
-                                  // 正文区窄的时候换成一个字，免得把左边那行日期挤没了
-                                  label: short ? (
-                                    <>
-                                      <span className="@min-[640px]:hidden">{short}</span>
-                                      <span className="hidden @min-[640px]:inline">{o}</span>
-                                    </>
-                                  ) : (
-                                    o
-                                  ),
-                                };
-                              })}
-                              value={doc.segments.active}
-                              onChange={onSegmentChange}
-                              size={doc.segments.options.length > 3 ? "sm" : "md"}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    )}
+                          {doc.segments && onSegmentChange && (
+                            <div className="-mt-2.5 ml-auto h-[30px] shrink-0">
+                              <Segmented
+                                group={doc.segments.group}
+                                options={doc.segments.options.map((o, i) => {
+                                  const short = doc.segments?.short?.[i];
+                                  return {
+                                    value: o,
+                                    title: short ? o : undefined,
+                                    // 正文区窄的时候换成一个字，免得把左边那行日期挤没了
+                                    label: short ? (
+                                      <>
+                                        <span className="@min-[640px]:hidden">{short}</span>
+                                        <span className="hidden @min-[640px]:inline">{o}</span>
+                                      </>
+                                    ) : (
+                                      o
+                                    ),
+                                  };
+                                })}
+                                value={doc.segments.active}
+                                onChange={onSegmentChange}
+                                size={doc.segments.options.length > 3 ? "sm" : "md"}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
 
-                    {/* 标题按文档 key 重挂（可编辑标题的本地状态跟着换篇重置），
+                      {/* 标题按文档 key 重挂（可编辑标题的本地状态跟着换篇重置），
                     但不再单独播入场：以前旧标题直接消失、新标题从下面 16px 弹上来，
                     中间空着一拍，正文却已经换好了。 */}
-                    {doc.editor?.titleEditable && onSaveTitle ? (
-                      <EditableDocumentTitle
-                        key={doc.key}
-                        fieldRef={titleFieldRef}
-                        title={doc.title}
-                        // 占位标题（无标题笔记）不是真标题：输入框里留空，让用户直接起名
-                        placeholder={doc.title === NEW_NOTE_TITLE}
-                        // 刚新建的这一篇：光标直接落在标题里
-                        autoFocus={focusRequest?.docKey === doc.key && focusRequest.at === "title"}
-                        onEnterBody={enterBody}
-                        onSave={(title) =>
-                          target ? onSaveTitle(target, title) : Promise.resolve()
-                        }
-                      />
-                    ) : (
-                      <h1
-                        key={doc.key}
-                        className="selectable break-words font-display text-[30px] font-bold leading-[1.25]
+                      {doc.editor?.titleEditable && onSaveTitle ? (
+                        <EditableDocumentTitle
+                          key={doc.key}
+                          fieldRef={titleFieldRef}
+                          title={doc.title}
+                          // 占位标题（无标题笔记）不是真标题：输入框里留空，让用户直接起名
+                          placeholder={doc.title === NEW_NOTE_TITLE}
+                          // 刚新建的这一篇：光标直接落在标题里
+                          autoFocus={
+                            focusRequest?.docKey === doc.key && focusRequest.at === "title"
+                          }
+                          onEnterBody={enterBody}
+                          onSave={(title) =>
+                            target ? onSaveTitle(target, title) : Promise.resolve()
+                          }
+                        />
+                      ) : (
+                        <h1
+                          key={doc.key}
+                          className="selectable break-words font-display text-[30px] font-bold leading-[1.25]
                                text-ink @min-[480px]:text-[38px]"
-                      >
-                        {doc.title}
-                      </h1>
-                    )}
-                  </header>
+                        >
+                          {doc.title}
+                        </h1>
+                      )}
+                    </header>
 
-                  {/* 标题下的细分隔线：宽度从 0 展开，是「文档打开了」的一个小信号。
+                    {/* 标题下的细分隔线：宽度从 0 展开，是「文档打开了」的一个小信号。
                   只在进这个工作区时播一次；换篇时它留在原地，跟着整块一起淡换 */}
-                  <motion.div
-                    className="mt-6 h-px origin-left bg-line"
-                    initial={{ scaleX: 0, opacity: 0 }}
-                    animate={{ scaleX: 1, opacity: 1 }}
-                    transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1], delay: 0.05 }}
-                  />
+                    <motion.div
+                      className="mt-6 h-px origin-left bg-line"
+                      initial={{ scaleX: 0, opacity: 0 }}
+                      animate={{ scaleX: 1, opacity: 1 }}
+                      transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1], delay: 0.05 }}
+                    />
 
-                  {/* ---------- 正文 ----------
+                    {/* ---------- 正文 ----------
                   编辑器稳定岛：这里以及编辑器自身都没有 Motion layout/transform
                   （SwapFade 只动 opacity）。Shell 那边的工作区进场也是纯 opacity，
                   所以编辑器可以在新一屏的第一帧就挂上，不需要先拿 DocumentPreview
                   顶一段。这一点很重要：预览和编辑器的排版并不一致（正文 15px vs
                   17px/1.4，h2 21px vs 29.75px），中途替换会让整篇重排一次，看着像卡顿。
                   数据还没到（没有 doc.editor）或 editorEnabled 强制只读时才是预览。 */}
-                  <div className="flex-1">
-                    {canEdit && Editor ? (
-                      <Editor
-                        key={saveKey(doc)}
-                        initialMarkdown={doc.bodyMd}
-                        // 团队仓库里别人在主持这一篇：他存，这边不存（docs/协同编辑.md §22.2 规矩 1）
-                        onSave={(markdown) =>
-                          target && !doc.collab?.remote
-                            ? onSaveDocument(target, markdown)
-                            : Promise.resolve()
-                        }
-                        outlineItems={outline}
-                        onOutlineHandle={setEditorOutline}
-                        onDocumentChange={handleDocumentChange}
-                        // 做客的那一篇：双链指向的是主持人的笔记，不在这里打开
-                        onWikiLink={shared ? undefined : handleWikiLink}
-                        // 日历当日安排跟在正文后面：编辑器别再撑 360px 把任务推到底下
-                        fill={!doc.dayTasks?.length}
-                        // 切走时缓存编辑器状态，切回来不用再解析全文
-                        cacheKey={saveKey(doc)}
-                        externalRevision={externalRevision}
-                        onExternalConflict={handleExternalConflict}
-                        templateContext={templateContext}
-                        imageBase={shared ? guestImages : imageBase}
-                        onAttachFiles={shared ? guestAttachFiles : handleAttachFiles}
-                        onAttachPaths={shared ? guestAttachPaths : handleAttachPaths}
-                        linkTargets={shared ? undefined : linkTargets}
-                        // 双链指向的是主持人的笔记，这边没有：一律按「不存在」画
-                        linksMissing={shared}
-                        collab={doc.collab?.session ?? null}
-                        readOnly={doc.collab?.readOnly ?? false}
-                        linkSelf={noteId ?? undefined}
-                        onExitTop={doc.editor?.titleEditable ? exitToTitle : undefined}
-                      />
-                    ) : (
-                      <DocumentPreview markdown={doc.bodyMd} />
-                    )}
+                    <div className="flex-1">
+                      {canEdit && Editor ? (
+                        <Editor
+                          key={saveKey(doc)}
+                          initialMarkdown={doc.bodyMd}
+                          // 团队仓库里别人在主持这一篇：他存，这边不存（docs/协同编辑.md §22.2 规矩 1）
+                          onSave={(markdown) =>
+                            target && !doc.collab?.remote
+                              ? onSaveDocument(target, markdown)
+                              : Promise.resolve()
+                          }
+                          outlineItems={outline}
+                          onOutlineHandle={setEditorOutline}
+                          onDocumentChange={handleDocumentChange}
+                          // 做客的那一篇：双链指向的是主持人的笔记，不在这里打开
+                          onWikiLink={shared ? undefined : handleWikiLink}
+                          // 日历当日安排跟在正文后面：编辑器别再撑 360px 把任务推到底下
+                          fill={!doc.dayTasks?.length}
+                          // 切走时缓存编辑器状态，切回来不用再解析全文
+                          cacheKey={saveKey(doc)}
+                          externalRevision={externalRevision}
+                          onExternalConflict={handleExternalConflict}
+                          templateContext={templateContext}
+                          imageBase={shared ? guestImages : imageBase}
+                          onAttachFiles={shared ? guestAttachFiles : handleAttachFiles}
+                          onAttachPaths={shared ? guestAttachPaths : handleAttachPaths}
+                          linkTargets={shared ? undefined : linkTargets}
+                          // 双链指向的是主持人的笔记，这边没有：一律按「不存在」画
+                          linksMissing={shared}
+                          collab={doc.collab?.session ?? null}
+                          readOnly={doc.collab?.readOnly ?? false}
+                          linkSelf={noteId ?? undefined}
+                          onExitTop={doc.editor?.titleEditable ? exitToTitle : undefined}
+                        />
+                      ) : (
+                        <DocumentPreview markdown={doc.bodyMd} />
+                      )}
 
-                    {doc.dayTasks && doc.dayTasks.length > 0 && (
-                      <DayTasks tasks={doc.dayTasks} onToggle={onToggleTask} />
-                    )}
+                      {doc.dayTasks && doc.dayTasks.length > 0 && (
+                        <DayTasks tasks={doc.dayTasks} onToggle={onToggleTask} />
+                      )}
 
-                    {/* ---------- 反向链接：别的文档里写了 [[这篇]] 的地方 ---------- */}
-                    {noteId && <Backlinks key={noteId} noteId={noteId} title={doc.title} />}
-                  </div>
-
-                  {/* ---------- 底部状态栏 ---------- */}
-                  <StatusBar
-                    parts={doc.statusParts}
-                    onDelete={doc.deletable ? onDelete : undefined}
-                    onReveal={handleReveal}
-                    onHistory={handleHistory}
-                    saving={saving}
-                    saveError={saveError}
-                  />
-                </>
-              )}
-            </SwapFade>
-          </CenteredColumn>
+                      {/* ---------- 反向链接：别的文档里写了 [[这篇]] 的地方 ---------- */}
+                      {noteId && <Backlinks key={noteId} noteId={noteId} title={doc.title} />}
+                    </div>
+                  </>
+                )}
+              </SwapFade>
+            </CenteredColumn>
+          </div>
+          <OverlayScrollbar targetRef={scrollRef} />
+          {/* 大标题滚出去以后，窗口最上面那条里的「路径 / 标题」 */}
+          <TitleStrip doc={doc} scrollRef={scrollRef} />
+          {/* 正文滚到状态栏跟前淡掉，不是被一刀切齐：状态栏不画分隔线（窄栏右边那一栏底下的
+              「仓库名」有一条，高度对不上，两条线一高一低）。压在换篇的快照（z-5）上面，快照也一样淡 */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-[6] h-6"
+            style={{ background: "linear-gradient(to bottom, transparent, var(--color-canvas))" }}
+          />
         </div>
-        <OverlayScrollbar targetRef={scrollRef} />
+
+        <Outline
+          items={outline}
+          scrollRef={scrollRef}
+          resetKey={doc.key}
+          memoryKey={saveKey(doc)}
+          editorHandle={editorOutline}
+          zen={zen}
+        />
       </div>
 
-      <Outline
-        items={outline}
-        scrollRef={scrollRef}
-        resetKey={doc.key}
-        memoryKey={saveKey(doc)}
-        editorHandle={editorOutline}
-        zen={zen}
+      {/* ---------- 底部状态栏：贴着窗口底边，不跟着正文滚 ---------- */}
+      <StatusBar
+        docKey={doc.key}
+        parts={doc.empty ? [] : doc.statusParts}
+        panelToggle={panelToggle}
+        onDelete={doc.deletable ? onDelete : undefined}
+        onReveal={handleReveal}
+        onHistory={handleHistory}
+        saving={saving}
+        guestCopy={guestCopy}
+        saveError={saveError}
       />
 
-      {zenAvailable && <ZenToggle zen={zen} onToggle={() => setZen(!zen)} />}
+      {/* 换到没有专注模式的区（日历、归档）时淡掉：笔记 ↔ 日历是同一个 DocumentView，不跟着整屏换 */}
+      <AnimatePresence initial={false}>
+        {zenAvailable && <ZenToggle key="zen" zen={zen} onToggle={() => setZen(!zen)} />}
+      </AnimatePresence>
     </div>
   );
 }
 
+/** 窗口最上面那条的高：无边框窗口的拖动区（TitleBar 也是这么高） */
+const STRIP_HEIGHT = 38;
+
 /**
- * 正文那一列：居中、最宽 860。进出专注模式、列表栏收起 / 展开时，它「滑」到新的居中位置，
+ * 大标题滚出去以后，窗口最上面那条（无边框窗口的拖动区）里淡进来一行「路径 / 标题」
+ * （docs/仓库与启动器.md §20）。像苹果的大标题收进导航栏：在顶上时路径、标题都在正文里，跟着滚，
+ * 顶上一点不多占；往下滚到大标题整个钻进这一条底下，这一行淡进来，读到一半也知道在哪一篇、哪个文件夹。
+ * 点标题滑回顶上，点路径的一段在列表栏里打开那个文件夹。
+ *
+ * 为什么是到点淡入、不是滚多少淡多少（CSS 滚动时间线）：换篇时正文先拨回顶上、编辑器挂上后再滚回
+ * 上次看到的地方，跟着滚动走的话这一行会消失一帧再冒出来。现在看的是「大标题在不在这一条底下」
+ * （IntersectionObserver，滚动时不用每帧算），换篇时它一直显示着的话，里面的字跟着正文一起溶解（SwapFade）；
+ * 淡出的那一下字留着刚才那一篇的，不会换成新那篇的再淡掉。
+ *
+ * 两层：底色（铺满这一栏，下沿 16px 渐隐，盖住滚上来的正文）在标题栏（z-40）底下，窗口按钮照样在它上面
+ * —— 它比 chrome（z-30）高，所以不能像正文画布那样往左多铺一截，不然盖到窄栏的 Logo 上；字那一层在标题栏上面（z-41），整层不接指针，只有路径的几段和标题接 ——
+ * 空着的地方照样拖窗口、双击最大化。只淡 opacity（CLAUDE.md 规矩 1），一直待在自己的图层上（规矩 3）。
+ * 给鼠标用的复本：读屏器、Tab 键走正文里那一行（aria-hidden、tabIndex -1）
+ */
+function TitleStrip({
+  doc,
+  scrollRef,
+}: {
+  doc: DocumentModel;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  // 显不显示，以及这是哪一篇的结论（换篇的那一次渲染里还是上一篇的，新那篇的要等下面的 observer 回来）
+  const [state, setState] = useState({ key: doc.key, shown: false });
+  // 大标题（连同上面那一行）整个钻进这一条底下了没有。换篇、从空白页换成有内容的，重新找标题
+  // biome-ignore lint/correctness/useExhaustiveDependencies: doc.key / doc.empty 是「标题换了一个」的信号
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    const header = scroller?.querySelector<HTMLElement>("[data-outline-id='doc-top']");
+    const key = doc.key;
+    if (!scroller || !header || typeof IntersectionObserver === "undefined") {
+      setState({ key, shown: false });
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry) return;
+        // 不在视口里、而且是在上面（不是被挤到了下面）
+        const above = entry.boundingClientRect.bottom <= (entry.rootBounds?.top ?? 0);
+        setState({ key, shown: !entry.isIntersecting && above });
+      },
+      { root: scroller, rootMargin: `-${STRIP_HEIGHT}px 0px 0px 0px` },
+    );
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, [scrollRef, doc.key, doc.empty]);
+
+  // 字跟着「显示着、而且是这一篇的结论」走：淡出的时候、新那篇的结论还没回来的时候，留着刚才那一篇的
+  const shown = state.shown;
+  const last = useRef(doc);
+  if (shown && state.key === doc.key) last.current = doc;
+  const info = last.current;
+  if (info.empty) return null;
+  const where =
+    info.folder !== undefined ? (
+      <NotePath folder={info.folder} relPath={info.relPath} tabIndex={-1} />
+    ) : info.eyebrow ? (
+      <span className="min-w-0 truncate">{info.eyebrow}</span>
+    ) : null;
+
+  return (
+    <>
+      <div
+        aria-hidden="true"
+        data-shown={shown || undefined}
+        className="odea-doc-strip pointer-events-none absolute inset-x-0 top-0 z-[39]"
+        style={{
+          height: STRIP_HEIGHT + 16,
+          background: `linear-gradient(to bottom, var(--color-canvas) ${STRIP_HEIGHT}px, transparent)`,
+        }}
+      />
+      <div
+        aria-hidden="true"
+        data-shown={shown || undefined}
+        className="odea-doc-strip @container pointer-events-none absolute inset-x-0 top-0 z-[41]"
+        style={{ height: STRIP_HEIGHT }}
+      >
+        <CenteredColumn className="h-full items-center">
+          {/* 右边让出窗口按钮的位置（正文区贴着窗口右边缘的时候） */}
+          <div className="relative h-full min-w-0 max-w-[calc(100%-80px)]" data-swap-host>
+            <SwapFade
+              swapKey={info.key}
+              className="flex h-full min-w-0 items-center text-[12px] font-medium leading-[20px] tracking-[0.02em] text-muted"
+            >
+              {where && (
+                <div className="pointer-events-auto flex min-w-0 shrink items-center">{where}</div>
+              )}
+              {where && (
+                <span aria-hidden="true" className="shrink-0 text-faint/70">
+                  /
+                </span>
+              )}
+              <button
+                type="button"
+                tabIndex={-1}
+                title="回到顶上"
+                onClick={() => scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+                className="pointer-events-auto h-5 min-w-0 shrink-[2] truncate rounded-md px-[5px] text-body
+                           transition-colors duration-[140ms] hover:bg-raised/60 hover:text-ink"
+              >
+                {info.title}
+              </button>
+            </SwapFade>
+          </div>
+        </CenteredColumn>
+      </div>
+    </>
+  );
+}
+
+/**
+ * 正文那一列（和窗口最上面那条里「路径 / 标题」那一列）：居中、最宽 860。进出专注模式、列表栏收起 / 展开时，它「滑」到新的居中位置，
  * 而不是瞬间跳过去（layout="position"，只动位置不动尺寸 —— 尺寸动画是 scale，会把文字拉变形）。
  * layoutDependency 把重新测量限定在这两样变化的那一次，换笔记、正文变长都不会触发多余的位移动画。
  * 列表栏收起 / 展开时和它的进出场同一个节奏（Shell 里的 tween.base）。
@@ -558,7 +710,7 @@ export function DocumentView({
  * 一切换就把目录树、专注模式的刻度、编辑器外壳全部重渲染一遍 —— 长文档在 dev 构建里 68ms，
  * 4 倍降速 370ms，动画开头卡一下。现在只有这一层重渲染，children 是上层给的同一份，React 直接复用。
  */
-function CenteredColumn({ children }: { children: React.ReactNode }) {
+function CenteredColumn({ className, children }: { className: string; children: React.ReactNode }) {
   const zen = useApp((s) => s.zen);
   const panelCollapsed = useApp((s) => s.panelCollapsed);
   // 这一次滑动是谁引起的，就跟谁的节奏走：专注模式和列表栏收起 / 展开的曲线不一样
@@ -571,7 +723,7 @@ function CenteredColumn({ children }: { children: React.ReactNode }) {
       layout="position"
       layoutDependency={`${zen}|${panelCollapsed}`}
       transition={last.current.by === "panel" ? tween.base : ZEN_TRANSITION}
-      className="mx-auto flex min-h-full w-full max-w-[860px] flex-col px-8 pb-6 pt-[52px] @min-[560px]:px-14"
+      className={cn("mx-auto flex w-full max-w-[860px] px-8 @min-[560px]:px-14", className)}
     >
       {children}
     </motion.div>
@@ -596,10 +748,14 @@ function ZenToggle({ zen, onToggle }: { zen: boolean; onToggle: () => void }) {
       aria-label={label}
       aria-pressed={zen}
       title={label}
+      // 进出只淡（CLAUDE.md 动效规矩 1、3）：一直待在自己的图层上；右上角是整数位置，不用对齐
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
       whileTap={{ scale: 0.9 }}
-      transition={spring.snappy}
+      transition={{ ...spring.snappy, opacity: tween.fast }}
       className={cn(
-        "absolute right-4 top-[44px] z-40 grid h-8 w-8 place-items-center rounded-lg",
+        "absolute right-4 top-[44px] z-40 grid h-8 w-8 place-items-center rounded-lg will-change-[opacity]",
         "text-faint transition-colors duration-[160ms] hover:bg-raised hover:text-ink",
       )}
     >
@@ -828,7 +984,7 @@ function useLingering(on: boolean, delay: number): boolean {
   return shown;
 }
 
-/** 状态栏分段之间的点。整行往左多出一个点的宽度、外层裁掉：折到下一行时，行首那个点正好落在裁掉的地方 */
+/** 状态栏分段之间的点 */
 function Dot() {
   return (
     <span aria-hidden="true" className="w-[18px] shrink-0 text-center text-faint/50">
@@ -837,15 +993,38 @@ function Dot() {
   );
 }
 
+/** 状态栏右端的小按钮 */
+const BAR_BUTTON =
+  "grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition-colors duration-[140ms]";
+
+/**
+ * 正文底下的状态栏：贴着窗口底边，不跟着正文滚（像 Typora）。
+ * 最左端是侧栏开关（只有有那一栏的几页才有），接着是字数、日期，右端是保存状态和
+ * 历史版本、在文件夹中显示、删除。
+ *
+ * 2026-10-28 以前它跟在正文最后面，得滚到底才看得见，长文档里几乎没人看到过；
+ * 侧栏开关在窄栏左下角，今日TODO、目标没有那一栏，在那两页按它什么都不发生。
+ *
+ * 不画分隔线，和正文同一个底色：正文滚到跟前是淡掉的（滚动区底下那条渐隐）。
+ * 换篇时只有字那一截跟着正文一起溶解（SwapFade）：开关和按钮两边一样，原地不动。
+ * 和正文的画布一样往左 chrome 底下多铺 RAIL_WIDTH（见上面的滚动容器）：退出专注模式时 chrome
+ * 滑回来，底下这一截也是连着的白底，不露出外层的灰底。
+ */
 function StatusBar({
+  docKey,
   parts,
+  panelToggle,
   onDelete,
   onReveal,
   onHistory,
   saving,
   saveError,
+  guestCopy,
 }: {
+  docKey: string;
   parts: string[];
+  /** 收起 / 展开窄栏右边那一栏；这一页没有那一栏就不给 */
+  panelToggle?: { collapsed: boolean; onToggle: () => void };
   onDelete?: () => void;
   /** 在文件夹中显示这篇文档的文件（每篇都是仓库里的一个 .md） */
   onReveal?: () => void;
@@ -853,44 +1032,78 @@ function StatusBar({
   onHistory?: () => void;
   saving?: boolean;
   saveError?: string | null;
+  /** 做客：本机留着一份主持人还没存下的字（kept），还是都存下了（synced） */
+  guestCopy?: GuestCopyState;
 }) {
   // 本地保存一般几毫秒就完：每停一下笔就闪一次「保存中…」只是噪音。慢到看得出来才显示
   const slowSave = useLingering(!!saving, 600);
+  const ToggleIcon = panelToggle?.collapsed ? PanelLeftOpen : PanelLeftClose;
+  const toggleLabel = panelToggle?.collapsed ? "展开侧栏" : "收起侧栏";
   return (
-    <footer className="mt-16 flex items-center gap-3 border-t border-line pt-3.5">
-      <div className="min-w-0 flex-1 overflow-hidden">
-        <motion.div
-          className="-ml-[18px] flex flex-wrap items-center gap-y-1"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ ...tween.base, delay: 0.18 }}
+    <footer
+      className="relative z-10 flex h-8 shrink-0 items-center gap-1 bg-canvas pr-2.5"
+      style={{ marginLeft: -RAIL_WIDTH, paddingLeft: RAIL_WIDTH + (panelToggle ? 6 : 16) }}
+    >
+      {panelToggle && (
+        <button
+          type="button"
+          onClick={panelToggle.onToggle}
+          aria-label={toggleLabel}
+          title={toggleLabel}
+          className={cn(BAR_BUTTON, "mr-1.5 hover:bg-raised hover:text-ink")}
         >
-          {parts.map((p) => (
+          <ToggleIcon size={13.5} strokeWidth={1.8} />
+        </button>
+      )}
+
+      {/* 字数、日期：换篇时跟着正文一起溶解，快照只盖这一截 */}
+      <div className="relative h-full min-w-0 flex-1 overflow-hidden" data-swap-host>
+        <SwapFade swapKey={docKey} className="flex h-full items-center whitespace-nowrap">
+          {parts.map((p, i) => (
             <span key={p} className="flex items-center">
-              <Dot />
-              <span className="font-mono text-[12px] leading-[1.4] text-faint">{p}</span>
+              {i > 0 && <Dot />}
+              <span className="font-mono text-[12px] leading-none text-faint">{p}</span>
             </span>
           ))}
-          {/* 保存状态。以前 store 里记了 error 却没人渲染，
-              自动保存失败时界面上完全看不出来。 */}
-          {saveError ? (
-            <span className="flex min-w-0 items-center" role="status">
-              <Dot />
-              <AlertTriangle size={11} strokeWidth={2} className="mr-1.5 shrink-0 text-danger" />
-              <span className="truncate font-mono text-[12px] leading-none text-danger">
-                保存失败：{saveError}
-              </span>
-            </span>
-          ) : (
-            slowSave && (
-              <span className="flex items-center" role="status">
-                <Dot />
-                <span className="font-mono text-[12px] leading-none text-muted">保存中…</span>
-              </span>
-            )
-          )}
-        </motion.div>
+        </SwapFade>
       </div>
+
+      {/* 保存状态。以前 store 里记了 error 却没人渲染，自动保存失败时界面上完全看不出来 */}
+      {saveError ? (
+        <span
+          className="flex min-w-0 max-w-[50%] items-center px-1.5"
+          role="status"
+          title={saveError}
+        >
+          <AlertTriangle size={11} strokeWidth={2} className="mr-1.5 shrink-0 text-danger" />
+          <span className="truncate font-mono text-[12px] leading-none text-danger">
+            保存失败：{saveError}
+          </span>
+        </span>
+      ) : (
+        slowSave && (
+          <span
+            className="shrink-0 px-1.5 font-mono text-[12px] leading-none text-muted"
+            role="status"
+          >
+            保存中…
+          </span>
+        )
+      )}
+      {/* 做客时这一篇由主持人存：分清「这台电脑上留着」和「主持人已经存下」（docs/协同编辑.md §24） */}
+      {guestCopy && (
+        <span
+          className="shrink-0 px-1.5 font-mono text-[12px] leading-none text-muted"
+          role="status"
+          title={
+            guestCopy === "kept"
+              ? "主持人还没存下你刚打的字：这台电脑上另留了一份，断线、关掉也在（回收站里找得到）"
+              : "你打的字主持人都存下了"
+          }
+        >
+          {guestCopy === "kept" ? "本机已保留" : "已同步给主持人"}
+        </span>
+      )}
 
       {onHistory && (
         <button
@@ -898,10 +1111,9 @@ function StatusBar({
           onClick={onHistory}
           aria-label="历史版本"
           title="历史版本"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint
-                     transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
+          className={cn(BAR_BUTTON, "hover:bg-raised hover:text-ink")}
         >
-          <History size={13.5} strokeWidth={1.8} />
+          <History size={13} strokeWidth={1.8} />
         </button>
       )}
 
@@ -911,10 +1123,9 @@ function StatusBar({
           onClick={onReveal}
           aria-label="在文件夹中显示"
           title="在文件夹中显示"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint
-                     transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
+          className={cn(BAR_BUTTON, "hover:bg-raised hover:text-ink")}
         >
-          <FolderOpen size={13.5} strokeWidth={1.8} />
+          <FolderOpen size={13} strokeWidth={1.8} />
         </button>
       )}
 
@@ -924,10 +1135,9 @@ function StatusBar({
           onClick={onDelete}
           aria-label="删除"
           title="删除（可以撤销）"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint
-                     transition-colors duration-[140ms] hover:bg-danger/10 hover:text-danger"
+          className={cn(BAR_BUTTON, "hover:bg-danger/10 hover:text-danger")}
         >
-          <Trash2 size={13.5} strokeWidth={1.8} />
+          <Trash2 size={13} strokeWidth={1.8} />
         </button>
       )}
     </footer>

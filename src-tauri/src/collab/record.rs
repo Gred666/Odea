@@ -1,14 +1,16 @@
 /* ============================================================
 会话状态落盘（docs/协同编辑.md §3）：崩溃、强退以后接得上。
 
-应用数据目录的 collab/ 下，同一时刻最多一套主持、一套做客：
+应用数据目录的 collab/ 下，一个会话一个文件夹（docs/协同编辑.md §25.2）：主持的在 host/<会话 id>/，
+做客的在 guest/<随机 id>/（「附近」进来的没有会话 id）。文件夹里：
 - host.json：主持人的会话 id、邀请密钥、默认权限、标题、是哪篇笔记、允许过谁（成员号、权限）、
   拉黑了谁、端点绑的端口。Rust 的 Host 一有变化就重写（Host::persist）
 - guest.json：访客的邀请链接（或者「附近」点进来的主持人地址）、只直连没有、标题、主持人的名字、
   开着哪几篇。命令层写
 - host-docs/、guest-docs/：每篇一个 Loro 文档的快照（文件名是文档 id 的十六进制）。前端每隔几秒、
   每次存盘时交过来（collab_send 的 PIPE_SAVE），这里只存字节，不懂内容。一条连接里好几篇（设计 §22.5）
-  以前只有一个 host.loro / guest.loro（版本 1），升上来以后那种记录不认
+  以前只有一个 host.loro / guest.loro（版本 1），升上来以后那种记录不认。
+  2026-10-27 以前同一时刻最多一套主持、一套做客，直接放在 collab/ 下：第一次读时搬进各自的文件夹
 
 正常结束（停止协作、离开）就删掉。重启后还在 = 上次没正常结束：主持人那边出「继续上次的协作」，
 用同一个会话 id、邀请密钥和端口重新起端点，允许过的人不再问，访客的断线重连自己就接上了；
@@ -268,6 +270,98 @@ pub fn remove(dir: &Path, role: Role) {
             let _ = std::fs::remove_file(dir.join(old));
         }
     }
+}
+
+/// 主持的这一次放在哪
+pub fn host_dir(base: &Path, session: &[u8; 16]) -> PathBuf {
+    base.join("host").join(data_encoding::HEXLOWER.encode(session))
+}
+
+/// 做客的这一次放在哪（key 是命令层起的随机 id）
+pub fn guest_dir(base: &Path, key: &str) -> PathBuf {
+    base.join("guest").join(key)
+}
+
+/// 新的一次做客的文件夹名
+pub fn new_guest_key() -> String {
+    data_encoding::HEXLOWER.encode(&super::endpoint::random::<8>())
+}
+
+/// 2026-10-27 以前的那一套（直接在 collab/ 下）搬进各自的文件夹
+fn migrate(base: &Path) {
+    let move_into = |role: Role, target: PathBuf| {
+        let (meta, docs) = role.files();
+        if std::fs::create_dir_all(&target).is_err() {
+            return;
+        }
+        let _ = std::fs::rename(base.join(meta), target.join(meta));
+        if base.join(docs).exists() {
+            let _ = std::fs::rename(base.join(docs), target.join(docs));
+        }
+    };
+    if let Some(record) = load_json::<HostRecord>(base, HOST_FILE) {
+        match record.session_bytes() {
+            Some(session) => move_into(Role::Host, host_dir(base, &session)),
+            None => remove(base, Role::Host),
+        }
+    }
+    if base.join(GUEST_FILE).exists() {
+        move_into(Role::Guest, guest_dir(base, &new_guest_key()));
+    }
+}
+
+/// 一种角色的几个会话文件夹
+fn session_dirs(base: &Path, role: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(base.join(role)) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.path())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+/// 上次没正常结束的几次主持：(会话文件夹, 记录)。半截的（快照一篇都没有）顺手删掉
+pub fn hosts_left(base: &Path) -> Vec<(PathBuf, HostRecord)> {
+    migrate(base);
+    session_dirs(base, "host")
+        .into_iter()
+        .filter_map(|dir| match host_left(&dir) {
+            Some(record) => Some((dir, record)),
+            None => {
+                let _ = std::fs::remove_dir_all(&dir);
+                None
+            }
+        })
+        .collect()
+}
+
+/// 上次没正常结束的几次做客
+pub fn guests_left(base: &Path) -> Vec<(PathBuf, GuestRecord)> {
+    migrate(base);
+    session_dirs(base, "guest")
+        .into_iter()
+        .filter_map(|dir| match guest_left(&dir) {
+            Some(record) => Some((dir, record)),
+            None => {
+                let _ = std::fs::remove_dir_all(&dir);
+                None
+            }
+        })
+        .collect()
+}
+
+/// 会话文件夹的名字（前端按它说是哪一次）
+pub fn dir_key(dir: &Path) -> String {
+    dir.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// 正常结束：这个会话的文件夹整个删掉
+pub fn remove_session(dir: &Path) {
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// 上次没正常结束的主持（说明和至少一篇的快照都在才算）

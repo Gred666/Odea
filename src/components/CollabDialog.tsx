@@ -11,7 +11,17 @@ import {
   reachSummary,
 } from "@/collab/reach";
 import { useRelays } from "@/collab/relayStore";
-import { type CollabTreeDoc, type JoinRequest, endText, linkKind, useCollab } from "@/collab/store";
+import {
+  type CollabSessionState,
+  type CollabTreeDoc,
+  type JoinRequest,
+  type NearbyKnock,
+  endText,
+  hostNameOf,
+  linkKind,
+  sessionName,
+  useCollab,
+} from "@/collab/store";
 import { useData } from "@/data/store";
 import type { Diagnosis, MemberInfo, Permission, Reach, Scope } from "@/lib/bindings";
 import { cn } from "@/lib/cn";
@@ -22,26 +32,33 @@ import {
   CircleAlert,
   CircleCheck,
   Copy,
+  FileText,
+  Folder,
+  Library,
   Link2,
   LoaderCircle,
   LogOut,
+  Plus,
   RefreshCw,
   Users,
   X,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { BannerButton } from "./ConflictBanner";
 
 /* ============================================================
-   协作的界面（docs/协同编辑.md §8）：
-   - CollabDialog：主持人的邀请链接、加入请求、成员；访客的加入、连接状态、离开
-   - CollabRequests：有人想加入时底部的提示卡（对话框关着的时候）
-   - CollabPresence：正文区右上角的协作标签（谁在、点一下回到协作的那篇 / 打开对话框）
+   协作的界面（docs/协同编辑.md §8、§25）：
+   - CollabDialog：顶上一排会话（主持的、做客的，同时好几个），点哪个看哪个；最后是「加入」。
+     主持的一页是邀请链接、加入请求、成员；做客的一页是连接状态、离开；「加入」那一页是粘链接、附近
+   - CollabRequests：有人想加入时底部的提示卡（对话框关着的时候）。几个会话的都在这里，写清楚要进哪一个；
+     「附近」进来、主持着好几个时，卡片上挑进哪一个
+   - CollabPresence：正文区右上角的协作标签（这一篇所在的那次协作谁在，点一下打开它）
    - CollabBanner：做客那一篇顶上的一行（重新连接中、只读、协作结束了）
 
    P10.1 的遗留：加入表单下面是「附近」（同一个网络里正在分享的人，点一下请求加入）；
-   CollabResume 是重启后底部的「继续上次的协作」卡（上次没正常结束的）。
+   CollabResume 是重启后底部的「继续上次的协作」卡（上次没正常结束的，一次一张）。
 
    互联网上（P10.2，设计 §8.4、§8.5）：主持人的链接下面是分享前自检（谁能加入、局域网 / IPv6 /
    端口映射 / 中继各怎样，collab/reach.ts 拼的话）；访客连不上时 3 秒内给结论和下一步，能生成
@@ -49,7 +66,7 @@ import { BannerButton } from "./ConflictBanner";
 
    外壳和同步对话框一样：遮罩 + 从标题栏往下展开的实心卡片（popoverCard）。展开时只量第一帧，
    所以「正在准备邀请链接」和链接本身占同样的高度（技术方案 §10.1 第 5 条）。
-   提示卡、标签只淡 opacity，不位移（CLAUDE.md 动效规矩第 1 条）。
+   会话条换一个看是当场换（只变底色、字色），不淡入不位移；提示卡、标签只淡 opacity（CLAUDE.md 动效规矩第 1 条）。
    ============================================================ */
 
 const HEADER = 52;
@@ -58,7 +75,9 @@ const DOWNLOAD = "https://github.com/Gred666/Odea/releases/latest";
 export function CollabDialog() {
   const open = useCollab((s) => s.dialogOpen);
   const close = useCollab((s) => s.closeDialog);
-  const phase = useCollab((s) => s.phase);
+  const focused = useCollab((s) => (s.focus === null ? undefined : s.sessions[s.focus]));
+  const any = useCollab((s) => s.order.length > 0);
+  const notice = useCollab((s) => s.notice);
 
   useEffect(() => {
     if (!open) return;
@@ -73,7 +92,13 @@ export function CollabDialog() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [open, close]);
 
-  const hosting = phase === "preparing" || phase === "hosting";
+  const heading = !focused
+    ? "加入协作"
+    : focused.role === "host"
+      ? "邀请协作"
+      : focused.phase === "joining"
+        ? "加入协作"
+        : "协作";
   return (
     <AnimatePresence>
       {open && (
@@ -105,7 +130,7 @@ export function CollabDialog() {
               initial="hidden"
               animate="shown"
               exit="gone"
-              className="pointer-events-auto relative w-[460px] max-w-[calc(100vw-48px)]
+              className="pointer-events-auto relative w-[480px] max-w-[calc(100vw-48px)]
                          overflow-clip rounded-2xl bg-canvas shadow-modal ring-1 ring-line-strong"
             >
               <div
@@ -113,9 +138,7 @@ export function CollabDialog() {
                 style={{ height: HEADER }}
               >
                 <Users size={15} strokeWidth={2} className="shrink-0 text-faint" />
-                <p className="flex-1 text-[14px] font-medium text-ink">
-                  {hosting ? "邀请协作" : phase === "idle" ? "加入协作" : "协作"}
-                </p>
+                <p className="flex-1 text-[14px] font-medium text-ink">{heading}</p>
                 <button
                   type="button"
                   aria-label="关闭"
@@ -126,14 +149,118 @@ export function CollabDialog() {
                   <X size={14} strokeWidth={2} />
                 </button>
               </div>
+              {any && <SessionStrip />}
               <div className="scroll-thin max-h-[64vh] overflow-y-auto px-5 py-4">
-                {hosting ? <HostBody /> : phase === "idle" ? <JoinForm /> : <GuestBody />}
+                {notice && (
+                  <p data-collab-notice className="mb-3 text-[12.5px] leading-[1.6] text-accent">
+                    {notice}
+                  </p>
+                )}
+                <Knocks />
+                {!focused ? (
+                  <JoinForm />
+                ) : focused.role === "host" ? (
+                  <HostBody key={focused.id} id={focused.id} />
+                ) : (
+                  <GuestBody key={focused.id} id={focused.id} />
+                )}
               </div>
             </motion.div>
           </div>
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+/* ---------------- 会话条 ---------------- */
+
+/** 顶上一排：每个会话一格，最后是「加入」。多了横着滚 */
+function SessionStrip() {
+  const order = useCollab((s) => s.order);
+  const focus = useCollab((s) => s.focus);
+  const setFocus = useCollab((s) => s.setFocus);
+  return (
+    <div
+      role="tablist"
+      aria-label="正在进行的协作"
+      data-collab-strip
+      className="scroll-thin flex items-center gap-1 overflow-x-auto border-b border-line px-3 py-2"
+    >
+      {order.map((id) => (
+        <SessionTab key={id} id={id} active={focus === id} />
+      ))}
+      <button
+        type="button"
+        role="tab"
+        aria-selected={focus === null}
+        data-collab-tab-join
+        onClick={() => setFocus(null)}
+        title="加入别人的协作"
+        className={cn(
+          "flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[12.5px] transition-colors duration-[140ms]",
+          focus === null ? "bg-raised text-ink" : "text-muted hover:bg-raised/60 hover:text-body",
+        )}
+      >
+        <Plus size={13} strokeWidth={2} />
+        加入
+      </button>
+    </div>
+  );
+}
+
+function SessionTab({ id, active }: { id: number; active: boolean }) {
+  const session = useCollab((s) => s.sessions[id]);
+  const setFocus = useCollab((s) => s.setFocus);
+  const noteTitle = useData((s) =>
+    session?.noteId ? s.notes.find((note) => note.id === session.noteId)?.title : undefined,
+  );
+  if (!session) return null;
+  const host = session.role === "guest" ? session.members.find((member) => member.host) : null;
+  const name = sessionName(session, noteTitle);
+  const waiting = session.requests.length > 0;
+  const state = session.status?.state;
+  const trouble = state === "reconnecting" || state === "unreachable";
+  const ended = state === "ended";
+  const Icon =
+    session.scope?.kind === "folder"
+      ? Folder
+      : session.scope?.kind === "vault"
+        ? Library
+        : FileText;
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      data-collab-tab={id}
+      onClick={() => setFocus(id)}
+      title={
+        session.role === "guest" ? `在 ${hostNameOf(session)} 那里：${name}` : `你在主持：${name}`
+      }
+      className={cn(
+        "flex h-7 max-w-[200px] shrink-0 items-center gap-1.5 rounded-md px-2 text-[12.5px]",
+        "transition-colors duration-[140ms]",
+        active ? "bg-raised text-ink" : "text-muted hover:bg-raised/60 hover:text-body",
+        ended && !active && "text-faint",
+      )}
+    >
+      {host ? (
+        <PeerAvatar id={host.id} name={host.name} />
+      ) : session.role === "guest" ? (
+        <LoaderCircle size={13} strokeWidth={2} className="shrink-0 animate-spin text-faint" />
+      ) : (
+        <Icon size={13} strokeWidth={2} className="shrink-0 opacity-80" />
+      )}
+      <span className="min-w-0 truncate">{name}</span>
+      {/* 有人在等你同意 / 连接有问题：一个小点，静态出现 */}
+      {(waiting || trouble) && (
+        <span
+          aria-label={waiting ? "有人想加入" : "连接有问题"}
+          className={cn("size-[6px] shrink-0 rounded-full", waiting ? "bg-accent" : "bg-warning")}
+        />
+      )}
+    </button>
   );
 }
 
@@ -146,24 +273,21 @@ function scopeText(scope: Scope | null, noteTitle: string): string {
   return `「${noteTitle || scope?.name || ""}」`;
 }
 
-function HostBody() {
-  const phase = useCollab((s) => s.phase);
-  const link = useCollab((s) => s.link);
-  const members = useCollab((s) => s.members);
-  const requests = useCollab((s) => s.requests);
-  const noteId = useCollab((s) => s.noteId);
+function HostBody({ id }: { id: number }) {
+  const session = useCollab((s) => s.sessions[id]);
   const stop = useCollab((s) => s.stop);
   const resetInvite = useCollab((s) => s.resetInvite);
-  const reach = useCollab((s) => s.reach);
   const trustedCount = useCollab((s) => s.trusted.length);
-  const outdated = useCollab((s) => s.outdated);
-  const scope = useCollab((s) => s.scope);
-  const noteTitle = useData((s) => s.notes.find((note) => note.id === noteId)?.title ?? "");
-  const title = scopeText(scope, noteTitle);
+  const noteTitle = useData(
+    (s) => s.notes.find((note) => note.id === session?.noteId)?.title ?? "",
+  );
   const [copied, setCopied] = useState(false);
   /** 复制出去的是哪一个：之后地址变了（端口映射到了、换了网络）提醒再复制一次 */
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [pasting, setPasting] = useState(false);
+  if (!session) return null;
+  const { phase, link, requests, reach, outdated, scope } = session;
+  const title = scopeText(scope, noteTitle);
 
   const copy = async () => {
     if (!link) return;
@@ -235,13 +359,13 @@ function HostBody() {
         </p>
       </section>
 
-      <DialBackLine />
+      <DialBackLine dialBack={session.dialBack} />
       {pasting && <CallbackField onDone={() => setPasting(false)} />}
 
       {requests.length > 0 && (
         <section className="flex flex-col gap-1.5">
           {requests.map((request) => (
-            <RequestRow key={request.request} request={request} title={title} />
+            <RequestRow key={request.request} id={id} request={request} title={title} />
           ))}
         </section>
       )}
@@ -254,7 +378,7 @@ function HostBody() {
         </p>
       )}
 
-      <MemberList members={members} editable />
+      <MemberList session={session} editable />
 
       <div className="flex items-center gap-1.5 border-t border-line pt-3">
         <NameField />
@@ -266,12 +390,12 @@ function HostBody() {
           </BannerButton>
         )}
         {phase === "hosting" && (
-          <BannerButton onClick={() => void resetInvite()}>
+          <BannerButton onClick={() => void resetInvite(id)}>
             <RefreshCw size={12} strokeWidth={2} />
             换一个链接
           </BannerButton>
         )}
-        <BannerButton danger onClick={() => void stop()}>
+        <BannerButton danger onClick={() => void stop(id)}>
           停止协作
         </BannerButton>
       </div>
@@ -338,8 +462,7 @@ function ReachRows({ rows }: { rows: ReachRow[] }) {
 }
 
 /** 按回连链接往访客那边拨的进展 */
-function DialBackLine() {
-  const dialBack = useCollab((s) => s.dialBack);
+function DialBackLine({ dialBack }: { dialBack: CollabSessionState["dialBack"] }) {
   if (!dialBack) return null;
   return (
     <p
@@ -413,7 +536,7 @@ function CallbackField({ onDone }: { onDone: () => void }) {
   );
 }
 
-function RequestRow({ request, title }: { request: JoinRequest; title: string }) {
+function RequestRow({ id, request, title }: { id: number; request: JoinRequest; title: string }) {
   const answer = useCollab((s) => s.answer);
   return (
     <div
@@ -425,7 +548,7 @@ function RequestRow({ request, title }: { request: JoinRequest; title: string })
         {request.name}
         <span className="text-muted">{requestText(request, title)}</span>
       </p>
-      <AnswerButtons onAnswer={(allow) => void answer(request.request, allow)} />
+      <AnswerButtons onAnswer={(allow) => void answer(id, request.request, allow)} />
     </div>
   );
 }
@@ -433,7 +556,7 @@ function RequestRow({ request, title }: { request: JoinRequest; title: string })
 /** 加入请求后半句：拿着链接的、「附近」点进来的、经别的访客转发来的（设计 §20.9） */
 function requestText(request: JoinRequest, title: string): string {
   if (request.via) return ` 经由 ${request.via} 转发，想加入${title}`;
-  return request.invited ? ` 想加入${title}` : " 在同一个网络里，想加入";
+  return request.invited ? ` 想加入${title}` : ` 在同一个网络里，想加入${title}`;
 }
 
 function AnswerButtons({
@@ -481,7 +604,132 @@ function AnswerButtons({
   );
 }
 
-function MemberList({ members, editable }: { members: MemberInfo[]; editable?: boolean }) {
+/* ---------------- 「附近」进来、主持着好几个：挑进哪一个（设计 §25.1） ---------------- */
+
+/** 对话框里：等着挑的那几位 */
+function Knocks() {
+  const knocks = useCollab((s) => s.knocks);
+  if (!knocks.length) return null;
+  return (
+    <section className="mb-4 flex flex-col gap-1.5">
+      {knocks.map((knock) => (
+        <KnockCard key={knock.request} knock={knock} />
+      ))}
+    </section>
+  );
+}
+
+/** 主持着的、已经准备好的几个（挑「附近」那位进哪一个） */
+function useHostedSessions(): Array<{ id: number; name: string }> {
+  const notes = useData((s) => s.notes);
+  const sessions = useCollab(
+    useShallow((s) =>
+      s.order
+        .map((id) => s.sessions[id])
+        .filter(
+          (session): session is CollabSessionState =>
+            session?.role === "host" && session.phase === "hosting",
+        ),
+    ),
+  );
+  return sessions.map((session) => ({
+    id: session.id,
+    name: sessionName(session, notes.find((note) => note.id === session.noteId)?.title),
+  }));
+}
+
+/**
+ * 「附近」点进来一位、我主持着好几个：挑进哪一个（点了就进，按选的权限，不再问第二遍）。
+ * inverted 是底部提示卡（深底白字）
+ */
+function KnockCard({ knock, inverted }: { knock: NearbyKnock; inverted?: boolean }) {
+  const answerKnock = useCollab((s) => s.answerKnock);
+  const hosted = useHostedSessions();
+  const [permission, setPermission] = useState<Permission>("edit");
+  const chip = (active: boolean) =>
+    cn(
+      "rounded-md px-2 py-1 text-[12px] transition-colors duration-[140ms]",
+      inverted
+        ? active
+          ? "bg-canvas/20 text-canvas"
+          : "text-canvas/60 hover:text-canvas"
+        : active
+          ? "bg-canvas text-ink shadow-[0_0_0_1px_var(--color-line)]"
+          : "text-muted hover:text-body",
+    );
+  return (
+    <div
+      data-collab-knock
+      className={cn(
+        "flex flex-col gap-2 rounded-lg px-3 py-2.5",
+        inverted ? "" : "border border-accent-line bg-accent-wash",
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <PeerAvatar id={knock.id} name={knock.name} />
+        <p className={cn("min-w-0 flex-1 truncate text-[13px]", inverted ? "" : "text-ink")}>
+          {knock.name}
+          <span className={inverted ? "opacity-70" : "text-muted"}>
+            {" 在同一个网络里，想加入：进哪一个？"}
+          </span>
+        </p>
+        <span
+          className={cn(
+            "flex shrink-0 items-center rounded-md p-0.5",
+            inverted ? "bg-canvas/10" : "bg-raised",
+          )}
+        >
+          <button
+            type="button"
+            aria-pressed={permission === "edit"}
+            onClick={() => setPermission("edit")}
+            className={chip(permission === "edit")}
+          >
+            可编辑
+          </button>
+          <button
+            type="button"
+            aria-pressed={permission === "read"}
+            onClick={() => setPermission("read")}
+            className={chip(permission === "read")}
+          >
+            只读
+          </button>
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 pl-[26px]">
+        {hosted.map((session) => (
+          <button
+            key={session.id}
+            type="button"
+            data-collab-knock-into={session.id}
+            onClick={() => void answerKnock(knock.request, session.id, permission)}
+            className={cn(
+              "max-w-[200px] truncate rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors duration-[140ms]",
+              inverted
+                ? "bg-canvas text-ink hover:bg-canvas/85"
+                : "bg-accent text-accent-ink hover:bg-accent-hover",
+            )}
+          >
+            {session.name}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => void answerKnock(knock.request, null, permission)}
+          className={cn(
+            "rounded-md px-2 py-1 text-[12px] transition-colors duration-[140ms]",
+            inverted ? "text-canvas/70 hover:bg-canvas/15" : "text-muted hover:bg-raised",
+          )}
+        >
+          拒绝
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MemberList({ session, editable }: { session: CollabSessionState; editable?: boolean }) {
   const identity = useCollab((s) => s.identity);
   const setPermission = useCollab((s) => s.setPermission);
   const kick = useCollab((s) => s.kick);
@@ -489,10 +737,11 @@ function MemberList({ members, editable }: { members: MemberInfo[]; editable?: b
   const remember = useCollab((s) => s.remember);
   const forget = useCollab((s) => s.forget);
   const notes = useData((s) => s.notes);
+  const { id, members, scope } = session;
   if (!members.length) return null;
   /** 主持人这边：他开着哪几篇（一篇的范围不用说） */
   const viewing = (member: MemberInfo) =>
-    editable && useCollab.getState().scope?.kind !== "doc"
+    editable && scope?.kind !== "doc"
       ? member.docs
           .map((doc) => notes.find((note) => note.id === doc)?.title)
           .filter(Boolean)
@@ -553,14 +802,14 @@ function MemberList({ members, editable }: { members: MemberInfo[]; editable?: b
                     aria-label={`${member.name} 的权限`}
                     value={member.permission}
                     onChange={(event) =>
-                      void setPermission(member.member, event.target.value as Permission)
+                      void setPermission(id, member.member, event.target.value as Permission)
                     }
                     className="rounded-md bg-transparent px-1 py-0.5 text-[12px] text-body hover:bg-raised"
                   >
                     <option value="edit">可编辑</option>
                     <option value="read">只读</option>
                   </select>
-                  <BannerButton danger onClick={() => void kick(member.member)}>
+                  <BannerButton danger onClick={() => void kick(id, member.member)}>
                     移出
                   </BannerButton>
                 </>
@@ -767,23 +1016,19 @@ function NearbyList() {
   );
 }
 
-function GuestBody() {
-  const status = useCollab((s) => s.status);
-  const members = useCollab((s) => s.members);
-  const title = useCollab((s) => s.title);
-  const permission = useCollab((s) => s.permission);
-  const showShared = useCollab((s) => s.showShared);
+function GuestBody({ id }: { id: number }) {
+  const session = useCollab((s) => s.sessions[id]);
+  const shownHere = useCollab((s) => s.showShared && s.shownSession === id);
   const setShowShared = useCollab((s) => s.setShowShared);
   const stop = useCollab((s) => s.stop);
   const close = useCollab((s) => s.closeDialog);
-  const relayed = useCollab((s) => s.relayed);
-  const scope = useCollab((s) => s.scope);
-  const current = useCollab((s) => s.current);
-  const host = members.find((member) => member.host)?.name ?? "主持人";
+  if (!session) return null;
+  const { status, members, title, permission, relayed, scope, current } = session;
+  const host = hostNameOf(session);
   const many = !!scope && scope.kind !== "doc";
 
   if (status?.state === "unreachable") {
-    return <Unreachable diagnosis={status.diagnosis} host={host} />;
+    return <Unreachable id={id} diagnosis={status.diagnosis} host={host} />;
   }
 
   const line = (() => {
@@ -823,25 +1068,27 @@ function GuestBody() {
           {line.text}
         </p>
       </div>
-      {many && status?.state === "connected" && <SharedTree />}
-      <MemberList members={members} />
-      {status?.state === "connected" && <ForwardLink host={host} />}
+      {many && status?.state === "connected" && <SharedTree id={id} />}
+      <MemberList session={session} />
+      {status?.state === "connected" && <ForwardLink id={id} host={host} />}
       <div className="flex items-center gap-1.5 border-t border-line pt-3">
         <NameField />
         <span className="flex-1" />
-        {status?.state === "connected" && !showShared && (!many || current) && (
-          <BannerButton
-            onClick={() => {
-              setShowShared(true);
-              close();
-            }}
-          >
-            回到这篇
-          </BannerButton>
-        )}
+        {(status?.state === "connected" || status?.state === "reconnecting") &&
+          !shownHere &&
+          current && (
+            <BannerButton
+              onClick={() => {
+                setShowShared(true, id);
+                close();
+              }}
+            >
+              回到这篇
+            </BannerButton>
+          )}
         {/* 文件夹、整个仓库的范围存的是开着的那一篇：还没开就没有可存的 */}
-        {members.length > 0 && (!many || current) && <SaveCopyButton />}
-        <BannerButton danger onClick={() => void stop()}>
+        {members.length > 0 && current && <SaveCopyButton id={id} />}
+        <BannerButton danger onClick={() => void stop(id)}>
           <LogOut size={12} strokeWidth={2} />
           {line.ended ? "关闭" : "离开"}
         </BannerButton>
@@ -854,28 +1101,29 @@ function GuestBody() {
  * 文件夹、整个仓库的范围（设计 §22.5）：主持人给的树，按文件夹分开列，点一篇就开它；能写的还能新建一篇。
  * 协作对话框里有，访客窗口的左边也是它（compact）
  */
-export function SharedTree({ compact }: { compact?: boolean }) {
-  const tree = useCollab((s) => s.tree);
-  const current = useCollab((s) => s.current);
-  const openDocs = useCollab((s) => s.openDocs);
+export function SharedTree({ id, compact }: { id: number; compact?: boolean }) {
+  const session = useCollab((s) => s.sessions[id]);
+  const shownHere = useCollab((s) => s.shownSession === id);
   const openShared = useCollab((s) => s.openShared);
   const createShared = useCollab((s) => s.createShared);
-  const permission = useCollab((s) => s.permission);
   const [newTitle, setNewTitle] = useState("");
+  if (!session) return null;
+  const { tree, openDocs, permission } = session;
+  const current = shownHere ? session.current : null;
   const docs = tree?.docs ?? [];
   const folders = [...new Set(docs.map((doc) => doc.folder))];
   const create = async () => {
     const title = newTitle.trim();
     if (!title) return;
     setNewTitle("");
-    await createShared("", title);
+    await createShared(id, "", title);
   };
   const row = (doc: CollabTreeDoc) => (
     <li key={doc.id}>
       <button
         type="button"
         data-collab-tree-doc
-        onClick={() => void openShared(doc.id)}
+        onClick={() => void openShared(id, doc.id)}
         className={cn(
           "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-[140ms]",
           doc.id === current ? "bg-raised text-ink" : "text-body hover:bg-raised/60",
@@ -942,9 +1190,9 @@ export function SharedTree({ compact }: { compact?: boolean }) {
  * 转发链接（设计 §20.9）：有人连不上主持人、却连得上我（比如和我在同一个网络里，主持人只有我够得着），
  * 我把这个链接发给他，他经我加入。主持人照样确认、照样管他的权限；我这边只是一根管子
  */
-function ForwardLink({ host }: { host: string }) {
-  const forward = useCollab((s) => s.forward);
-  const busy = useCollab((s) => s.forwardBusy);
+function ForwardLink({ id, host }: { id: number; host: string }) {
+  const forward = useCollab((s) => s.sessions[id]?.forward ?? null);
+  const busy = useCollab((s) => s.sessions[id]?.forwardBusy ?? false);
   const make = useCollab((s) => s.makeForwardLink);
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -961,7 +1209,7 @@ function ForwardLink({ host }: { host: string }) {
     return (
       <p className="flex items-center gap-2 text-[12px] leading-[1.65] text-muted">
         <span className="flex-1">有人连不上 {host}、却连得上你？发一个转发链接给他，经你加入</span>
-        <BannerButton disabled={busy} onClick={() => void make()}>
+        <BannerButton disabled={busy} onClick={() => void make(id)}>
           {busy ? (
             <LoaderCircle size={12} strokeWidth={2} className="animate-spin" />
           ) : (
@@ -1004,10 +1252,10 @@ function ForwardLink({ host }: { host: string }) {
 }
 
 /** 连不上：卡在哪、为什么、下一步；能生成回连链接。不算结束：后台接着试 */
-function Unreachable({ diagnosis, host }: { diagnosis: Diagnosis; host: string }) {
+function Unreachable({ id, diagnosis, host }: { id: number; diagnosis: Diagnosis; host: string }) {
   const stop = useCollab((s) => s.stop);
-  const callback = useCollab((s) => s.callback);
-  const busy = useCollab((s) => s.callbackBusy);
+  const callback = useCollab((s) => s.sessions[id]?.callback ?? null);
+  const busy = useCollab((s) => s.sessions[id]?.callbackBusy ?? false);
   const makeCallback = useCollab((s) => s.makeCallback);
   const error = useCollab((s) => s.error);
   const [copied, setCopied] = useState(false);
@@ -1082,7 +1330,7 @@ function Unreachable({ diagnosis, host }: { diagnosis: Diagnosis; host: string }
         <NameField />
         <span className="flex-1" />
         {text.callback && !callback && (
-          <BannerButton disabled={busy} onClick={() => void makeCallback()}>
+          <BannerButton disabled={busy} onClick={() => void makeCallback(id)}>
             {busy ? (
               <LoaderCircle size={12} strokeWidth={2} className="animate-spin" />
             ) : (
@@ -1092,7 +1340,7 @@ function Unreachable({ diagnosis, host }: { diagnosis: Diagnosis; host: string }
           </BannerButton>
         )}
         <BannerButton onClick={() => useRelays.getState().openRelays()}>配中继…</BannerButton>
-        <BannerButton danger onClick={() => void stop()}>
+        <BannerButton danger onClick={() => void stop(id)}>
           <LogOut size={12} strokeWidth={2} />
           离开
         </BannerButton>
@@ -1101,7 +1349,7 @@ function Unreachable({ diagnosis, host }: { diagnosis: Diagnosis; host: string }
   );
 }
 
-function SaveCopyButton() {
+function SaveCopyButton({ id }: { id: number }) {
   const saveCopy = useCollab((s) => s.saveCopy);
   const [busy, setBusy] = useState(false);
   return (
@@ -1110,11 +1358,11 @@ function SaveCopyButton() {
       onClick={async () => {
         setBusy(true);
         try {
-          const id = await saveCopy();
-          if (id) {
+          const note = await saveCopy(id);
+          if (note) {
             useCollab.getState().setShowShared(false);
             useCollab.getState().closeDialog();
-            openDocument({ kind: "note", id });
+            openDocument({ kind: "note", id: note });
           }
         } finally {
           setBusy(false);
@@ -1128,22 +1376,60 @@ function SaveCopyButton() {
 
 /* ---------------- 加入请求的提示卡（对话框关着的时候） ---------------- */
 
+/** 几个会话里等着同意的人（每一位带着要进哪一个） */
+function usePendingRequests(): Array<{ id: number; request: JoinRequest; title: string }> {
+  const notes = useData((s) => s.notes);
+  const sessions = useCollab(
+    useShallow((s) =>
+      s.order
+        .map((id) => s.sessions[id])
+        .filter(
+          (session): session is CollabSessionState =>
+            session?.role === "host" && session.requests.length > 0,
+        ),
+    ),
+  );
+  return sessions.flatMap((session) => {
+    const title = scopeText(
+      session.scope,
+      notes.find((note) => note.id === session.noteId)?.title ?? "",
+    );
+    return session.requests.map((request) => ({ id: session.id, request, title }));
+  });
+}
+
 export function CollabRequests() {
-  const requests = useCollab((s) => s.requests);
+  const pending = usePendingRequests();
+  const knocks = useCollab((s) => s.knocks);
   const dialogOpen = useCollab((s) => s.dialogOpen);
-  const noteId = useCollab((s) => s.noteId);
   const answer = useCollab((s) => s.answer);
-  const title = useData((s) => s.notes.find((note) => note.id === noteId)?.title ?? "");
-  const shown = dialogOpen ? [] : requests.slice(0, 3);
+  const shown = dialogOpen ? [] : pending.slice(0, 3);
+  const shownKnocks = dialogOpen ? [] : knocks.slice(0, 2);
   return (
     <AnimatePresence initial={false}>
-      {shown.map((request) => (
+      {shownKnocks.map((knock) => (
         <motion.div
-          key={request.request}
+          key={`knock-${knock.request}`}
+          role="alertdialog"
+          aria-label={`${knock.name} 想加入`}
+          data-collab-knock-toast
+          // 只淡入：不位移、不缩放（CLAUDE.md 动效规矩第 1 条）
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0, transition: tween.fast }}
+          transition={tween.base}
+          className="pointer-events-auto w-[480px] max-w-[calc(100vw-48px)] rounded-xl bg-ink
+                     text-canvas shadow-float"
+        >
+          <KnockCard knock={knock} inverted />
+        </motion.div>
+      ))}
+      {shown.map(({ id, request, title }) => (
+        <motion.div
+          key={`${id}-${request.request}`}
           role="alertdialog"
           aria-label={`${request.name} 想加入`}
           data-collab-request-toast
-          // 只淡入：不位移、不缩放（CLAUDE.md 动效规矩第 1 条）
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: tween.fast }}
@@ -1156,7 +1442,7 @@ export function CollabRequests() {
             {request.name}
             <span className="opacity-70">{requestText(request, title)}</span>
           </span>
-          <AnswerButtons inverted onAnswer={(allow) => void answer(request.request, allow)} />
+          <AnswerButtons inverted onAnswer={(allow) => void answer(id, request.request, allow)} />
         </motion.div>
       ))}
     </AnimatePresence>
@@ -1166,30 +1452,32 @@ export function CollabRequests() {
 /* ---------------- 重启后：继续上次没正常结束的协作 ---------------- */
 
 /**
- * 上次协作时 Odea 崩了、被强退了：底部问一句。主持人「继续协作」用同一个会话 id 和端口重新起来，
- * 访客那边自己接上；访客「重新加入」用落盘的状态，断线期间各自写的同步时补齐。只淡 opacity
+ * 上次协作时 Odea 崩了、被强退了：底部问一句，一次一张（最多三张）。主持人「继续协作」用同一个会话 id
+ * 和端口重新起来，访客那边自己接上；访客「重新加入」用落盘的状态，断线期间各自写的同步时补齐。只淡 opacity
  */
 export function CollabResume() {
   const resume = useCollab((s) => s.resume);
-  const phase = useCollab((s) => s.phase);
   const notes = useData((s) => s.notes);
   const items: Array<{ key: string; host: boolean; text: string; action: string }> = [];
-  if (resume?.host && phase === "idle") {
-    const note = notes.find((item) => item.id === resume.host!.note);
-    const title = note?.title ?? resume.host.title;
-    const who = resume.host.guests ? `和 ${resume.host.guests} 个人一起` : "";
+  for (const host of resume?.hosts ?? []) {
+    const note = notes.find((item) => item.id === host.note);
+    const what =
+      host.scope && host.scope.kind !== "doc"
+        ? scopeText(host.scope, "")
+        : `「${note?.title ?? host.title}」`;
+    const who = host.guests ? `和 ${host.guests} 个人一起` : "";
     items.push({
-      key: "host",
+      key: host.key,
       host: true,
-      text: `上次${who}编辑「${title}」时 Odea 没有正常退出`,
+      text: `上次${who}编辑${what}时 Odea 没有正常退出`,
       action: "继续协作",
     });
   }
-  if (resume?.guest && phase === "idle") {
-    const host = resume.guest.hostName || "主持人";
-    const title = resume.guest.title ? `「${resume.guest.title}」` : "";
+  for (const guest of resume?.guests ?? []) {
+    const host = guest.hostName || "主持人";
+    const title = guest.title ? `「${guest.title}」` : "";
     items.push({
-      key: "guest",
+      key: guest.key,
       host: false,
       text: `上次在 ${host} 那里做客${title}时 Odea 没有正常退出`,
       action: "重新加入",
@@ -1197,9 +1485,9 @@ export function CollabResume() {
   }
   return (
     <AnimatePresence initial={false}>
-      {items.map((item) => (
+      {items.slice(0, 3).map((item) => (
         <motion.div
-          key={item.key}
+          key={`${item.host ? "host" : "guest"}-${item.key}`}
           role="alertdialog"
           aria-label={item.text}
           data-collab-resume
@@ -1216,8 +1504,8 @@ export function CollabResume() {
             type="button"
             onClick={() =>
               void (item.host
-                ? useCollab.getState().resumeHost()
-                : useCollab.getState().resumeGuest())
+                ? useCollab.getState().resumeHost(item.key)
+                : useCollab.getState().resumeGuest(item.key))
             }
             className="shrink-0 rounded-md bg-canvas px-2 py-1 text-[12px] font-medium text-ink
                        transition-colors duration-[140ms] hover:bg-canvas/85"
@@ -1226,7 +1514,7 @@ export function CollabResume() {
           </button>
           <button
             type="button"
-            onClick={() => void useCollab.getState().discardResume(item.host)}
+            onClick={() => void useCollab.getState().discardResume(item.host, item.key)}
             className="shrink-0 rounded-md px-2 py-1 text-[12px] text-canvas/70
                        transition-colors duration-[140ms] hover:bg-canvas/15"
           >
@@ -1240,66 +1528,90 @@ export function CollabResume() {
 
 /* ---------------- 正文区右上角的协作标签 ---------------- */
 
+/** 正文区这一篇在哪个会话里：主持的笔记、做客显示的那一篇。不在协作里是 null */
+function useSessionHere(docKey: string): number | null {
+  return useCollab((s) => {
+    if (docKey.startsWith("note-")) return s.hostedIn[docKey.slice(5)] ?? null;
+    if (docKey.startsWith("shared-") && s.showShared) return s.shownSession;
+    return null;
+  });
+}
+
 /**
- * 协作中才有。主持人正在看主持的那篇 / 访客正在看共享的那篇：显示谁在，点开对话框；
- * 看着别的笔记：「协作中：标题」，点一下回到那篇。静态出现，不做动画。
+ * 协作中才有。正文区这一篇在一次协作里：显示谁在，点开那一次；看着别的笔记：只有一次协作时
+ * 「协作中：标题」点一下回到那篇，好几次时「n 个协作」点一下打开对话框。静态出现，不做动画。
  * 放在标题上方那一行（路径 / 日期）的右端：比这一行高的部分用负外边距溢出去，不把这一行撑高
  */
 export function CollabPresence({ docKey }: { docKey: string }) {
-  const phase = useCollab((s) => s.phase);
-  const members = useCollab((s) => s.members);
-  const noteId = useCollab((s) => s.noteId);
-  const showShared = useCollab((s) => s.showShared);
-  const sharedTitle = useCollab((s) => s.title);
-  const ended = useCollab((s) => s.status?.state === "ended");
-  // 访客断线重连中：成员表是断之前的，别再说「2 人在编辑」
-  const reconnecting = useCollab((s) => s.status?.state === "reconnecting");
-  const hostedTitle = useData((s) => s.notes.find((note) => note.id === noteId)?.title ?? "");
-  if (phase === "idle" || phase === "joining") return null;
+  const hereId = useSessionHere(docKey);
+  const here = useCollab((s) => (hereId === null ? undefined : s.sessions[hereId]));
+  const identity = useCollab((s) => s.identity);
+  // 还在加入的不算（连上之前什么都没有）
+  const live = useCollab(
+    useShallow((s) => s.order.filter((id) => s.sessions[id]?.phase !== "joining")),
+  );
+  const only = useCollab((s) => (live.length === 1 ? s.sessions[live[0]!] : undefined));
+  const onlyTitle = useData((s) =>
+    only?.noteId ? s.notes.find((note) => note.id === only.noteId)?.title : undefined,
+  );
+  if (!here && !live.length) return null;
 
-  const hosting = phase === "preparing" || phase === "hosting";
-  const here = hosting ? docKey === `note-${noteId}` : showShared;
+  const className = `-my-[5px] ml-auto flex h-[30px] shrink-0 items-center gap-2 rounded-lg px-2
+                 text-[12px] text-muted transition-colors duration-[160ms] hover:bg-raised hover:text-ink`;
+
+  if (here) {
+    const others = here.members.filter((member) => member.id !== identity?.id);
+    const state = here.status?.state;
+    return (
+      <button
+        type="button"
+        data-collab-presence
+        onClick={() => useCollab.getState().openSession(here.id)}
+        title="协作"
+        className={className}
+      >
+        <span className="flex -space-x-1.5">
+          {others.slice(0, 4).map((member) => (
+            <PeerAvatar key={member.id} id={member.id} name={member.name} ring />
+          ))}
+        </span>
+        <span>
+          {state === "ended"
+            ? "协作已结束"
+            : // 访客断线重连中：成员表是断之前的，别再说「2 人在编辑」
+              state === "reconnecting"
+              ? "重新连接中…"
+              : others.length
+                ? `${here.members.length} 人在编辑`
+                : "等人加入"}
+        </span>
+      </button>
+    );
+  }
+
   const onClick = () => {
-    if (here) useCollab.getState().openDialog();
-    else if (hosting && noteId) openDocument({ kind: "note", id: noteId });
-    else useCollab.getState().setShowShared(true);
+    const collab = useCollab.getState();
+    if (!only) {
+      collab.openDialog();
+      return;
+    }
+    // 只有一次：回到协作的那篇（主持一篇的、做客开着一篇的），不然打开它
+    if (only.role === "host" && only.noteId) openDocument({ kind: "note", id: only.noteId });
+    else if (only.role === "guest" && only.current) collab.setShowShared(true, only.id);
+    else collab.openSession(only.id);
   };
-  const others = members.filter((member) => member.id !== useCollab.getState().identity?.id);
-
   return (
     <button
       type="button"
       data-collab-presence
       onClick={onClick}
-      title={here ? "协作" : "回到协作的那篇"}
-      className="-my-[5px] ml-auto flex h-[30px] shrink-0 items-center gap-2 rounded-lg px-2
-                 text-[12px] text-muted transition-colors duration-[160ms] hover:bg-raised hover:text-ink"
+      title={only ? "回到协作的那篇" : "正在进行的协作"}
+      className={className}
     >
-      {here ? (
-        <>
-          <span className="flex -space-x-1.5">
-            {others.slice(0, 4).map((member) => (
-              <PeerAvatar key={member.id} id={member.id} name={member.name} ring />
-            ))}
-          </span>
-          <span>
-            {ended
-              ? "协作已结束"
-              : reconnecting
-                ? "重新连接中…"
-                : others.length
-                  ? `${members.length} 人在编辑`
-                  : "等人加入"}
-          </span>
-        </>
-      ) : (
-        <>
-          <Users size={13} strokeWidth={2} />
-          <span className="max-w-[180px] truncate">
-            协作中：{hosting ? hostedTitle : sharedTitle}
-          </span>
-        </>
-      )}
+      <Users size={13} strokeWidth={2} />
+      <span className="max-w-[180px] truncate">
+        {only ? `协作中：${sessionName(only, onlyTitle)}` : `${live.length} 个协作进行中`}
+      </span>
     </button>
   );
 }
@@ -1307,11 +1619,13 @@ export function CollabPresence({ docKey }: { docKey: string }) {
 /* ---------------- 做客那一篇顶上的一行 ---------------- */
 
 export function CollabBanner() {
-  const status = useCollab((s) => s.status);
-  const permission = useCollab((s) => s.permission);
-  const members = useCollab((s) => s.members);
+  const session = useCollab((s) =>
+    s.shownSession === null ? undefined : s.sessions[s.shownSession],
+  );
   const stop = useCollab((s) => s.stop);
-  const host = members.find((member) => member.host)?.name ?? "主持人";
+  if (!session) return null;
+  const { status, permission } = session;
+  const host = hostNameOf(session);
   let content: ReactNode = null;
   if (status?.state === "reconnecting") {
     content = (
@@ -1324,8 +1638,8 @@ export function CollabBanner() {
       <>
         <p className="text-[13px] text-body">{endText(status.reason, host)}。要接着写就存一份。</p>
         <div className="mt-2 flex gap-1.5">
-          <SaveCopyButton />
-          <BannerButton onClick={() => void stop()}>关闭</BannerButton>
+          <SaveCopyButton id={session.id} />
+          <BannerButton onClick={() => void stop(session.id)}>关闭</BannerButton>
         </div>
       </>
     );

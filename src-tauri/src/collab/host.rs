@@ -8,7 +8,8 @@
 - 只读成员的更新直接丢（光标照转，同步请求照回）
 - 踢人：发 Kick、断开，这次会话里拉黑这把公钥
 - 「重置邀请链接」换掉邀请密钥：旧链接作废，已经在里面的人不受影响
-- 分享前自检（reach.rs）：开始协作就要端口映射、看公网 IPv6、连中继，变了就报，邀请链接跟着更新
+- 端点是几个会话共用的（node.rs，§25.1）：连进来的人由它读 Hello、按会话 id 交过来（serve_knock）；
+  分享前自检、端口映射、mDNS 广播也在那边，自检有结果了告诉这里（on_reach），邀请链接跟着更新
 - 回连（设计 §8.4）：访客连不进来、自己能被连时发回连链接，主持人往访客那边拨。连上以后角色不变：
   访客照样开控制流发 Hello（而且必须带邀请证明），主持人照样确认。断了主持人接着往回拨
 - 「附近」（设计 §8.3）：从局域网列表里点进来的没有链接，Hello 里会话 id 是全 0、不带证明。照样问主持人
@@ -29,19 +30,19 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use iroh::endpoint::{Connection, ConnectionError, RecvStream, SendStream, VarInt};
-use iroh::{Endpoint, SecretKey, TransportAddr};
+use iroh::TransportAddr;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-use super::endpoint::{self, Bound};
+use super::endpoint;
+use super::node::Node;
 use super::protocol::{
     self, kind, AttachGet, AttachPut, CreateDoc, CreatedDoc, Forward, ForwardStream, Hello, Member,
     Permission, Reject, RejectReason, Scope, Welcome,
 };
 use super::queue::{spawn_queue_writer, DocQueue};
-use super::reach::{self, Mapper};
-use super::record::{self, ApprovedRecord, HostRecord, Role};
-use super::relays::{self, Pins, Relay};
+use super::reach::{self, Reach};
+use super::record::{self, ApprovedRecord, HostRecord};
 use super::{
     clean_name, spawn_writer, AttachReply, Callback, Control, EndReason, Event, Events, Invite,
     MemberInfo, Status, SyncKind,
@@ -63,24 +64,15 @@ const ATTACH_STREAMS: u32 = 8;
 const DOC_ANSWER: Duration = Duration::from_secs(10);
 
 pub struct HostOptions {
-    pub secret_key: SecretKey,
     pub name: String,
     pub title: String,
     /// 邀请链接里默认的权限
     pub permission: Permission,
-    /// 局域网广播（单测里关掉）
-    pub mdns: bool,
-    /// 自己配的中继（空的话一台都不连）
-    pub relays: Vec<Relay>,
-    /// 问路由器要公网端口（单测里关掉：不去碰本机的路由器）
-    pub portmap: bool,
-    /// 查 Windows 防火墙放不放行（单测里关掉）
-    pub firewall: bool,
     /// 主持的是哪篇笔记（前端的笔记 id，只是记进落盘的记录里）。文件夹、整个仓库的范围是空的
     pub note: String,
     /// 邀请的范围：Welcome 里告诉访客（设计 §22.5）
     pub scope: Scope,
-    /// 落盘到哪个目录（应用数据目录的 collab/）；None 就不落盘
+    /// 落盘到哪个目录（应用数据目录的 collab/，这一次放在里面的 host/<会话 id>/）；None 就不落盘
     pub record: Option<PathBuf>,
     /// 继续上次的协作：照这份记录重新起来（同一个会话 id、邀请密钥、端口，允许过的人不再问）
     pub resume: Option<HostRecord>,
@@ -97,22 +89,17 @@ pub enum Decision {
 
 pub struct Host {
     shared: Arc<Shared>,
-    endpoint: Endpoint,
-    _mdns: Option<iroh_mdns_address_lookup::MdnsAddressLookup>,
-    mapper: Option<Mapper>,
-    pins: Pins,
-    tasks: Vec<JoinHandle<()>>,
 }
 
-struct Shared {
+pub(crate) struct Shared {
     events: Events,
     session: [u8; 16],
     id: [u8; 32],
     permission: Permission,
-    relays: Vec<Relay>,
-    endpoint: Endpoint,
+    node: Node,
     note: String,
     scope: Scope,
+    /// 这一次的落盘文件夹（collab/host/<会话 id>/）
     record: Option<PathBuf>,
     state: Mutex<State>,
 }
@@ -218,25 +205,17 @@ impl Drop for Slot {
 }
 
 impl Host {
-    /// 开始协作：起端点、等人来，同时查能不能被连进来（Reach 事件）。要在 tokio 运行时里调
-    pub async fn start(options: HostOptions, events: Events) -> Result<Host, String> {
+    /// 开始协作：挂到端点上等人来，同时查能不能被连进来（Reach 事件）。要在 tokio 运行时里调
+    pub async fn start(node: &Node, options: HostOptions, events: Events) -> Result<Host, String> {
         let resume = options.resume.as_ref();
-        let Bound {
-            endpoint,
-            mdns,
-            pins,
-        } = endpoint::bind(
-            options.secret_key,
-            Some(&options.name),
-            options.mdns,
-            &options.relays,
-            resume.map_or(&[][..], |record| &record.ports),
-        )
-        .await?;
         // 继续上次的：会话 id、邀请密钥、允许过谁、拉黑了谁都照旧
         let session = resume
             .and_then(HostRecord::session_bytes)
             .unwrap_or_else(endpoint::random);
+        let record_dir = options
+            .record
+            .as_ref()
+            .map(|base| record::host_dir(base, &session));
         let secret = resume
             .and_then(HostRecord::secret_bytes)
             .unwrap_or_else(endpoint::random);
@@ -274,13 +253,12 @@ impl Host {
         let shared = Arc::new(Shared {
             events,
             session,
-            id: *endpoint.id().as_bytes(),
+            id: node.id(),
             permission: options.permission,
-            relays: options.relays,
-            endpoint: endpoint.clone(),
+            node: node.clone(),
             note: options.note,
             scope: options.scope,
-            record: options.record,
+            record: record_dir,
             state: Mutex::new(State {
                 secret,
                 name: clean_name(&options.name),
@@ -308,56 +286,8 @@ impl Host {
             }),
         });
         persist(&shared);
-        let accept = {
-            let shared = shared.clone();
-            let endpoint = endpoint.clone();
-            tokio::spawn(async move {
-                while let Some(incoming) = endpoint.accept().await {
-                    let shared = shared.clone();
-                    tokio::spawn(async move {
-                        let result = match incoming.await {
-                            Ok(conn) => serve(shared, conn, false).await.map(|_| ()),
-                            Err(error) => Err(error.to_string()),
-                        };
-                        if let Err(error) = result {
-                            eprintln!("协作：接入失败：{error}");
-                        }
-                    });
-                }
-            })
-        };
-        let mapper = options.portmap.then(|| Mapper::start(&endpoint));
-        let (firewall, firewall_task) = match options.firewall {
-            true => {
-                let (state, task) = super::firewall::watch();
-                (Some(state), Some(task))
-            }
-            false => (None, None),
-        };
-        let watch = {
-            let shared = shared.clone();
-            reach::watch_reach(
-                endpoint.clone(),
-                mapper.as_ref().map(Mapper::state),
-                firewall,
-                shared.relays.clone(),
-                move |reach| {
-                    let link = invite_of(&shared).to_link();
-                    let _ = shared.events.send(Event::Control(Control::Reach {
-                        reach,
-                        link: Some(link),
-                    }));
-                },
-            )
-        };
-        Ok(Host {
-            shared,
-            endpoint,
-            _mdns: mdns,
-            mapper,
-            pins,
-            tasks: [accept, watch].into_iter().chain(firewall_task).collect(),
-        })
+        node.add_host(&shared);
+        Ok(Host { shared })
     }
 
     /// 现在的邀请链接（地址每次现取：换了网络、端口映射到了都是新的）
@@ -433,13 +363,18 @@ impl Host {
         if !state.dialing.insert(callback.guest) {
             return Ok(());
         }
-        let task = tokio::spawn(dial_back(self.shared.clone(), self.pins.clone(), callback));
+        let task = tokio::spawn(dial_back(self.shared.clone(), callback));
         state.dial_tasks.push(task);
         Ok(())
     }
 
     pub fn id(&self) -> String {
         endpoint::id_text(&self.shared.id)
+    }
+
+    /// 会话 id（邀请链接、回连链接里的那个）
+    pub fn session(&self) -> [u8; 16] {
+        self.shared.session
     }
 
     /// 单测：这几篇不问前端直接给（大多数测试只有一篇，不想每个都回 DocOpen）
@@ -452,32 +387,18 @@ impl Host {
     /// 端点绑在哪些本机地址上（单测拿它拼本机回环的链接）
     #[cfg(test)]
     pub fn bound_sockets(&self) -> Vec<std::net::SocketAddr> {
-        self.endpoint.bound_sockets()
+        self.shared.node.bound_sockets()
     }
 
     /// 默认配置下一台中继都没连（设计 §5.2：代码里不出现 n0 的中继，测试守着）
     #[cfg(test)]
     pub fn relays_disabled(&self) -> bool {
-        use iroh::Watcher;
-        if !self.shared.relays.is_empty() {
-            return false;
-        }
-        self.endpoint
-            .addr()
-            .addrs
-            .iter()
-            .all(|addr| !matches!(addr, iroh::TransportAddr::Relay(_)))
-            && self.endpoint.home_relay_status().get().is_empty()
+        self.shared.node.relays_disabled()
     }
 
-    /// 单测：主持人那台崩了 —— 端点没了，谁都没告诉，落盘的记录留着。真崩的话进程一退端口就空出来了；
-    /// 这里别的任务还拿着端点，等端口真的空出来再返回（重启的那个要绑回去）
+    /// 单测：主持人那台崩了 —— 端点没了，谁都没告诉，落盘的记录留着（端点也一起崩，Node::crash）
     #[cfg(test)]
     pub async fn crash(self) {
-        let ports = endpoint::ports(&self.endpoint);
-        for task in self.tasks {
-            task.abort();
-        }
         let (slots, dial_tasks) = {
             let mut state = self.shared.state.lock().unwrap();
             state.ended = true;
@@ -492,24 +413,10 @@ impl Host {
         for (_, slot) in slots {
             slot.route.conn().close(VarInt::from_u32(9), b"crash");
         }
-        self.endpoint.close().await;
-        drop(self.endpoint);
+        let node = self.shared.node.clone();
+        node.remove_host(&self.shared);
         drop(self.shared);
-        let free = |port: u16, v6: bool| {
-            if v6 {
-                std::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, port)).is_ok()
-            } else {
-                std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).is_ok()
-            }
-        };
-        for _ in 0..50 {
-            let v4 = ports.first().is_none_or(|port| free(*port, false));
-            let v6 = ports.get(1).is_none_or(|port| free(*port, true));
-            if v4 && v6 {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        node.crash().await;
     }
 
     /// 单测：模拟网络断了一下（掐掉连接，不拉黑）
@@ -530,18 +437,12 @@ impl Host {
         sender.is_some_and(|sender| sender.send(decision).is_ok())
     }
 
-    /// 主持人改了名字：成员表里换掉、告诉每位访客，「附近」广播的昵称也换
+    /// 主持人改了名字：成员表里换掉、告诉每位访客（「附近」广播的昵称由 Node::set_name 换）
     pub fn set_name(&self, name: &str) {
         if name.trim().is_empty() {
             return;
         }
-        let name = clean_name(name);
-        self.shared.state.lock().unwrap().name = name.clone();
-        // 广播里只有昵称，超长的截掉（和 endpoint::bind 一样）
-        let advertised: String = name.chars().take(40).collect();
-        if let Ok(data) = iroh::address_lookup::UserData::try_from(advertised) {
-            self.endpoint.set_user_data_for_address_lookup(Some(data));
-        }
+        self.shared.state.lock().unwrap().name = clean_name(name);
         broadcast_members(&self.shared);
     }
 
@@ -659,7 +560,7 @@ impl Host {
         };
         // 正常结束：落盘的那一套删掉（重启后不再问「继续上次的协作」）
         if let Some(dir) = &self.shared.record {
-            record::remove(dir, Role::Host);
+            record::remove_session(dir);
         }
         for task in dial_tasks {
             task.abort();
@@ -679,14 +580,8 @@ impl Host {
             }
         })
         .await;
-        for task in self.tasks {
-            task.abort();
-        }
-        // 端口映射还给路由器
-        if let Some(mapper) = self.mapper {
-            mapper.stop().await;
-        }
-        self.endpoint.close().await;
+        // 端点是共用的：只从上面摘下来（最后一个会话结束时命令层关端点）
+        self.shared.node.remove_host(&self.shared);
         let _ = self.shared.events.send(Event::Control(Control::Status {
             status: Status::Ended {
                 reason: EndReason::Left,
@@ -697,31 +592,59 @@ impl Host {
 
 /// 一条连接怎么结束的：按回连链接拨的那边据此决定要不要再拨
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Served {
+pub(crate) enum Served {
     /// 走了、被拒、被移出、协作停了、换成了另一条连接：不用再拨
     Gone,
     /// 网络断了
     Lost,
 }
 
-/// 一位访客从连进来到离开。dialed = 主持人按回连链接拨过去的（这样的必须带邀请证明：
-/// 回连链接谁都能伪造，不能凭它让陌生人出现在加入请求里）
-async fn serve(shared: Arc<Shared>, conn: Connection, dialed: bool) -> Result<Served, String> {
+/* ---------------- 端点（node.rs）用的 ---------------- */
+
+pub(crate) fn session_of(shared: &Shared) -> [u8; 16] {
+    shared.session
+}
+
+pub(crate) fn ended(shared: &Shared) -> bool {
+    shared.state.lock().unwrap().ended
+}
+
+/// 这次会话里允许过他（没被移出）：「附近」进来的断线重连回这里
+pub(crate) fn approved(shared: &Shared, id: &[u8; 32]) -> bool {
+    let state = shared.state.lock().unwrap();
+    !state.ended && state.approved.contains_key(id) && !state.banned.contains(id)
+}
+
+/// 协议版本、特性对得上
+pub(crate) fn compatible(hello: &Hello) -> bool {
+    hello.version == protocol::PROTOCOL_VERSION
+        && protocol::FEATURES
+            .iter()
+            .all(|feature| hello.features.iter().any(|f| f == feature))
+}
+
+/// 分享前自检有了新结果：连同现在的邀请链接告诉前端
+pub(crate) fn on_reach(shared: &Shared, reach: Reach) {
+    let link = invite_of(shared).to_link();
+    let _ = shared.events.send(Event::Control(Control::Reach {
+        reach,
+        link: Some(link),
+    }));
+}
+
+/// 一位访客从连进来到离开（Hello 端点已经读出来了，会话 id 对的是这一次）。dialed = 主持人按回连链接
+/// 拨过去的（这样的必须带邀请证明：回连链接谁都能伪造，不能凭它让陌生人出现在加入请求里）。
+/// preset = 「附近」进来、主持人挑这一次时已经给了权限，不再问
+pub(crate) async fn serve_knock(
+    shared: Arc<Shared>,
+    conn: Connection,
+    mut control_send: SendStream,
+    control_recv: RecvStream,
+    hello: Hello,
+    dialed: bool,
+    preset: Option<Permission>,
+) -> Result<Served, String> {
     let id = *conn.remote_id().as_bytes();
-    let (mut control_send, mut control_recv) = tokio::time::timeout(HANDSHAKE, conn.accept_bi())
-        .await
-        .map_err(|_| "等 Hello 超时".to_string())?
-        .map_err(|error| error.to_string())?;
-    let hello = match tokio::time::timeout(HANDSHAKE, protocol::read_frame(&mut control_recv)).await
-    {
-        Ok(Ok(Some((kind::HELLO, payload)))) => {
-            protocol::decode::<Hello>(&payload).map_err(|error| error.to_string())?
-        }
-        _ => {
-            conn.close(VarInt::from_u32(2), b"no hello");
-            return Err("对方没发 Hello".into());
-        }
-    };
     let mut keying = [0u8; 32];
     conn.export_keying_material(&mut keying, protocol::PROOF_LABEL, &shared.session)
         .map_err(|_| "导不出密钥材料".to_string())?;
@@ -737,6 +660,7 @@ async fn serve(shared: Arc<Shared>, conn: Connection, dialed: bool) -> Result<Se
         invited,
         dialed,
         via: None,
+        preset,
     };
     let gone = async {
         conn.closed().await;
@@ -829,6 +753,7 @@ async fn serve_forwarded(
         invited,
         dialed: false,
         via: Some((via, via_name, via_permission)),
+        preset: None,
     };
     // 等确认的时候他走了：转发的那位的连接断了，或者他那条控制流到头了（Welcome 之前他不会再发东西）
     let gone = async {
@@ -886,6 +811,8 @@ struct Knock<'a> {
     dialed: bool,
     /// 转发他的那位：成员号、名字、权限（他的权限不超过这一位的）
     via: Option<(u16, String, Permission)>,
+    /// 主持人已经给了的权限（「附近」进来、主持人挑了这一次）：不再问
+    preset: Option<Permission>,
 }
 
 /// 查版本、会话、证明、拉黑、允许过没有；要问的问主持人；允许了就登记成员号。
@@ -901,12 +828,9 @@ async fn admit(
         invited,
         dialed,
         via,
+        preset,
     } = knock;
-    if hello.version != protocol::PROTOCOL_VERSION
-        || !protocol::FEATURES
-            .iter()
-            .all(|feature| hello.features.iter().any(|f| f == feature))
-    {
+    if !compatible(hello) {
         // 告诉主持人一声（不然对方说连不上、他这边什么都没看到）：对方版本低、或者缺了特性，是对方旧
         let _ = shared.events.send(Event::Control(Control::JoinOutdated {
             name: clean_name(&hello.name),
@@ -943,6 +867,8 @@ async fn admit(
             return Err(Some(RejectReason::Kicked));
         } else if let Some(&(member, permission)) = state.approved.get(&id) {
             Next::Allow(Some(member), permission)
+        } else if let Some(permission) = preset {
+            Next::Allow(None, permission)
         } else if let Some(&permission) = state.trusted.get(&id) {
             // 记住的人：不问，新的成员号
             Next::Allow(None, permission)
@@ -1091,27 +1017,29 @@ fn uninstall(shared: &Shared, member: u16, generation: u64) -> bool {
 
 /// 按回连链接往访客那边拨：拨通了照常 serve；断了（网络）接着往回拨，退避到 8 秒一次，
 /// 一直拨不通 10 分钟就算了。第一次就拨不通直接告诉主持人
-async fn dial_back(shared: Arc<Shared>, pins: Pins, callback: Callback) {
-    // 访客自己的中继：这次会话里临时加进来（会话结束端点一关就没了）
+async fn dial_back(shared: Arc<Shared>, callback: Callback) {
+    // 访客自己的中继：拨的这段时间借来用
     if let Some(relay) = &callback.relay {
-        relays::add_pin(&pins, relay);
-        if let (Ok(url), Some(config)) = (relay.relay_url(), relay.config()) {
-            shared.endpoint.insert_relay(url, Arc::new(config)).await;
-        }
+        shared.node.borrow_relay(relay).await;
     }
+    dial_back_loop(&shared, &callback).await;
+    if let Some(relay) = &callback.relay {
+        shared.node.release_relay(relay).await;
+    }
+    shared.state.lock().unwrap().dialing.remove(&callback.guest);
+}
+
+async fn dial_back_loop(shared: &Arc<Shared>, callback: &Callback) {
     let mut first = true;
     let mut backoff = Duration::from_secs(1);
     let mut failing_since: Option<Instant> = None;
-    let done = |shared: &Shared| {
-        shared.state.lock().unwrap().dialing.remove(&callback.guest);
-    };
     loop {
         let (ended, banned) = {
             let state = shared.state.lock().unwrap();
             (state.ended, state.banned.contains(&callback.guest))
         };
         if ended || banned {
-            return done(&shared);
+            return;
         }
         let addr =
             match endpoint::dial_addr(&callback.guest, &callback.addrs, callback.relay.as_ref()) {
@@ -1121,11 +1049,11 @@ async fn dial_back(shared: Arc<Shared>, pins: Pins, callback: Callback) {
                         ok: false,
                         detail: Some(detail),
                     }));
-                    return done(&shared);
+                    return;
                 }
             };
         let attempt =
-            tokio::time::timeout(DIAL_BACK, shared.endpoint.connect(addr, protocol::ALPN)).await;
+            tokio::time::timeout(DIAL_BACK, shared.node.endpoint().connect(addr, protocol::ALPN)).await;
         match attempt {
             Ok(Ok(conn)) => {
                 if first {
@@ -1137,9 +1065,10 @@ async fn dial_back(shared: Arc<Shared>, pins: Pins, callback: Callback) {
                 first = false;
                 failing_since = None;
                 backoff = Duration::from_secs(1);
-                match serve(shared.clone(), conn, true).await {
+                // 按他 Hello 里的会话 id 分（他可能同时在等我好几个会话的回连）
+                match shared.node.serve_dialed(conn).await {
                     Ok(Served::Lost) => {}
-                    Ok(Served::Gone) | Err(_) => return done(&shared),
+                    Ok(Served::Gone) | Err(_) => return,
                 }
             }
             failed => {
@@ -1152,11 +1081,11 @@ async fn dial_back(shared: Arc<Shared>, pins: Pins, callback: Callback) {
                         ok: false,
                         detail: Some(detail),
                     }));
-                    return done(&shared);
+                    return;
                 }
                 let since = *failing_since.get_or_insert_with(Instant::now);
                 if since.elapsed() > DIAL_BACK_GIVE_UP {
-                    return done(&shared);
+                    return;
                 }
             }
         }
@@ -1636,7 +1565,7 @@ fn persist(shared: &Shared) {
         record.approved.sort_by_key(|item| item.member);
         record.banned = state.banned.iter().map(endpoint::id_text).collect();
         record.next_member = state.next_member;
-        record.ports = endpoint::ports(&shared.endpoint);
+        record.ports = shared.node.ports();
         record
     };
     if let Err(error) = record::save_json(dir, record::HOST_FILE, &record) {
@@ -1706,7 +1635,8 @@ fn broadcast_members(shared: &Shared) {
 
 /// 现在的邀请链接：地址现取；中继是 iroh 选中的那台（延迟最低的），还没选出来就用配的第一台
 fn invite_of(shared: &Shared) -> Invite {
-    let addr = shared.endpoint.addr();
+    let endpoint = shared.node.endpoint();
+    let addr = endpoint.addr();
     let home: Vec<String> = addr
         .addrs
         .iter()
@@ -1715,20 +1645,20 @@ fn invite_of(shared: &Shared) -> Invite {
             _ => None,
         })
         .collect();
-    let relay = shared
-        .relays
+    let relays = shared.node.relays();
+    let relay = relays
         .iter()
         .find(|relay| {
             relay
                 .relay_url()
                 .is_ok_and(|url| home.contains(&url.to_string()))
         })
-        .or_else(|| shared.relays.first())
+        .or_else(|| relays.first())
         .cloned();
     let state = shared.state.lock().unwrap();
     Invite {
         host: shared.id,
-        addrs: reach::endpoint_addrs(&shared.endpoint),
+        addrs: reach::endpoint_addrs(endpoint),
         session: shared.session,
         secret: state.secret,
         permission: shared.permission,
@@ -1737,7 +1667,7 @@ fn invite_of(shared: &Shared) -> Invite {
 }
 
 /// 回一个 Reject，等对方读到再断。转发来的（conn 是 None）只把流收尾，连接是转发那位的
-async fn reject(
+pub(crate) async fn reject(
     conn: Option<&Connection>,
     mut send: SendStream,
     reason: RejectReason,

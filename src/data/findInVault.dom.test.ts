@@ -22,7 +22,8 @@ async function vaultWith(...notes: [string, string][]) {
   const ids: string[] = [];
   for (const [title, contentMd] of notes) {
     const id = await mockBackend.noteCreate("", title);
-    await mockBackend.noteUpsert({ id, title, contentMd });
+    await mockBackend.noteRename(id, title);
+    await mockBackend.noteSave(id, contentMd, null);
     ids.push(id);
   }
   const find = (query: string, options: Partial<FindOptions> = {}) =>

@@ -2,12 +2,12 @@
 iroh 端点（docs/协同编辑.md §5.2）。
 
 - 默认一台服务器都不连：presets::Minimal 就是「不连 n0 的中继、不用 n0 的 DNS、只配好 TLS」，
-  没配中继时明写 RelayMode::Disabled。tests.rs 守着
+  没配中继时是空的中继表（后来加的才接得上：访客借主持人的、新配的，node.rs）。tests.rs 守着
 - 用户自己配了中继（或者邀请链接里带了主持人的）：RelayMode::Custom，只有这几台（relays.rs）。
   证书校验换成认指纹的那一个（自签名证书的中继），其余的照常按 CA 根证书
-- 只在会话期间开着：开始协作时起，结束时关。平时不占端口、不广播、不弹防火墙
+- 只在会话期间开着：第一个会话开始时起，最后一个结束时关（node.rs）。平时不占端口、不广播、不弹防火墙
 - 局域网发现用 mDNS（自己的服务名，只看得到 Odea）。主持人广播，广播里只有昵称和公钥，
-  不带文档标题；访客只听不广播
+  不带文档标题；访客只听不广播。这里起的只听，有在主持的会话时 node.rs 另加一份广播的
 - QUIC 每 5 秒保活一次，12 秒没动静认出断了（设计 §7.3）
 - 继续上次的协作（record.rs）时绑回原来的端口：访客手里链接里的地址才不作废。被占了就随便绑一个
 ============================================================ */
@@ -69,7 +69,11 @@ async fn bind_with(
     let mut builder = Endpoint::builder(presets::Minimal)
         .secret_key(secret_key)
         .alpns(vec![ALPN.to_vec()])
-        .relay_mode(relays::relay_mode(relays))
+        // 一台都没配时也用「自己的中继表」（空的）：后来加的中继（insert_relay）才接得上；默认一台都不连
+        .relay_mode(match relays::relay_mode(relays) {
+            iroh::RelayMode::Disabled => iroh::RelayMode::Custom(iroh::RelayMap::empty()),
+            mode => mode,
+        })
         .ca_tls_config(relays::tls_config(pins.clone()))
         .transport_config(transport);
     if let Some(&v4) = ports.first().filter(|port| **port != 0) {

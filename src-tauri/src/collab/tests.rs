@@ -198,18 +198,38 @@ fn members_of(event: &Event) -> Option<Vec<MemberInfo>> {
     }
 }
 
+/// 单测用的端点（docs/协同编辑.md §25.1）：不碰路由器、不查防火墙。会话停了端点也不关（单测里没人收）
+async fn test_node(secret_key: SecretKey, mdns: bool, relays: Vec<Relay>) -> Node {
+    test_node_on(secret_key, mdns, relays, Vec::new()).await
+}
+
+/// 绑回指定端口的（崩了以后照记录重新起来）
+async fn test_node_on(secret_key: SecretKey, mdns: bool, relays: Vec<Relay>, ports: Vec<u16>) -> Node {
+    let (events, _) = unbounded_channel();
+    Node::start(
+        NodeOptions {
+            secret_key,
+            name: "林夕".into(),
+            mdns,
+            relays,
+            portmap: false,
+            firewall: false,
+            ports,
+        },
+        events,
+    )
+    .await
+    .expect("端点起不来")
+}
+
 async fn start_host(title: &str) -> (Host, UnboundedReceiver<Event>) {
     let (events, rx) = unbounded_channel();
     let host = Host::start(
+        &test_node(SecretKey::generate(), false, Vec::new()).await,
         HostOptions {
-            secret_key: SecretKey::generate(),
             name: "林夕".into(),
             title: title.into(),
             permission: Permission::Edit,
-            mdns: false,
-            relays: Vec::new(),
-            portmap: false,
-            firewall: false,
             note: String::new(),
             scope: protocol::Scope::doc(DOC, title),
             record: None,
@@ -238,14 +258,11 @@ fn loopback(host: &Host, mut invite: Invite) -> Invite {
 async fn join(name: &str, invite: Invite) -> (Guest, UnboundedReceiver<Event>) {
     let (events, rx) = unbounded_channel();
     let guest = Guest::join(
+        &test_node(SecretKey::generate(), false, Vec::new()).await,
         GuestOptions {
-            secret_key: SecretKey::generate(),
             name: name.into(),
             invite,
-            mdns: false,
             use_host_relay: true,
-            relays: Vec::new(),
-            portmap: false,
             nearby: false,
         },
         events,
@@ -546,14 +563,11 @@ async fn kicked_guests_cannot_come_back() {
     let (events_tx, mut events) = unbounded_channel();
     let key = SecretKey::generate();
     let _guest = Guest::join(
+        &test_node(key.clone(), false, Vec::new()).await,
         GuestOptions {
-            secret_key: key.clone(),
             name: "捣乱".into(),
             invite: invite.clone(),
-            mdns: false,
             use_host_relay: true,
-            relays: Vec::new(),
-            portmap: false,
             nearby: false,
         },
         events_tx,
@@ -582,14 +596,11 @@ async fn kicked_guests_cannot_come_back() {
     // 同一台设备（同一把公钥）拿着链接再来：直接拒
     let (events_tx, mut events) = unbounded_channel();
     let _again = Guest::join(
+        &test_node(key, false, Vec::new()).await,
         GuestOptions {
-            secret_key: key,
             name: "捣乱".into(),
             invite,
-            mdns: false,
             use_host_relay: true,
-            relays: Vec::new(),
-            portmap: false,
             nearby: false,
         },
         events_tx,
@@ -1027,15 +1038,11 @@ async fn guests_reach_hosts_through_the_relay() {
     let relay = relay_at(&url, Some("secret"), &pin);
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
+        &test_node(SecretKey::generate(), false, vec![relay.clone()]).await,
         HostOptions {
-            secret_key: SecretKey::generate(),
             name: "林夕".into(),
             title: "经中继".into(),
             permission: Permission::Edit,
-            mdns: false,
-            relays: vec![relay.clone()],
-            portmap: false,
-            firewall: false,
             note: String::new(),
             scope: protocol::Scope::doc(DOC, "经中继"),
             record: None,
@@ -1233,14 +1240,9 @@ async fn hosts_report_reach_with_a_fresh_link() {
 
 fn host_options(title: &str) -> HostOptions {
     HostOptions {
-        secret_key: SecretKey::generate(),
         name: "林夕".into(),
         title: title.into(),
         permission: Permission::Edit,
-        mdns: false,
-        relays: Vec::new(),
-        portmap: false,
-        firewall: false,
         note: DOC.into(),
         scope: protocol::Scope::doc(DOC, title),
         record: None,
@@ -1255,8 +1257,8 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     let key = SecretKey::generate();
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
+        &test_node(key.clone(), false, Vec::new()).await,
         HostOptions {
-            secret_key: key.clone(),
             record: Some(dir.path().to_path_buf()),
             ..host_options("周会")
         },
@@ -1267,9 +1269,11 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     host.allow_docs(&[DOC]);
     let (guest, mut guest_events, member) =
         admitted(&host, &mut host_events, "Alex", Permission::Read).await;
+    // 一个会话一个文件夹（§25.2）
+    let session_dir = record::host_dir(dir.path(), &host.session());
     // 前端每隔几秒交来的 文档 状态（这里随便几个字节）
-    record::save_state(dir.path(), record::Role::Host, DOC, b"y-state").unwrap();
-    let left = record::host_left(dir.path()).expect("落盘的记录");
+    record::save_state(&session_dir, record::Role::Host, DOC, b"y-state").unwrap();
+    let left = record::host_left(&session_dir).expect("落盘的记录");
     assert_eq!(left.note, "note-1");
     assert_eq!(left.title, "周会");
     assert_eq!(left.approved.len(), 1);
@@ -1285,13 +1289,13 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
         matches!(status_of(event), Some(Status::Reconnecting)).then_some(())
     })
     .await;
-    assert!(record::host_left(dir.path()).is_some());
+    assert_eq!(record::hosts_left(dir.path()).len(), 1);
 
     // 重启以后照记录起来：同一个会话 id、邀请密钥、端口
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
+        &test_node_on(key, false, Vec::new(), left.ports.clone()).await,
         HostOptions {
-            secret_key: key,
             record: Some(dir.path().to_path_buf()),
             resume: Some(left),
             ..host_options("周会")
@@ -1329,9 +1333,8 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
 
     // 正常停止：记录删掉，重启后不再问
     host.stop().await;
-    assert!(record::host_left(dir.path()).is_none());
-    assert!(!dir.path().join(record::HOST_FILE).exists());
-    assert!(record::saved_docs(dir.path(), record::Role::Host).is_empty());
+    assert!(record::hosts_left(dir.path()).is_empty());
+    assert!(!session_dir.exists());
     drop(guest);
 }
 
@@ -1344,14 +1347,11 @@ async fn nearby_guests_ask_without_a_link() {
     invite.secret = [0; 32];
     let (events_tx, mut events) = unbounded_channel();
     let _guest = Guest::join(
+        &test_node(SecretKey::generate(), false, Vec::new()).await,
         GuestOptions {
-            secret_key: SecretKey::generate(),
             name: "同一个 Wi-Fi".into(),
             invite,
-            mdns: false,
             use_host_relay: true,
-            relays: Vec::new(),
-            portmap: false,
             nearby: true,
         },
         events_tx,
@@ -1386,8 +1386,8 @@ async fn nearby_guests_ask_without_a_link() {
 async fn nearby_list_finds_a_sharing_host_over_mdns() {
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
+        &test_node(SecretKey::generate(), true, Vec::new()).await,
         HostOptions {
-            mdns: true,
             ..host_options("t")
         },
         events,
@@ -1415,14 +1415,11 @@ async fn nearby_list_finds_a_sharing_host_over_mdns() {
     nearby.stop().await;
     let (events_tx, _events) = unbounded_channel();
     let _guest = Guest::join(
+        &test_node(SecretKey::generate(), true, Vec::new()).await,
         GuestOptions {
-            secret_key: SecretKey::generate(),
             name: "邻座".into(),
             invite,
-            mdns: true,
             use_host_relay: true,
-            relays: Vec::new(),
-            portmap: false,
             nearby: true,
         },
         events_tx,
@@ -1655,14 +1652,11 @@ fn records_round_trip_and_only_count_with_their_state() {
 async fn join_as(key: &SecretKey, name: &str, invite: Invite) -> (Guest, UnboundedReceiver<Event>) {
     let (events, rx) = unbounded_channel();
     let guest = Guest::join(
+        &test_node(key.clone(), false, Vec::new()).await,
         GuestOptions {
-            secret_key: key.clone(),
             name: name.into(),
             invite,
-            mdns: false,
             use_host_relay: true,
-            relays: Vec::new(),
-            portmap: false,
             nearby: false,
         },
         events,
@@ -1678,6 +1672,7 @@ async fn remembered_people_come_in_without_asking_until_forgotten() {
     let id = *key.public().as_bytes();
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
+        &test_node(SecretKey::generate(), false, Vec::new()).await,
         HostOptions {
             trusted: [(id, Permission::Read)].into_iter().collect(),
             ..host_options("周会")
@@ -1766,6 +1761,7 @@ async fn remembered_people_come_in_without_asking_until_forgotten() {
     // 忘掉：下一次会话里照样问（这次会话里允许过的人重连不问，那是另一回事）
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
+        &test_node(SecretKey::generate(), false, Vec::new()).await,
         HostOptions {
             trusted: [(id, Permission::Edit)].into_iter().collect(),
             ..host_options("周会")
@@ -2246,6 +2242,7 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
 async fn start_folder_host() -> (Host, UnboundedReceiver<Event>) {
     let (events, rx) = unbounded_channel();
     let host = Host::start(
+        &test_node(SecretKey::generate(), false, Vec::new()).await,
         HostOptions {
             scope: protocol::Scope {
                 kind: protocol::ScopeKind::Folder,
@@ -2412,4 +2409,265 @@ async fn a_folder_session_opens_docs_on_request_and_keeps_them_apart() {
     other.leave().await;
     guest.leave().await;
     host.stop().await;
+}
+
+/* ---------------- 同时好几个协作（docs/协同编辑.md §25） ---------------- */
+
+/// 带着端点事件的（「附近」进来要挑哪一个）
+async fn test_node_events() -> (Node, UnboundedReceiver<Event>) {
+    let (events, rx) = unbounded_channel();
+    let node = Node::start(
+        NodeOptions {
+            secret_key: SecretKey::generate(),
+            name: "林夕".into(),
+            mdns: false,
+            relays: Vec::new(),
+            portmap: false,
+            firewall: false,
+            ports: Vec::new(),
+        },
+        events,
+    )
+    .await
+    .expect("端点起不来");
+    (node, rx)
+}
+
+/// 在这个端点上主持一篇
+async fn host_on(node: &Node, doc: &str, title: &str) -> (Host, UnboundedReceiver<Event>) {
+    let (events, rx) = unbounded_channel();
+    let host = Host::start(
+        node,
+        HostOptions {
+            note: doc.into(),
+            scope: protocol::Scope::doc(doc, title),
+            ..host_options(title)
+        },
+        events,
+    )
+    .await
+    .expect("主持人起不来");
+    host.allow_docs(&[doc]);
+    (host, rx)
+}
+
+/// 在这个端点上做客
+async fn join_on(node: &Node, name: &str, invite: Invite) -> (Guest, UnboundedReceiver<Event>) {
+    let (events, rx) = unbounded_channel();
+    let guest = Guest::join(
+        node,
+        GuestOptions {
+            name: name.into(),
+            invite,
+            use_host_relay: true,
+            nearby: false,
+        },
+        events,
+    )
+    .await
+    .expect("访客起不来");
+    (guest, rx)
+}
+
+fn names(host: &Host) -> Vec<String> {
+    host.members().into_iter().map(|member| member.name).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_endpoint_hosts_two_sessions_and_keeps_them_apart() {
+    let (node, _node_events) = test_node_events().await;
+    let (weekly, mut weekly_events) = host_on(&node, "note-weekly", "周报").await;
+    let (plan, mut plan_events) = host_on(&node, "note-plan", "计划").await;
+    assert_ne!(weekly.session(), plan.session());
+    assert_eq!(weekly.bound_sockets(), plan.bound_sockets(), "两个会话共用一个端点");
+
+    let (alex, mut alex_events, _) =
+        admitted(&weekly, &mut weekly_events, "Alex", Permission::Edit).await;
+    let (sam, mut sam_events, _) = admitted(&plan, &mut plan_events, "Sam", Permission::Edit).await;
+    // 各进各的：周报那边只看到 Alex，计划那边只看到 Sam
+    assert_eq!(names(&weekly), ["林夕", "Alex"]);
+    assert_eq!(names(&plan), ["林夕", "Sam"]);
+
+    weekly.send_update("note-weekly", b"weekly".to_vec());
+    expect(&mut alex_events, "周报的更新", |event| {
+        matches!(event, Event::Update { doc, bytes, .. } if doc == "note-weekly" && bytes == b"weekly")
+            .then_some(())
+    })
+    .await;
+    expect_none(&mut sam_events, "周报的更新不该到计划那边", |event| {
+        matches!(event, Event::Update { .. })
+    })
+    .await;
+
+    // 停掉一个，另一个照常
+    weekly.stop().await;
+    expect(&mut alex_events, "主持人停了", |event| {
+        matches!(
+            status_of(event),
+            Some(Status::Ended {
+                reason: EndReason::HostStopped
+            })
+        )
+        .then_some(())
+    })
+    .await;
+    plan.send_update("note-plan", b"plan".to_vec());
+    expect(&mut sam_events, "计划的更新", |event| {
+        matches!(event, Event::Update { bytes, .. } if bytes == b"plan").then_some(())
+    })
+    .await;
+    alex.leave().await;
+    sam.leave().await;
+    plan.stop().await;
+    node.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_device_hosts_and_guests_at_once() {
+    // 林夕主持周报、同时在 Sam 那里做客；Sam 主持计划、同时在林夕那里做客（两台互相是对方的主持人）
+    let (linxi, _a) = test_node_events().await;
+    let (sam, _b) = test_node_events().await;
+    let (weekly, mut weekly_events) = host_on(&linxi, "note-weekly", "周报").await;
+    let (plan, mut plan_events) = host_on(&sam, "note-plan", "计划").await;
+
+    let (sam_in_weekly, mut sam_guest_events) =
+        join_on(&sam, "Sam", loopback(&weekly, weekly.invite())).await;
+    let (linxi_in_plan, mut linxi_guest_events) =
+        join_on(&linxi, "林夕", loopback(&plan, plan.invite())).await;
+    for (host, events, who) in [
+        (&weekly, &mut weekly_events, "Sam"),
+        (&plan, &mut plan_events, "林夕"),
+    ] {
+        let request = expect(events, "加入请求", |event| match event {
+            Event::Control(Control::JoinRequest { request, name, .. }) if name == who => {
+                Some(*request)
+            }
+            _ => None,
+        })
+        .await;
+        assert!(host.answer(request, Decision::Allow(Permission::Edit)));
+    }
+    // 两边的文档流都开好了（双方都被叫去发 Sync1）再发
+    for events in [&mut sam_guest_events, &mut linxi_guest_events] {
+        expect(events, "访客的 SyncStart", |event| {
+            matches!(event, Event::SyncStart { with: 0, .. }).then_some(())
+        })
+        .await;
+    }
+    for events in [&mut weekly_events, &mut plan_events] {
+        expect(events, "主持人的 SyncStart", |event| {
+            matches!(event, Event::SyncStart { .. }).then_some(())
+        })
+        .await;
+    }
+    weekly.send_update("note-weekly", b"w".to_vec());
+    plan.send_update("note-plan", b"p".to_vec());
+    expect(&mut sam_guest_events, "周报的更新", |event| {
+        matches!(event, Event::Update { doc, .. } if doc == "note-weekly").then_some(())
+    })
+    .await;
+    expect(&mut linxi_guest_events, "计划的更新", |event| {
+        matches!(event, Event::Update { doc, .. } if doc == "note-plan").then_some(())
+    })
+    .await;
+    sam_in_weekly.leave().await;
+    linxi_in_plan.leave().await;
+    weekly.stop().await;
+    plan.stop().await;
+    linxi.close().await;
+    sam.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nearby_guests_are_asked_which_session_when_hosting_several() {
+    let (node, mut node_events) = test_node_events().await;
+    let (weekly, mut weekly_events) = host_on(&node, "note-weekly", "周报").await;
+    let (plan, mut plan_events) = host_on(&node, "note-plan", "计划").await;
+    // 「附近」点进来的：只知道公钥和地址
+    let mut invite = loopback(&weekly, weekly.invite());
+    invite.session = [0; 16];
+    invite.secret = [0; 32];
+    let (events, mut guest_events) = unbounded_channel();
+    let guest = Guest::join(
+        &test_node(SecretKey::generate(), false, Vec::new()).await,
+        GuestOptions {
+            name: "Alex".into(),
+            invite,
+            use_host_relay: true,
+            nearby: true,
+        },
+        events,
+    )
+    .await
+    .unwrap();
+    // 主持着两个：端点问主持人进哪一个（不经哪个会话问）
+    let request = expect(&mut node_events, "问进哪一个", |event| match event {
+        Event::Control(Control::NearbyKnock { request, name, .. }) if name == "Alex" => {
+            Some(*request)
+        }
+        _ => None,
+    })
+    .await;
+    assert!(node.answer_nearby(request, Some((plan.session(), Permission::Read))));
+    // 挑了计划、只读：直接进去，计划那边不再问第二遍
+    let (scope, permission) = expect(&mut guest_events, "进了计划", |event| {
+        match status_of(event) {
+            Some(Status::Connected {
+                scope, permission, ..
+            }) => Some((scope, permission)),
+            _ => None,
+        }
+    })
+    .await;
+    assert_eq!((scope.doc.as_str(), permission), ("note-plan", Permission::Read));
+    expect(&mut node_events, "卡片收起", |event| {
+        matches!(event, Event::Control(Control::NearbyKnockDone { request: done }) if *done == request)
+            .then_some(())
+    })
+    .await;
+    expect_none(&mut plan_events, "不该再问", |event| {
+        matches!(event, Event::Control(Control::JoinRequest { .. }))
+    })
+    .await;
+    expect_none(&mut weekly_events, "周报那边什么都不知道", |event| {
+        matches!(event, Event::Control(Control::JoinRequest { .. }))
+    })
+    .await;
+    assert_eq!(names(&plan), ["林夕", "Alex"]);
+    assert_eq!(names(&weekly), ["林夕"]);
+    guest.leave().await;
+    weekly.stop().await;
+    plan.stop().await;
+    node.close().await;
+}
+
+#[test]
+fn records_from_before_several_sessions_move_into_their_own_folders() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path();
+    // 2026-10-27 以前：直接放在 collab/ 下
+    let mut host = record::HostRecord::new("n".into(), "标题".into(), Permission::Edit);
+    host.session = "00112233445566778899aabbccddeeff".into();
+    host.secret = "11".repeat(32);
+    record::save_json(base, record::HOST_FILE, &host).unwrap();
+    record::save_state(base, record::Role::Host, DOC, b"h").unwrap();
+    let guest = record::GuestRecord::new("odea://join/x".into(), false, false);
+    record::save_json(base, record::GUEST_FILE, &guest).unwrap();
+    record::save_state(base, record::Role::Guest, DOC, b"g").unwrap();
+
+    let hosts = record::hosts_left(base);
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(record::dir_key(&hosts[0].0), host.session);
+    assert_eq!(
+        record::load_state(&hosts[0].0, record::Role::Host, DOC).as_deref(),
+        Some(&b"h"[..])
+    );
+    let guests = record::guests_left(base);
+    assert_eq!(guests.len(), 1);
+    assert_eq!(guests[0].1.link, "odea://join/x");
+    assert!(!base.join(record::HOST_FILE).exists() && !base.join(record::GUEST_FILE).exists());
+    // 正常结束：那一次的文件夹整个删掉，别的不动
+    record::remove_session(&hosts[0].0);
+    assert!(record::hosts_left(base).is_empty());
+    assert_eq!(record::guests_left(base).len(), 1);
 }

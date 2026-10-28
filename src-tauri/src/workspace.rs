@@ -7,7 +7,9 @@
 - 仓库窗口关了：还有别的仓库窗口开着就记成「没开着」，它是最后一个就照旧开着，下次启动回到它
 ============================================================ */
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -27,8 +29,8 @@ use crate::vault::{layout, team, Vault};
 
 /// 启动器窗口的标签
 pub const LAUNCHER: &str = "launcher";
-/// 协作访客窗口的标签（docs/仓库与启动器.md §13）：不开仓库，只有别人共享的那一篇。一次只有一个会话，
-/// 访客窗口也只有一个
+/// 协作访客窗口的标签（docs/仓库与启动器.md §13）：不开仓库，只有别人共享的那几篇。访客窗口只有一个，
+/// 同时在好几个人那里做客时左边按会话分开（docs/协同编辑.md §25）
 pub const GUEST: &str = "guest";
 
 /// 窗口刚建好、前端还没起来时的底色（和 index.html 里浅色主题的底一致，窗口 ready 之前是藏着的）
@@ -90,7 +92,7 @@ pub fn open_vault<R: Runtime>(app: &AppHandle<R>, root: &Path, how: Open) -> Res
     // 先登记再建窗口：前端一起来就要拿着窗口标签找仓库
     lock(&state.workspaces)?.insert(label.clone(), workspace.clone());
     commands::start_services(app, &data_dir, &workspace, backlog);
-    if let Err(error) = build_vault_window(app, &label, how.quiet) {
+    if let Err(error) = build_vault_window(app, &label, how.quiet, saved.placement) {
         lock(&state.workspaces)?.remove(&label);
         let _ = commands::stop_services(&workspace);
         return Err(error.into());
@@ -108,10 +110,16 @@ fn free_label<R: Runtime>(app: &AppHandle<R>, state: &AppState, wanted: String) 
     (2..).map(|n| format!("{wanted}-{n}")).find(|label| !taken(label)).expect("总有一个没被占的")
 }
 
-/// 仓库窗口：和以前 tauri.conf.json 里那个一样（无边框、先藏着，前端首帧画完调 ready 才显示）
-fn build_vault_window<R: Runtime>(app: &AppHandle<R>, label: &str, quiet: bool) -> tauri::Result<()> {
+/// 仓库窗口：和以前 tauri.conf.json 里那个一样（无边框、先藏着，前端首帧画完调 ready 才显示）。
+/// 建好以后按上次的样子摆好（place_hidden）
+fn build_vault_window<R: Runtime>(
+    app: &AppHandle<R>,
+    label: &str,
+    quiet: bool,
+    placement: Option<boot::WindowPlacement>,
+) -> tauri::Result<()> {
     let url = if quiet { "index.html?quiet" } else { "index.html" };
-    WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
         .title("Odea")
         .inner_size(1440.0, 900.0)
         .min_inner_size(940.0, 620.0)
@@ -121,7 +129,147 @@ fn build_vault_window<R: Runtime>(app: &AppHandle<R>, label: &str, quiet: bool) 
         .visible(false)
         .background_color(BACKGROUND)
         .build()?;
+    place_hidden(&window, placement);
     Ok(())
+}
+
+/* ---------------- 仓库窗口的样子（docs/仓库与启动器.md §19） ----------------
+   上次关的时候什么样就什么样；没记过的最大化开（像 Obsidian）。
+
+   以前交给 tauri-plugin-window-state，两个毛病：它只在应用正常退出那一刻写盘，自动更新是 restart，
+   走不到那一步 —— 记录一直停在 10 月 20 日，最大化过也记不住；它还原「最大化」「可见」是在窗口刚建好的
+   时候，而最大化（SW_MAXIMIZE）会把藏着的窗口直接显示出来，前端还没画第一帧，先闪一个空窗口。
+
+   现在自己记：关之前（lib.rs 的 CloseRequested）记下是不是最大化、不最大化时的位置大小（Windows 用
+   GetWindowPlacement，最大化着也拿得到原来那个）；建窗口时（还藏着）摆好 —— 要最大化的先撑满它那块
+   屏幕的工作区，前端第一帧就按最终的尺寸排，显示时不再重排一次；ready 时一步显示（show_placed）。 */
+
+/// 建好、藏着、等 ready 的仓库窗口：显示时按这个摆
+static PLACING: std::sync::LazyLock<Mutex<HashMap<String, boot::WindowPlacement>>> =
+    std::sync::LazyLock::new(Mutex::default);
+
+fn place_hidden<R: Runtime>(window: &tauri::WebviewWindow<R>, saved: Option<boot::WindowPlacement>) {
+    // 没记过：最大化；不最大化时就是刚建好的样子（屏幕正中 1440×900）
+    let fresh = || {
+        current_placement(&window.as_ref().window()).map(|now| boot::WindowPlacement { maximized: true, ..now })
+    };
+    let Some(placement) = saved.or_else(fresh) else { return };
+    if saved.is_some() {
+        set_normal(window, placement);
+    }
+    // 先撑满工作区，前端按最大化的尺寸排第一帧。只在 Windows 上：显示时 SetWindowPlacement 把不最大化时的
+    // 位置记回去；别的系统上撑满以后「还原」就还原成这么大了
+    #[cfg(windows)]
+    if placement.maximized {
+        let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
+        if let Some(monitor) = monitor {
+            let area = monitor.work_area();
+            let _ = window.set_position(tauri::Position::Physical(area.position));
+            let _ = window.set_size(tauri::Size::Physical(area.size));
+        }
+    }
+    if let Ok(mut placing) = PLACING.lock() {
+        placing.insert(window.label().to_string(), placement);
+    }
+}
+
+/// lib.rs 的 ready 在 show() 之前调：仓库窗口要最大化的，这时候最大化（一步显示出来）。
+/// `jumped`：日程切换器已经给这个窗口摆好了（place_pending），只把记着的这份丢掉
+pub fn show_placed<R: Runtime>(window: &tauri::WebviewWindow<R>, jumped: bool) {
+    let placement = PLACING.lock().ok().and_then(|mut placing| placing.remove(window.label()));
+    let Some(placement) = placement.filter(|placement| placement.maximized && !jumped) else { return };
+    // Windows：最大化显示，同时把不最大化时的位置记回去（藏着时撑满了工作区）
+    #[cfg(windows)]
+    set_placement(window, placement, windows::Win32::UI::WindowsAndMessaging::SW_SHOWMAXIMIZED);
+    // tao 自己记着窗口是不是最大化（标题栏的「还原」图标按它），也走一遍
+    let _ = window.maximize();
+}
+
+/// 仓库窗口要关了（lib.rs 的 CloseRequested）：记下这时候的样子，下次打开这个仓库照样摆。
+/// 已经藏起来的（关到一半又来一次）不算；最小化着的照样记（Windows 知道它最小化之前是不是最大化）
+pub fn remember_placement<R: Runtime>(window: &tauri::Window<R>) {
+    let state = window.state::<AppState>();
+    let Some(workspace) = state.workspace(window.label()) else { return };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let Some(placement) = current_placement(window) else { return };
+    let root = workspace.root();
+    if let Err(error) = boot::edit_config(&state.data_dir, |config| {
+        config.set_vault_placement(&root, placement);
+        Ok(())
+    }) {
+        eprintln!("保存配置失败: {error}");
+    }
+}
+
+#[cfg(windows)]
+fn current_placement<R: Runtime>(window: &tauri::Window<R>) -> Option<boot::WindowPlacement> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowPlacement, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
+    };
+    let hwnd = window.hwnd().ok()?;
+    let mut place = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+    unsafe { GetWindowPlacement(hwnd, &mut place) }.ok()?;
+    let maximized = place.showCmd == SW_SHOWMAXIMIZED.0 as u32
+        || (place.showCmd == SW_SHOWMINIMIZED.0 as u32 && place.flags.0 & WPF_RESTORETOMAXIMIZED.0 != 0);
+    let rect = place.rcNormalPosition;
+    Some(boot::WindowPlacement {
+        maximized,
+        x: rect.left,
+        y: rect.top,
+        width: (rect.right - rect.left).max(0) as u32,
+        height: (rect.bottom - rect.top).max(0) as u32,
+    })
+}
+
+/// 别的系统：最大化着拿不到原来的位置，只记是不是最大化，位置大小沿用刚建好时的
+#[cfg(not(windows))]
+fn current_placement<R: Runtime>(window: &tauri::Window<R>) -> Option<boot::WindowPlacement> {
+    let maximized = window.is_maximized().ok()?;
+    let position = window.outer_position().ok()?;
+    let size = window.outer_size().ok()?;
+    Some(boot::WindowPlacement { maximized, x: position.x, y: position.y, width: size.width, height: size.height })
+}
+
+/// 藏着的窗口摆到不最大化时的位置大小（还藏着）
+fn set_normal<R: Runtime>(window: &tauri::WebviewWindow<R>, placement: boot::WindowPlacement) {
+    #[cfg(windows)]
+    set_placement(window, placement, windows::Win32::UI::WindowsAndMessaging::SW_HIDE);
+    #[cfg(not(windows))]
+    {
+        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(placement.width, placement.height)));
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(placement.x, placement.y)));
+    }
+}
+
+/// SetWindowPlacement：不最大化时的位置大小 + 这一下怎么显示（SW_HIDE 是还藏着）。
+/// 记下的那块屏幕拔掉了的话，系统自己把窗口挪回看得见的地方
+#[cfg(windows)]
+fn set_placement<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    placement: boot::WindowPlacement,
+    show: windows::Win32::UI::WindowsAndMessaging::SHOW_WINDOW_CMD,
+) {
+    use windows::Win32::Foundation::{POINT, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPlacement, WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS};
+    let Ok(hwnd) = window.hwnd() else { return };
+    let place = WINDOWPLACEMENT {
+        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+        flags: WINDOWPLACEMENT_FLAGS(0),
+        showCmd: show.0 as u32,
+        ptMinPosition: POINT { x: -1, y: -1 },
+        ptMaxPosition: POINT { x: -1, y: -1 },
+        rcNormalPosition: RECT {
+            left: placement.x,
+            top: placement.y,
+            right: placement.x + placement.width as i32,
+            bottom: placement.y + placement.height as i32,
+        },
+    };
+    if let Err(error) = unsafe { SetWindowPlacement(hwnd, &place) } {
+        eprintln!("摆窗口失败: {error}");
+    }
 }
 
 /// 弹启动器：已经开着就提到前面
@@ -144,6 +292,10 @@ pub fn show_launcher<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
 }
 
 pub fn focus<R: Runtime>(app: &AppHandle<R>, label: &str) {
+    if label == LAUNCHER {
+        // 刚关上、还没销毁的启动器又被叫回来：不销毁了
+        LAUNCHER_RETIRING.store(0, Ordering::SeqCst);
+    }
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.unminimize();
         let _ = window.show();
@@ -237,10 +389,24 @@ pub fn on_ready<R: Runtime>(app: &AppHandle<R>, label: &str) {
     deliver_jump(app, label);
 }
 
-fn close_launcher<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window(LAUNCHER) {
-        let _ = window.destroy();
-    }
+/// 正在退场的那一次启动器（0 = 没在退场）：藏起来了、等着销毁。又被叫回来（focus）就作废
+static LAUNCHER_RETIRING: AtomicU64 = AtomicU64::new(0);
+static LAUNCHER_TICKET: AtomicU64 = AtomicU64::new(0);
+
+/// 关启动器：先藏起来，等系统的关窗淡出播完再销毁（关闭按钮、Alt+F4 也走这里，见 lib.rs）。
+/// 以前直接 destroy：WebView 先被拆掉，系统拿来播淡出的是一块只剩底色的窗口；拆 WebView 还要在
+/// 主线程上卡一下，这时候新开的仓库窗口正在画第一屏 —— 就是关掉启动器那一下的「掉帧」
+pub fn close_launcher<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.get_webview_window(LAUNCHER) else { return };
+    let ticket = LAUNCHER_TICKET.fetch_add(1, Ordering::SeqCst) + 1;
+    LAUNCHER_RETIRING.store(ticket, Ordering::SeqCst);
+    let _ = window.hide();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        if LAUNCHER_RETIRING.compare_exchange(ticket, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            let _ = window.destroy();
+        }
+    });
 }
 
 /// 点开了一个 odea:// 链接（协作邀请、回连、中继码）：交给最近用过的仓库窗口。一个都没开着就先打开
@@ -425,11 +591,11 @@ pub async fn launcher_vaults(state: State<'_, AppState>) -> Result<Vec<VaultEntr
     Ok(entries(&state))
 }
 
-/// 打开（或者提到前面）一个仓库。新开的窗口画出来以后启动器自己关掉
-async fn open_from_launcher<R: Runtime>(app: AppHandle<R>, root: PathBuf, seed: bool) -> Result<()> {
+/// 打开（或者提到前面）一个仓库。新开的窗口画出来以后启动器自己关掉。
+/// logical 只对新建的（seed）有用：建成逻辑目录还是真实文件夹，用户在「新建」里选的；打开的文件夹照它本来的样子
+async fn open_from_launcher<R: Runtime>(app: AppHandle<R>, root: PathBuf, seed: bool, logical: bool) -> Result<()> {
     let handle = app.clone();
-    // 新建的（seed）建成逻辑目录；打开的文件夹照它本来的样子
-    let how = Open { seed, remember: true, quiet: true, logical: seed };
+    let how = Open { seed, remember: true, quiet: true, logical: seed && logical };
     let (label, existing) = blocking(move || open_vault(&handle, &root, how)).await?;
     if existing {
         close_launcher(&app);
@@ -448,7 +614,7 @@ pub async fn launcher_open<R: Runtime>(app: AppHandle<R>, path: String) -> Resul
     if !root.is_dir() {
         return Err(AppError::NotFound(format!("找不到这个文件夹了：{path}")));
     }
-    open_from_launcher(app, root, false).await
+    open_from_launcher(app, root, false, false).await
 }
 
 /// 「打开文件夹」：系统的选择文件夹对话框，选了就打开（不往别人的文件夹里放指南）。取消了返回 false
@@ -468,7 +634,7 @@ pub async fn launcher_open_folder<R: Runtime>(app: AppHandle<R>) -> Result<bool>
     let root = picked
         .into_path()
         .map_err(|error| AppError::Invalid(format!("这个位置用不了: {error}")))?;
-    open_from_launcher(app, root, false).await?;
+    open_from_launcher(app, root, false, false).await?;
     Ok(true)
 }
 
@@ -499,13 +665,15 @@ pub async fn launcher_pick_parent<R: Runtime>(app: AppHandle<R>, from: String) -
         .map(|path| path.to_string_lossy().into_owned()))
 }
 
-/// 新建：在 parent 下面建一个叫 name 的文件夹，放使用指南，打开。同名的文件夹已经有了、里面有东西就不建
+/// 新建：在 parent 下面建一个叫 name 的文件夹，放使用指南，打开。同名的文件夹已经有了、里面有东西就不建。
+/// logical：建成逻辑目录（树记在清单里，笔记平放）；否则是真实文件夹（树就是硬盘上的文件夹）。
+/// 两样的区别在启动器「新建」里说清楚、让用户选（docs/仓库与启动器.md §15）
 #[tauri::command]
 #[specta::specta]
-pub async fn launcher_create<R: Runtime>(app: AppHandle<R>, parent: String, name: String) -> Result<()> {
+pub async fn launcher_create<R: Runtime>(app: AppHandle<R>, parent: String, name: String, logical: bool) -> Result<()> {
     let root = new_vault_root(&parent, &name)?;
     std::fs::create_dir_all(&root)?;
-    open_from_launcher(app, root, true).await
+    open_from_launcher(app, root, true, logical).await
 }
 
 /// 「从同步仓库拉一份」（换电脑时最常用，技术方案 §5.9.7）：用登录过的账号把云端的仓库 clone 到
@@ -547,7 +715,7 @@ pub async fn launcher_clone<R: Runtime>(
         Ok(())
     })
     .await?;
-    open_from_launcher(app, root, false).await
+    open_from_launcher(app, root, false, false).await
 }
 
 /// 新建 / 拉一份时的新文件夹：parent 下面叫 name 的。同名的已经有了、里面有东西就不行
@@ -673,8 +841,8 @@ fn apply_place<R: Runtime>(window: &tauri::WebviewWindow<R>, place: Place) {
     let _ = window.set_position(tauri::Position::Physical(place.position));
 }
 
-/// lib.rs 的 ready 在显示窗口之前调：日程切换器打开的窗口先摆好位置
-pub fn place_pending<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+/// lib.rs 的 ready 在显示窗口之前调：日程切换器打开的窗口先摆好位置。摆了返回 true
+pub fn place_pending<R: Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
     let state = window.state::<AppState>();
     let place = state
         .journal_jumps
@@ -684,6 +852,7 @@ pub fn place_pending<R: Runtime>(window: &tauri::WebviewWindow<R>) {
     if let Some(place) = place {
         apply_place(window, place);
     }
+    place.is_some()
 }
 
 /// 窗口起来了：日程切换器在等它的话，翻到那一页

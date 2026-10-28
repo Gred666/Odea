@@ -1,7 +1,7 @@
 import { openDocument } from "@/app/navigate";
-import { useApp } from "@/app/store";
+import { hasListColumn, useApp } from "@/app/store";
 import { useRelays } from "@/collab/relayStore";
-import { useCollab } from "@/collab/store";
+import { overlapOf, sessionName, useCollab } from "@/collab/store";
 import { releaseOf } from "@/content/changelog";
 import { backend } from "@/data/backend";
 import { UNSORTED, folderLabel, folderName, folderOf, smartQuery } from "@/data/folders";
@@ -23,6 +23,7 @@ import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/palet
 import { isMac } from "@/lib/platform";
 import {
   Archive,
+  ArchiveX,
   ArrowDown,
   ArrowUp,
   BookOpen,
@@ -60,6 +61,7 @@ import {
   Sun,
   Target,
   TextSearch,
+  Trash2,
   Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -160,6 +162,9 @@ export function CommandPalette({
   // 这个仓库开没开日程（docs/仓库与启动器.md §6）：没开的话没有今日TODO、目标、日历、归档
   const journalOn = useData((s) => s.layout.journal);
   const setJournal = useData((s) => s.setJournal);
+  const archiveOn = useData((s) => s.layout.archive);
+  const setArchive = useData((s) => s.setArchive);
+  const setTrashOpen = useApp((s) => s.setTrashOpen);
   // 逻辑目录（§7）：本地目录能转过去；转过去的能导出成真实文件夹
   const logical = useData((s) => s.layout.logical);
   const makeLogical = useData((s) => s.makeLogical);
@@ -178,13 +183,10 @@ export function CommandPalette({
   const checkUpdate = useData((s) => s.checkUpdate);
   const setUpdateDialog = useApp((s) => s.setUpdateDialog);
   const setFindOpen = useApp((s) => s.setFindOpen);
-  const collabPhase = useCollab((s) => s.phase);
-  // 上一次做客已经结束（主持人停了、被移出）：和没在协作一样给「邀请 / 加入」，开始新的时候先收掉那一次
-  const collabFree = useCollab(
-    (s) => s.phase === "idle" || (s.phase === "guest" && s.status?.state === "ended"),
-  );
-  // 共享仓库（docs/协同编辑.md §20）：这个仓库共享了的话，会话式的「邀请协作」不给（一篇不能同时
-  // 绑两个 CRDT），换成「共享仓库…」
+  // 同时好几个协作（docs/协同编辑.md §25）：几个、这一篇在不在哪一个里
+  const collabCount = useCollab((s) => s.order.length);
+  const collabOnly = useCollab((s) => (s.order.length === 1 ? s.sessions[s.order[0]!] : undefined));
+  const hostedIn = useCollab((s) => s.hostedIn);
 
   const [query, setQuery] = useState("");
   const searched = useTextSearch(open ? query : "", NOTE_RESULTS * 2);
@@ -310,7 +312,6 @@ export function CommandPalette({
             nav("today", "今日TODO", SquareCheckBig, "today 今天 待办 todo"),
             nav("goal", "/GOAL", Target, "goal 目标 周 月 年"),
             nav("calendar", "日历", CalendarDays, "calendar 日期 某天"),
-            nav("archive", "归档", Archive, "archive 存档"),
             // 日程切换器（docs/协同编辑.md §22.6）：团队的、个人的日程在不同的仓库里
             {
               id: "journal-switch",
@@ -323,6 +324,7 @@ export function CommandPalette({
             } satisfies Item,
           ]
         : []),
+      ...(archiveOn ? [nav("archive", "归档", Archive, "archive 存档")] : []),
 
       themeItem("light", "切换到亮色", Sun, "light 浅色 白天 日间 亮"),
       themeItem("dark", "切换到暗色", Moon, "dark 深色 夜间 黑 暗"),
@@ -336,15 +338,20 @@ export function CommandPalette({
         keywords: "动效 动画 motion animation reduce",
         run: () => setReduceMotion(!reduceMotion),
       },
-      {
-        id: "toggle-panel",
-        group: "外观",
-        icon: panelCollapsed ? PanelLeftOpen : PanelLeftClose,
-        label: panelCollapsed ? "展开侧栏" : "收起侧栏",
-        hint: panelCollapsed ? undefined : "文件树那一栏，窄窗口里给正文让地方",
-        keywords: "侧栏 侧边栏 文件树 列表栏 导航 sidebar collapse 收起 展开 隐藏",
-        run: () => setPanelCollapsed(!panelCollapsed),
-      },
+      // 今日TODO、目标没有那一栏：那两页不给这一条（和正文底下状态栏左端的开关一样）
+      ...(hasListColumn(workspace)
+        ? [
+            {
+              id: "toggle-panel",
+              group: "外观",
+              icon: panelCollapsed ? PanelLeftOpen : PanelLeftClose,
+              label: panelCollapsed ? "展开侧栏" : "收起侧栏",
+              hint: panelCollapsed ? undefined : "文件树那一栏，窄窗口里给正文让地方",
+              keywords: "侧栏 侧边栏 文件树 列表栏 导航 sidebar collapse 收起 展开 隐藏",
+              run: () => setPanelCollapsed(!panelCollapsed),
+            } satisfies Item,
+          ]
+        : []),
 
       {
         id: "switch-vault",
@@ -361,11 +368,30 @@ export function CommandPalette({
         icon: journalOn ? CalendarOff : CalendarCheck,
         label: journalOn ? "关闭日程" : "启用日程",
         hint: journalOn
-          ? "窄栏上不再有今日TODO、目标、日历、归档，文件都留着"
-          : "今日TODO、目标、日历、归档；放在这个仓库的日记、目标文件夹里",
-        keywords:
-          "journal 日程 日记 今日 todo 目标 goal 日历 calendar 归档 启用 开启 关闭 obsidian",
+          ? "窄栏上不再有今日TODO、目标、日历，文件都留着"
+          : "今日TODO、目标、日历；放在这个仓库的日记、目标文件夹里",
+        keywords: "journal 日程 日记 今日 todo 目标 goal 日历 calendar 启用 开启 关闭 obsidian",
         run: () => void setJournal(!journalOn),
+      },
+      {
+        id: "toggle-archive",
+        group: "文件",
+        icon: archiveOn ? ArchiveX : Archive,
+        label: archiveOn ? "关闭归档" : "启用归档",
+        hint: archiveOn
+          ? "窄栏上不再有归档，「归档」文件夹里的笔记回到文件树"
+          : "不用的旧笔记挪进「归档」文件夹，不占文件树；和日程无关",
+        keywords: "archive 归档 存档 旧笔记 启用 开启 关闭",
+        run: () => void setArchive(!archiveOn),
+      },
+      {
+        id: "trash",
+        group: "文件",
+        icon: Trash2,
+        label: "回收站…",
+        hint: "删掉的笔记留 30 天，在这里找回来",
+        keywords: "trash recycle bin 回收站 删除 恢复 找回 误删 undo",
+        run: () => setTrashOpen(true),
       },
       logical
         ? {
@@ -419,99 +445,126 @@ export function CommandPalette({
         keywords: "vault 仓库 位置 网盘 迁移 搬 移动 C盘 D盘 换盘 存在哪",
         run: () => void changeVaultRoot(),
       },
-      // 协作（docs/协同编辑.md §8）：没在协作时是邀请 / 加入，协作中是打开对话框、停止
-      ...(collabFree
-        ? [
-            ...(docTarget?.kind === "note"
-              ? [
-                  {
-                    id: "collab-invite",
-                    group: "协作",
-                    icon: Users,
-                    label: "邀请协作…",
-                    hint: "发一个链接，和别人一起编辑这篇",
-                    keywords: "collab invite share 协作 协同 一起编辑 多人 邀请 分享 共享 链接",
-                    run: () => {
-                      const id = docTarget.id;
-                      const title = useData.getState().notes.find((note) => note.id === id)?.title;
-                      void useCollab.getState().startHosting(id, title ?? "");
-                    },
-                  } satisfies Item,
-                ]
-              : []),
-            // 一个文件夹、整个仓库（docs/协同编辑.md §22.5）：对方能打开里面的任何一篇
-            ...(workspace === "notes" &&
-            noteFolder &&
-            noteFolder !== UNSORTED &&
-            !smartQuery(noteFolder)
-              ? [
-                  {
-                    id: "collab-invite-folder",
-                    group: "协作",
-                    icon: Users,
-                    label: `邀请协作：文件夹「${folderName(noteFolder)}」…`,
-                    hint: "对方能打开这个文件夹里的每一篇",
-                    keywords: "collab invite folder share 协作 协同 文件夹 邀请 一起编辑 多人 共享",
-                    run: () =>
-                      void useCollab.getState().startHostingScope({
-                        kind: "folder",
-                        folder: noteFolder,
-                        name: folderName(noteFolder),
-                      }),
-                  } satisfies Item,
-                ]
-              : []),
-            {
-              id: "collab-invite-vault",
-              group: "协作",
-              icon: Users,
-              label: "邀请协作：整个仓库…",
-              hint: "对方能打开这个仓库里的每一篇笔记",
-              keywords: "collab invite vault share 协作 协同 仓库 全部 邀请 一起编辑 多人 共享",
-              run: () =>
-                void useCollab.getState().startHostingScope({
-                  kind: "vault",
-                  name: vaultRoot ? folderName(vaultRoot.replaceAll("\\", "/")) : "Odea",
-                }),
-            } satisfies Item,
-            {
-              id: "collab-join",
-              group: "协作",
-              icon: Users,
-              label: "加入协作…",
-              hint: "粘贴别人发来的链接",
-              keywords: "collab join 协作 协同 加入 一起编辑 多人 链接 odea",
-              run: () => useCollab.getState().openDialog(""),
-            } satisfies Item,
-            {
-              id: "collab-nearby",
-              group: "协作",
-              icon: Users,
-              label: "附近的协作…",
-              hint: "同一个网络里正在分享的人",
-              keywords: "collab nearby lan 协作 协同 附近 局域网 同一个网络 wifi 加入",
-              run: () => useCollab.getState().openDialog(""),
-            } satisfies Item,
-          ]
-        : [
-            {
-              id: "collab-open",
-              group: "协作",
-              icon: Users,
-              label: "协作…",
-              hint: collabPhase === "guest" ? "做客中" : "主持中",
-              keywords: "collab 协作 协同 成员 邀请 链接 权限",
-              run: () => useCollab.getState().openDialog(),
-            } satisfies Item,
-            {
-              id: "collab-stop",
-              group: "协作",
-              icon: LogOut,
-              label: collabPhase === "guest" ? "离开协作" : "停止协作",
-              keywords: "collab stop leave 协作 停止 离开 结束",
-              run: () => void useCollab.getState().stop(),
-            } satisfies Item,
-          ]),
+      // 协作（docs/协同编辑.md §8、§25）：邀请、加入随时都有（同时好几个协作）；这一篇已经在一次协作里的话，
+      // 「邀请协作」换成打开那一次（一篇只能在一次协作里）
+      ...(() => {
+        const items: Item[] = [];
+        const noteId = docTarget?.kind === "note" ? docTarget.id : null;
+        const inside =
+          noteId !== null
+            ? (hostedIn[noteId] ?? overlapOf({ kind: "doc", noteId, title: "" }) ?? null)
+            : null;
+        if (noteId !== null && inside !== null) {
+          items.push({
+            id: "collab-here",
+            group: "协作",
+            icon: Users,
+            label: "这篇的协作…",
+            hint: "这一篇已经在一次协作里：谁在、邀请链接",
+            keywords: "collab invite share 协作 协同 一起编辑 多人 邀请 分享 共享 链接 成员",
+            run: () => useCollab.getState().openSession(inside),
+          });
+        } else if (noteId !== null) {
+          items.push({
+            id: "collab-invite",
+            group: "协作",
+            icon: Users,
+            label: "邀请协作…",
+            hint: "发一个链接，和别人一起编辑这篇",
+            keywords: "collab invite share 协作 协同 一起编辑 多人 邀请 分享 共享 链接",
+            run: () => {
+              const title = useData.getState().notes.find((note) => note.id === noteId)?.title;
+              void useCollab.getState().startHosting(noteId, title ?? "");
+            },
+          });
+        }
+        // 一个文件夹、整个仓库（docs/协同编辑.md §22.5）：对方能打开里面的任何一篇
+        if (
+          workspace === "notes" &&
+          noteFolder &&
+          noteFolder !== UNSORTED &&
+          !smartQuery(noteFolder)
+        ) {
+          items.push({
+            id: "collab-invite-folder",
+            group: "协作",
+            icon: Users,
+            label: `邀请协作：文件夹「${folderName(noteFolder)}」…`,
+            hint: "对方能打开这个文件夹里的每一篇",
+            keywords: "collab invite folder share 协作 协同 文件夹 邀请 一起编辑 多人 共享",
+            run: () =>
+              void useCollab.getState().startHostingScope({
+                kind: "folder",
+                folder: noteFolder,
+                name: folderName(noteFolder),
+              }),
+          });
+        }
+        items.push(
+          {
+            id: "collab-invite-vault",
+            group: "协作",
+            icon: Users,
+            label: "邀请协作：整个仓库…",
+            hint: "对方能打开这个仓库里的每一篇笔记",
+            keywords: "collab invite vault share 协作 协同 仓库 全部 邀请 一起编辑 多人 共享",
+            run: () =>
+              void useCollab.getState().startHostingScope({
+                kind: "vault",
+                name: vaultRoot ? folderName(vaultRoot.replaceAll("\\", "/")) : "Odea",
+              }),
+          },
+          {
+            id: "collab-join",
+            group: "协作",
+            icon: Users,
+            label: "加入协作…",
+            hint: "粘贴别人发来的链接",
+            keywords: "collab join 协作 协同 加入 一起编辑 多人 链接 odea",
+            run: () => useCollab.getState().openDialog(""),
+          },
+          {
+            id: "collab-nearby",
+            group: "协作",
+            icon: Users,
+            label: "附近的协作…",
+            hint: "同一个网络里正在分享的人",
+            keywords: "collab nearby lan 协作 协同 附近 局域网 同一个网络 wifi 加入",
+            run: () => useCollab.getState().openDialog(""),
+          },
+        );
+        if (collabCount > 0) {
+          items.push({
+            id: "collab-open",
+            group: "协作",
+            icon: Users,
+            label: "协作…",
+            hint:
+              collabCount > 1
+                ? `${collabCount} 个协作进行中`
+                : collabOnly?.role === "guest"
+                  ? "做客中"
+                  : "主持中",
+            keywords: "collab 协作 协同 成员 邀请 链接 权限",
+            run: () => useCollab.getState().openDialog(),
+          });
+        }
+        // 停哪一个：这一篇所在的那次；只有一次的话就是它
+        const stoppable = inside ?? (collabOnly ? collabOnly.id : null);
+        const target = stoppable === null ? undefined : useCollab.getState().sessions[stoppable];
+        if (target) {
+          const guest = target.role === "guest";
+          items.push({
+            id: "collab-stop",
+            group: "协作",
+            icon: LogOut,
+            label: `${guest ? "离开协作" : "停止协作"}：${sessionName(target)}`,
+            keywords: "collab stop leave 协作 停止 离开 结束",
+            run: () => void useCollab.getState().stop(target.id),
+          });
+        }
+        return items;
+      })(),
       // 团队仓库（docs/协同编辑.md §22.3）：别人也能读写这个同步仓库
       {
         id: "team",
@@ -633,6 +686,9 @@ export function CommandPalette({
     setPanelCollapsed,
     journalOn,
     setJournal,
+    archiveOn,
+    setArchive,
+    setTrashOpen,
     logical,
     makeLogical,
     exportTree,
@@ -642,8 +698,9 @@ export function CommandPalette({
     openVaultFolder,
     syncState,
     setSyncOpen,
-    collabPhase,
-    collabFree,
+    collabCount,
+    collabOnly,
+    hostedIn,
     setHistoryFor,
     changeVaultRoot,
     vaultRoot,

@@ -88,7 +88,8 @@ export const tauriTeamNet: TeamNet = {
   base: (target) => unwrap(commands.teamBase(target)),
   syncNow: syncRound,
   send: (kind, member, doc, payload) => {
-    invoke("team_send", encodeFrame(kind, member, doc, payload)).catch((error) => {
+    // 帧格式和协作的一样，会话号填 0（团队用不着）
+    invoke("team_send", encodeFrame(kind, 0, member, doc, payload)).catch((error) => {
       console.error("团队：发不出去", error);
     });
   },

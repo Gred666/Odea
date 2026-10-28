@@ -23,7 +23,6 @@ import type {
   JournalVault,
   LinkRewrite,
   Note,
-  NoteInput,
   NoteSummary,
   Relink,
   SyncAccount,
@@ -37,6 +36,7 @@ import type {
   TeamInfo,
   TeamInvite,
   TextSearch,
+  TrashedNote,
   TreeFile,
   TreeNode,
   UpdateInfo,
@@ -59,13 +59,21 @@ export interface Backend {
   /** 一个列表（笔记 / 归档）的全部笔记，不带正文。正文打开哪篇取哪篇（noteGet） */
   noteList(archived: boolean): Promise<NoteSummary[]>;
   noteGet(id: string): Promise<Note>;
-  noteUpsert(input: NoteInput): Promise<string>;
+  /**
+   * 存正文，返回存完的那一篇。base 是编辑器照着改的那一版正文的指纹（lib/fingerprint.ts）：
+   * 磁盘上已经不是那一版了，后端先把磁盘上的另存成冲突副本再写。null = 不知道（只比索引）
+   */
+  noteSave(id: string, contentMd: string, base: string | null): Promise<Note>;
+  /** 改标题：文件跟着改名，正文不动。返回改完的那一篇 */
+  noteRename(id: string, title: string): Promise<Note>;
   noteSetPinned(id: string, pinned: boolean): Promise<void>;
   noteArchive(id: string, category?: string): Promise<void>;
   noteRestore(id: string): Promise<void>;
   noteDelete(id: string): Promise<void>;
-  /** 撤销删除（删除是软删除） */
+  /** 撤销删除、回收站里的「恢复」（删除是挪进回收站） */
   noteUndelete(id: string): Promise<void>;
+  /** 回收站里的笔记，最近删的在前 */
+  trashList(): Promise<TrashedNote[]>;
   /** 正文里写了 `[[这篇的标题]]` 的文档，最近改过的在前 */
   noteBacklinks(id: string): Promise<Backlink[]>;
   /** 笔记改了标题之后：别处的 `[[旧标题]]` 改成现在的标题 */
@@ -131,10 +139,22 @@ export interface Backend {
   taskToggle(id: string): Promise<Task>;
   /** 某个周期的目标；没写过的周期返回空文档（id 为空） */
   goalGet(horizon: GoalHorizon, periodStart: string): Promise<Goal>;
-  goalSave(horizon: GoalHorizon, periodStart: string, contentMd: string): Promise<Goal>;
+  /** base 同 noteSave */
+  goalSave(
+    horizon: GoalHorizon,
+    periodStart: string,
+    contentMd: string,
+    base: string | null,
+  ): Promise<Goal>;
   /** carryOver 只在请求「今天」时传 true：今天还没写过就延续之前最近的一天 */
   calendarDay(date: string, carryOver: boolean): Promise<DayDoc>;
-  calendarDaySave(date: string, title: string, noteMd: string): Promise<DayDoc>;
+  /** base 同 noteSave */
+  calendarDaySave(
+    date: string,
+    title: string,
+    noteMd: string,
+    base: string | null,
+  ): Promise<DayDoc>;
   /** 月网格上的记号：写过记录 / 做过事的日子，和还有待办的日子 */
   calendarMarks(from: string, to: string): Promise<CalendarMarks>;
   /** 所有写过的某一天、某个周期的目标（不带正文，命令面板按标题搜它们），最近改过的在前 */
@@ -148,14 +168,14 @@ export interface Backend {
   vaultInfo(): Promise<VaultInfo>;
   /** 开 / 关日程：改仓库标记、每个文件按新的摆法重新认一遍（文件不动）。之后整页重载 */
   vaultSetJournal(on: boolean): Promise<VaultInfo>;
+  /** 开 / 关归档（和日程分开）：改仓库标记、重新认一遍文件。之后整页重载 */
+  vaultSetArchive(on: boolean): Promise<VaultInfo>;
   /** 别的设备开关了日程、转成了逻辑目录（VaultChange.layout）：按磁盘上的仓库标记重新摆 */
   vaultRelayout(): Promise<VaultInfo>;
   /** 在系统的文件管理器里定位这篇文档的文件 */
   vaultReveal(target: DocumentSaveTarget): Promise<void>;
   /** 打开整个笔记文件夹 */
   vaultOpenFolder(): Promise<void>;
-  /** 把磁盘上的当前版本另存成冲突副本，返回它的标题（文件不存在时为 null） */
-  vaultKeepConflictCopy(target: DocumentSaveTarget): Promise<string | null>;
   /**
    * 弹选择文件夹对话框换仓库；取消了返回 null。`ask`：新文件夹里没有笔记就问搬过去 / 复制过去 /
    * 只换文件夹；`move`：直接搬过去
@@ -245,7 +265,8 @@ async function unwrap<T>(request: Promise<IpcResult<T, unknown>>): Promise<T> {
 const tauriBackend: Backend = {
   noteList: (archived) => unwrap(commands.noteList(archived)),
   noteGet: (id) => unwrap(commands.noteGet(id)) as Promise<Note>,
-  noteUpsert: (input) => unwrap(commands.noteUpsert(input)),
+  noteSave: (id, contentMd, base) => unwrap(commands.noteSave(id, contentMd, base)),
+  noteRename: (id, title) => unwrap(commands.noteRename(id, title)),
   noteSetPinned: async (id, pinned) => {
     await unwrap(commands.noteSetPinned(id, pinned));
   },
@@ -261,6 +282,7 @@ const tauriBackend: Backend = {
   noteUndelete: async (id) => {
     await unwrap(commands.noteUndelete(id));
   },
+  trashList: () => unwrap(commands.trashList()),
   noteBacklinks: (id) => unwrap(commands.noteBacklinks(id)) as Promise<Backlink[]>,
   noteRelink: (id, oldTitle) => unwrap(commands.noteRelink(id, oldTitle)),
   noteRelinkUndo: (rewrites) => unwrap(commands.noteRelinkUndo(rewrites)),
@@ -304,12 +326,12 @@ const tauriBackend: Backend = {
   taskToggle: (id) => unwrap(commands.taskToggle(id)) as Promise<Task>,
   goalGet: (horizon, periodStart) =>
     unwrap(commands.goalGet(horizon, periodStart)) as Promise<Goal>,
-  goalSave: (horizon, periodStart, contentMd) =>
-    unwrap(commands.goalSave(horizon, periodStart, contentMd)) as Promise<Goal>,
+  goalSave: (horizon, periodStart, contentMd, base) =>
+    unwrap(commands.goalSave(horizon, periodStart, contentMd, base)) as Promise<Goal>,
   calendarDay: (date, carryOver) =>
     unwrap(commands.calendarDay(date, carryOver)) as Promise<DayDoc>,
-  calendarDaySave: (date, title, noteMd) =>
-    unwrap(commands.calendarDaySave(date, title, noteMd)) as Promise<DayDoc>,
+  calendarDaySave: (date, title, noteMd, base) =>
+    unwrap(commands.calendarDaySave(date, title, noteMd, base)) as Promise<DayDoc>,
   calendarMarks: async (from, to) => {
     const marks = await unwrap(commands.calendarMarks(from, to));
     return { written: new Set(marks.written), open: new Set(marks.open) };
@@ -322,6 +344,7 @@ const tauriBackend: Backend = {
   guideOpen: (name) => unwrap(commands.guideOpen(name)),
   vaultInfo: () => unwrap(commands.vaultInfo()),
   vaultSetJournal: (on) => unwrap(commands.vaultSetJournal(on)),
+  vaultSetArchive: (on) => unwrap(commands.vaultSetArchive(on)),
   vaultRelayout: () => unwrap(commands.vaultRelayout()),
   vaultReveal: async (target) => {
     await unwrap(commands.vaultReveal(target));
@@ -329,7 +352,6 @@ const tauriBackend: Backend = {
   vaultOpenFolder: async () => {
     await unwrap(commands.vaultOpenFolder());
   },
-  vaultKeepConflictCopy: (target) => unwrap(commands.vaultKeepConflictCopy(target)),
   vaultChangeRoot: (mode) => unwrap(commands.vaultChangeRoot(mode)),
   showLauncher: async () => {
     await unwrap(commands.launcherShow());

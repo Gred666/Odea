@@ -1,6 +1,8 @@
+import { keepGuestCopy } from "@/collab/keep";
 import { errorText } from "@/collab/net";
 import { FIREWALL_FIX } from "@/collab/reach";
 import type { CollabSession } from "@/collab/session";
+import { conflictOriginalTitle } from "@/data/conflicts";
 import { useData } from "@/data/store";
 import { type DocumentModel, type DocumentSaveTarget, goalKey } from "@/data/types";
 import { flushAllEditors, registerBeforeClose } from "@/editor/saveBus";
@@ -92,17 +94,38 @@ let pendingView: TeamView | null = null;
 const MAX_DOC_ID = 255;
 const utf8 = new TextEncoder();
 
-/** 这一篇在团队里的 id：笔记是相对路径（git 同步的仓库里两边一样），某一天、目标按日期。做客的那篇没有 */
+/**
+ * 编辑器里开着的这一篇上一次算出来的团队 id。开着的时候不换：改了标题（文件跟着改名）、第一次存盘把 id
+ * 写进了属性块，都还是这一篇的那份会话 —— 换了 id 就成了另一篇，会话当场分成两份
+ */
+let viewing: { key: string; doc: string } | null = null;
+
+/**
+ * 这一篇在团队里的 id（docs/协同编辑.md §22.4）。笔记是属性块里的 id（`note-<id>`）：改名、挪位置都不变，
+ * 每台设备上都一样（随 git 走）。属性块里没写 id 的（别的工具建的、扔进来的）退回相对路径 ——
+ * 索引给它的 id 只在本机，换台设备就对不上；git 同步的仓库里两边路径一样。
+ * 某一天、目标按日期。做客的那篇没有
+ */
 export function teamDocId(doc: DocumentModel): string | null {
   const target = doc.editor?.target;
   if (!target || target.kind === "shared") return null;
-  return teamIdOf(target, doc.relPath);
+  const key = keyOf(target);
+  if (viewing?.key === key) return viewing.doc;
+  const id = teamIdOf(target, doc.relPath, doc.idInFile ?? false);
+  viewing = id ? { key, doc: id } : null;
+  return id;
 }
 
-function teamIdOf(target: DocumentSaveTarget, relPath: string | undefined): string | null {
+function teamIdOf(
+  target: DocumentSaveTarget,
+  relPath: string | undefined,
+  idInFile: boolean,
+): string | null {
   const id =
     target.kind === "note"
-      ? (relPath ?? null)
+      ? idInFile
+        ? `note-${target.id}`
+        : (relPath ?? null)
       : target.kind === "day"
         ? `day-${target.id}`
         : `goal-${target.horizon}-${target.periodStart}`;
@@ -115,9 +138,13 @@ function teamIdOf(target: DocumentSaveTarget, relPath: string | undefined): stri
  */
 export async function holdTeamDoc(
   target: DocumentSaveTarget,
-  relPath: string | undefined,
+  note: { relPath: string; idInFile: boolean } | undefined,
 ): Promise<{ session: CollabSession; release: () => void } | null> {
-  const doc = teamIdOf(target, relPath);
+  // 编辑器里正开着这一篇：用开着时定下的那个 id（和团队那边的会话对得上）
+  const doc =
+    viewing?.key === keyOf(target)
+      ? viewing.doc
+      : teamIdOf(target, note?.relPath, note?.idInFile ?? false);
   const owner = controller;
   if (!doc || !owner) return null;
   const session = await owner.hold({ doc, target });
@@ -157,6 +184,17 @@ const io: TeamIO = {
   flush: flushAllEditors,
   load: bodyOf,
   save: (target, text) => useData.getState().saveDocument(target, text),
+  // 做客时主持人还没存下的字本机另留一份（docs/协同编辑.md §24）：放在应用数据目录，按仓库 + 文档认
+  keep: (link, target, doc, host) => {
+    const vault = useData.getState().vaultRoot;
+    return keepGuestCopy(link, {
+      key: `team:${vault ?? ""}:${doc}`,
+      title: () => conflictOriginalTitle(target, useData.getState()) ?? doc,
+      host,
+      vault,
+      target,
+    });
+  },
   onExternal: (target, listener) => {
     const key = keyOf(target);
     return useData.subscribe((state, previous) => {
@@ -222,5 +260,6 @@ export async function resetTeam(): Promise<void> {
   controller = null;
   started = false;
   pendingView = null;
+  viewing = null;
   useTeam.setState({ active: false, me: null, peers: [], sessions: {}, relays: [] });
 }

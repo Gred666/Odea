@@ -24,6 +24,9 @@ pub struct Note {
     pub rel_path: String,
     /// 这篇是另一篇的冲突副本（网盘同步撞车、或本应用另存的）：原文的 id
     pub conflict_of: Option<String>,
+    /// id 写在这个文件的属性块里（不是索引临时给的）：换台设备、重建索引都还是它。
+    /// 团队协作按它认同一篇（docs/协同编辑.md §22.4），没写的按相对路径
+    pub id_in_file: bool,
 }
 
 /// 列表里的一篇：Note 去掉正文。仓库里有多少篇列表就给多少篇，正文打开时再取（note_get）、
@@ -43,6 +46,23 @@ pub struct NoteSummary {
     pub updated_at: i64,
     pub rel_path: String,
     pub conflict_of: Option<String>,
+    /// 同 Note.id_in_file
+    pub id_in_file: bool,
+}
+
+/// 回收站里的一篇（`.odea/trash/<id>.md`）：回收站对话框列它们，恢复走 note_undelete
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashedNote {
+    pub id: String,
+    pub title: String,
+    /// 删之前在仓库里的位置（相对路径）：恢复时放回这里
+    pub from: String,
+    pub excerpt: String,
+    /// 什么时候删的（Unix 毫秒）
+    pub deleted_at: i64,
+    /// 到这个时候就被清掉了（打开仓库时清，Vault::purge_trash）
+    pub purge_at: i64,
 }
 
 /// 日历「当日安排」里的一条：某篇文档正文里带日期的 `- [ ]`（见 vault/tasks.rs）
@@ -191,16 +211,6 @@ pub struct FindResult {
     pub truncated: bool,
     /// 正则写错了：给人看的原因（这时 files 是空的）
     pub error: Option<String>,
-}
-
-/// 新建 / 更新笔记的入参。
-/// id 为 None 表示新建。
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct NoteInput {
-    pub id: Option<String>,
-    pub title: String,
-    pub content_md: String,
 }
 
 /// 指向一篇文档：和前端的 DocumentSaveTarget 同形
@@ -431,14 +441,16 @@ pub struct VaultInfo {
 pub struct VaultLayout {
     /// 逻辑目录（docs/仓库与启动器.md §7）：文件树是清单里摆的那一棵（tree_view），不按文件夹
     pub logical: bool,
-    /// 开没开日程（今日TODO、目标、日历、归档）
+    /// 开没开日程（今日TODO、目标、日历）
     pub journal: bool,
+    /// 开没开归档。和日程分开（只写笔记的人也要归档旧资料）；老仓库的标记里没写的跟着日程
+    pub archive: bool,
     /// 文件树的根：「笔记」，或者整个仓库（空串）
     pub notes_dir: String,
     pub days_dir: String,
     pub goals_dir: String,
     pub archive_dir: String,
-    /// 不在树上的文件夹（日程开着时的日记、目标、归档）：里面的笔记算在树根这一层
+    /// 不在树上的文件夹（日程开着时的日记、目标，归档开着时的归档）：里面的笔记算在树根这一层
     pub hidden_dirs: Vec<String>,
 }
 

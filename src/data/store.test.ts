@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { fingerprint } from "@/lib/fingerprint";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backend } from "./backend";
 import { UNSORTED, folderOf, setTreeShape } from "./folders";
@@ -11,7 +12,8 @@ const api = {
   calendarMarks: vi.fn(),
   goalGet: vi.fn(),
   goalSave: vi.fn(),
-  noteUpsert: vi.fn(),
+  noteSave: vi.fn(),
+  noteRename: vi.fn(),
   noteGet: vi.fn(),
   noteList: vi.fn(),
   noteDelete: vi.fn(),
@@ -30,7 +32,6 @@ const api = {
   onSyncStatus: vi.fn(),
   onSyncNotice: vi.fn(),
   syncStatus: vi.fn(),
-  vaultKeepConflictCopy: vi.fn(),
   vaultReveal: vi.fn(),
   guidePending: vi.fn(),
   guideSettle: vi.fn(),
@@ -81,6 +82,7 @@ const note = (contentMd: string): Note => ({
   updatedAt: 1,
   relPath: "笔记/笔记.md",
   conflictOf: null,
+  idInFile: true,
 });
 
 const initial = useData.getState();
@@ -132,7 +134,6 @@ beforeEach(() => {
     notice: null,
     drafts: {},
     externalRevisions: {},
-    conflicts: new Set(),
     marks: { written: new Set(), open: new Set() },
     guideUpdates: [],
     undoable: null,
@@ -164,7 +165,12 @@ describe("saveDocument", () => {
     api.calendarDaySave.mockResolvedValue(day("新的备注"));
 
     await useData.getState().saveDocument({ kind: "day", id: "2026-08-29" }, "新的备注");
-    expect(api.calendarDaySave).toHaveBeenCalledWith("2026-08-29", "", "新的备注");
+    expect(api.calendarDaySave).toHaveBeenCalledWith(
+      "2026-08-29",
+      "",
+      "新的备注",
+      fingerprint("原有备注"),
+    );
     expect(useData.getState().dayDocs[0]?.noteMd).toBe("新的备注");
   });
 
@@ -177,7 +183,12 @@ describe("saveDocument", () => {
     api.calendarDaySave.mockResolvedValue(day("- [x] 跑步", { title: "周四的 TODO" }));
 
     await useData.getState().saveDocument({ kind: "day", id: "2026-08-29" }, "- [x] 跑步");
-    expect(api.calendarDaySave).toHaveBeenCalledWith("2026-08-29", "周四的 TODO", "- [x] 跑步");
+    expect(api.calendarDaySave).toHaveBeenCalledWith(
+      "2026-08-29",
+      "周四的 TODO",
+      "- [x] 跑步",
+      fingerprint("- [ ] 跑步"),
+    );
     expect(useData.getState().dayDocs[0]?.carriedFrom).toBeNull();
     expect(useData.getState().marks.written.has("2026-08-29")).toBe(true);
   });
@@ -206,7 +217,7 @@ describe("saveDocument", () => {
     await useData
       .getState()
       .saveDocument({ kind: "goal", horizon: "week", periodStart: "2026-08-24" }, "本周");
-    expect(api.goalSave).toHaveBeenCalledWith("week", "2026-08-24", "本周");
+    expect(api.goalSave).toHaveBeenCalledWith("week", "2026-08-24", "本周", fingerprint(""));
     expect(useData.getState().goals["week:2026-08-24"]?.id).toBe("g1");
   });
 
@@ -216,8 +227,7 @@ describe("saveDocument", () => {
     const older = { ...note("甲"), id: "n-old", updatedAt: 1 };
     const newer = { ...note("乙"), id: "n-new", updatedAt: 9 };
     put({ notes: [newer, older] });
-    api.noteUpsert.mockResolvedValue("n-old");
-    api.noteGet.mockResolvedValue({ ...older, contentMd: "甲甲", updatedAt: 99 });
+    api.noteSave.mockResolvedValue({ ...older, contentMd: "甲甲", updatedAt: 99 });
 
     await useData.getState().saveDocument({ kind: "note", id: "n-old" }, "甲甲");
     expect(useData.getState().notes.map((item) => item.id)).toEqual(["n-new", "n-old"]);
@@ -225,7 +235,7 @@ describe("saveDocument", () => {
 
   it("surfaces a failed save instead of swallowing it", async () => {
     put({ notes: [note("原文")] });
-    api.noteUpsert.mockRejectedValue(new Error("磁盘只读"));
+    api.noteSave.mockRejectedValue(new Error("磁盘只读"));
 
     await expect(
       useData.getState().saveDocument({ kind: "note", id: "n-1" }, "新文"),
@@ -240,8 +250,7 @@ describe("saveDocument", () => {
       notes: [note("原文")],
       saveError: { key: "note:n-1", message: "磁盘只读" },
     });
-    api.noteUpsert.mockResolvedValue("n-1");
-    api.noteGet.mockResolvedValue(note("新文"));
+    api.noteSave.mockResolvedValue(note("新文"));
 
     await useData.getState().saveDocument({ kind: "note", id: "n-1" }, "新文");
     expect(useData.getState().saveError).toBeNull();
@@ -258,35 +267,77 @@ describe("saveDocument / saveTitle 排队", () => {
     return { promise, open };
   };
 
-  it("does not let a body save overwrite a title saved just before it", async () => {
-    // 标题改完失焦就存，正文 400ms 后自动保存；两次都写整篇。以前两次同时在路上时，
-    // 正文那次带的是旧标题，后落库就把新标题覆盖回去了。
+  it("saves the title and the body separately, so neither overwrites the other", async () => {
+    // 以前标题和正文都写整篇，各自带着另一半的旧值，得靠排队防覆盖。现在改标题只发标题（noteRename），
+    // 存正文只发正文（noteSave）：不用等对方，谁先落库都一样
     const saved = { title: "旧标题", contentMd: "旧正文" };
     put({ notes: [{ ...note("旧正文"), title: "旧标题" }] });
-    const firstUpsert = gate<string>();
-    api.noteUpsert
-      .mockImplementationOnce(async (input: { title: string; contentMd: string }) => {
-        await firstUpsert.promise;
-        Object.assign(saved, input);
-        return "n-1";
-      })
-      .mockImplementation(async (input: { title: string; contentMd: string }) => {
-        Object.assign(saved, input);
-        return "n-1";
-      });
-    api.noteGet.mockImplementation(async () => ({ ...note(saved.contentMd), title: saved.title }));
+    const slowRename = gate<void>();
+    api.noteRename.mockImplementation(async (_id: string, title: string) => {
+      await slowRename.promise;
+      saved.title = title;
+      return { ...note(saved.contentMd), title: saved.title, relPath: `笔记/${title}.md` };
+    });
+    api.noteSave.mockImplementation(async (_id: string, contentMd: string) => {
+      saved.contentMd = contentMd;
+      return { ...note(saved.contentMd), title: saved.title };
+    });
 
     const title = useData.getState().saveTitle({ kind: "note", id: "n-1" }, "新标题");
-    const body = useData.getState().saveDocument({ kind: "note", id: "n-1" }, "新正文");
-    firstUpsert.open("n-1");
-    await Promise.all([title, body]);
+    // 改名还在路上，正文的保存不用等它
+    await useData.getState().saveDocument({ kind: "note", id: "n-1" }, "新正文");
+    expect(api.noteSave).toHaveBeenCalledWith("n-1", "新正文", fingerprint("旧正文"));
+    slowRename.open();
+    await title;
 
-    expect(saved).toMatchObject({ title: "新标题", contentMd: "新正文" });
-    expect(api.noteUpsert).toHaveBeenLastCalledWith(
-      expect.objectContaining({ title: "新标题", contentMd: "新正文" }),
-    );
+    expect(saved).toEqual({ title: "新标题", contentMd: "新正文" });
+    expect(api.noteRename).toHaveBeenCalledWith("n-1", "新标题");
     expect(useData.getState().notes[0]?.title).toBe("新标题");
+    expect(useData.getState().notes[0]?.relPath).toBe("笔记/新标题.md");
     expect(useData.getState().bodies["n-1"]).toBe("新正文");
+  });
+
+  it("does not let a late body save put the old title back in the list", async () => {
+    put({ notes: [{ ...note("旧正文"), title: "旧标题" }] });
+    const slowSave = gate<void>();
+    api.noteSave.mockImplementation(async (_id: string, contentMd: string) => {
+      await slowSave.promise;
+      // 这次保存在后端落库时标题还是旧的
+      return { ...note(contentMd), title: "旧标题", updatedAt: 50 };
+    });
+    api.noteRename.mockImplementation(async (_id: string, title: string) => ({
+      ...note("旧正文"),
+      title,
+    }));
+
+    const body = useData.getState().saveDocument({ kind: "note", id: "n-1" }, "新正文");
+    await useData.getState().saveTitle({ kind: "note", id: "n-1" }, "新标题");
+    slowSave.open();
+    await body;
+    const listed = useData.getState().notes[0];
+    expect(listed?.title).toBe("新标题");
+    expect(listed?.updatedAt).toBe(50);
+  });
+
+  it("chains the base of back-to-back body saves", async () => {
+    // 正文的保存还是排队：第二次带的 base 得是第一次存进去的那一版，不然后端当成别处改过
+    put({ notes: [note("第零版")] });
+    const firstSave = gate<void>();
+    api.noteSave
+      .mockImplementationOnce(async (_id: string, contentMd: string) => {
+        await firstSave.promise;
+        return note(contentMd);
+      })
+      .mockImplementation(async (_id: string, contentMd: string) => note(contentMd));
+
+    const first = useData.getState().saveDocument({ kind: "note", id: "n-1" }, "第一版");
+    const second = useData.getState().saveDocument({ kind: "note", id: "n-1" }, "第二版");
+    firstSave.open();
+    await Promise.all([first, second]);
+    expect(api.noteSave.mock.calls.map((call) => call[2])).toEqual([
+      fingerprint("第零版"),
+      fingerprint("第一版"),
+    ]);
   });
 
   it("keeps a day's new title when its body is saved right after", async () => {
@@ -313,8 +364,9 @@ describe("saveDocument / saveTitle 排队", () => {
 
   it("keeps going after a failed write", async () => {
     put({ notes: [note("原文")] });
-    api.noteUpsert.mockRejectedValueOnce(new Error("磁盘只读")).mockResolvedValue("n-1");
-    api.noteGet.mockResolvedValue(note("第二版"));
+    api.noteSave
+      .mockRejectedValueOnce(new Error("磁盘只读"))
+      .mockImplementation(async (_id: string, contentMd: string) => note(contentMd));
 
     const first = useData.getState().saveDocument({ kind: "note", id: "n-1" }, "第一版");
     const second = useData.getState().saveDocument({ kind: "note", id: "n-1" }, "第二版");
@@ -332,8 +384,7 @@ describe("saveError 按文档区分", () => {
       notes: [note("甲"), other],
       saveError: { key: "note:n-1", message: "磁盘只读" },
     });
-    api.noteUpsert.mockResolvedValue("n-2");
-    api.noteGet.mockResolvedValue({ ...other, contentMd: "乙乙" });
+    api.noteSave.mockResolvedValue({ ...other, contentMd: "乙乙" });
 
     await useData.getState().saveDocument({ kind: "note", id: "n-2" }, "乙乙");
     expect(useData.getState().saveError).toEqual({ key: "note:n-1", message: "磁盘只读" });
@@ -341,7 +392,7 @@ describe("saveError 按文档区分", () => {
 
   it("a failed title save is reported on that document, not as a global error", async () => {
     put({ notes: [note("甲")] });
-    api.noteUpsert.mockRejectedValue(new Error("磁盘只读"));
+    api.noteRename.mockRejectedValue(new Error("磁盘只读"));
 
     await expect(
       useData.getState().saveTitle({ kind: "note", id: "n-1" }, "新标题"),
@@ -359,7 +410,12 @@ describe("saveTitle", () => {
     api.calendarDaySave.mockResolvedValue(day("延续来的正文", { title: "新标题" }));
 
     await useData.getState().saveTitle({ kind: "day", id: "2026-08-29" }, "  新标题 ");
-    expect(api.calendarDaySave).toHaveBeenCalledWith("2026-08-29", "新标题", "延续来的正文");
+    expect(api.calendarDaySave).toHaveBeenCalledWith(
+      "2026-08-29",
+      "新标题",
+      "延续来的正文",
+      fingerprint("延续来的正文"),
+    );
     expect(useData.getState().dayDocs[0]?.title).toBe("新标题");
   });
 
@@ -642,13 +698,12 @@ describe("drafts（保存失败的正文）", () => {
 
   it("keeps a failed version as a draft and clears it once a save succeeds", async () => {
     put({ notes: [note("原文")] });
-    api.noteUpsert.mockRejectedValueOnce(new Error("database is locked"));
+    api.noteSave.mockRejectedValueOnce(new Error("database is locked"));
     await expect(useData.getState().saveDocument(target, "没存进去的字")).rejects.toThrow();
     // 编辑器卸载后它的保存队列就没了，这一版只剩 store 里这份
     expect(useData.getState().drafts["note:n-1"]?.contentMd).toBe("没存进去的字");
 
-    api.noteUpsert.mockResolvedValue("n-1");
-    api.noteGet.mockResolvedValue(note("没存进去的字，又写了一点"));
+    api.noteSave.mockResolvedValue(note("没存进去的字，又写了一点"));
     await useData.getState().saveDocument(target, "没存进去的字，又写了一点");
     expect(useData.getState().drafts).toEqual({});
   });
@@ -658,11 +713,11 @@ describe("drafts（保存失败的正文）", () => {
       notes: [note("原文")],
       drafts: { "note:n-1": { target, contentMd: "草稿" } },
     });
-    api.noteUpsert.mockResolvedValue("n-1");
-    api.noteGet.mockResolvedValue(note("草稿"));
+    api.noteSave.mockResolvedValue(note("草稿"));
 
     await useData.getState().flushDrafts();
-    expect(api.noteUpsert).toHaveBeenCalledWith(expect.objectContaining({ contentMd: "草稿" }));
+    // 存失败时 store 里的正文没换，还是照着它改的那一版
+    expect(api.noteSave).toHaveBeenCalledWith("n-1", "草稿", fingerprint("原文"));
     expect(useData.getState().drafts).toEqual({});
     expect(useData.getState().bodies["n-1"]).toBe("草稿");
   });
@@ -672,7 +727,7 @@ describe("drafts（保存失败的正文）", () => {
       notes: [note("原文")],
       drafts: { "note:n-1": { target, contentMd: "草稿" } },
     });
-    api.noteUpsert.mockRejectedValue(new Error("database is locked"));
+    api.noteSave.mockRejectedValue(new Error("database is locked"));
     await expect(useData.getState().flushDrafts()).rejects.toThrow("database is locked");
     expect(useData.getState().drafts["note:n-1"]?.contentMd).toBe("草稿");
   });
@@ -758,28 +813,41 @@ describe("applyVaultChange（别的程序改了仓库里的文件）", () => {
 });
 
 describe("外部改动撞上没存的修改", () => {
-  it("keeps the disk version as a conflict copy before saving the editor's", async () => {
-    put({ notes: [note("别处改的")] });
-    const order: string[] = [];
-    api.vaultKeepConflictCopy.mockImplementation(async () => {
-      order.push("copy");
-      return "笔记 (冲突 2026-09-27 1030)";
-    });
-    api.noteUpsert.mockImplementation(async () => {
-      order.push("save");
-      return "n-1";
-    });
-    api.noteGet.mockResolvedValue(note("编辑器里的"));
+  it("saves with the version the editor started from, so the backend keeps the newer one", async () => {
+    // 编辑器照着「原来的」在改，别处改成了「别处改的」，store 里已经换上了；编辑器有没存的修改。
+    // 下一次保存带的 base 是「原来的」：后端看出磁盘上不是那一版，先另存冲突副本再写（判断在后端）
+    put({ notes: [note("原来的")] });
+    api.noteGet.mockResolvedValue(note("别处改的"));
+    await useData.getState().applyVaultChange(change({ notes: ["n-1"] }));
+    expect(useData.getState().bodies["n-1"]).toBe("别处改的");
 
+    api.noteSave.mockImplementation(async (_id: string, contentMd: string) => note(contentMd));
     useData.getState().markConflict({ kind: "note", id: "n-1" });
     await useData.getState().saveDocument({ kind: "note", id: "n-1" }, "编辑器里的");
-    expect(order).toEqual(["copy", "save"]);
-    expect(api.vaultKeepConflictCopy).toHaveBeenCalledWith({ kind: "note", id: "n-1" });
-    expect(useData.getState().conflicts.size).toBe(0);
+    expect(api.noteSave).toHaveBeenLastCalledWith("n-1", "编辑器里的", fingerprint("原来的"));
 
-    // 只另存一次：之后的保存照常
+    // 用过就不再用：之后照着刚存的那一版
     await useData.getState().saveDocument({ kind: "note", id: "n-1" }, "编辑器里的，又改了");
-    expect(api.vaultKeepConflictCopy).toHaveBeenCalledTimes(1);
+    expect(api.noteSave).toHaveBeenLastCalledWith(
+      "n-1",
+      "编辑器里的，又改了",
+      fingerprint("编辑器里的"),
+    );
+  });
+
+  it("a day keeps the version from before the external edit too", async () => {
+    put({ dayDocs: [day("本机的")] });
+    api.calendarDay.mockResolvedValue(day("另一台的"));
+    await useData.getState().applyVaultChange(change({ days: ["2026-08-29"] }));
+    api.calendarDaySave.mockResolvedValue(day("编辑器里的"));
+    useData.getState().markConflict({ kind: "day", id: "2026-08-29" });
+    await useData.getState().saveDocument({ kind: "day", id: "2026-08-29" }, "编辑器里的");
+    expect(api.calendarDaySave).toHaveBeenCalledWith(
+      "2026-08-29",
+      "",
+      "编辑器里的",
+      fingerprint("本机的"),
+    );
   });
 });
 
@@ -958,7 +1026,12 @@ describe("resolveConflict（冲突副本的原文是某一天 / 目标）", () =
 
     expect(opened).toEqual({ kind: "day", id: "2026-08-29" });
     // 当天的标题不动，只换正文
-    expect(api.calendarDaySave).toHaveBeenCalledWith("2026-08-29", "周六", "- [x] 另一台的");
+    expect(api.calendarDaySave).toHaveBeenCalledWith(
+      "2026-08-29",
+      "周六",
+      "- [x] 另一台的",
+      fingerprint("- [ ] 本机的"),
+    );
     expect(api.noteDelete).toHaveBeenCalledWith("copy");
     expect(useData.getState().notes).toEqual([]);
     expect(useData.getState().externalRevisions["day:2026-08-29"]).toBe(1);
@@ -987,31 +1060,30 @@ describe("使用指南有新版、用户改过那一篇", () => {
 
   it("taking the new version saves it, settles, and can be undone", async () => {
     put({ notes: [guide("我改过的指南")], guideUpdates: [update] });
-    api.noteUpsert.mockResolvedValue("guide-welcome-1");
-    api.noteGet.mockImplementation(async () => guide(api.noteUpsert.mock.lastCall![0].contentMd));
+    api.noteSave.mockImplementation(async (_id: string, contentMd: string) => guide(contentMd));
     api.guideSettle.mockResolvedValue(undefined);
 
     await useData.getState().adoptGuideUpdate("guide-welcome-1");
 
-    expect(api.noteUpsert).toHaveBeenLastCalledWith({
-      id: "guide-welcome-1",
-      title: "欢迎使用 Odea",
-      contentMd: "新版的指南",
-    });
+    expect(api.noteSave).toHaveBeenLastCalledWith(
+      "guide-welcome-1",
+      "新版的指南",
+      fingerprint("我改过的指南"),
+    );
     // 正文存好了才记下这一版：记下的指纹和正文对得上
     expect(api.guideSettle.mock.invocationCallOrder[0]).toBeGreaterThan(
-      api.noteUpsert.mock.invocationCallOrder[0]!,
+      api.noteSave.mock.invocationCallOrder[0]!,
     );
     expect(useData.getState().guideUpdates).toEqual([]);
     expect(useData.getState().externalRevisions["note:guide-welcome-1"]).toBe(1);
     expect(useData.getState().undoable?.message).toBe("已换成新版的使用指南");
 
     await useData.getState().undoable?.undo();
-    expect(api.noteUpsert).toHaveBeenLastCalledWith({
-      id: "guide-welcome-1",
-      title: "欢迎使用 Odea",
-      contentMd: "我改过的指南",
-    });
+    expect(api.noteSave).toHaveBeenLastCalledWith(
+      "guide-welcome-1",
+      "我改过的指南",
+      fingerprint("新版的指南"),
+    );
   });
 
   it("keeping mine only settles", async () => {
@@ -1021,7 +1093,7 @@ describe("使用指南有新版、用户改过那一篇", () => {
     await useData.getState().keepGuide("guide-welcome-1");
 
     expect(api.guideSettle).toHaveBeenCalledWith("guide-welcome-1");
-    expect(api.noteUpsert).not.toHaveBeenCalled();
+    expect(api.noteSave).not.toHaveBeenCalled();
     expect(useData.getState().guideUpdates).toEqual([]);
   });
 

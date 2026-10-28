@@ -200,7 +200,7 @@ export function FolderPicker({
         {entries.map((entry, index) => {
           const isCurrent = entry.path === current;
           const off = disabled(entry.path);
-          // 「全部笔记」用左侧导航里「笔记」的那个图标
+          // 树根用以前左侧导航里「笔记」的那个图标
           const smart = smartQuery(entry.path) !== undefined;
           const Icon =
             entry.path === UNSORTED ? Inbox : smart ? ListFilter : entry.path ? Folder : Copy;
@@ -275,7 +275,7 @@ export function FolderPicker({
 }
 
 /**
- * 没有筛选词时是整棵树（「全部笔记」打头，逻辑目录最后是「未整理」）；有的话是名字对得上的文件夹，摊平
+ * 没有筛选词时是整棵树（树根打头，逻辑目录最后是「未整理」）；有的话是名字对得上的文件夹，摊平
  */
 function entriesFor(folders: string[], query: string, unsorted: boolean): Entry[] {
   const q = query.trim().toLowerCase();

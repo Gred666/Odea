@@ -325,7 +325,7 @@ export function slashItems(query: string, withTemplates: boolean): Ranked<SlashI
 export interface WikiCandidate {
   id: string;
   title: string;
-  /** 所在文件夹的显示名（「全部笔记」下面直接放着的是空串） */
+  /** 所在文件夹的显示名（树根这一层直接放着的是空串） */
   folder: string;
   archived: boolean;
 }

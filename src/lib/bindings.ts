@@ -67,11 +67,23 @@ async noteGet(id: string) : Promise<Result<Note, AppError>> {
 }
 },
 /**
- * id 为 null 是新建（返回新 id）；否则改标题和正文，标题变了文件跟着改名
+ * 改正文（编辑器的保存），返回存完的笔记。base 是编辑器照着改的那一版正文的指纹（fsio::fingerprint）：
+ * 磁盘上已经不是那一版了，先把磁盘上的另存成冲突副本再写（Vault::note_save）
  */
-async noteUpsert(input: NoteInput) : Promise<Result<string, AppError>> {
+async noteSave(id: string, contentMd: string, base: string | null) : Promise<Result<Note, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("note_upsert", { input }) };
+    return { status: "ok", data: await TAURI_INVOKE("note_save", { id, contentMd, base }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 改标题：文件跟着改名，正文不动。返回改完的笔记
+ */
+async noteRename(id: string, title: string) : Promise<Result<Note, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("note_rename", { id, title }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -115,6 +127,41 @@ async noteDelete(id: string) : Promise<Result<null, AppError>> {
 async noteUndelete(id: string) : Promise<Result<null, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("note_undelete", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 回收站里的笔记，最近删的在前
+ */
+async trashList() : Promise<Result<TrashedNote[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("trash_list") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async guestCopyPut(copy: GuestCopy) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("guest_copy_put", { copy }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async guestCopyDrop(key: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("guest_copy_drop", { key }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async guestCopyList() : Promise<Result<GuestCopy[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("guest_copy_list") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -395,9 +442,9 @@ async goalGet(horizon: string, periodStart: string) : Promise<Result<Goal, AppEr
     else return { status: "error", error: e  as any };
 }
 },
-async goalSave(horizon: string, periodStart: string, contentMd: string) : Promise<Result<Goal, AppError>> {
+async goalSave(horizon: string, periodStart: string, contentMd: string, base: string | null) : Promise<Result<Goal, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("goal_save", { horizon, periodStart, contentMd }) };
+    return { status: "ok", data: await TAURI_INVOKE("goal_save", { horizon, periodStart, contentMd, base }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -414,9 +461,9 @@ async calendarDay(date: string, carryOver: boolean) : Promise<Result<DayDoc, App
     else return { status: "error", error: e  as any };
 }
 },
-async calendarDaySave(date: string, title: string, noteMd: string) : Promise<Result<DayDoc, AppError>> {
+async calendarDaySave(date: string, title: string, noteMd: string, base: string | null) : Promise<Result<DayDoc, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("calendar_day_save", { date, title, noteMd }) };
+    return { status: "ok", data: await TAURI_INVOKE("calendar_day_save", { date, title, noteMd, base }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -498,6 +545,17 @@ async vaultSetJournal(on: boolean) : Promise<Result<VaultInfo, AppError>> {
 }
 },
 /**
+ * 开 / 关归档：和开关日程一样，改标记、重新认文件，前端整页重载
+ */
+async vaultSetArchive(on: boolean) : Promise<Result<VaultInfo, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_set_archive", { on }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 别的设备开关了日程、转成了逻辑目录（同步过来，VaultChange.layout）：用户点了「切换过去」，
  * 按磁盘上的仓库标记重新摆。前端随后整页重载
  */
@@ -538,18 +596,6 @@ async vaultReveal(target: DocTarget) : Promise<Result<null, AppError>> {
 async vaultOpenFolder() : Promise<Result<null, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("vault_open_folder") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * 编辑器里有没存的改动时，磁盘上又来了外部改动：先把磁盘上那一版另存一份
- * 「(冲突 …)」，前端随后照常保存自己的。返回冲突副本的标题。
- */
-async vaultKeepConflictCopy(target: DocTarget) : Promise<Result<string | null, AppError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("vault_keep_conflict_copy", { target }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -702,11 +748,13 @@ async launcherPickParent(from: string) : Promise<Result<string | null, AppError>
 }
 },
 /**
- * 新建：在 parent 下面建一个叫 name 的文件夹，放使用指南，打开。同名的文件夹已经有了、里面有东西就不建
+ * 新建：在 parent 下面建一个叫 name 的文件夹，放使用指南，打开。同名的文件夹已经有了、里面有东西就不建。
+ * logical：建成逻辑目录（树记在清单里，笔记平放）；否则是真实文件夹（树就是硬盘上的文件夹）。
+ * 两样的区别在启动器「新建」里说清楚、让用户选（docs/仓库与启动器.md §15）
  */
-async launcherCreate(parent: string, name: string) : Promise<Result<null, AppError>> {
+async launcherCreate(parent: string, name: string, logical: boolean) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("launcher_create", { parent, name }) };
+    return { status: "ok", data: await TAURI_INVOKE("launcher_create", { parent, name, logical }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1106,13 +1154,13 @@ async collabSetName(name: string) : Promise<Result<null, AppError>> {
 }
 },
 /**
- * 开始协作（主持人）：起端点、返回邀请链接。第一次在网络上接受连接时 Windows 会弹防火墙
- * note 是主持的那篇笔记的 id（一篇的范围；文件夹、整个仓库是空的，只记进落盘的记录里）；scope 是邀请的范围
- * （设计 §22.5）；resume = 继续上次没正常结束的那一次（同一个会话 id、邀请密钥、端口，允许过的人不再问）
+ * 开始协作（主持人）：挂到端点上（没有就起一个，第一次在网络上接受连接时 Windows 会弹防火墙）、返回邀请链接。
+ * session 是前端起的会话号；note 是主持的那篇笔记的 id（一篇的范围；文件夹、整个仓库是空的，只记进落盘的记录里）；
+ * scope 是邀请的范围（设计 §22.5）；resume 是上次没正常结束的那一次（同一个会话 id、邀请密钥、端口，允许过的人不再问）
  */
-async collabHost(title: string, permission: Permission, note: string, scope: Scope, resume: boolean) : Promise<Result<CollabHosting, AppError>> {
+async collabHost(session: number, title: string, permission: Permission, note: string, scope: Scope, resume: string | null) : Promise<Result<CollabHosting, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_host", { title, permission, note, scope, resume }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_host", { session, title, permission, note, scope, resume }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1121,9 +1169,9 @@ async collabHost(title: string, permission: Permission, note: string, scope: Sco
 /**
  * 换掉邀请链接：旧的作废，已经在里面的人不受影响
  */
-async collabResetInvite() : Promise<Result<string, AppError>> {
+async collabResetInvite(session: number) : Promise<Result<string, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_reset_invite") };
+    return { status: "ok", data: await TAURI_INVOKE("collab_reset_invite", { session }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1141,12 +1189,12 @@ async collabCheckLink(link: string) : Promise<Result<InvitePreview, AppError>> {
 }
 },
 /**
- * 加入（访客）：马上返回，进展从 CollabEvent 的 status 里出来。
+ * 加入（访客）：马上返回，进展从 CollabEvent 的 status 里出来。session 是前端起的会话号。
  * direct_only：不经链接里主持人的中继（访客的 IP 不让那台机器看到，设计 §6.5）
  */
-async collabJoin(link: string, directOnly: boolean) : Promise<Result<null, AppError>> {
+async collabJoin(session: number, link: string, directOnly: boolean) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_join", { link, directOnly }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_join", { session, link, directOnly }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1155,25 +1203,25 @@ async collabJoin(link: string, directOnly: boolean) : Promise<Result<null, AppEr
 /**
  * 主持人回答加入请求：allow 是给的权限，None 是拒绝
  */
-async collabAnswer(request: number, allow: Permission | null) : Promise<Result<boolean, AppError>> {
+async collabAnswer(session: number, request: number, allow: Permission | null) : Promise<Result<boolean, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_answer", { request, allow }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_answer", { session, request, allow }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
-async collabSetPermission(member: number, permission: Permission) : Promise<Result<null, AppError>> {
+async collabSetPermission(session: number, member: number, permission: Permission) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_set_permission", { member, permission }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_permission", { session, member, permission }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
-async collabKick(member: number) : Promise<Result<null, AppError>> {
+async collabKick(session: number, member: number) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_kick", { member }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_kick", { session, member }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1191,7 +1239,7 @@ async collabTrusted() : Promise<Result<TrustedPeer[], AppError>> {
 }
 },
 /**
- * 记住一个人：下次拿着链接或者从「附近」进来不问，按这个权限进来。返回整张表
+ * 记住一个人：下次拿着链接或者从「附近」进来不问，按这个权限进来（每个在主持的会话都算）。返回整张表
  */
 async collabRemember(id: string, name: string, permission: Permission) : Promise<Result<TrustedPeer[], AppError>> {
     try {
@@ -1215,20 +1263,20 @@ async collabForget(id: string) : Promise<Result<TrustedPeer[], AppError>> {
 /**
  * 主持人改了标题：之后进来的人看到新的
  */
-async collabSetTitle(title: string) : Promise<Result<null, AppError>> {
+async collabSetTitle(session: number, title: string) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_set_title", { title }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_title", { session, title }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
 /**
- * 停止协作（主持人）/ 离开（访客）
+ * 停止这一次协作（主持人）/ 离开（访客）。一个会话都不剩了关端点
  */
-async collabStop() : Promise<Result<null, AppError>> {
+async collabStop(session: number) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_stop") };
+    return { status: "ok", data: await TAURI_INVOKE("collab_stop", { session }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1271,9 +1319,9 @@ async collabTakeCopy() : Promise<Result<SharedCopy | null, AppError>> {
 /**
  * 访客连不上主持人时：生成回连链接发给主持人（设计 §8.4）。要等端口映射、中继有个结果，最多五秒
  */
-async collabCallback() : Promise<Result<CollabCallback, AppError>> {
+async collabCallback(session: number) : Promise<Result<CollabCallback, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_callback") };
+    return { status: "ok", data: await TAURI_INVOKE("collab_callback", { session }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1283,18 +1331,19 @@ async collabCallback() : Promise<Result<CollabCallback, AppError>> {
  * 访客：转发链接（设计 §20.9）。发给连不上主持人、却连得上我的人，他经我加入（主持人照样确认）。
  * 和回连链接一样先看我能不能被连进来
  */
-async collabForwardLink() : Promise<Result<CollabCallback, AppError>> {
+async collabForwardLink(session: number) : Promise<Result<CollabCallback, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_forward_link") };
+    return { status: "ok", data: await TAURI_INVOKE("collab_forward_link", { session }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
 /**
- * 主持人打开了回连链接：往访客那边拨。拨的结果从 CollabEvent 的 dialBack 里出来
+ * 主持人打开了回连链接：往访客那边拨，返回是哪个会话的（链接里带着会话 id）。
+ * 拨的结果从那个会话的 CollabEvent 的 dialBack 里出来
  */
-async collabDialBack(link: string) : Promise<Result<null, AppError>> {
+async collabDialBack(link: string) : Promise<Result<number, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("collab_dial_back", { link }) };
 } catch (e) {
@@ -1384,16 +1433,27 @@ async collabNearbyStop() : Promise<Result<null, AppError>> {
 /**
  * 点了「附近」列表里的一位：不用链接，请求加入（主持人照样确认）
  */
-async collabJoinNearby(id: string) : Promise<Result<null, AppError>> {
+async collabJoinNearby(session: number, id: string) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_join_nearby", { id }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_join_nearby", { session, id }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
 /**
- * 上次没正常结束的协作（主持、做客各最多一份）
+ * 「附近」进来一位、我主持着好几个（NearbyKnock）：让他进哪一个（session 是会话号，空 = 拒绝），给什么权限
+ */
+async collabAnswerNearby(request: number, session: number | null, permission: Permission) : Promise<Result<boolean, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_answer_nearby", { request, session, permission }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 上次没正常结束的几次协作（主持的、做客的，一次一条）
  */
 async collabResumeInfo() : Promise<Result<CollabResume, AppError>> {
     try {
@@ -1404,22 +1464,22 @@ async collabResumeInfo() : Promise<Result<CollabResume, AppError>> {
 }
 },
 /**
- * 访客：继续上次没正常结束的做客（前端先读走了落盘的状态，用它建好了会话）
+ * 访客：继续上次没正常结束的那一次做客（前端先读走了落盘的状态，用它建好了会话）
  */
-async collabRejoin() : Promise<Result<null, AppError>> {
+async collabRejoin(session: number, key: string) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_rejoin") };
+    return { status: "ok", data: await TAURI_INVOKE("collab_rejoin", { session, key }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
 /**
- * 不接着来了：落盘的那一份删掉
+ * 不接着来了：落盘的那一次删掉
  */
-async collabDiscardResume(host: boolean) : Promise<Result<null, AppError>> {
+async collabDiscardResume(host: boolean, key: string) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_discard_resume", { host }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_discard_resume", { host, key }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1429,20 +1489,20 @@ async collabDiscardResume(host: boolean) : Promise<Result<null, AppError>> {
  * 主持人：这一篇正文里引用的附件（正文一变前端就给一份新的）。只有在这里面的访客才要得到。
  * refs 是 None：这一篇不在协作里了（没人开着、收掉了）
  */
-async collabSetAttachmentRefs(doc: string, refs: AttachmentRef[] | null) : Promise<Result<null, AppError>> {
+async collabSetAttachmentRefs(session: number, doc: string, refs: AttachmentRef[] | null) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_set_attachment_refs", { doc, refs }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_attachment_refs", { session, doc, refs }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
 /**
- * 上次做客时开着的那几篇（重新加入时照样开）
+ * 上次那一次做客时开着的那几篇（重新加入时照样开）
  */
-async collabResumeDocs() : Promise<Result<string[], AppError>> {
+async collabResumeDocs(key: string) : Promise<Result<string[], AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_resume_docs") };
+    return { status: "ok", data: await TAURI_INVOKE("collab_resume_docs", { key }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1451,9 +1511,9 @@ async collabResumeDocs() : Promise<Result<string[], AppError>> {
 /**
  * 主持人：前端对「访客要开这一篇」（docOpen）的回话。error 为空 = 给
  */
-async collabDocAnswer(request: number, error: string | null) : Promise<Result<boolean, AppError>> {
+async collabDocAnswer(session: number, request: number, error: string | null) : Promise<Result<boolean, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_doc_answer", { request, error }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_doc_answer", { session, request, error }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1462,9 +1522,9 @@ async collabDocAnswer(request: number, error: string | null) : Promise<Result<bo
 /**
  * 主持人：范围里的树（JSON，前端给什么访客那边就收到什么）
  */
-async collabSetTree(tree: string) : Promise<Result<null, AppError>> {
+async collabSetTree(session: number, tree: string) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_set_tree", { tree }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_set_tree", { session, tree }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1473,9 +1533,9 @@ async collabSetTree(tree: string) : Promise<Result<null, AppError>> {
 /**
  * 主持人：访客要的那篇建好了（doc），或者建不了（error）
  */
-async collabCreateAnswer(request: number, doc: string | null, error: string | null) : Promise<Result<boolean, AppError>> {
+async collabCreateAnswer(session: number, request: number, doc: string | null, error: string | null) : Promise<Result<boolean, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_create_answer", { request, doc, error }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_create_answer", { session, request, doc, error }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1484,9 +1544,9 @@ async collabCreateAnswer(request: number, doc: string | null, error: string | nu
 /**
  * 访客：开一篇（范围里的）。开好了从管道上来 SyncStart；不给是 CollabEvent 的 docRefused
  */
-async collabOpenDoc(doc: string) : Promise<Result<null, AppError>> {
+async collabOpenDoc(session: number, doc: string) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_open_doc", { doc }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_open_doc", { session, doc }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1495,9 +1555,9 @@ async collabOpenDoc(doc: string) : Promise<Result<null, AppError>> {
 /**
  * 访客：关掉一篇（主持人那边知道我不看了）
  */
-async collabCloseDoc(doc: string) : Promise<Result<null, AppError>> {
+async collabCloseDoc(session: number, doc: string) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_close_doc", { doc }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_close_doc", { session, doc }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1506,9 +1566,9 @@ async collabCloseDoc(doc: string) : Promise<Result<null, AppError>> {
 /**
  * 访客：在范围里新建一篇（主持人那边建），返回它的文档 id
  */
-async collabCreateDoc(folder: string, title: string) : Promise<Result<string, AppError>> {
+async collabCreateDoc(session: number, folder: string, title: string) : Promise<Result<string, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_create_doc", { folder, title }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_create_doc", { session, folder, title }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1611,9 +1671,9 @@ async teamRelayShare(url: string, share: boolean) : Promise<Result<TeamRelay[], 
 /**
  * 访客：向主持人要正文里引用的一个附件，缓存下来，返回本机的路径（前端转成 asset 地址显示）
  */
-async collabFetchAttachment(doc: string, path: string) : Promise<Result<string, AppError>> {
+async collabFetchAttachment(session: number, doc: string, path: string) : Promise<Result<string, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_fetch_attachment", { doc, path }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_fetch_attachment", { session, doc, path }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1622,9 +1682,9 @@ async collabFetchAttachment(doc: string, path: string) : Promise<Result<string, 
 /**
  * 访客：粘贴的文件交给主持人存进他的「附件」，返回从那篇引用它的路径（编辑器插进正文）
  */
-async collabPutAttachment(doc: string, name: string, dataBase64: string) : Promise<Result<Attachment, AppError>> {
+async collabPutAttachment(session: number, doc: string, name: string, dataBase64: string) : Promise<Result<Attachment, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment", { doc, name, dataBase64 }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment", { session, doc, name, dataBase64 }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1633,9 +1693,9 @@ async collabPutAttachment(doc: string, name: string, dataBase64: string) : Promi
 /**
  * 访客：从系统拖进来的文件（只有路径）
  */
-async collabPutAttachmentPath(doc: string, path: string) : Promise<Result<Attachment, AppError>> {
+async collabPutAttachmentPath(session: number, doc: string, path: string) : Promise<Result<Attachment, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment_path", { doc, path }) };
+    return { status: "ok", data: await TAURI_INVOKE("collab_put_attachment_path", { session, doc, path }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1822,8 +1882,16 @@ export type CollabCopyReady = null
 /**
  * 加入请求、成员变了、连接状态
  */
-export type CollabEvent = Control
-export type CollabHosting = { link: string; id: string; members: MemberInfo[] }
+export type CollabEvent = { 
+/**
+ * 哪个会话（会话号）；不属于哪个会话的（「附近」的列表、「附近」进来要主持人挑）是空
+ */
+session: number | null; control: Control }
+export type CollabHosting = { 
+/**
+ * 会话 id（十六进制）：继续上次的协作按它认
+ */
+key: string; link: string; id: string; members: MemberInfo[] }
 export type CollabIdentity = { 
 /**
  * 设备公钥（十六进制）：别人那里按它给我挑颜色
@@ -1836,7 +1904,7 @@ export type CollabLink = string
 /**
  * 上次没正常结束的协作（崩溃、强退）：重启后问一句要不要接着来
  */
-export type CollabResume = { host: HostResume | null; guest: GuestResume | null }
+export type CollabResume = { hosts: HostResume[]; guests: GuestResume[] }
 /**
  * 控制消息：命令层转成 tauri-specta 的事件
  */
@@ -1874,6 +1942,14 @@ export type Control =
  * 同一个网络里正在分享的人（「附近」列表开着时，变了就报一次整张表）
  */
 { type: "nearby"; hosts: NearbyHost[] } | 
+/**
+ * 「附近」点进来一位，我主持着好几个（不属于哪个会话）：问主持人让他进哪一个，用 collab_answer_nearby 回话
+ */
+{ type: "nearbyKnock"; request: number; id: string; name: string } | 
+/**
+ * 上面那位有了结果（主持人挑了、拒了，或者他自己走了）：收起那张卡
+ */
+{ type: "nearbyKnockDone"; request: number } | 
 /**
  * 访客要开一篇（主持人）：前端看它在不在范围里，用 collab_doc_answer 回话
  */
@@ -2115,7 +2191,35 @@ periodStart: string; contentMd: string; createdAt: number; updatedAt: number;
  * 在仓库里的相对路径；还没写过的周期是它将来的位置
  */
 relPath: string }
-export type GuestResume = { title: string; hostName: string; savedAt: number }
+/**
+ * 做客时本机留的一份
+ */
+export type GuestCopy = { 
+/**
+ * 哪一篇（前端起的：团队仓库里是「仓库路径 + 团队文档 id」，邀请做客是「会话 + 文档 id」）
+ */
+key: string; title: string; 
+/**
+ * 团队仓库里的一篇：那个仓库的路径（在那个仓库的窗口里列出来）。邀请做客的是 None，哪个窗口都列
+ */
+vault: string | null; 
+/**
+ * 团队仓库里的哪一篇：那个仓库里它的正文和这份一样了（git 拉来了主持人存的那一版），这份就可以删了
+ */
+target: DocTarget | null; 
+/**
+ * 主持人是谁（给人看）
+ */
+host: string; text: string; 
+/**
+ * 最后一次写（Unix 毫秒）
+ */
+savedAt: number }
+export type GuestResume = { 
+/**
+ * 是哪一次（落盘文件夹的名字）
+ */
+key: string; title: string; hostName: string; savedAt: number }
 /**
  * 用户改过、而这个版本的应用带着新版的使用指南（vault/guide.rs）：前端在那一篇上问换不换
  */
@@ -2133,6 +2237,10 @@ name: string;
  */
 body: string }
 export type HostResume = { 
+/**
+ * 是哪一次（落盘文件夹的名字）
+ */
+key: string; 
 /**
  * 主持的那篇笔记的 id（文件夹、整个仓库的范围是空的）
  */
@@ -2242,17 +2350,21 @@ relPath: string;
 /**
  * 这篇是另一篇的冲突副本（网盘同步撞车、或本应用另存的）：原文的 id
  */
-conflictOf: string | null }
+conflictOf: string | null; 
 /**
- * 新建 / 更新笔记的入参。
- * id 为 None 表示新建。
+ * id 写在这个文件的属性块里（不是索引临时给的）：换台设备、重建索引都还是它。
+ * 团队协作按它认同一篇（docs/协同编辑.md §22.4），没写的按相对路径
  */
-export type NoteInput = { id: string | null; title: string; contentMd: string }
+idInFile: boolean }
 /**
  * 列表里的一篇：Note 去掉正文。仓库里有多少篇列表就给多少篇，正文打开时再取（note_get）、
  * 搜正文走 search_text —— 前端不留每篇的全文，篇数再多常驻内存也只多一点摘要（技术方案 §13.2）
  */
-export type NoteSummary = { id: string; title: string; excerpt: string; wordCount: number; isPinned: boolean; isArchived: boolean; archiveCategory: string | null; archivedAt: number | null; createdAt: number; updatedAt: number; relPath: string; conflictOf: string | null }
+export type NoteSummary = { id: string; title: string; excerpt: string; wordCount: number; isPinned: boolean; isArchived: boolean; archiveCategory: string | null; archivedAt: number | null; createdAt: number; updatedAt: number; relPath: string; conflictOf: string | null; 
+/**
+ * 同 Note.id_in_file
+ */
+idInFile: boolean }
 /**
  * 权限：能改，或者只读（主持人随时能改）
  */
@@ -2275,7 +2387,8 @@ export type Portmap = { state: "checking" } |
  */
 export type PresenceDoc = { 
 /**
- * 文档 id：笔记是相对路径，某一天 `day-日期`，目标 `goal-周期-开始日期`
+ * 文档 id：笔记是属性块里的 id（`note-<id>`，没写 id 的是相对路径），某一天 `day-日期`，
+ * 目标 `goal-周期-开始日期`。这边不解释它
  */
 doc: string; 
 /**
@@ -2742,6 +2855,22 @@ line: string }
  */
 export type TextSearch = { notes: TextHit[]; journal: TextHit[] }
 /**
+ * 回收站里的一篇（`.odea/trash/<id>.md`）：回收站对话框列它们，恢复走 note_undelete
+ */
+export type TrashedNote = { id: string; title: string; 
+/**
+ * 删之前在仓库里的位置（相对路径）：恢复时放回这里
+ */
+from: string; excerpt: string; 
+/**
+ * 什么时候删的（Unix 毫秒）
+ */
+deletedAt: number; 
+/**
+ * 到这个时候就被清掉了（打开仓库时清，Vault::purge_trash）
+ */
+purgeAt: number }
+/**
  * 文件树上的一个不是笔记的文件：图片、PDF（docs/仓库与启动器.md §11：整个仓库当树根时和 Obsidian 一样列出来）
  */
 export type TreeFile = { 
@@ -2910,15 +3039,19 @@ export type VaultLayout = {
  */
 logical: boolean; 
 /**
- * 开没开日程（今日TODO、目标、日历、归档）
+ * 开没开日程（今日TODO、目标、日历）
  */
 journal: boolean; 
+/**
+ * 开没开归档。和日程分开（只写笔记的人也要归档旧资料）；老仓库的标记里没写的跟着日程
+ */
+archive: boolean; 
 /**
  * 文件树的根：「笔记」，或者整个仓库（空串）
  */
 notesDir: string; daysDir: string; goalsDir: string; archiveDir: string; 
 /**
- * 不在树上的文件夹（日程开着时的日记、目标、归档）：里面的笔记算在树根这一层
+ * 不在树上的文件夹（日程开着时的日记、目标，归档开着时的归档）：里面的笔记算在树根这一层
  */
 hiddenDirs: string[] }
 

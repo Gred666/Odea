@@ -56,7 +56,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await useCollab.getState().stop();
+  for (const id of [...useCollab.getState().order]) await useCollab.getState().stop(id);
   resetCollabForTest(null);
   await resetTeam();
   useData.setState(originalData, true);
@@ -97,8 +97,10 @@ describe("一份文档两条链路", () => {
     await net.onControl(handleControl);
     await useCollab.getState().startHosting("n1", "周会");
     expect(useCollab.getState().hostedDocs.n1).toBe(teamSession);
-    await until("加入请求", () => useCollab.getState().requests.length === 1);
-    await useCollab.getState().answer(useCollab.getState().requests[0]!.request, "edit");
+    const id = useCollab.getState().order[0]!;
+    const requests = () => useCollab.getState().sessions[id]!.requests;
+    await until("加入请求", () => requests().length === 1);
+    await useCollab.getState().answer(id, requests()[0]!.request, "edit");
     await until("Alex 拿到正文", () => net.remoteText() === TEXT);
 
     net.remoteType("（Alex 补充）", 3);
@@ -112,7 +114,7 @@ describe("一份文档两条链路", () => {
     expect(saved).toEqual([]);
 
     // 协作停了：团队那一份还在（这边还开着这一篇）
-    await useCollab.getState().stop();
+    await useCollab.getState().stop(id);
     expect(useTeam.getState().sessions[DOC]?.session).toBe(teamSession);
     await host.destroy();
   });

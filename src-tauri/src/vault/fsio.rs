@@ -191,6 +191,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fingerprints_match_the_frontend() {
+        // 前端 src/lib/fingerprint.ts 算同一个（保存时带的 base），两边的测试用同一组值
+        assert_eq!(fingerprint(""), "cbf29ce484222325");
+        assert_eq!(fingerprint("a"), "af63dc4c8601ec8c");
+        assert_eq!(fingerprint("周报：第 3 期\n\n- [ ] 交稿 😀"), "0b6430e23ccb5e54");
+    }
+
+    #[test]
     fn atomic_write_replaces_and_leaves_no_temp_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("笔记").join("a.md");

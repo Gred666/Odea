@@ -1,5 +1,5 @@
 import type { MemberInfo } from "@/lib/bindings";
-import { type CollabNet, type Frame, PIPE } from "./net";
+import { type Frame, PIPE } from "./net";
 import { type CollabScheduler, CollabSession, type Peer, peerColor } from "./session";
 
 /* ============================================================
@@ -9,7 +9,9 @@ import { type CollabScheduler, CollabSession, type Peer, peerColor } from "./ses
    同步（y-protocols 的 sync step 1 / 2）在这里接上：
    - Rust 说「刚连上某人」（syncVector）：把自己的状态向量发给他
    - Rust 说「某人发来了状态向量」（syncReply）：回他缺的
-   两边各来一遍，断线期间各自的改动就补齐了。会话在组字时会先压着不回（session.answerSync）
+   两边各来一遍，断线期间各自的改动就补齐了。会话在组字时会先压着不回（session.answerSync）。
+   主持人每次存盘以后也发一次自己的状态向量（ackSaved）：访客据此知道自己的字主持人都存下了，
+   本机留的那一份可以删了（keep.ts，docs/协同编辑.md §24）
 
    一份文档几条链路（设计 §22.5 最后一段）：团队仓库里我在一份团队会话里，又用「邀请协作…」请了外人 ——
    外人那条（attachSession）接到同一份会话上。本机打的发给每一条；从一条收到的更新转给别的几条
@@ -25,7 +27,22 @@ export interface SessionLink {
   /** 成员变了：成员号 → 是谁（光标按它认人）；走了的人光标马上收起。团队那边给的是 TeamPeer，也有这几样 */
   setMembers(members: readonly LinkMember[]): void;
   peerOf(member: number): Peer | undefined;
+  /** 有人发来了他的状态向量（Sync1）：成员号、向量 */
+  onVector(listener: (member: number, vector: Uint8Array) => void): () => void;
   destroy(): void;
+}
+
+/**
+ * 主持人存下了一版（vector 是存的那一刻的状态向量）：发给这几位访客。他们照常回一个 Sync2（一般是空的），
+ * 顺便知道自己打的字都存下了（keep.ts）
+ */
+export function ackSaved(
+  net: Sender,
+  doc: string,
+  members: Iterable<number>,
+  vector: Uint8Array,
+): void {
+  for (const member of members) net.send(PIPE.syncVector, member, doc, vector);
 }
 
 /** 认人用的几样：会话的成员（MemberInfo）、团队里的设备（TeamPeer）都有 */
@@ -35,7 +52,12 @@ export function peerOfMember(member: LinkMember): Peer {
   return { id: member.id, name: member.name, color: peerColor(member.id) };
 }
 
-type Sender = Pick<CollabNet, "send">;
+/** 发帧的那一头：协作是一个会话（store 包了一层，带上会话号），团队是团队的网络 */
+export interface FrameSender {
+  send(kind: number, member: number, doc: string, payload: Uint8Array): void;
+}
+
+type Sender = FrameSender;
 
 /** 一条链路：发到哪个网络、那边这一篇叫什么 */
 interface Route {
@@ -97,6 +119,7 @@ function makeLink(
   onDestroy: () => void,
 ): SessionLink {
   const peers = new Map<number, Peer>();
+  const vectorListeners = new Set<(member: number, vector: Uint8Array) => void>();
   const { net, doc } = route;
   return {
     doc,
@@ -115,11 +138,12 @@ function makeLink(
           if (peer) session.receiveCursor(peer, frame.payload.slice());
           return;
         }
-        case PIPE.syncReply:
-          session.answerSync(frame.payload.slice(), (reply) =>
-            net.send(PIPE.syncReply, frame.member, doc, reply),
-          );
+        case PIPE.syncReply: {
+          const vector = frame.payload.slice();
+          for (const listener of vectorListeners) listener(frame.member, vector);
+          session.answerSync(vector, (reply) => net.send(PIPE.syncReply, frame.member, doc, reply));
           return;
+        }
         case PIPE.syncVector:
           net.send(PIPE.syncVector, frame.member, doc, session.stateVector());
           return;
@@ -136,9 +160,14 @@ function makeLink(
       }
     },
     peerOf: (member) => peers.get(member),
+    onVector(listener) {
+      vectorListeners.add(listener);
+      return () => vectorListeners.delete(listener);
+    },
     destroy() {
       for (const peer of peers.values()) session.removePeer(peer.id);
       peers.clear();
+      vectorListeners.clear();
       onDestroy();
     },
   };

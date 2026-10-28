@@ -24,8 +24,10 @@ interface AppState {
   /** 导航切换方向，用于让主内容做方向感知的位移动画 */
   navDirection: 1 | -1;
   setWorkspace: (w: WorkspaceId) => void;
-  /** 这个仓库开没开日程（data/store 取到仓库信息时调）：没开的话，停在日程那几页的回到文件 */
-  fitJournal: (journal: boolean) => void;
+  /**
+   * 这个仓库开没开日程、归档（data/store 取到仓库信息时调）：没开的话，停在日程那几页、归档的回到文件
+   */
+  fitLayout: (journal: boolean, archive: boolean) => void;
 
   /* ---- 各区的选中项 ---- */
   selectedNoteId: string;
@@ -77,6 +79,9 @@ interface AppState {
   /** 笔记列表的排序，记在本机 */
   noteSort: NoteSort;
   setNoteSort: (sort: NoteSort) => void;
+  /** 树上的笔记带不带一行摘要（排序菜单里的开关），记在本机 */
+  noteExcerpts: boolean;
+  setNoteExcerpts: (on: boolean) => void;
 
   /** 新建完要把光标放到哪（见 FocusRequest） */
   focusRequest: FocusRequest | null;
@@ -107,6 +112,9 @@ interface AppState {
   /** 新版本卡片（components/UpdateDialog.tsx）：等着装的新版本 / 升级后的更新说明；null = 关着 */
   updateDialog: "update" | "notes" | null;
   setUpdateDialog: (v: "update" | "notes" | null) => void;
+  /** 回收站对话框（components/TrashDialog.tsx）：删掉的笔记、协作时本机留的几份 */
+  trashOpen: boolean;
+  setTrashOpen: (v: boolean) => void;
   /** 历史版本对话框开着的那一篇（技术方案 §5.9.11）；null = 关着 */
   historyFor: DocumentSaveTarget | null;
   setHistoryFor: (target: DocumentSaveTarget | null) => void;
@@ -125,8 +133,8 @@ interface AppState {
 /** 导航顺序 —— 决定切换时主内容往哪个方向位移 */
 const NAV_ORDER: WorkspaceId[] = ["notes", "today", "goal", "calendar", "archive", "extensions"];
 
-/** 日程那几页（docs/仓库与启动器.md §6）：仓库开了日程才有 */
-export const JOURNAL_WORKSPACES: WorkspaceId[] = ["today", "goal", "calendar", "archive"];
+/** 日程那几页（docs/仓库与启动器.md §6）：仓库开了日程才有。归档单独一个开关，不算在里面 */
+export const JOURNAL_WORKSPACES: WorkspaceId[] = ["today", "goal", "calendar"];
 
 const LS_KEY = "odea.prefs";
 
@@ -134,6 +142,7 @@ interface Prefs {
   theme: ThemePref;
   reduceMotion: boolean;
   noteSort: NoteSort;
+  noteExcerpts: boolean;
   panelCollapsed: boolean;
 }
 
@@ -142,6 +151,7 @@ function loadPrefs(): Prefs {
     theme: "system",
     reduceMotion: false,
     noteSort: "updated",
+    noteExcerpts: false,
     panelCollapsed: false,
   };
   try {
@@ -152,6 +162,7 @@ function loadPrefs(): Prefs {
       prefs.reduceMotion = !!p.reduceMotion;
       if (p.noteSort === "created" || p.noteSort === "title" || p.noteSort === "manual")
         prefs.noteSort = p.noteSort;
+      prefs.noteExcerpts = !!p.noteExcerpts;
       // 以前的 navCollapsed（导航栏收成图标栏）不接着用：导航栏现在一直是窄栏（P11.2）
       prefs.panelCollapsed = !!p.panelCollapsed;
     }
@@ -163,10 +174,10 @@ function loadPrefs(): Prefs {
 
 function savePrefs(patch: Partial<Prefs>) {
   try {
-    const { theme, reduceMotion, noteSort, panelCollapsed } = useApp.getState();
+    const { theme, reduceMotion, noteSort, noteExcerpts, panelCollapsed } = useApp.getState();
     localStorage.setItem(
       LS_KEY,
-      JSON.stringify({ theme, reduceMotion, noteSort, panelCollapsed, ...patch }),
+      JSON.stringify({ theme, reduceMotion, noteSort, noteExcerpts, panelCollapsed, ...patch }),
     );
   } catch {
     /* 忽略：偏好丢失不影响使用 */
@@ -257,8 +268,13 @@ export const useApp = create<AppState>((set, get) => ({
     // 用户在日历页找不到任何东西可以点回来。
     set({ workspace: w, navDirection: to > from ? 1 : -1, zen: false });
   },
-  fitJournal: (journal) => {
-    if (!journal && JOURNAL_WORKSPACES.includes(get().workspace)) set({ workspace: "notes" });
+  fitLayout: (journal, archive) => {
+    const workspace = get().workspace;
+    if (
+      (!journal && JOURNAL_WORKSPACES.includes(workspace)) ||
+      (!archive && workspace === "archive")
+    )
+      set({ workspace: "notes" });
   },
 
   // 上次看的那一篇；不在了（删了、换了仓库）由列表栏退到第一篇
@@ -327,6 +343,11 @@ export const useApp = create<AppState>((set, get) => ({
     savePrefs({ noteSort });
     set({ noteSort });
   },
+  noteExcerpts: initialPrefs.noteExcerpts,
+  setNoteExcerpts: (noteExcerpts) => {
+    savePrefs({ noteExcerpts });
+    set({ noteExcerpts });
+  },
   focusRequest: null,
   setFocusRequest: (focusRequest) => set({ focusRequest }),
 
@@ -360,6 +381,8 @@ export const useApp = create<AppState>((set, get) => ({
   setSyncOpen: (v) => set({ syncOpen: v }),
   updateDialog: null,
   setUpdateDialog: (v) => set({ updateDialog: v }),
+  trashOpen: false,
+  setTrashOpen: (v) => set({ trashOpen: v }),
   historyFor: null,
   setHistoryFor: (target) => set({ historyFor: target }),
   panelCollapsed: initialPrefs.panelCollapsed,

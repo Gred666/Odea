@@ -10,8 +10,9 @@ Odea 建的仓库（新建的、老用户的）：
     附件/                          图片等，正文里用相对路径引用
     .odea/                         应用自己的东西（回收站、行为日志、仓库标记）
 
-日记、目标、归档是「日程」这组功能的（docs/仓库与启动器.md §6），开关和文件夹名记在
-仓库标记 `.odea/vault.json` 里（Layout）。没开日程的仓库里什么都是笔记，文件树的根是整个仓库。
+日记、目标是「日程」这组功能的（docs/仓库与启动器.md §6），归档单独一个开关（只写笔记的人也要
+归档旧资料）。开关和文件夹名记在仓库标记 `.odea/vault.json` 里（Layout）。两样都没开的仓库里
+什么都是笔记；没开日程的仓库文件树的根是整个仓库。
 
 路径在程序里一律是正斜杠分隔的相对路径字符串，落到磁盘时再按组件拼。
 ============================================================ */
@@ -49,13 +50,14 @@ pub enum Slot {
 /* ---------------- 这个仓库怎么摆（.odea/vault.json） ----------------
    {
      "kind": "logical",
-     "features": { "journal": true },
+     "features": { "journal": true, "archive": true },
      "folders": { "notes": "笔记", "days": "日记", "goals": "目标", "archive": "归档" }
    }
    - 没有 features 的（P11.2 以前写的标记、老用户的仓库）：日程开着、文件树的根是「笔记」，和以前一样
+   - features 里没写 archive 的（0.4.2 以前写的）：归档跟着日程，和以前一样
    - 新建的、空文件夹：上面这一份。打开一个已经有笔记的文件夹：`journal: false`，不往别人的文件夹里建
      日记、目标（boot::prepare）
-   - 日程关着时文件树的根一律是整个仓库：日记、目标、归档这时候都只是普通文件夹
+   - 日程关着时文件树的根一律是整个仓库：日记、目标这时候都只是普通文件夹；归档关着时「归档」也是
    - 日程开着、没写日记文件夹的：Obsidian 的日记设置（.obsidian/daily-notes.json）是 YYYY-MM-DD
      的话用它的文件夹，平放（Obsidian 就是这么建的），原来的日记直接进今日TODO 和日历
    - `kind: "logical"`（或者有 .odea/tree）是逻辑目录（docs/仓库与启动器.md §7）：树是清单里摆的那一棵，
@@ -66,8 +68,10 @@ pub enum Slot {
 pub struct Layout {
     /// 逻辑目录：文件树按 .odea/tree 摆（vault/tree.rs），不按文件夹
     pub logical: bool,
-    /// 开没开日程（今日TODO、目标、日历、归档）
+    /// 开没开日程（今日TODO、目标、日历）
     pub journal: bool,
+    /// 开没开归档：「归档」文件夹里的是归档的笔记，不在树上
+    pub archiving: bool,
     /// 文件树的根：「笔记」，或者整个仓库（空串）
     pub notes: String,
     pub days: String,
@@ -101,6 +105,7 @@ impl Layout {
         Self {
             logical: false,
             journal: true,
+            archiving: true,
             notes: NOTES_DIR.into(),
             days: DAYS_DIR.into(),
             days_by_year: true,
@@ -141,6 +146,7 @@ impl Layout {
             return Self::odea();
         };
         let journal = features.get("journal").and_then(Value::as_bool).unwrap_or(false);
+        let archiving = features.get("archive").and_then(Value::as_bool).unwrap_or(journal);
         let folder = |key: &str| {
             marker
                 .get("folders")
@@ -158,6 +164,7 @@ impl Layout {
         Self {
             logical: false,
             journal,
+            archiving,
             // 日程关着时日记、目标、归档都是普通文件夹，整个仓库都在树上
             notes: if journal { folder("notes").unwrap_or_default() } else { String::new() },
             days,
@@ -190,32 +197,28 @@ impl Layout {
     /// 摆法变了，索引里每篇是什么文档就得重新认（Vault::bare 拿它和索引里记的比）
     pub fn fingerprint(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}",
-            self.journal, self.notes, self.days, self.days_by_year, self.goals, self.archive
+            "{}|{}|{}|{}|{}|{}|{}",
+            self.journal, self.notes, self.days, self.days_by_year, self.goals, self.archive, self.archiving
         )
     }
 
-    /// 文件树上不出现的文件夹：日程开着时的日记、目标、归档（从窄栏进）。根是「笔记」的仓库里
-    /// 它们本来就在树外面，这里也照样列出来，不碍事
+    /// 文件树上不出现的文件夹：日程开着时的日记、目标，归档开着时的归档（从窄栏进）。根是「笔记」的
+    /// 仓库里它们本来就在树外面，这里也照样列出来，不碍事
     pub fn hidden_dirs(&self) -> Vec<&str> {
-        if !self.journal {
-            return Vec::new();
-        }
-        [self.days.as_str(), self.goals.as_str(), self.archive.as_str()]
-            .into_iter()
-            .filter(|dir| !dir.is_empty())
-            .collect()
+        let journal = [self.days.as_str(), self.goals.as_str()].into_iter().filter(|_| self.journal);
+        let archive = [self.archive.as_str()].into_iter().filter(|_| self.archiving);
+        journal.chain(archive).filter(|dir| !dir.is_empty()).collect()
     }
 
     pub fn classify(&self, rel: &str) -> Slot {
+        let dir = dir_of(rel);
+        if self.archiving && within(dir, &self.archive) {
+            return Slot::Note { archived: true };
+        }
         if !self.journal {
             return Slot::Note { archived: false };
         }
-        let dir = dir_of(rel);
         let stem = stem_of(rel);
-        if within(dir, &self.archive) {
-            return Slot::Note { archived: true };
-        }
         // 日记文件夹是仓库根（Obsidian 的默认）时只认根上的
         let in_days = if self.days.is_empty() { dir.is_empty() } else { within(dir, &self.days) };
         if in_days && parse_date(stem).is_some() {
@@ -282,12 +285,21 @@ impl Layout {
         dir.strip_prefix(self.notes.as_str())?.strip_prefix('/')
     }
 
-    /// 日程关着时，日记、目标、归档这些操作不做（不往别人的文件夹里建日记）
+    /// 日程关着时，日记、目标这些操作不做（不往别人的文件夹里建日记）
     pub fn require_journal(&self) -> Result<()> {
         if self.journal {
             Ok(())
         } else {
             Err(AppError::Invalid("这个仓库没开日程（命令面板「启用日程」）".into()))
+        }
+    }
+
+    /// 归档关着时不往「归档」里挪（打开的是别人的文件夹，那里的「归档」可能只是个普通文件夹）
+    pub fn require_archive(&self) -> Result<()> {
+        if self.archiving {
+            Ok(())
+        } else {
+            Err(AppError::Invalid("这个仓库没开归档（命令面板「启用归档」）".into()))
         }
     }
 }
@@ -362,7 +374,7 @@ pub fn new_marker(fresh: bool, logical: bool, created_at: i64) -> Value {
     if logical {
         marker["kind"] = "logical".into();
     }
-    marker["features"] = serde_json::json!({ "journal": fresh });
+    marker["features"] = serde_json::json!({ "journal": fresh, "archive": fresh });
     if fresh {
         marker["folders"] = serde_json::json!({
             "notes": if logical { "" } else { NOTES_DIR }, "days": DAYS_DIR, "goals": GOALS_DIR, "archive": ARCHIVE_DIR,
@@ -382,10 +394,25 @@ pub fn marker_logical(marker: Option<Value>, journal: bool) -> Value {
 /// 开 / 关日程：只改 features.journal，别的键（包括不认识的）原样留着。老标记（没有 features）
 /// 是 Odea 的摆法，补上 folders.notes，关了再开树根还是「笔记」
 pub fn marker_with_journal(marker: Option<Value>, journal: bool) -> Value {
+    marker_with_feature(marker, "journal", journal)
+}
+
+/// 开 / 关归档：只改 features.archive，别的照 marker_with_journal 的规矩
+pub fn marker_with_archive(marker: Option<Value>, archive: bool) -> Value {
+    marker_with_feature(marker, "archive", archive)
+}
+
+/// 改一个开关。另一个没写的先按现在的意思写上：老标记里归档是跟着日程的，只改其中一个时
+/// 另一个不能跟着变（关了日程，归档还开着）
+fn marker_with_feature(marker: Option<Value>, key: &str, on: bool) -> Value {
     let mut marker = match marker {
         Some(Value::Object(map)) => Value::Object(map),
         _ => serde_json::json!({ "app": "Odea", "version": 1 }),
     };
+    // 现在的日程开没开：没有 features 的老标记是 Odea 的摆法（开着），和 Layout::from_marker 一致
+    let journal_now = marker
+        .get("features")
+        .map_or(true, |features| features.get("journal").and_then(Value::as_bool).unwrap_or(false));
     if marker.get("features").is_none() {
         let folders = marker
             .as_object_mut()
@@ -404,7 +431,10 @@ pub fn marker_with_journal(marker: Option<Value>, journal: bool) -> Value {
     if !features.is_object() {
         *features = serde_json::json!({});
     }
-    features["journal"] = Value::Bool(journal);
+    let features = features.as_object_mut().expect("上面保证了是对象");
+    features.entry("journal").or_insert(Value::Bool(journal_now));
+    features.entry("archive").or_insert(Value::Bool(journal_now));
+    features.insert(key.to_string(), Value::Bool(on));
     marker
 }
 
@@ -813,6 +843,35 @@ mod tests {
         assert_eq!(odd.days, "Daily");
         assert_eq!(odd.goals, GOALS_DIR);
         assert_eq!(odd.archive, ARCHIVE_DIR);
+    }
+
+    #[test]
+    fn archive_has_its_own_switch() {
+        // 0.4.2 以前的标记没写 archive：跟着日程
+        let old = layout_of(serde_json::json!({ "features": { "journal": false } }));
+        assert!(!old.archiving);
+        // 只写笔记、归档旧资料：日程关着，归档开着
+        let marker = marker_with_archive(Some(serde_json::json!({ "features": { "journal": false } })), true);
+        assert_eq!(marker["features"], serde_json::json!({ "journal": false, "archive": true }));
+        let notes_only = layout_of(marker);
+        assert!(!notes_only.journal && notes_only.archiving);
+        assert_eq!(notes_only.classify("归档/旧.md"), Slot::Note { archived: true });
+        assert_eq!(notes_only.classify("日记/2026/2026-10-20.md"), Slot::Note { archived: false });
+        assert_eq!(notes_only.hidden_dirs(), vec!["归档"]);
+        assert_eq!(notes_only.folder_of_dir("归档"), None);
+        assert!(notes_only.require_archive().is_ok());
+        assert!(notes_only.require_journal().is_err());
+        // 关日程不带走归档：老标记（没写 archive，归档跟着日程开着）关了日程，归档照旧开着
+        let off = marker_with_journal(Some(serde_json::json!({ "features": { "journal": true } })), false);
+        assert_eq!(off["features"], serde_json::json!({ "journal": false, "archive": true }));
+        let off = marker_with_journal(Some(serde_json::json!({ "app": "Odea" })), false);
+        assert_eq!(off["features"], serde_json::json!({ "journal": false, "archive": true }));
+        assert!(layout_of(off).archiving);
+        // 只开日程、不要归档
+        let journal_only = layout_of(serde_json::json!({ "features": { "journal": true, "archive": false } }));
+        assert_eq!(journal_only.classify("归档/旧.md"), Slot::Note { archived: false });
+        assert_eq!(journal_only.hidden_dirs(), vec!["日记", "目标"]);
+        assert!(journal_only.require_archive().is_err());
     }
 
     #[test]

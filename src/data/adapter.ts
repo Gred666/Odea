@@ -76,17 +76,16 @@ function useVaultDocument(): DocumentModel {
     drafts[saveKeyOf(target)]?.contentMd ?? stored;
 
   // 协作（docs/协同编辑.md）：做客时正文区换成共享的那一篇；主持的那几篇笔记带上各自的会话
-  const collabPhase = useCollab((s) => s.phase);
-  const collabSession = useCollab((s) => s.session);
+  // （一篇只在一个会话里，§25）
   const hostedDocs = useCollab((s) => s.hostedDocs);
   const showShared = useCollab((s) => s.showShared);
-  const sharedTitle = useCollab((s) => s.title);
+  const collabSession = useCollab((s) => s.session);
   const sessionKey = useCollab((s) => s.sessionKey);
-  const permission = useCollab((s) => s.permission);
-  const ended = useCollab((s) => s.status?.state === "ended");
-  const members = useCollab((s) => s.members);
+  const shared = useCollab((s) =>
+    s.shownSession === null ? undefined : s.sessions[s.shownSession],
+  );
   const hostedCollab = (noteId: string) => {
-    const session = collabPhase === "hosting" ? hostedDocs[noteId] : undefined;
+    const session = hostedDocs[noteId];
     return session ? { session, readOnly: false } : undefined;
   };
 
@@ -101,17 +100,18 @@ function useVaultDocument(): DocumentModel {
   );
 
   // 做客时正文区换成共享的那一篇（放在所有 hook 之后：提前 return 不能改变 hook 的顺序）
-  if (collabPhase === "guest" && showShared && collabSession) {
-    const host = members.find((member) => member.host)?.name;
+  if (shared?.phase === "guest" && showShared && collabSession) {
+    const host = shared.members.find((member) => member.host)?.name;
+    const ended = shared.status?.state === "ended";
     return {
       key: `shared-${sessionKey}`,
-      title: sharedTitle || "协作的笔记",
+      title: shared.title || "协作的笔记",
       eyebrow: host ? `${host} 的笔记` : undefined,
       bodyMd: collabSession.toString(),
-      statusParts: ended ? ["协作已结束"] : ["协作中", `${members.length} 人`],
+      statusParts: ended ? ["协作已结束"] : ["协作中", `${shared.members.length} 人`],
       editor: { target: { kind: "shared", id: sessionKey }, titleEditable: false },
       // 只读：主持人给的权限；协作结束以后也不再能改（改了也传不出去），要接着写就存一份
-      collab: { session: collabSession, readOnly: permission === "read" || ended },
+      collab: { session: collabSession, readOnly: shared.permission === "read" || ended },
     };
   }
   switch (workspace) {
@@ -141,6 +141,7 @@ function useVaultDocument(): DocumentModel {
         title: note.title,
         conflict: conflictOf(note, notes, archived),
         relPath: note.relPath,
+        idInFile: note.idInFile,
         folder: folderOf(note),
         bodyMd: draftOr({ kind: "note", id: note.id }, body ?? ""),
         statusParts: body === undefined ? ["载入中…"] : noteStatus(note, "上次更新"),
@@ -213,6 +214,7 @@ function useVaultDocument(): DocumentModel {
         title: note.title,
         conflict: conflictOf(note, notes, archived),
         relPath: note.relPath,
+        idInFile: note.idInFile,
         banner: {
           icon: "archive",
           text: `已归档 · ${formatFullCN(toISODate(new Date(note.archivedAt ?? note.updatedAt)))}`,

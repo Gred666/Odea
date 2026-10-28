@@ -3,7 +3,8 @@
 命令在 commands.rs 的「协作」一节。
 
 CRDT 在前端（collab/session.ts），这里只搬字节、管成员和权限：
-- Host：主持人。起端点、发邀请链接、有人连进来先问主持人、星形转发（访客的更新转给其他人）
+- Node：端点（node.rs）。一个应用一个，几个会话共用；接进来的连接按 Hello 里的会话 id 分给会话（§25.1）
+- Host：主持人。发邀请链接、有人连进来先问主持人、星形转发（访客的更新转给其他人）
 - Guest：访客。按邀请链接拨主持人、等确认、断线自动重连
 
 两边都往一个 mpsc 里吐 Event：文档更新、光标、同步请求原样交给前端（命令层走二进制
@@ -28,6 +29,7 @@ pub mod firewall;
 mod guest;
 mod host;
 pub mod nearby;
+mod node;
 pub mod protocol;
 mod queue;
 pub mod reach;
@@ -44,6 +46,7 @@ pub use diagnose::Diagnosis;
 pub use endpoint::id_text;
 pub use guest::{Guest, GuestOptions};
 pub use host::{Decision, Host, HostOptions};
+pub use node::{Node, NodeOptions};
 pub use protocol::{Permission, RejectReason, Scope};
 pub use reach::Reach;
 pub use relays::Relay;
@@ -173,6 +176,16 @@ pub enum Control {
     /// 同一个网络里正在分享的人（「附近」列表开着时，变了就报一次整张表）
     Nearby {
         hosts: Vec<nearby::NearbyHost>,
+    },
+    /// 「附近」点进来一位，我主持着好几个（不属于哪个会话）：问主持人让他进哪一个，用 collab_answer_nearby 回话
+    NearbyKnock {
+        request: u32,
+        id: String,
+        name: String,
+    },
+    /// 上面那位有了结果（主持人挑了、拒了，或者他自己走了）：收起那张卡
+    NearbyKnockDone {
+        request: u32,
     },
     /// 访客要开一篇（主持人）：前端看它在不在范围里，用 collab_doc_answer 回话
     #[serde(rename_all = "camelCase")]

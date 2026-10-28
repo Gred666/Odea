@@ -35,6 +35,38 @@ const SCENES = {
     hover: "aside nav",
   },
   /**
+   * 文件列表里文件夹那一行（views/NotesView.tsx 的 FolderRow）：悬停时图标让位给箭头、篇数让位给「…」。
+   * 一列文件夹每行都有，淡的是颜色、不进合成层
+   */
+  folder: {
+    setup: `(async () => {
+      const { useData } = await import('/src/data/store.ts');
+      await useData.getState().createFolder('', '交易');
+      await useData.getState().createNote('交易');
+      await new Promise((r) => setTimeout(r, 800));
+    })()`,
+    target: '[data-folder-row="交易"]',
+    hover: '[data-folder-row="交易"]',
+  },
+  /**
+   * 窗口最上面那条里的「路径 / 标题」（components/DocumentView.tsx 的 TitleStrip）：
+   * 往下滚到大标题钻进去以后淡进来。截的是字那一层（整条 38px 高）
+   */
+  strip: {
+    markdown: "正文一行。\n\n".repeat(80),
+    target: ".odea-doc-strip + .odea-doc-strip",
+    trigger: "document.querySelector('[data-doc-scroller]').scrollTop = 400",
+    pad: { top: 0, right: 0, bottom: 0, left: 0 },
+    capture: 3000,
+    settle: 600,
+  },
+  /** 文件列表里置顶的那一行：悬停时图钉让位给「…」（views/NotesView.tsx 的 TreeNoteRow） */
+  pinned: {
+    setup: "new Promise((r) => setTimeout(r, 300))",
+    target: "[data-list-scroller] [data-note-row]",
+    hover: "[data-list-scroller] [data-note-row]",
+  },
+  /**
    * 协作时别人的名字标签（collab/cursors.ts）：协作实验台里访客的选区一变，主持人那边亮起来。
    * 标签只亮 2.5 秒（JS 定时器，不跟着放慢），截到 2 秒以内
    */

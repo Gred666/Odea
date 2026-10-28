@@ -15,6 +15,7 @@ import { SyncDialog } from "@/components/SyncDialog";
 import { TeamDialog } from "@/components/TeamDialog";
 import { TeamRelayToast } from "@/components/TeamRelayToast";
 import { TitleBar } from "@/components/TitleBar";
+import { TrashDialog } from "@/components/TrashDialog";
 import { UndoToast } from "@/components/UndoToast";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { VaultSwitcher } from "@/components/VaultSwitcher";
@@ -40,9 +41,11 @@ import { useEffect, useRef } from "react";
  */
 const zenTransition = ZEN_TRANSITION;
 
+/** 版面换了时旧的一屏盖在新的上面退掉（和 SwapFade 同一个节奏） */
+const FRAME_DISSOLVE = { duration: 0.18, ease: [0.22, 1, 0.36, 1] } as const;
+
 export function Shell() {
   const workspace = useApp((s) => s.workspace);
-  const navDirection = useApp((s) => s.navDirection);
   const setCalendarScope = useApp((s) => s.setCalendarScope);
   const setGoalHorizon = useApp((s) => s.setGoalHorizon);
   const reduceMotion = useApp((s) => s.reduceMotion);
@@ -74,6 +77,9 @@ export function Shell() {
   const showList = hasListColumn(workspace) && !panelCollapsed;
   // 专注模式要把整条 chrome 推出去有多远
   const zenShift = zen ? -chromeWidth(showList) : 0;
+  // 主内容的版面（见下面主内容那段注释）：版面一样的两页之间不重挂，只换文档
+  const frame =
+    workspace === "extensions" ? "extensions" : hasListColumn(workspace) ? "listed" : "full";
 
   // 零点翻页
   useEffect(() => startTodayTicker(), []);
@@ -93,13 +99,16 @@ export function Shell() {
 
   // 今天这一篇一进应用就取：今日TODO 页渲染的就是它，而下面那个 effect 只管
   // 日历和 /GOAL，不给今日TODO 单独取。
+  // /GOAL 这一期的目标也先取着：第一次点过去是现成的，不先空着一页「载入中…」、再换上正文。
   // 跨过零点后，昨天那份「延续来的」缓存不再作数（它从来不是昨天自己的内容）。
   useEffect(() => {
     // 没开日程的仓库没有今日TODO（docs/仓库与启动器.md §6）
     if (!journal) return;
     forgetCarriedDays(todayDate);
     void loadDay(todayDate, true);
-  }, [forgetCarriedDays, journal, loadDay, todayDate]);
+    const horizon = useApp.getState().goalHorizon;
+    void loadGoal(horizon, periodStartOf(horizon, todayDate));
+  }, [forgetCarriedDays, journal, loadDay, loadGoal, todayDate]);
 
   // 日历：选中的那一天 / 那一天所在周期的目标；/GOAL：今天所在周期的目标
   useEffect(() => {
@@ -243,26 +252,24 @@ export function Shell() {
         </motion.div>
 
         {/* ---------- 主内容 ----------
-            方位感只放在**退场**上：离开的那一屏按导航方向滑走。
-            进场是纯 opacity，刻意不带任何 transform。
+            按「版面」换，不按区换：frame 是「这一区有列表栏 / 没有 / 扩展页」。列表栏收起了也算有：
+            在笔记里收起 / 展开它不换一屏，正文那一列自己滑过去（DocumentView 的 CenteredColumn）。
+            版面一样的两页（今日TODO ↔ /GOAL，笔记 ↔ 日历 ↔ 归档）是同一个 DocumentView，
+            只是换了一篇文档 —— 和在列表里换一篇笔记一样走 SwapFade 的溶解：标题、分隔线、
+            状态栏原地不动，只有字换掉。2026-10-28 以前按区换，今日TODO ↔ /GOAL 是整屏卸掉
+            重挂：旧的一屏 140ms 淡出还往旁边挪 12px，新的一屏 220ms 淡入，分隔线从 0 再展开一次、
+            状态栏再晚一拍淡进来 —— 用户说的「闪来闪去」。
 
-            这样做是为了根除「先渲染一遍只读预览、再换成编辑器」的二次排版。
-            以前进场带 x 位移，而编辑器不能挂在正在平移的祖先里（技术方案
-            §11.3②），只能先拿 DocumentPreview 顶着、等位移停了再换。可这两者
-            的排版根本不一样 —— 预览正文 15px，编辑器 17px/1.4，h2 是 21px 对
-            29.75px —— 一换整篇每一行都在动，看起来就是「切过去之后又渲染了
-            一次」。（最早那版门控等的是 spring.smooth 静止，要 492ms；改成
-            tween 后仍有 280ms，只是把同一个跳变提前了，没有消掉。）
+            版面变了（列表栏出现 / 收起）才换一屏，也是溶解：新的一屏挂上就是不透明的，
+            旧的一屏冻在原尺寸上（popLayout，见下）盖在它上面退掉。新的一屏从头到尾不动，
+            编辑器能在第一帧直接挂上（它不能挂在正在动 transform 的祖先里，技术方案 §11.3②），
+            也不会淡完再被提出图层重画一次。旧的那一屏得画在新的上面：新的一屏的根（DocumentView）
+            是 relative 的、DOM 里又排在后面，不管的话它盖住旧的，就成了一下硬切。退场时 Motion 给
+            那一屏挂上 data-motion-pop-id（在画之前），globals.css 的 .odea-frame 照着它抬高一层。
 
-            进场不带 transform，编辑器就能在新一屏的第一帧直接挂上：全程只排
-            一次版，没有可见的替换。它自身挂载只要 2ms（1800 行文档 5ms）。
-            退场那一屏的编辑器马上就要被销毁、也没有焦点，滑动不影响它。
-
-            mode="popLayout" 而不是 "wait"：退场的那一屏立刻脱离文档流并被
-            冻结在原尺寸上，新一屏在最终布局里直接挂载 —— 两屏交叉淡入淡出。
-            这一点和上面列表栏的进出配套：列表栏一出现主内容就收窄，如果旧正文
-            还留在流里，它会在淡出的同时被重新折行，看起来就是先跳一下再消失。
-            冻结之后它只是安静地淡掉，重排只发生在新一屏挂载那一次。
+            mode="popLayout" 而不是 "wait"：退场的那一屏立刻脱离文档流并被冻结在原尺寸上，
+            新一屏在最终布局里直接挂载。这一点和上面列表栏的进出配套：列表栏一出现主内容就收窄，
+            如果旧正文还留在流里，它会在退场的同时被重新折行，看起来就是先跳一下再消失。
 
             anchorX="right"：popLayout 把退场那一屏钉在它的定位父级上，而这个
             父级（下面那个 flex-1 的 div）正是列表栏进出时左边缘会挪 300px 的
@@ -270,18 +277,16 @@ export function Shell() {
             —— 父级的右边缘是窗口右边缘，从来不动 —— 它就原地不动。
 
             这一层不能 overflow-hidden：正文画布要往左 chrome 底下铺（见上），
-            在这里裁掉就白铺了。退场那 12px 位移往左是被 z-30 的 chrome 盖住，
-            往右由最外层的 overflow-hidden 裁掉，都不需要这里再裁一次。 */}
+            在这里裁掉就白铺了。 */}
         <div className="relative min-w-0 flex-1">
-          <AnimatePresence mode="popLayout" anchorX="right" initial={false} custom={navDirection}>
+          <AnimatePresence mode="popLayout" anchorX="right" initial={false}>
             <motion.main
-              key={workspace}
-              custom={navDirection}
-              initial={{ opacity: 0 }}
+              key={frame}
+              initial={false}
               animate={{ opacity: 1 }}
-              exit={{ opacity: 0, x: navDirection * -12, transition: tween.fast }}
-              transition={tween.base}
-              className="h-full"
+              exit={{ opacity: 0 }}
+              transition={FRAME_DISSOLVE}
+              className="odea-frame h-full"
             >
               {workspace === "extensions" ? (
                 <ExtensionsView />
@@ -307,7 +312,7 @@ export function Shell() {
 
           {/* 底部居中的提示条：错误在上、撤销在下。容器不接收指针，只有提示条本身接收。
               在正文区里居中（以前按整个窗口居中，跨在列表栏和正文的分界线上）。
-              离底 72px：再低就压在文档底部状态栏上了，「保存失败」恰好显示在那一行 */}
+              离底 72px：底下贴着正文的状态栏（32px 高），「保存失败」就显示在那一行，别压上去 */}
           <div className="pointer-events-none absolute inset-x-0 bottom-[72px] z-40 flex flex-col items-center gap-2 px-6">
             <ErrorToast />
             <NoticeToast />
@@ -326,6 +331,7 @@ export function Shell() {
         <RelayDialog />
         <TeamDialog />
         <HistoryDialog />
+        <TrashDialog />
         <UpdateDialog />
         {/* 开场：冷启动时盖在最上面，写一个「O」再把它送回侧栏（components/Intro.tsx） */}
         <Intro />

@@ -1,4 +1,5 @@
 import { openDocument } from "@/app/navigate";
+import { useApp } from "@/app/store";
 import { NEW_NOTE_TITLE, useData } from "@/data/store";
 import { tween } from "@/lib/motion";
 import {
@@ -34,6 +35,7 @@ const UNDO_WINDOW_MS = 6000;
  * 以前删除既不确认也不能撤销，界面上又没有回收站，手一滑就等于永久删除。
  * 用撤销而不是确认框 —— 删除是有意为之的时候居多，每次都拦一道只是多一次点击。
  * 同一时间只有一条：后发生的顶掉前一条（store 里 lastDeleted 和 undoable 互斥）。
+ * 所以删除的提示条上还有「回收站」：提示条过了、被顶掉了，删掉的笔记在回收站里留 30 天（TrashDialog）。
  */
 export function UndoToast() {
   const deleted = useData((s) => s.lastDeleted);
@@ -41,6 +43,7 @@ export function UndoToast() {
   const undoDelete = useData((s) => s.undoDelete);
   const dismissUndo = useData((s) => s.dismissUndo);
   const dismissUndoable = useData((s) => s.dismissUndoable);
+  const setTrashOpen = useApp((s) => s.setTrashOpen);
   const [hovered, setHovered] = useState(false);
   const [busy, setBusy] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -91,6 +94,7 @@ export function UndoToast() {
   };
 
   const Icon = item?.icon ?? Trash2;
+  const deletion = !!deleted || undoable?.kind === "delete";
 
   // 定位交给 Shell 里的 ToastStack，和错误提示叠在一起
   return (
@@ -121,6 +125,20 @@ export function UndoToast() {
           >
             撤销
           </button>
+          {deletion && (
+            <button
+              type="button"
+              onClick={() => {
+                dismissUndo();
+                dismissUndoable();
+                setTrashOpen(true);
+              }}
+              className="-ml-2 shrink-0 rounded-md px-2 py-1 text-canvas/75
+                         transition-colors duration-[140ms] hover:bg-canvas/15 hover:text-canvas"
+            >
+              回收站
+            </button>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

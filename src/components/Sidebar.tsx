@@ -2,6 +2,7 @@ import { JOURNAL_WORKSPACES, NAV_WIDTH, hasListColumn, useApp } from "@/app/stor
 import { useData } from "@/data/store";
 import type { SyncState, WorkspaceId } from "@/data/types";
 import { cn } from "@/lib/cn";
+import { snapToDevicePixels } from "@/lib/devicePixels";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { shortcut } from "@/lib/platform";
 import { describeSync } from "@/lib/syncText";
@@ -16,8 +17,6 @@ import {
   FolderTree,
   KeyRound,
   LoaderCircle,
-  PanelLeftClose,
-  PanelLeftOpen,
   RefreshCw,
   Search,
   SquareCheckBig,
@@ -26,7 +25,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion, motionValue, useAnimationControls } from "motion/react";
 import type { TargetAndTransition } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Logo } from "./Logo";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -57,7 +56,7 @@ const INSTANT = { duration: 0 };
 
 /**
  * 最左边的窄栏（Obsidian 的 ribbon、VS Code 的活动栏，docs/仓库与启动器.md §6）：
- * Logo、各个区的图标、后台读索引 / 新版本 / 同步三样状态、左下角的侧栏开关、命令面板、主题。
+ * Logo、各个区的图标、后台读索引 / 新版本 / 同步三样状态、左下角的命令面板、主题。
  * 字都在悬停提示里。
  *
  * 2026-10-20 以前这里是能在 240 宽（带字）和 64 宽之间切换的导航栏；P11.2 起一直是 64 宽，
@@ -70,10 +69,16 @@ export function Sidebar() {
   const panelCollapsed = useApp((s) => s.panelCollapsed);
   const setPanelCollapsed = useApp((s) => s.setPanelCollapsed);
   const journal = useData((s) => s.layout.journal);
+  const archive = useData((s) => s.layout.archive);
   const appReduce = useApp((s) => s.reduceMotion);
   const systemReduce = usePrefersReducedMotion();
   const reduce = appReduce || systemReduce;
-  const items = journal ? NAV : NAV.filter((item) => !JOURNAL_WORKSPACES.includes(item.id));
+  const items = NAV.filter(
+    (item) =>
+      (journal || !JOURNAL_WORKSPACES.includes(item.id)) && (archive || item.id !== "archive"),
+  );
+  const listRef = useRef<HTMLUListElement>(null);
+  const { rows, leaving, booted } = useNavRows(listRef, items, reduce);
 
   const select = (id: WorkspaceId) => {
     if (id === workspace) {
@@ -96,12 +101,15 @@ export function Sidebar() {
         <Logo collapsed reduce={reduce} fade={LOGO_HIDDEN} />
       </div>
 
-      <ul className="flex flex-col gap-[2px] px-3 pt-1">
-        {items.map((item, i) => (
+      {/* 开关日程、归档是就地换的（data/store 的 switchLayout）：多出来 / 没了的那几项怎么进出见 useNavRows */}
+      <ul ref={listRef} className="flex flex-col px-3 pt-1">
+        {rows.map((item, i) => (
           <NavRow
             key={item.id}
             item={item}
             index={i}
+            inserted={booted}
+            leaving={leaving.includes(item.id)}
             active={workspace === item.id}
             onSelect={() => select(item.id)}
           />
@@ -281,48 +289,22 @@ ${online.length ? `${online.join("、")} 在线` : "团队里别人都不在线"
   );
 }
 
-/* ---------------- 左下角：侧栏开关、命令面板、主题 ----------------
-   贴着 64 宽窄栏的中线一列，从下往上：主题、命令面板、侧栏开关（和以前导航栏收起后的样子一样）。
-   侧栏开关收起 / 展开的是窄栏右边那一栏（文件树、月历、归档列表）；今日TODO、目标没有那一栏，
-   这时候按它只是记下来，回到文件时照着办 */
+/* ---------------- 左下角：命令面板、主题 ----------------
+   贴着 64 宽窄栏的中线一列，从下往上：主题、命令面板。
+   以前最上面还有一颗侧栏开关，可它收起 / 展开的是窄栏右边那一栏（文件树、月历、归档列表），
+   今日TODO、目标没有那一栏，在那两页按它什么都不发生（2026-10-28 用户反馈）。
+   开关挪到了正文底下状态栏的最左端（DocumentView 的 StatusBar），紧挨着它收起的那一栏，
+   只在有那一栏的几页出现；点窄栏上已经选中的那一项照样收起 / 展开 */
 
 /** 按钮边长，和 ThemeToggle 一样 */
 const KNOB = 28;
 
 function FootControls() {
   const setPaletteOpen = useApp((s) => s.setPaletteOpen);
-  const panelCollapsed = useApp((s) => s.panelCollapsed);
-  const setPanelCollapsed = useApp((s) => s.setPanelCollapsed);
   const combo = shortcut("K");
-  const ToggleIcon = panelCollapsed ? PanelLeftOpen : PanelLeftClose;
-  const toggleLabel = panelCollapsed ? "展开侧栏" : "收起侧栏";
 
   return (
     <div className="flex shrink-0 flex-col items-center gap-1 pt-3 pb-4">
-      {/* 收起 / 展开。图标换的那一下只淡（CLAUDE.md 动效规矩 1） */}
-      <button
-        type="button"
-        onClick={() => setPanelCollapsed(!panelCollapsed)}
-        aria-label={toggleLabel}
-        title={toggleLabel}
-        style={{ width: KNOB, height: KNOB }}
-        className="grid place-items-center rounded-md text-muted transition-colors duration-[140ms]
-                   hover:bg-raised hover:text-ink"
-      >
-        <AnimatePresence mode="popLayout" initial={false}>
-          <motion.span
-            key={panelCollapsed ? "open" : "close"}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={tween.fast}
-            className="grid place-items-center"
-          >
-            <ToggleIcon size={14.5} strokeWidth={1.9} />
-          </motion.span>
-        </AnimatePresence>
-      </button>
-
       <button
         type="button"
         onClick={() => setPaletteOpen(true)}
@@ -383,14 +365,133 @@ const ICON_MOTION: Record<WorkspaceId, { to: TargetAndTransition; origin: string
   },
 };
 
+/** 窄栏那几项挪位置的曲线：起步就走、收尾短（CLAUDE.md 动效规矩 7） */
+const SLIDE_EASE = "cubic-bezier(0.33, 1, 0.68, 1)";
+const SLIDE_MS = 240;
+/** 拿掉的那几项原地淡出；淡完下面的才滑上去 */
+const LEAVE_MS = 140;
+/** 新出现的那几项淡入。晚一点开始：从上面滑下来的「归档」先过去，别和它们叠在一起 */
+const ENTER_MS = 180;
+const ENTER_DELAY = 70;
+
+/**
+ * 开关日程、归档时窄栏那几项的进出（2026-10-28）。
+ *
+ * 以前是动高度（0 ↔ 38）：高度只能在主线程上一帧一帧算，可开关的那一下主线程正忙着按新的列表
+ * 把整个应用重画一遍（4 倍降速的开发版里一下 106ms），接着今天那一篇取回来又是 53ms ——
+ * 动画的头几帧和中间都卡住，用户说「左侧小图标会掉帧」。
+ *
+ * 现在排版只变一次，动的都是合成器上的 opacity / transform（Web Animations），主线程再忙也照常走：
+ * - 多出来的：挂上就占好格子，淡入；它下面的（「归档」）从原来的位置滑过去（FLIP）
+ * - 拿掉的：先留在原来的格子里淡出（leaving，点不到），淡完撤掉，下面的再滑上去
+ * 位置都是整 CSS 像素，可 1.25 倍屏上奇数格落在半个物理像素上：动之前先对齐（CLAUDE.md 规矩 3）。
+ */
+function useNavRows(
+  listRef: React.RefObject<HTMLUListElement | null>,
+  items: NavItem[],
+  reduce: boolean,
+) {
+  const ids = items.map((item) => item.id);
+  const key = ids.join("|");
+  // 首屏那一批错峰淡入（NavRow）；之后新出现的才算「插进来的」
+  const [booted, setBooted] = useState(false);
+  useEffect(() => setBooted(true), []);
+  /** 上一次提交时窄栏上有哪几项 */
+  const shown = useRef(ids);
+  /** 正在淡出的几项：还占着格子 */
+  const [leaving, setLeaving] = useState<WorkspaceId[]>([]);
+  const fades = useRef(new Map<WorkspaceId, Animation>());
+  // 这一次刚拿掉、还没登记进 leaving 的：这一帧先照旧画着，下面的 layout effect 开始淡
+  const dropping = reduce ? [] : shown.current.filter((id) => !ids.includes(id));
+  const rows = NAV.filter(
+    (item) => ids.includes(item.id) || leaving.includes(item.id) || dropping.includes(item.id),
+  );
+  const rowsKey = rows.map((item) => item.id).join("|");
+
+  // 拿掉的开始淡出；又回来的（淡到一半又开了）停下、照常显示
+  // biome-ignore lint/correctness/useExhaustiveDependencies: key 就是 ids 的指纹
+  useLayoutEffect(() => {
+    const before = shown.current;
+    shown.current = ids;
+    const list = listRef.current;
+    for (const id of ids) {
+      const fade = fades.current.get(id);
+      if (!fade) continue;
+      fade.cancel();
+      fades.current.delete(id);
+      setLeaving((now) => now.filter((other) => other !== id));
+    }
+    const removed = before.filter((id) => !ids.includes(id));
+    if (!removed.length || reduce || !list) return;
+    setLeaving((now) => [...now, ...removed.filter((id) => !now.includes(id))]);
+    for (const id of removed) {
+      const row = list.querySelector<HTMLElement>(`[data-nav="${id}"]`);
+      if (!row || typeof row.animate !== "function") continue;
+      snapToDevicePixels(row);
+      const fade = row.animate([{ opacity: 1 }, { opacity: 0 }], {
+        duration: LEAVE_MS,
+        easing: "ease-out",
+        fill: "forwards",
+      });
+      fades.current.set(id, fade);
+      fade.onfinish = () => {
+        if (fades.current.get(id) !== fade) return;
+        fades.current.delete(id);
+        setLeaving((now) => now.filter((other) => other !== id));
+      };
+    }
+  }, [key, reduce]);
+
+  // 格子变了（插进来、淡完撤掉）：挪了位置的从原处滑过去，新出现的淡入
+  const tops = useRef(new Map<string, number>());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rowsKey 就是这一列的指纹
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const previous = tops.current;
+    const next = new Map<string, number>();
+    for (const row of list.querySelectorAll<HTMLElement>("[data-nav]")) {
+      const id = row.dataset.nav!;
+      const top = row.offsetTop;
+      next.set(id, top);
+      if (!booted || reduce || typeof row.animate !== "function") continue;
+      const old = previous.get(id);
+      if (old === undefined) {
+        snapToDevicePixels(row);
+        row.animate([{ opacity: 0 }, { opacity: 1 }], {
+          duration: ENTER_MS,
+          delay: ENTER_DELAY,
+          easing: "ease-out",
+          fill: "backwards",
+        });
+      } else if (old !== top) {
+        snapToDevicePixels(row);
+        row.animate([{ transform: `translateY(${old - top}px)` }, { transform: "none" }], {
+          duration: SLIDE_MS,
+          easing: SLIDE_EASE,
+        });
+      }
+    }
+    tops.current = next;
+  }, [rowsKey]);
+
+  return { rows, leaving: [...leaving, ...dropping], booted };
+}
+
 function NavRow({
   item,
   index,
+  inserted,
+  leaving,
   active,
   onSelect,
 }: {
   item: NavItem;
   index: number;
+  /** 首屏之后才出现的（开了日程）：不错峰淡入，由 useNavRows 淡入 */
+  inserted: boolean;
+  /** 已经拿掉了、正在原地淡出（useNavRows）：点不到 */
+  leaving: boolean;
   active: boolean;
   onSelect: () => void;
 }) {
@@ -425,11 +526,18 @@ function NavRow({
   }, [active, tapCount, icon, motionSpec, skipMotion]);
 
   return (
-    // 首屏错峰淡入。只淡 opacity，不位移（CLAUDE.md 动效规矩 1）
+    // 首屏错峰淡入。只淡 opacity，不位移（CLAUDE.md 动效规矩 1）。
+    // 之后插进来的、拿掉的由 useNavRows 用 Web Animations 淡 / 滑；一直待在自己的图层上（规矩 3）
     <motion.li
-      initial={{ opacity: 0 }}
+      data-nav={item.id}
+      initial={inserted ? false : { opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ ...tween.base, delay: 0.3 + index * 0.04 }}
+      aria-hidden={leaving || undefined}
+      className={cn(
+        "shrink-0 pb-[2px] will-change-[opacity,transform]",
+        leaving && "pointer-events-none",
+      )}
     >
       <motion.button
         type="button"

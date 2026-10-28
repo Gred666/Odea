@@ -38,7 +38,7 @@ describe("mock backend", () => {
   it("does not turn a slash in a renamed title into a folder", async () => {
     const mockBackend = await reopen();
     const id = await mockBackend.noteCreate("", "无标题笔记");
-    await mockBackend.noteUpsert({ id, title: "测试/斜杠:标题", contentMd: "正文" });
+    await mockBackend.noteRename(id, "测试/斜杠:标题");
     const note = await mockBackend.noteGet(id);
     expect(note.title).toBe("测试/斜杠:标题");
     expect(note.relPath).toBe("笔记/测试／斜杠：标题.md");

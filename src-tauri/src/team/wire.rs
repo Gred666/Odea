@@ -54,7 +54,8 @@ pub enum Refusal {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PresenceDoc {
-    /// 文档 id：笔记是相对路径，某一天 `day-日期`，目标 `goal-周期-开始日期`
+    /// 文档 id：笔记是属性块里的 id（`note-<id>`，没写 id 的是相对路径），某一天 `day-日期`，
+    /// 目标 `goal-周期-开始日期`。这边不解释它
     pub doc: String,
     /// 这一篇由我主持（别人要开就连我）
     pub hosting: bool,

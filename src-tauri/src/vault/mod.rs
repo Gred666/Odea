@@ -45,7 +45,7 @@ use crate::db::now_ms;
 use crate::domain::model::{
     Attachment, Backlink, BacklinkLine, CalendarMarks, DayDoc, DocTarget, FindFile, FindMatch,
     FindOptions, FindResult, FolderDeletion, Goal, JournalDoc, LinkRewrite, Note, NoteSummary,
-    Relink, Task, TextHit, TextSearch, TreeFile, VaultChange, VaultInfo, VaultLayout,
+    Relink, Task, TextHit, TextSearch, TrashedNote, TreeFile, VaultChange, VaultInfo, VaultLayout,
 };
 use crate::domain::search;
 use crate::error::{AppError, Result};
@@ -261,6 +261,20 @@ impl Vault {
         fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker)?)?;
         let backlog = self.relayout()?;
         self.log.record("vault", "journal", if on { "enabled" } else { "disabled" });
+        Ok(backlog)
+    }
+
+    /// 开 / 关归档：和开关日程一样改标记、重新认一遍文件（「归档」文件夹里的是归档的笔记，还是普通笔记）。
+    /// 文件一个都不动
+    pub fn set_archive(&mut self, on: bool) -> Result<Backlog> {
+        let path = fsio::abs(&self.root, layout::VAULT_MARKER);
+        let marker = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok());
+        let marker = layout::marker_with_archive(marker, on);
+        fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker)?)?;
+        let backlog = self.relayout()?;
+        self.log.record("vault", "archive", if on { "enabled" } else { "disabled" });
         Ok(backlog)
     }
 
@@ -736,6 +750,31 @@ impl Vault {
         Ok(())
     }
 
+    /// 编辑器照着 base 那一版正文改的（base 是那一版正文的指纹 fsio::fingerprint，前端 lib/fingerprint.ts
+    /// 算的是同一个），磁盘上的正文已经不是那一版了
+    /// （别的程序、同步刚改过，前端还没来得及刷新；或者前端看到了外部改动、编辑器里又有没存的修改）：
+    /// 先把磁盘上那一版另存成冲突副本，再写编辑器的 —— 两边都不丢，提示条说一声（VaultChange.conflicts）。
+    /// 磁盘上正好已经是要写的那些字就不用另存。没给 base（存失败的草稿，不知道当时照着哪一版）只比索引
+    fn keep_unseen_edits(
+        &mut self,
+        row: &DocRow,
+        base: Option<&str>,
+        content: &str,
+        change: &mut VaultChange,
+    ) -> Result<()> {
+        let Some(base) = base else {
+            return self.keep_external_edits(row, change);
+        };
+        let Some(text) = self.read(&row.rel_path)? else {
+            return Ok(());
+        };
+        let (_, body) = frontmatter::split(&text);
+        if fsio::fingerprint(&body) != base && body != content {
+            self.write_conflict_copy(&row.rel_path, &text, change)?;
+        }
+        Ok(())
+    }
+
     /// 「标题 (冲突 2026-09-27 1030).md」，放在原文件旁边。它是一篇新的笔记：
     /// 去掉 id（不和原文件抢）、去掉写在属性块里的标题（否则两篇同名，分不清）。
     fn write_conflict_copy(&mut self, rel: &str, text: &str, change: &mut VaultChange) -> Result<DocRow> {
@@ -831,6 +870,8 @@ impl Vault {
         self.note_of(&self.note_row(id)?)
     }
 
+    /// 测试搭场景用（应用里新建走 note_create_in，正文由编辑器的保存写）
+    #[cfg(test)]
     pub fn note_create(&mut self, title: &str, content: &str) -> Result<String> {
         self.note_create_in("", title, content)
     }
@@ -860,7 +901,51 @@ impl Vault {
         Ok(row.id)
     }
 
-    /// 改正文和标题。标题变了文件跟着改名（同一个文件夹里）。
+    /// 改正文（编辑器的保存）。标题、属性块里别的键都照磁盘上的留着。
+    /// `base` 是编辑器照着改的那一版正文的指纹，磁盘上已经不是那一版了就先另存冲突副本
+    /// （keep_unseen_edits）
+    pub fn note_save(&mut self, id: &str, content: &str, base: Option<&str>) -> Result<Note> {
+        let row = self.note_row(id)?;
+        let mut change = VaultChange::default();
+        self.keep_unseen_edits(&row, base, content, &mut change)?;
+        let (mut meta, _) = frontmatter::split(&self.read(&row.rel_path)?.unwrap_or_default());
+        meta.id = Some(row.id.clone());
+        meta.created.get_or_insert(row.created_at);
+        let saved = self.write_and_index(&row.rel_path, &frontmatter::render(&meta, content), &mut change)?;
+        self.log.record("note", &saved.id, "updated");
+        self.announce(change.without(&saved));
+        self.note_of(&saved)
+    }
+
+    /// 改标题：文件跟着改名（同一个文件夹里），正文一个字都不动（照磁盘上的留着，见 rewrite_note_meta）。
+    /// 和 note_save 互不覆盖：两样各写各的那一部分，谁先落库都一样
+    pub fn note_rename(&mut self, id: &str, title: &str) -> Result<Note> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(AppError::Invalid("标题不能是空的".into()));
+        }
+        let row = self.note_row(id)?;
+        if title == row.title {
+            return self.note_of(&row);
+        }
+        let stem = layout::file_stem_for_title(title);
+        let rel = fsio::unique_rel(
+            &self.root,
+            layout::dir_of(&row.rel_path),
+            &stem,
+            Some(&row.rel_path),
+        );
+        let (saved, change) = self.rewrite_note_meta(&row, Some(rel.clone()), |meta| {
+            meta.title = title_meta(&rel, title);
+        })?;
+        self.log.record("note", &saved.id, "renamed");
+        self.announce(change);
+        self.note_of(&saved)
+    }
+
+    /// 改正文和标题。标题变了文件跟着改名（同一个文件夹里）。应用里的保存分成了 note_save / note_rename，
+    /// 这个整篇写的留给测试和同步引擎的测试搭场景
+    #[cfg(test)]
     pub fn note_update(&mut self, id: &str, title: &str, content: &str) -> Result<()> {
         let row = self.note_row(id)?;
         let mut change = VaultChange::default();
@@ -906,7 +991,7 @@ impl Vault {
     /// 归档 = 挪进「归档」文件夹。置顶随之取消。原来在树上的哪个子文件夹里
     /// 记在属性块里，恢复时放回去。
     pub fn note_archive(&mut self, id: &str, category: Option<String>) -> Result<()> {
-        self.layout.require_journal()?;
+        self.layout.require_archive()?;
         let row = self.note_row(id)?;
         let rel = fsio::unique_rel(
             &self.root,
@@ -1178,6 +1263,47 @@ impl Vault {
         }
     }
 
+    /// 回收站里的笔记，最近删的在前（回收站对话框）。`share-<时间>` 这类文件夹（退役的共享仓库）不算
+    pub fn trash_list(&self) -> Result<Vec<TrashedNote>> {
+        let Ok(entries) = std::fs::read_dir(fsio::abs(&self.root, layout::TRASH_DIR)) else {
+            return Ok(Vec::new());
+        };
+        let keep = TRASH_KEEP_DAYS * 24 * 3600 * 1000;
+        let mut notes = Vec::new();
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(stem) = name.strip_suffix(".md") else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+            let (front, body) = frontmatter::split(&text);
+            let from = front.trashed_from.clone().unwrap_or_default();
+            let deleted_at = fsio::mtime_ms(&meta);
+            // 恢复按 id 找文件（trash_rel）：属性块里的 id 对得上这个文件就用它，对不上（手放进来的）用文件名
+            let file = format!("{}/{name}", layout::TRASH_DIR);
+            let id = front
+                .id
+                .clone()
+                .filter(|id| trash_rel(id) == file)
+                .unwrap_or_else(|| stem.to_string());
+            notes.push(TrashedNote {
+                id,
+                title: front
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| layout::stem_of(&from).to_string()),
+                from,
+                excerpt: search::make_excerpt(&body, 80),
+                deleted_at,
+                purge_at: deleted_at + keep,
+            });
+        }
+        notes.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+        Ok(notes)
+    }
+
     /* ---------------- 某一天 ---------------- */
 
     fn tasks_due(&self, date: &str) -> Result<Vec<Task>> {
@@ -1232,7 +1358,14 @@ impl Vault {
     }
 
     /// 写某一天。标题和正文都清空了就删掉这个文件 —— 空文件留在文件夹里只是杂物。
+    /// 不带 base 的这个是测试搭场景用的（应用里走 save_day_on）
+    #[cfg(test)]
     pub fn save_day(&mut self, date: &str, title: &str, body: &str) -> Result<DayDoc> {
+        self.save_day_on(date, title, body, None)
+    }
+
+    /// 写某一天。base 同 note_save：编辑器照着改的那一版正文的指纹，磁盘上已经不是那一版了就先另存冲突副本
+    pub fn save_day_on(&mut self, date: &str, title: &str, body: &str, base: Option<&str>) -> Result<DayDoc> {
         self.layout.require_journal()?;
         if index::day(&self.db, date)?.is_none() {
             self.index_if_unseen(&self.layout.day_path(date)?)?;
@@ -1241,7 +1374,7 @@ impl Vault {
         let mut change = VaultChange::default();
         let rel = match &existing {
             Some(row) => {
-                self.keep_external_edits(row, &mut change)?;
+                self.keep_unseen_edits(row, base, body, &mut change)?;
                 row.rel_path.clone()
             }
             None => self.layout.day_path(date)?,
@@ -1325,7 +1458,20 @@ impl Vault {
         })
     }
 
+    /// 测试搭场景用（应用里走 save_goal_on）
+    #[cfg(test)]
     pub fn save_goal(&mut self, horizon: &str, period_start: &str, body: &str) -> Result<Goal> {
+        self.save_goal_on(horizon, period_start, body, None)
+    }
+
+    /// 写某个周期的目标。base 同 note_save
+    pub fn save_goal_on(
+        &mut self,
+        horizon: &str,
+        period_start: &str,
+        body: &str,
+        base: Option<&str>,
+    ) -> Result<Goal> {
         self.layout.require_journal()?;
         layout::validate_period_start(horizon, period_start)?;
         if index::goal(&self.db, horizon, period_start)?.is_none() {
@@ -1335,7 +1481,7 @@ impl Vault {
         let mut change = VaultChange::default();
         let rel = match &existing {
             Some(row) => {
-                self.keep_external_edits(row, &mut change)?;
+                self.keep_unseen_edits(row, base, body, &mut change)?;
                 row.rel_path.clone()
             }
             None => self.layout.goal_path(horizon, period_start)?,
@@ -1455,8 +1601,9 @@ impl Vault {
         })
     }
 
-    /// 前端发现编辑器里有没存的改动、磁盘上又来了外部改动：先把磁盘上那一版另存一份，
-    /// 前端随后照常保存自己的。返回冲突副本的标题。
+    /// 把磁盘上那一版另存一份冲突副本，返回它的标题。应用里的保存不再走这一步（版本对不上时
+    /// keep_unseen_edits 自己另存），留给测试搭「已经有冲突副本」的场景
+    #[cfg(test)]
     pub fn keep_conflict_copy(&mut self, target: &DocTarget) -> Result<Option<String>> {
         let rel = self.target_rel(target)?;
         let Some(text) = self.read(&rel)? else {
@@ -1791,6 +1938,7 @@ impl Vault {
             layout: VaultLayout {
                 logical: self.tree.is_some(),
                 journal: self.layout.journal,
+                archive: self.layout.archiving,
                 notes_dir: self.layout.notes.clone(),
                 days_dir: self.layout.days.clone(),
                 goals_dir: self.layout.goals.clone(),
@@ -2038,7 +2186,13 @@ fn summary_from_row(row: &DocRow, conflict_of: Option<String>) -> NoteSummary {
         updated_at: row.updated_at,
         rel_path: row.rel_path.clone(),
         conflict_of,
+        id_in_file: id_in_file(row),
     }
+}
+
+/// 属性块里写着的 id 就是这一篇的（不是索引临时给的，也不是从别的文件拷过来的冲突副本）
+fn id_in_file(row: &DocRow) -> bool {
+    row.file_id.as_deref() == Some(row.id.as_str())
 }
 
 fn note_from_row(row: &DocRow, conflict_of: Option<String>) -> Note {
@@ -2056,6 +2210,7 @@ fn note_from_row(row: &DocRow, conflict_of: Option<String>) -> Note {
         updated_at: row.updated_at,
         rel_path: row.rel_path.clone(),
         conflict_of,
+        id_in_file: id_in_file(row),
     }
 }
 

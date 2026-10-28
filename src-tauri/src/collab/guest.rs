@@ -17,6 +17,7 @@
 （和 mDNS、中继）退避重连，也等主持人往回拨。重连上了双方再互发一次 Sync1 / Sync2，
 断线期间各自的改动就补齐了。主持人允许过的人重连不再问。
 替别人转发（设计 §20.9）：连不上主持人的人拿我的转发链接连我，我替他把流接到主持人那边（文件末尾）。
+端点是几个会话共用的（node.rs，§25.1）：主持人按回连链接拨过来的、找我转发的，都由它交过来。
 ============================================================ */
 
 use std::collections::{BTreeSet, HashMap};
@@ -26,19 +27,21 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use iroh::endpoint::{Connection, RecvStream, VarInt};
-use iroh::{Endpoint, PublicKey, SecretKey, Watcher};
+use iroh::endpoint::SendStream;
+use iroh::{Endpoint, PublicKey, Watcher};
 use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
 use n0_future::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use super::diagnose::{self, Diagnosis, Facts, RelayFact};
-use super::endpoint::{self, Bound};
+use super::endpoint;
+use super::node::Node;
 use super::protocol::{
     self, kind, AttachGet, AttachPut, CreateDoc, CreatedDoc, Forward, ForwardStream, Hello, Member,
     Permission, Reject, RejectReason, Welcome,
 };
-use super::reach::{self, Mapper, Portmap, Reach, RelayState};
+use super::reach::{self, Portmap, Reach, RelayState};
 use super::relays::Relay;
 use super::{
     clean_name, spawn_writer, Callback, Control, EndReason, Event, Events, Invite, MemberInfo,
@@ -63,44 +66,37 @@ const FORWARD_HANDSHAKE: Duration = Duration::from_secs(10);
 const CREATE_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct GuestOptions {
-    pub secret_key: SecretKey,
     pub name: String,
     pub invite: Invite,
-    pub mdns: bool,
     /// 用不用链接里主持人的中继（访客可以选「只直连，不经中继」，设计 §6.5）
     pub use_host_relay: bool,
-    /// 自己配的中继：回连链接里带上，主持人经它拨过来
-    pub relays: Vec<Relay>,
-    /// 生成回连链接时问路由器要公网端口（单测里关掉）
-    pub portmap: bool,
     /// 从「附近」点进来的：链接里没有会话 id 和邀请密钥
     pub nearby: bool,
 }
 
 pub struct Guest {
     shared: Arc<Shared>,
-    endpoint: Endpoint,
-    _mdns: Option<MdnsAddressLookup>,
-    /// 端口映射：要回连链接的时候才开（平时访客不去碰路由器）
-    mapper: Arc<tokio::sync::Mutex<Option<Mapper>>>,
     tasks: Vec<JoinHandle<()>>,
 }
 
 /// 生成回连链接的把手：不借用 Guest（命令层不必拿着会话的锁等那几秒）
 pub struct Callbacks {
     shared: Arc<Shared>,
-    endpoint: Endpoint,
-    mapper: Arc<tokio::sync::Mutex<Option<Mapper>>>,
 }
 
-struct Shared {
+pub(crate) struct Shared {
     events: Events,
+    node: Node,
+    /// 主持人按回连链接拨过来的连接（端点交过来，run 里接）
+    incoming: mpsc::UnboundedSender<Connection>,
     invite: Invite,
     /// 协作中途能改（Guest::set_name）：重连时的 Hello 用改过的
     name: Mutex<String>,
     use_host_relay: bool,
-    /// 这次端点上的中继：自己配的在前，主持人的（没选只直连的话）在后
+    /// 这次用的中继：自己配的在前，主持人的（没选只直连的话）在后
     relays: Vec<Relay>,
+    /// 借了端点上主持人的那台中继（离开时还回去）
+    borrowed: Option<Relay>,
     bound_at: Instant,
     link: Mutex<Option<Link>>,
     leaving: AtomicBool,
@@ -109,7 +105,6 @@ struct Shared {
     nearby: bool,
     /// 我的网段：加入时就在后台读好（Windows 上读一次网卡要两秒多，等到 3 秒再读就晚了）
     networks: Mutex<Option<Vec<(std::net::IpAddr, u8)>>>,
-    portmap: bool,
     /// 经我转发的人：成员号 → 他连我的那条连接（主持人发给他的数据报从这里转过去）
     forwarding: Mutex<HashMap<u16, Connection>>,
     /// 要开着的那几篇（文档 id）：断了重连以后照样开
@@ -144,62 +139,51 @@ pub struct CallbackLink {
 impl Guest {
     /// 加入：马上返回，进展从 events 里出来（Connecting → Waiting → Connected，
     /// 连不上是 Unreachable，被拒、被移出是 Ended）
-    pub async fn join(options: GuestOptions, events: Events) -> Result<Guest, String> {
-        let mut relays = options.relays;
+    pub async fn join(node: &Node, options: GuestOptions, events: Events) -> Result<Guest, String> {
+        let mut relays = node.relays();
+        let mut borrowed = None;
         if options.use_host_relay {
             if let Some(relay) = &options.invite.relay {
                 if !relays.iter().any(|mine| mine.url == relay.url) {
                     relays.push(relay.clone());
                 }
+                node.borrow_relay(relay).await;
+                borrowed = Some(relay.clone());
             }
         }
-        let Bound { endpoint, mdns, .. } =
-            endpoint::bind(options.secret_key, None, options.mdns, &relays, &[]).await?;
         let host = PublicKey::from_bytes(&options.invite.host)
             .map_err(|_| "链接里的主持人公钥不对".to_string())?;
+        let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared {
             events,
+            node: node.clone(),
+            incoming: incoming_tx,
             invite: options.invite,
             name: Mutex::new(clean_name(&options.name)),
             use_host_relay: options.use_host_relay,
             relays,
+            borrowed,
             bound_at: Instant::now(),
             link: Mutex::new(None),
             leaving: AtomicBool::new(false),
             seen_nearby: AtomicBool::new(false),
             nearby: options.nearby,
             networks: Mutex::new(None),
-            portmap: options.portmap,
             forwarding: Mutex::new(HashMap::new()),
             wanted: Mutex::new(BTreeSet::new()),
             next_create: AtomicU32::new(1),
             creating: Mutex::new(HashMap::new()),
         });
-        let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+        node.add_guest(&shared);
+        let endpoint = node.endpoint().clone();
         let mut tasks = vec![
-            tokio::spawn(accept_host(
-                endpoint.clone(),
-                host,
-                incoming_tx,
-                shared.clone(),
-            )),
             tokio::spawn(run(shared.clone(), endpoint.clone(), incoming_rx)),
-            tokio::spawn(refresh_networks(shared.clone(), endpoint.clone())),
+            tokio::spawn(refresh_networks(shared.clone(), endpoint)),
         ];
-        if let Some(mdns) = &mdns {
-            tasks.push(tokio::spawn(watch_nearby(
-                mdns.clone(),
-                host,
-                shared.clone(),
-            )));
+        if let Some(mdns) = node.listen() {
+            tasks.push(tokio::spawn(watch_nearby(mdns, host, shared.clone())));
         }
-        Ok(Guest {
-            shared,
-            endpoint,
-            _mdns: mdns,
-            mapper: Arc::new(tokio::sync::Mutex::new(None)),
-            tasks,
-        })
+        Ok(Guest { shared, tasks })
     }
 
     /// 改了名字：连着的话告诉主持人（他换掉成员表里的、再广播）；断着的话重连时 Hello 里就是新的
@@ -266,7 +250,7 @@ impl Guest {
     /// 端点绑在哪些本机地址上（单测拿它拼本机回环的回连链接）
     #[cfg(test)]
     pub fn bound_sockets(&self) -> Vec<std::net::SocketAddr> {
-        self.endpoint.bound_sockets()
+        self.shared.node.bound_sockets()
     }
 
     /// 附件的把手：不借用 Guest（命令层不必拿着会话的锁等文件传完）
@@ -279,12 +263,10 @@ impl Guest {
     pub fn callbacks(&self) -> Callbacks {
         Callbacks {
             shared: self.shared.clone(),
-            endpoint: self.endpoint.clone(),
-            mapper: self.mapper.clone(),
         }
     }
 
-    /// 离开：告诉主持人（Bye），断开，关端点
+    /// 离开：告诉主持人（Bye），断开（端点是共用的，最后一个会话结束时命令层关）
     pub async fn leave(self) {
         self.shared.leaving.store(true, Ordering::SeqCst);
         let link = self.shared.link.lock().unwrap().take();
@@ -303,10 +285,10 @@ impl Guest {
         for task in self.tasks {
             task.abort();
         }
-        if let Some(mapper) = self.mapper.lock().await.take() {
-            mapper.stop().await;
+        self.shared.node.remove_guest(&self.shared);
+        if let Some(relay) = &self.shared.borrowed {
+            self.shared.node.release_relay(relay).await;
         }
-        self.endpoint.close().await;
         let _ = self.shared.events.send(Event::Control(Control::Status {
             status: Status::Ended {
                 reason: EndReason::Left,
@@ -423,9 +405,10 @@ impl Callbacks {
     pub async fn forward_link(&self) -> CallbackLink {
         let reach = self.reach().await;
         let invite = &self.shared.invite;
+        let endpoint = self.shared.node.endpoint();
         let link = Invite {
-            host: *self.endpoint.id().as_bytes(),
-            addrs: reach::endpoint_addrs(&self.endpoint),
+            host: *endpoint.id().as_bytes(),
+            addrs: reach::endpoint_addrs(endpoint),
             session: invite.session,
             secret: invite.secret,
             permission: invite.permission,
@@ -439,9 +422,10 @@ impl Callbacks {
     /// 打包发给主持人。之后主持人拨过来，这边照常握手
     pub async fn make(&self) -> CallbackLink {
         let reach = self.reach().await;
+        let endpoint = self.shared.node.endpoint();
         let callback = Callback {
-            guest: *self.endpoint.id().as_bytes(),
-            addrs: reach::endpoint_addrs(&self.endpoint),
+            guest: *endpoint.id().as_bytes(),
+            addrs: reach::endpoint_addrs(endpoint),
             session: self.shared.invite.session,
             relay: self.connected_relay(&reach),
         };
@@ -468,18 +452,12 @@ impl Callbacks {
 
     /// 我能不能被连进来：开端口映射，等它和中继有个结果（最多 5 秒），顺带查防火墙
     async fn reach(&self) -> Reach {
-        let portmap = {
-            let mut mapper = self.mapper.lock().await;
-            if mapper.is_none() && self.shared.portmap {
-                *mapper = Some(Mapper::start(&self.endpoint));
-            }
-            mapper.as_ref().map(Mapper::state)
-        };
+        let node = &self.shared.node;
+        let portmap = node.mapper_state();
         let started = Instant::now();
         // 主持人拨过来是入站连接：这台的防火墙也得放行（真环境里才查，单测里不碰）
-        let firewall = self
-            .shared
-            .portmap
+        let firewall = node
+            .checks_firewall()
             .then(|| tokio::task::spawn_blocking(super::firewall::check));
         let mut reach = loop {
             let current = portmap
@@ -494,7 +472,7 @@ impl Callbacks {
                 .as_ref()
                 .map(|networks| networks.iter().map(|(ip, _)| *ip).collect());
             let reach = reach::snapshot(
-                &self.endpoint,
+                node.endpoint(),
                 &current,
                 &self.shared.relays,
                 self.shared.bound_at,
@@ -518,27 +496,25 @@ fn status(shared: &Shared, status: Status) {
         .send(Event::Control(Control::Status { status }));
 }
 
-/// 连到我这里的：主持人按回连链接拨过来的交给 run；别人是来找我转发的（我连着主持人时才转）
-async fn accept_host(
-    endpoint: Endpoint,
-    host: PublicKey,
-    incoming: mpsc::UnboundedSender<Connection>,
-    shared: Arc<Shared>,
-) {
-    while let Some(attempt) = endpoint.accept().await {
-        let Ok(conn) = attempt.await else { continue };
-        if conn.remote_id() != host {
-            if host_conn(&shared).is_some() {
-                tokio::spawn(forward_for(shared.clone(), conn));
-            } else {
-                conn.close(VarInt::from_u32(5), b"not the host");
-            }
-            continue;
-        }
-        if incoming.send(conn).is_err() {
-            return;
-        }
+/* ---------------- 端点（node.rs）用的 ---------------- */
+
+/// 我在等这位主持人（公钥是 remote）回连：还没连上他、也没走
+pub(crate) fn waiting_for(shared: &Shared, remote: &[u8; 32]) -> bool {
+    shared.invite.host == *remote
+        && !shared.leaving.load(Ordering::SeqCst)
+        && shared.link.lock().unwrap().is_none()
+}
+
+/// 主持人按回连链接拨过来了：交给 run
+pub(crate) fn dialed_in(shared: &Shared, conn: Connection) {
+    if shared.incoming.send(conn.clone()).is_err() {
+        conn.close(VarInt::from_u32(5), b"gone");
     }
+}
+
+/// 拿着这一次的会话 id 来的人找的是我（我的转发链接，设计 §20.9）
+pub(crate) fn forwards(shared: &Shared, session: &[u8; 16]) -> bool {
+    shared.invite.session == *session && !shared.leaving.load(Ordering::SeqCst)
 }
 
 /// 同一个网络里有没有看到主持人（他广播着昵称和公钥）
@@ -663,7 +639,6 @@ async fn run(
         match result {
             Ok(Outcome::Ended(reason)) => {
                 status(&shared, Status::Ended { reason });
-                endpoint.close().await;
                 return;
             }
             // 还没进去就被断开了（主持人那边出了事）：不重试，直说
@@ -674,7 +649,6 @@ async fn run(
                         reason: EndReason::Dropped,
                     },
                 );
-                endpoint.close().await;
                 return;
             }
             Ok(Outcome::Lost) => {
@@ -1032,26 +1006,28 @@ fn host_conn(shared: &Shared) -> Option<Connection> {
         .map(|link| link.conn.clone())
 }
 
-/// 一位经我转发的人：从他连上我到离开
-async fn forward_for(shared: Arc<Shared>, conn: Connection) {
-    if let Err(error) = forward_session(&shared, &conn).await {
+/// 一位经我转发的人：从他连上我到离开（他的控制流、Hello 端点已经读出来了）
+pub(crate) async fn forward_for(
+    shared: Arc<Shared>,
+    conn: Connection,
+    control_send: SendStream,
+    control_recv: RecvStream,
+    hello: Hello,
+) {
+    if let Err(error) = forward_session(&shared, &conn, control_send, control_recv, hello).await {
         eprintln!("协作：替人转发失败：{error}");
     }
     conn.close(VarInt::from_u32(0), b"done");
 }
 
-async fn forward_session(shared: &Arc<Shared>, conn: &Connection) -> Result<(), String> {
+async fn forward_session(
+    shared: &Arc<Shared>,
+    conn: &Connection,
+    mut control_send: SendStream,
+    control_recv: RecvStream,
+    hello: Hello,
+) -> Result<(), String> {
     let id = *conn.remote_id().as_bytes();
-    let (mut control_send, mut control_recv) = tokio::time::timeout(FORWARD_HANDSHAKE, conn.accept_bi())
-        .await
-        .map_err(|_| "等 Hello 超时".to_string())?
-        .map_err(|error| error.to_string())?;
-    let hello = match tokio::time::timeout(FORWARD_HANDSHAKE, protocol::read_frame(&mut control_recv)).await {
-        Ok(Ok(Some((kind::HELLO, payload)))) => {
-            protocol::decode::<Hello>(&payload).map_err(|error| error.to_string())?
-        }
-        _ => return Err("对方没发 Hello".into()),
-    };
     // 他的证明绑在他和我这条连接上，主持人核不了，我来核（我有邀请密钥的话；我自己是从「附近」进来的就没有）
     let invite = &shared.invite;
     let proven = match hello.proof {

@@ -9,11 +9,10 @@ import {
   ROW_BATCH,
   useRowBatch,
 } from "@/components/ListColumn";
-import { ActionMenu, RowMenu } from "@/components/RowMenu";
+import { ActionMenu, type MenuAction, RowMenu } from "@/components/RowMenu";
 import { SearchInput } from "@/components/SearchInput";
 import { conflictOriginalTitle, conflictTarget } from "@/data/conflicts";
 import {
-  ROOT_LABEL,
   UNSORTED,
   childFolders,
   cleanFolderName,
@@ -25,6 +24,7 @@ import {
   nameOf,
   parentOf,
   renamedPath,
+  rootLabel,
   shortcutsIn,
   smartQuery,
   uniqueChild,
@@ -45,10 +45,11 @@ import {
   CalendarPlus,
   ChevronDown,
   ChevronLeft,
-  ChevronRight,
+  FilePlus,
   FileSymlink,
   FileText,
   FileType,
+  Focus,
   Folder,
   FolderInput,
   FolderOpen,
@@ -63,6 +64,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  TextQuote,
   Trash2,
 } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
@@ -122,8 +124,22 @@ function manualOrder(a: NoteSummary, b: NoteSummary): number {
 const INDENT = 16;
 /** 笔记卡片的高度（两行字 + 上下留白）：分批画时给还没画的那一截占位（ListColumn 的 MoreRows） */
 const CARD_HEIGHT = 63.25;
+/** 树上一行的高度：文件夹、笔记、快捷方式、图片 PDF，哪一层都一样。分批画时同样拿来占位 */
+const ROW_HEIGHT = 34;
+/** 开着「显示摘要」时笔记那一行的高度：标题一行 + 摘要一行。文件夹那几行还是 ROW_HEIGHT */
+const EXCERPT_ROW_HEIGHT = 52;
 /** 行的左内边距（图标位从这里开始） */
 const ROW_PAD = 9;
+/** 树上的一行：图标位、名字、右边一格（数字 / 图钉 / 「…」）。深度只体现在左缩进上 */
+const TREE_ROW = cn(
+  "group relative flex h-[34px] cursor-default items-center gap-1.5 rounded-lg pr-3 outline-none",
+  "focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-inset",
+);
+/**
+ * 带摘要的笔记行：两行字，图标、右边一格都和标题那一行对齐（顶上留 7px，标题行高 20px，
+ * 和单行时标题落的位置一样）
+ */
+const EXCERPT_ROW = "h-[52px] items-start pt-[7px]";
 
 type Editing = { kind: "new"; parent: string } | { kind: "rename"; path: string } | null;
 type Picker =
@@ -151,15 +167,18 @@ const entryMotion = {
 /* ============================================================
    笔记列表栏。
 
-   文件夹就是仓库里「笔记」下面的子目录（data/folders.ts）。列表栏是「当前文件夹」
-   的视图：上面是置顶，然后是这一层的文件夹，最后是直接放在这一层的笔记。
+   文件夹就是仓库里「笔记」下面的子目录（data/folders.ts）。列表栏是一棵树
+   （docs/仓库与启动器.md §17）：上面一组置顶，下面是这一层的东西 —— 子文件夹、笔记、
+   快捷方式、图片 PDF，哪一层都是同一种行（图标 + 名字），只是缩进不同。
 
-   - 文件夹就地展开：图标位悬停变成箭头，点开在原地列出子文件夹和里面笔记的标题
-     （只有标题，一行一篇），展开了哪些记在本机。点文件夹的其余地方是进去
-   - 进了文件夹，搜索框下面一行面包屑回上层（标题栏那 38px 是拖窗口的，放不了按钮）；
-     点标题打开文件夹切换器，任意文件夹之间直接跳
+   - 有层级的用行，平铺的用卡片：搜索结果、智能文件夹里、未整理里没有层级，用带摘要的卡片
+   - 点文件夹整行是展开 / 收起（按住 Alt 连子文件夹一起），展开了哪些记在本机；
+     空的文件夹没什么可展开的，点了是进去（那里告诉你怎么往里放东西）
+   - 「进去」是次要的：文件夹「…」里的「聚焦到这里」、点标题打开文件夹切换器。进去以后
+     搜索框下面一行面包屑回上层（标题栏那 38px 是拖窗口的，放不了按钮）
+   - 置顶的每篇只出现一次：在最上面那一组（这一层和下面各层的，带上所在文件夹），
+     树上它那个位置不再列
    - 笔记可以拖进任何看得见的文件夹（含面包屑），停在收起的文件夹上会自动展开
-   - 「全部笔记」里的置顶包括所有文件夹里置顶的笔记，带上所在文件夹
    - 搜索标题时搜所有文件夹
 
    逻辑目录（docs/仓库与启动器.md §7）：文件夹在清单里，按手动摆的顺序；「手动排序」时笔记也按树上的
@@ -203,6 +222,9 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
   const sort = useApp((s) => s.noteSort);
   const sortMode: SortMode = sort === "manual" && !logical ? "updated" : sort;
   const setSort = useApp((s) => s.setNoteSort);
+  // 树上的笔记带不带一行摘要（平铺的卡片一直带）
+  const excerpts = useApp((s) => s.noteExcerpts);
+  const setExcerpts = useApp((s) => s.setNoteExcerpts);
   /** 现在所在的是智能文件夹的话，它的条件 */
   const smartHere = smartQuery(folder);
   const [creating, setCreating] = useState(false);
@@ -274,11 +296,15 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
     [sortMode, tree],
   );
 
-  /** 每个文件夹里直接放着的笔记（按当前排序）。逻辑目录按树上的位置（folderOf），树变了跟着变 */
+  /**
+   * 每个文件夹里直接列出来的笔记（按当前排序）。逻辑目录按树上的位置（folderOf），树变了跟着变。
+   * 置顶的不在这里：它们在最上面那一组，每篇只出现一次
+   */
   // biome-ignore lint/correctness/useExhaustiveDependencies: folderOf 在逻辑目录里读 data/folders 里摊开的树
   const notesByFolder = useMemo(() => {
     const map = new Map<string, NoteSummary[]>();
     for (const note of sortNotes(notes)) {
+      if (note.isPinned) continue;
       const key = folderOf(note);
       const list = map.get(key);
       if (list) list.push(note);
@@ -322,6 +348,8 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
   // 只按标题筛（不走全文搜索：输入「周」翻出一堆正文里提到它的笔记，跟标题对不上）。
   // 有搜索词时搜所有文件夹。
   const q = query.trim().toLowerCase();
+  /** 平铺的列表（搜索结果、智能文件夹里、未整理里）：没有层级，笔记用带摘要的卡片 */
+  const flat = q !== "" || smartHere !== undefined || folder === UNSORTED;
   const view = useMemo(() => {
     if (q) {
       return {
@@ -346,14 +374,12 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
         shortcuts: [] as Shortcut[],
       };
     }
-    const here = notesByFolder.get(folder) ?? [];
     return {
       search: false,
-      pinned: sortNotes(
-        notes.filter((n) => n.isPinned && (folder === "" || folderOf(n) === folder)),
-      ),
+      // 这一层和下面各层里置顶的（树根上就是所有置顶的）：树上不再列它们
+      pinned: sortNotes(notes.filter((n) => n.isPinned && within(folderOf(n), folder))),
       folders: childFolders(folders, folder),
-      notes: here.filter((n) => !n.isPinned),
+      notes: notesByFolder.get(folder) ?? [],
       files: filesByFolder.get(folder) ?? [],
       shortcuts: shortcutsOf(folder),
     };
@@ -396,15 +422,22 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
     if (up) flashRow(nearestVisible(folder, to, expanded), 140);
   };
 
-  const handleCreate = async () => {
+  /** 新建一篇：into 是文件夹「…」里点的那个文件夹，没给就是列表栏现在这一层 */
+  const handleCreate = async (into?: string) => {
     // 后端慢的时候连点两下会白建好几篇空笔记
     if (creating) return;
     setCreating(true);
     try {
       // 智能文件夹里放不了东西：新的一篇放在根上，跟过去
-      const id = await createNote(smartHere !== undefined ? "" : folder);
+      const here = into === undefined && smartHere !== undefined;
+      const id = await createNote(into ?? (here ? "" : folder));
       if (!id) return;
-      if (smartHere !== undefined) setNoteFolder("");
+      if (here) setNoteFolder("");
+      // 从文件夹的「…」建的：展开那个文件夹，新的一篇就在它底下
+      if (into !== undefined && into !== folder) {
+        setFolderExpanded([into], true);
+        setTimeout(() => revealNoteRow(id), 260);
+      }
       // 新笔记是空的，搜索词留着的话它进不了当前筛选结果 ——
       // 用户点了「新建」，界面上却什么都没发生。
       setQuery("");
@@ -570,6 +603,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
       setFolderExpanded(paths, open);
     },
     select: selectNote,
+    newNote: (path) => void handleCreate(path),
     dropNote,
     dropFolder: (path, target) => void dropFolder(path, target),
     springOpen: (path) => setFolderExpanded([path], true),
@@ -602,6 +636,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
       open: (path) => now().open(path),
       toggle: (path, all) => now().toggle(path, all),
       select: (id) => now().select(id),
+      newNote: (path) => now().newNote(path),
       dropNote: (id, target) => now().dropNote(id, target),
       dropFolder: (path, target) => now().dropFolder(path, target),
       springOpen: (path) => now().springOpen(path),
@@ -685,90 +720,90 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
     shape.current = { key: shapeKey, tick: shape.current.tick + 1 };
   const shapeTick = shape.current.tick;
 
-  const groups: { key: string; label: ReactNode; body: ReactNode }[] = [];
+  // 平铺的列表分组（文件夹 / 笔记 / 文件），每组带标题；树只有两组：置顶，和这一层的树（不带标题）
+  const groups: { key: string; label?: ReactNode; body: ReactNode }[] = [];
   if (view.pinned.length) {
     groups.push({
       key: "pinned",
       label: <GroupLabel icon={<Pin size={10} strokeWidth={2} />} text="置顶" />,
-      body: view.pinned.map((n, i) => (
-        <NoteCard
-          key={n.id}
-          note={n}
-          index={i}
-          selected={n.id === selectedId}
-          folder={folder}
-          shapeTick={shapeTick}
-          logical={logical}
-          boxed
-        />
-      )),
-    });
-  }
-  const newHere = !view.search && editing?.kind === "new" && editing.parent === folder;
-  // 逻辑目录：根上固定一行「未整理」（有东西的时候），没放进树里的笔记在里面
-  const unsorted =
-    logical && !view.search && folder === "" && (notesByFolder.get(UNSORTED)?.length ?? 0) > 0;
-  if (view.folders.length || newHere || unsorted) {
-    groups.push({
-      key: "folders",
-      label: <GroupLabel text="文件夹" />,
-      body: view.search ? (
-        view.folders.map((path) => <FolderRow key={path} path={path} depth={0} hint />)
-      ) : (
-        <>
-          <AnimatePresence initial={false} custom={settle?.slide ?? true}>
-            {newHere && <FolderNameInput key="new" depth={0} initial="新建文件夹" fresh />}
-          </AnimatePresence>
-          <FolderBranch parent={folder} depth={0} />
-        </>
-      ),
-    });
-  }
-  if (view.notes.length) {
-    const rest = view.notes.length - shown;
-    groups.push({
-      key: "notes",
-      label: <GroupLabel text="笔记" />,
-      body: (
-        <div className="flex flex-col">
-          {view.notes.slice(0, shown).map((n, i) => (
+      body: flat
+        ? view.pinned.map((n, i) => (
             <NoteCard
               key={n.id}
               note={n}
-              index={view.pinned.length + i}
+              index={i}
               selected={n.id === selectedId}
               folder={folder}
               shapeTick={shapeTick}
-              logical={logical}
-              reorderIn={reorder && smartHere === undefined ? folderOf(n) : undefined}
-              divided={i > 0}
-              appear={i < ROW_BATCH}
+              boxed
             />
-          ))}
-          {rest > 0 && <MoreRows height={rest * CARD_HEIGHT} onNear={more} />}
-        </div>
-      ),
+          ))
+        : view.pinned.map((n) => (
+            <TreeNoteRow key={n.id} note={n} depth={0} where={hintFolder(n, folder)} />
+          )),
     });
   }
-  if (view.shortcuts.length) {
-    groups.push({
-      key: "shortcuts",
-      label: <GroupLabel icon={<FileSymlink size={10} strokeWidth={2} />} text="快捷方式" />,
-      body: view.shortcuts.map((shortcut) => (
-        <TreeShortcutRow key={shortcut.node} shortcut={shortcut} depth={0} />
-      )),
-    });
+  if (flat) {
+    if (view.folders.length) {
+      groups.push({
+        key: "folders",
+        label: <GroupLabel text="文件夹" />,
+        body: view.folders.map((path) => <FolderRow key={path} path={path} depth={0} hint />),
+      });
+    }
+    if (view.notes.length) {
+      const rest = view.notes.length - shown;
+      groups.push({
+        key: "notes",
+        label: <GroupLabel text="笔记" />,
+        body: (
+          <div className="flex flex-col">
+            {view.notes.slice(0, shown).map((n, i) => (
+              <NoteCard
+                key={n.id}
+                note={n}
+                index={view.pinned.length + i}
+                selected={n.id === selectedId}
+                folder={folder}
+                shapeTick={shapeTick}
+                reorderIn={reorder && smartHere === undefined ? folderOf(n) : undefined}
+                divided={i > 0}
+                appear={i < ROW_BATCH}
+              />
+            ))}
+            {rest > 0 && <MoreRows height={rest * CARD_HEIGHT} onNear={more} />}
+          </div>
+        ),
+      });
+    }
+    if (view.files.length) {
+      groups.push({
+        key: "files",
+        label: <GroupLabel text="文件" />,
+        body: view.files.map((file) => (
+          <TreeFileRow key={file.relPath} file={file} depth={0} hint />
+        )),
+      });
+    }
+  } else {
+    const newHere = editing?.kind === "new" && editing.parent === folder;
+    // 逻辑目录：根上固定一行「未整理」（有东西的时候），没放进树里的笔记在里面
+    const unsorted = logical && folder === "" && (notesByFolder.get(UNSORTED)?.length ?? 0) > 0;
+    if (
+      newHere ||
+      unsorted ||
+      view.folders.length ||
+      view.notes.length ||
+      view.shortcuts.length ||
+      view.files.length
+    ) {
+      groups.push({
+        key: "tree",
+        body: <FolderContents path={folder} depth={0} batch={{ shown, more }} />,
+      });
+    }
   }
-  if (view.files.length) {
-    groups.push({
-      key: "files",
-      label: <GroupLabel text="文件" />,
-      body: view.files.map((file) => (
-        <TreeFileRow key={file.relPath} file={file} depth={0} hint={view.search} />
-      )),
-    });
-  }
-  const labelled = groups.length > 1 || view.pinned.length > 0 || view.search;
+  const labelled = !flat || groups.length > 1 || view.pinned.length > 0 || view.search;
   const pickerNote =
     picker?.mode === "move" || picker?.mode === "shortcut"
       ? notes.find((note) => note.id === picker.noteId)
@@ -824,20 +859,33 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
           action={
             <div className="flex items-center gap-1.5">
               {/* 排序：点开一个单选菜单，而不是盲点循环 —— 循环切换看不到还有哪些
-                选项、也不知道现在是哪一种，得点三下才能确认转了一圈。 */}
+                选项、也不知道现在是哪一种，得点三下才能确认转了一圈。
+                分隔线下面是「显示摘要」：树上的每一篇都多一行摘要，哪一层都一样 */}
               <ActionMenu
                 trigger={
-                  <ColumnButton label={`排序：${SORT_LABEL[sortMode]}`}>
+                  <ColumnButton
+                    label={`排序：${SORT_LABEL[sortMode]}${excerpts ? "，显示摘要" : ""}`}
+                  >
                     <ArrowUpDown size={13} strokeWidth={1.9} />
                   </ColumnButton>
                 }
-                actions={(logical ? LOGICAL_SORT_MODES : SORT_MODES).map((mode) => ({
-                  id: mode,
-                  label: SORT_LABEL[mode],
-                  icon: SORT_ICON[mode],
-                  checked: sortMode === mode,
-                  onSelect: () => setSort(mode),
-                }))}
+                actions={[
+                  ...(logical ? LOGICAL_SORT_MODES : SORT_MODES).map((mode) => ({
+                    id: mode,
+                    label: SORT_LABEL[mode],
+                    icon: SORT_ICON[mode],
+                    checked: sortMode === mode,
+                    onSelect: () => setSort(mode),
+                  })),
+                  {
+                    id: "excerpts",
+                    label: "显示摘要",
+                    icon: TextQuote,
+                    toggle: true,
+                    checked: excerpts,
+                    onSelect: () => setExcerpts(!excerpts),
+                  },
+                ]}
               />
               {canNest &&
                 (logical ? (
@@ -1039,6 +1087,8 @@ interface TreeActions {
   open: (path: string) => void;
   toggle: (path: string, all: boolean) => void;
   select: (id: string) => void;
+  /** 文件夹「…」里的「新建笔记」：建在那个文件夹里 */
+  newNote: (path: string) => void;
   /** 拖着的笔记 / 文件夹松手了 */
   dropNote: (id: string, target: DropTarget) => void;
   dropFolder: (path: string, target: DropTarget) => void;
@@ -1112,10 +1162,72 @@ function hasContent(tree: TreeContextValue, path: string) {
   );
 }
 
-/** 一个文件夹里直接看得到的笔记：智能文件夹是筛出来的那些 */
+/** 一个文件夹里直接看得到的笔记（置顶的不在树上）：智能文件夹是筛出来的那些 */
 function notesIn(tree: TreeContextValue, path: string) {
   const smart = smartQuery(path);
   return smart !== undefined ? tree.smartNotes(smart) : (tree.notesByFolder.get(path) ?? []);
+}
+
+/** 置顶那一组里不在列表栏这一层的：名字后面带上它在哪个文件夹（未整理里的不带） */
+function hintFolder(note: NoteSummary, folder: string) {
+  const where = folderOf(note);
+  return where !== folder && where !== "" && where !== UNSORTED ? where : undefined;
+}
+
+/**
+ * 一个文件夹里的东西，按树的顺序：就地起名的输入框、子文件夹（逻辑目录的根上最后是「未整理」）、
+ * 笔记、快捷方式、图片 PDF。列表栏这一层和展开出来的子树都是它：同一种行，只是缩进不同。
+ * batch：列表栏这一层的笔记可能有几百篇，分批画（ListColumn 的 useRowBatch）
+ */
+function FolderContents({
+  path,
+  depth,
+  batch,
+}: {
+  path: string;
+  depth: number;
+  batch?: { shown: number; more: () => void };
+}) {
+  const tree = useTree();
+  const excerpts = useApp((s) => s.noteExcerpts);
+  const newInside = tree.editing?.kind === "new" && tree.editing.parent === path;
+  const smart = smartQuery(path) !== undefined;
+  const notes = notesIn(tree, path);
+  const shown = batch ? Math.min(batch.shown, notes.length) : notes.length;
+  // 手动排序时这几行能拖着排（智能文件夹里的不行：顺序是筛出来的）
+  const reorderIn = tree.reorder && !smart ? path : undefined;
+  return (
+    <>
+      <AnimatePresence initial={false} custom={tree.settle?.slide ?? true}>
+        {newInside && <FolderNameInput key="new" depth={depth} initial="新建文件夹" fresh />}
+      </AnimatePresence>
+      <FolderBranch parent={path} depth={depth} />
+      {notes.slice(0, shown).map((note) => (
+        <TreeNoteRow
+          key={note.id}
+          note={note}
+          depth={depth}
+          reorderIn={reorderIn}
+          filtered={smart}
+        />
+      ))}
+      {batch && notes.length > shown && (
+        <MoreRows
+          height={(notes.length - shown) * (excerpts ? EXCERPT_ROW_HEIGHT : ROW_HEIGHT)}
+          onNear={batch.more}
+        />
+      )}
+      {!smart &&
+        tree
+          .shortcutsOf(path)
+          .map((shortcut) => (
+            <TreeShortcutRow key={shortcut.node} shortcut={shortcut} depth={depth} />
+          ))}
+      {(tree.filesByFolder.get(path) ?? []).map((file) => (
+        <TreeFileRow key={file.relPath} file={file} depth={depth} />
+      ))}
+    </>
+  );
 }
 
 /** parent 下面这一层的文件夹，展开的那些连同里面的东西一起。逻辑目录的根上最后一行是「未整理」 */
@@ -1167,9 +1279,6 @@ function FolderEntry({ path, depth }: { path: string; depth: number }) {
   const tree = useTree();
   const newInside = tree.editing?.kind === "new" && tree.editing.parent === path;
   const open = tree.expanded.has(path) && (hasContent(tree, path) || newInside);
-  const notes = notesIn(tree, path);
-  // 手动排序时，文件夹里的那几行也能拖着排（智能文件夹里的不行：顺序是筛出来的）
-  const reorderIn = tree.reorder && smartQuery(path) === undefined ? path : undefined;
   return (
     <>
       {tree.editing?.kind === "rename" && tree.editing.path === path ? (
@@ -1194,24 +1303,7 @@ function FolderEntry({ path, depth }: { path: string; depth: number }) {
               className="pointer-events-none absolute top-0 bottom-1.5 w-px bg-line-strong"
               style={{ left: ROW_PAD + depth * INDENT + 9.5 }}
             />
-            <AnimatePresence initial={false} custom={tree.settle?.slide ?? true}>
-              {newInside && (
-                <FolderNameInput key="new" depth={depth + 1} initial="新建文件夹" fresh />
-              )}
-            </AnimatePresence>
-            <FolderBranch parent={path} depth={depth + 1} />
-            {notes.map((note) => (
-              <TreeNoteRow key={note.id} note={note} depth={depth + 1} reorderIn={reorderIn} />
-            ))}
-            {smartQuery(path) === undefined &&
-              tree
-                .shortcutsOf(path)
-                .map((shortcut) => (
-                  <TreeShortcutRow key={shortcut.node} shortcut={shortcut} depth={depth + 1} />
-                ))}
-            {(tree.filesByFolder.get(path) ?? []).map((file) => (
-              <TreeFileRow key={file.relPath} file={file} depth={depth + 1} />
-            ))}
+            <FolderContents path={path} depth={depth + 1} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -1227,14 +1319,16 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
   const [menuOpen, setMenuOpen] = useState(false);
   const expandable = !hint && hasContent(tree, path);
   const open = expandable && tree.expanded.has(path);
-  const nested = depth > 0;
   const flashing = tree.flash?.path === path;
   const smart = smartQuery(path);
   const unsorted = path === UNSORTED;
-  const count =
-    smart !== undefined || unsorted ? notesIn(tree, path).length : countIn(tree.notes, path);
+  // 篇数连置顶的一起算：置顶的只是列在最上面，还是在这个文件夹里
+  const count = smart !== undefined ? notesIn(tree, path).length : countIn(tree.notes, path);
   // 逻辑目录的文件夹能拖（未整理固定在最后，不能拖）
   const draggable = tree.logical && !unsorted && !hint;
+  // 点整行：有东西就展开 / 收起（按住 Alt 连子文件夹一起）；空的没什么可展开，进去 ——
+  // 那里告诉你怎么往里放东西。搜索结果里的不展开，也是进去
+  const activate = (all: boolean) => (expandable ? tree.toggle(path, all) : tree.open(path));
 
   return (
     <div
@@ -1253,14 +1347,14 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
           onSpringOpen: tree.springOpen,
         });
       }}
-      onClick={() => {
-        if (!consumeDragClick()) tree.open(path);
+      onClick={(event) => {
+        if (!consumeDragClick()) activate(event.altKey);
       }}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          tree.open(path);
+          activate(event.altKey);
         } else if (event.key === "ArrowRight" && expandable && !open) {
           event.preventDefault();
           tree.toggle(path, event.altKey);
@@ -1274,12 +1368,7 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
         }
       }}
       style={{ paddingLeft: ROW_PAD + depth * INDENT }}
-      className={cn(
-        "group relative flex cursor-default items-center gap-1.5 rounded-lg pr-3 outline-none",
-        "focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-inset",
-        nested ? "h-[34px]" : "h-10",
-        dragged && "opacity-40",
-      )}
+      className={cn(TREE_ROW, dragged && "opacity-40")}
     >
       {edge && <DropLine edge={edge} indent={ROW_PAD + depth * INDENT} />}
       <span
@@ -1294,40 +1383,20 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
           flashing && !dropOn && "odea-folder-flash",
         )}
       />
-      {expandable ? (
-        <button
-          type="button"
-          tabIndex={-1}
-          aria-label={open ? "收起" : "展开"}
-          title={open ? "收起" : "展开（按住 Alt 连子文件夹一起）"}
-          onClick={(event) => {
-            event.stopPropagation();
-            tree.toggle(path, event.altKey);
-          }}
-          className="relative z-10 grid h-5 w-5 shrink-0 place-items-center rounded-[5px] text-faint
-                     transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
-        >
-          <FolderGlyph open={open || dropOn} accent={dropOn} expandable icon={glyphOf(path)} />
-          <ChevronRight
-            size={13}
-            strokeWidth={2.2}
-            className={cn(
-              "col-start-1 row-start-1 opacity-0 transition-[opacity,rotate] duration-[180ms] group-hover:opacity-100",
-              open && "rotate-90",
-              dropOn && "!opacity-0",
-            )}
-          />
-        </button>
-      ) : (
-        <span className="relative z-10 grid h-5 w-5 shrink-0 place-items-center text-faint">
-          <FolderGlyph open={dropOn} accent={dropOn} icon={glyphOf(path)} />
-        </span>
-      )}
+      {/* 图标位：有东西可展开的，悬停时文件夹图标让位给箭头（整行都能点，箭头只是告诉你点了会展开） */}
+      <span className="relative z-10 grid h-5 w-5 shrink-0 place-items-center">
+        <FolderGlyph
+          open={open || dropOn}
+          accent={dropOn}
+          expandable={expandable}
+          icon={glyphOf(path)}
+        />
+        {expandable && <Twisty open={open} hidden={dropOn} />}
+      </span>
       <span
         className={cn(
-          "relative z-10 min-w-0 flex-1 truncate text-[13px]",
-          nested ? "text-body" : "font-medium text-ink/90",
-          dropOn && "text-accent",
+          "relative z-10 min-w-0 flex-1 truncate text-[13px] font-medium",
+          dropOn ? "text-accent" : "text-ink/90",
         )}
       >
         {folderName(path)}
@@ -1337,30 +1406,32 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
           </span>
         )}
       </span>
-      <span
-        className={cn(
-          "relative z-10 min-w-5 text-right text-[12px] tabular-nums text-faint transition-opacity duration-[150ms]",
-          menuOpen ? "opacity-0" : "group-hover:opacity-0",
-        )}
-      >
-        {count}
-      </span>
-      <ChevronRight
-        size={12}
-        strokeWidth={2}
-        className="odea-row-actions relative z-10 -mr-1 shrink-0 text-faint opacity-0 transition-opacity duration-[150ms] group-hover:opacity-100"
-      />
-      {/* 「…」叠在数字的位置：静止时看到数字，悬停时换成菜单。未整理是固定的，没有菜单 */}
-      {!unsorted && (
-        <div
-          className="odea-row-actions absolute top-[calc(50%-10px)] right-[30px] z-20"
-          onClick={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-          onPointerDown={(event) => event.stopPropagation()}
+      {/* 右边一格：静止时是篇数，悬停时换成「…」。淡的是颜色，不是 opacity（CLAUDE.md 动效规矩第 3 条：
+          一排很多个的不进合成层）。未整理是固定的，没有菜单 */}
+      <span className="relative z-20 -mr-1 grid min-w-5 shrink-0 place-items-center justify-items-end">
+        <span
+          className={cn(
+            "col-start-1 row-start-1 pr-[3px] text-[12px] tabular-nums transition-colors duration-[150ms]",
+            unsorted
+              ? "text-faint"
+              : menuOpen
+                ? "text-transparent"
+                : "text-faint group-hover:text-transparent",
+          )}
         >
-          <RowMenu onOpenChange={setMenuOpen} actions={folderActions(tree, path, smart, count)} />
-        </div>
-      )}
+          {count}
+        </span>
+        {!unsorted && (
+          <div
+            className="odea-row-actions col-start-1 row-start-1"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <RowMenu onOpenChange={setMenuOpen} actions={folderActions(tree, path, smart, count)} />
+          </div>
+        )}
+      </span>
     </div>
   );
 }
@@ -1372,8 +1443,16 @@ function folderActions(
   smart: string | undefined,
   count: number,
 ) {
+  // 「进去」不再是点一下（点一下是展开），放在菜单里
+  const focus = {
+    id: "focus",
+    label: "聚焦到这里",
+    icon: Focus,
+    onSelect: () => tree.open(path),
+  };
   if (smart !== undefined) {
     return [
+      focus,
       {
         id: "edit",
         label: "改条件…",
@@ -1392,6 +1471,13 @@ function folderActions(
     ];
   }
   return [
+    focus,
+    {
+      id: "new-note",
+      label: "新建笔记",
+      icon: FilePlus,
+      onSelect: () => tree.newNote(path),
+    },
     {
       id: "new-sub",
       label: "新建子文件夹",
@@ -1454,7 +1540,10 @@ function DropLine({ edge, indent }: { edge: "above" | "below"; indent: number })
   );
 }
 
-/** 文件夹图标：平时合着，展开 / 拖到上面时打开。有子内容的悬停时让位给箭头 */
+/**
+ * 文件夹图标：平时合着，展开 / 拖到上面时打开。有子内容的悬停时让位给箭头（Twisty）。
+ * 让位淡的是颜色，不是 opacity：一列文件夹每个都进合成层的话，淡完那一帧退回页面会挪半个像素
+ */
 function FolderGlyph({
   open,
   accent,
@@ -1467,31 +1556,81 @@ function FolderGlyph({
       size={14}
       strokeWidth={1.9}
       className={cn(
-        "col-start-1 row-start-1 transition-opacity duration-[150ms]",
+        "col-start-1 row-start-1 transition-colors duration-[150ms]",
         // 拖到上面时一直是打开的文件夹（箭头这时候让位）
-        expandable && !accent && "group-hover:opacity-0",
-        accent && "text-accent",
+        accent
+          ? "text-accent"
+          : expandable
+            ? "text-faint group-hover:text-transparent"
+            : "text-faint",
       )}
     />
   );
 }
 
-/** 展开的文件夹里一篇笔记：只有标题，一行。选中与否自己订阅：换一篇只重渲染新旧两行 */
+/**
+ * 悬停时图标位上的箭头：收着朝右，展开了朝下。和右侧目录树的收起箭头一样（components/Outline.tsx）：
+ * 淡入淡出的是颜色，转的是 SVG 里的 <path>，都在原地重画、不进合成层，不用 will-change、不用对齐像素
+ */
+function Twisty({ open, hidden }: { open: boolean; hidden: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={13}
+      height={13}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={cn(
+        "col-start-1 row-start-1 text-transparent transition-colors duration-[150ms]",
+        !hidden && "group-hover:text-faint",
+      )}
+    >
+      <title>{open ? "收起（按住 Alt 连子文件夹一起）" : "展开（按住 Alt 连子文件夹一起）"}</title>
+      <motion.path
+        d="m9 18 6-6-6-6"
+        initial={false}
+        animate={{ rotate: open ? 90 : 0 }}
+        transition={tween.base}
+      />
+    </svg>
+  );
+}
+
+/**
+ * 树上一篇笔记：标题一行；开着「显示摘要」时底下再一行摘要，哪一层都一样。
+ * 选中与否自己订阅：换一篇只重渲染新旧两行。
+ * 右边一格：置顶的静止时是图钉，悬停时换成「…」（和卡片一样的菜单）
+ */
 const TreeNoteRow = memo(function TreeNoteRow({
   note,
   depth,
   reorderIn,
+  where,
+  filtered,
 }: {
   note: NoteSummary;
   depth: number;
   /** 手动排序：这一行是落点，拖来的插在它前后（它所在的文件夹） */
   reorderIn?: string;
+  /** 置顶那一组里：它在哪个文件夹（不在列表栏这一层的才给），名字后面淡淡地写上 */
+  where?: string;
+  /**
+   * 智能文件夹筛出来的：同一篇在树上还有它本来的位置。选中时这里只淡淡地亮（同快捷方式），
+   * 不然两处一样亮，看不出哪一处是它真正在的地方
+   */
+  filtered?: boolean;
 }) {
   const tree = useTreeActions();
   const selected = useApp((s) => s.selectedNoteId === note.id);
+  const excerpts = useApp((s) => s.noteExcerpts);
   const dragging = useNoteDrag((s) => draggingNote(s) === note.id);
   const edge = useNoteDrag((s) => (reorderIn === undefined ? null : noteEdge(s, note.id)));
   const title = useListTitle(note);
+  const menu = useNoteMenu(note);
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div
       role="button"
@@ -1516,39 +1655,157 @@ const TreeNoteRow = memo(function TreeNoteRow({
         }
       }}
       style={{ paddingLeft: ROW_PAD + depth * INDENT }}
-      className={cn(
-        "group relative flex h-8 cursor-default items-center gap-1.5 rounded-lg pr-3 outline-none",
-        "focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-inset",
-        dragging && "opacity-40",
-      )}
+      className={cn(TREE_ROW, excerpts && EXCERPT_ROW, dragging && "opacity-40")}
     >
       {edge && <DropLine edge={edge} indent={ROW_PAD + depth * INDENT} />}
       <span
         className={cn(
           "absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors duration-[150ms]",
-          selected ? "bg-accent-wash" : "group-hover:bg-raised/40",
+          selected
+            ? filtered
+              ? "bg-accent-wash/60"
+              : "bg-accent-wash"
+            : menuOpen
+              ? "bg-raised/40"
+              : "group-hover:bg-raised/40",
         )}
       />
       <span className="relative z-10 grid h-5 w-5 shrink-0 place-items-center text-faint">
         <FileText size={13} strokeWidth={1.8} />
       </span>
-      <span
-        className={cn(
-          "relative z-10 min-w-0 flex-1 truncate text-[13px]",
-          selected ? "font-medium text-ink" : "text-body",
+      <span className="relative z-10 min-w-0 flex-1">
+        <span
+          className={cn(
+            "block truncate text-[13px]",
+            excerpts && "leading-5",
+            selected && !filtered ? "font-medium text-ink" : selected ? "text-ink" : "text-body",
+          )}
+        >
+          {title}
+          {where !== undefined && (
+            <span className="ml-1.5 text-[12px] font-normal text-faint">{folderLabel(where)}</span>
+          )}
+        </span>
+        {excerpts && (
+          <span className="block truncate text-[12px] leading-[17px] text-muted">
+            {animatedEmojiText(note.excerpt)}
+          </span>
         )}
-      >
-        {title}
       </span>
       {note.conflictOf && (
-        <span className="relative z-10 shrink-0 text-[12px] font-medium text-warning">副本</span>
+        <span
+          className={cn(
+            "relative z-10 shrink-0 text-[12px] font-medium text-warning",
+            excerpts && "leading-5",
+          )}
+        >
+          副本
+        </span>
       )}
-      {note.isPinned && (
-        <Pin size={10.5} strokeWidth={2} className="relative z-10 rotate-45 text-accent" />
-      )}
+      {/* 图钉和「…」叠在同一格里：悬停时图钉淡成透明、「…」淡出来。淡的都是颜色（同文件夹行的篇数） */}
+      <span className="relative z-20 -mr-1 grid shrink-0 place-items-center">
+        {note.isPinned && (
+          <Pin
+            size={10.5}
+            strokeWidth={2}
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none col-start-1 row-start-1 rotate-45 transition-colors duration-[150ms]",
+              menuOpen ? "text-transparent" : "text-accent group-hover:text-transparent",
+            )}
+          />
+        )}
+        <div
+          className="odea-row-actions col-start-1 row-start-1"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <RowMenu onOpenChange={setMenuOpen} actions={menu} />
+        </div>
+      </span>
     </div>
   );
 });
+
+/** 一篇笔记的「…」菜单：卡片和树上的行是同一份 */
+function useNoteMenu(note: NoteSummary): MenuAction[] {
+  const tree = useTreeActions();
+  const togglePin = useData((s) => s.togglePin);
+  const archiveNote = useData((s) => s.archiveNote);
+  // 归档单独一个开关（和日程无关）：没开的仓库里没有「归档」这一项
+  const archiveOn = useData((s) => s.layout.archive);
+  const logical = useData((s) => s.layout.logical);
+  const deleteNote = useData((s) => s.deleteNote);
+  const revealDocument = useData((s) => s.revealDocument);
+  const where = folderOf(note);
+  return [
+    {
+      id: "pin",
+      label: note.isPinned ? "取消置顶" : "置顶",
+      icon: note.isPinned ? PinOff : Pin,
+      onSelect: () => togglePin(note.id),
+    },
+    {
+      id: "move",
+      label: "移动到…",
+      icon: FolderInput,
+      onSelect: () => tree.moveTo(note.id),
+    },
+    // 逻辑目录：一篇只在一个位置，别处要看得到它就放快捷方式（docs/仓库与启动器.md §7.5）
+    ...(logical
+      ? [
+          {
+            id: "shortcut",
+            label: "添加快捷方式到…",
+            icon: FileSymlink,
+            onSelect: () => tree.shortcutTo(note.id),
+          },
+        ]
+      : []),
+    // 逻辑目录：挪出文件夹和删除是两回事（docs/仓库与启动器.md §7.5），只改清单
+    ...(logical && where !== UNSORTED
+      ? [
+          {
+            id: "unsort",
+            label: "移到未整理",
+            icon: Inbox,
+            onSelect: () => tree.unsort(note.id),
+          },
+        ]
+      : []),
+    {
+      // 每篇笔记就是笔记文件夹里的一个 .md 文件：打开资源管理器并选中它
+      id: "reveal",
+      label: "在文件夹中显示",
+      icon: FolderOpen,
+      onSelect: () => void revealDocument({ kind: "note", id: note.id }),
+    },
+    ...(archiveOn
+      ? [
+          {
+            id: "archive",
+            label: "归档",
+            icon: Archive,
+            onSelect: () => {
+              selectNeighbor(note.id);
+              void archiveNote(note.id);
+            },
+          },
+        ]
+      : []),
+    {
+      id: "delete",
+      label: "删除",
+      icon: Trash2,
+      danger: true,
+      onSelect: () => {
+        selectNeighbor(note.id);
+        void deleteNote(note.id);
+      },
+    },
+  ];
+}
 
 /**
  * 快捷方式（逻辑目录，docs/仓库与启动器.md §7.5）：一行，标题是它指着的那篇，图标带个小箭头。
@@ -1579,10 +1836,7 @@ const TreeShortcutRow = memo(function TreeShortcutRow({
       }}
       title={`快捷方式 · 在「${folderLabel(where)}」`}
       style={{ paddingLeft: ROW_PAD + depth * INDENT }}
-      className={cn(
-        "group relative flex h-8 cursor-default items-center gap-1.5 rounded-lg pr-3 outline-none",
-        "focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-inset",
-      )}
+      className={TREE_ROW}
     >
       <span
         className={cn(
@@ -1681,10 +1935,7 @@ const TreeFileRow = memo(function TreeFileRow({
       }}
       title={file.name}
       style={{ paddingLeft: ROW_PAD + depth * INDENT }}
-      className={cn(
-        "group relative flex h-8 cursor-default items-center gap-1.5 rounded-lg pr-3 outline-none",
-        "focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-inset",
-      )}
+      className={TREE_ROW}
     >
       <span
         className={cn(
@@ -1771,7 +2022,7 @@ function FolderNameInput({
     <TreeSlot slide={!!fresh}>
       <div
         style={{ paddingLeft: ROW_PAD + depth * INDENT }}
-        className={cn("relative flex items-center gap-1.5 pr-3", depth > 0 ? "h-[34px]" : "h-10")}
+        className="relative flex h-[34px] items-center gap-1.5 pr-3"
       >
         <span className="grid h-5 w-5 shrink-0 place-items-center text-faint">
           <Folder size={14} strokeWidth={1.9} />
@@ -1796,8 +2047,7 @@ function FolderNameInput({
           // 回车之后字原地不动，只是框没了
           className={cn(
             "-ml-[7px] h-[26px] min-w-0 flex-1 rounded-md bg-canvas px-[7px] text-[13px] outline-none",
-            "ring-1 ring-accent-line focus:shadow-[0_0_0_3px_var(--color-accent-wash)]",
-            depth > 0 ? "text-body" : "font-medium text-ink/90",
+            "font-medium text-ink/90 ring-1 ring-accent-line focus:shadow-[0_0_0_3px_var(--color-accent-wash)]",
           )}
         />
       </div>
@@ -1845,7 +2095,7 @@ function Crumb({
       )}
     >
       {first && <ChevronLeft size={12} strokeWidth={2} className="shrink-0" />}
-      <span className="truncate">{path ? nameOf(path) : ROOT_LABEL}</span>
+      <span className="truncate">{path ? nameOf(path) : rootLabel()}</span>
     </button>
   );
 }
@@ -1890,7 +2140,6 @@ const NoteCard = memo(function NoteCard({
   selected,
   folder,
   shapeTick,
-  logical,
   reorderIn,
   boxed,
   divided,
@@ -1901,8 +2150,6 @@ const NoteCard = memo(function NoteCard({
   selected: boolean;
   /** 列表栏现在在哪个文件夹 */
   folder: string;
-  /** 逻辑目录：菜单里多一个「移到未整理」 */
-  logical: boolean;
   /** 手动排序：这一张是落点，拖来的插在它前后（它所在的文件夹） */
   reorderIn?: string;
   /** 列表的样子变了就加一（见 NotesList）：这时才量位置、播 layout 动画 */
@@ -1915,16 +2162,13 @@ const NoteCard = memo(function NoteCard({
   appear?: boolean;
 }) {
   const tree = useTreeActions();
-  const togglePin = useData((s) => s.togglePin);
-  const archiveNote = useData((s) => s.archiveNote);
-  const deleteNote = useData((s) => s.deleteNote);
-  const revealDocument = useData((s) => s.revealDocument);
+  const menu = useNoteMenu(note);
   const dragging = useNoteDrag((s) => draggingNote(s) === note.id);
   const edge = useNoteDrag((s) => (reorderIn === undefined ? null : noteEdge(s, note.id)));
   // 「…」菜单开着的时候指针在菜单上、不在行上，行会掉出 hover 态；
   // 底色一暗一亮，看着像菜单和行没关系。开着就按住不放。
   const [menuOpen, setMenuOpen] = useState(false);
-  // 不在当前这一层的（「全部笔记」里别的文件夹的置顶、搜索结果）：摘要前面带上文件夹
+  // 不在当前这一层的（未整理里的置顶、搜索结果、智能文件夹）：摘要前面带上文件夹
   const where = folderOf(note);
   const showFolder = where !== "" && where !== folder && where !== UNSORTED;
   const title = useListTitle(note);
@@ -2039,71 +2283,7 @@ const NoteCard = memo(function NoteCard({
             </motion.span>
           </span>
         )}
-        <RowMenu
-          onOpenChange={setMenuOpen}
-          actions={[
-            {
-              id: "pin",
-              label: note.isPinned ? "取消置顶" : "置顶",
-              icon: note.isPinned ? PinOff : Pin,
-              onSelect: () => togglePin(note.id),
-            },
-            {
-              id: "move",
-              label: "移动到…",
-              icon: FolderInput,
-              onSelect: () => tree.moveTo(note.id),
-            },
-            // 逻辑目录：一篇只在一个位置，别处要看得到它就放快捷方式（docs/仓库与启动器.md §7.5）
-            ...(logical
-              ? [
-                  {
-                    id: "shortcut",
-                    label: "添加快捷方式到…",
-                    icon: FileSymlink,
-                    onSelect: () => tree.shortcutTo(note.id),
-                  },
-                ]
-              : []),
-            // 逻辑目录：挪出文件夹和删除是两回事（docs/仓库与启动器.md §7.5），只改清单
-            ...(logical && where !== UNSORTED
-              ? [
-                  {
-                    id: "unsort",
-                    label: "移到未整理",
-                    icon: Inbox,
-                    onSelect: () => tree.unsort(note.id),
-                  },
-                ]
-              : []),
-            {
-              // 每篇笔记就是笔记文件夹里的一个 .md 文件：打开资源管理器并选中它
-              id: "reveal",
-              label: "在文件夹中显示",
-              icon: FolderOpen,
-              onSelect: () => void revealDocument({ kind: "note", id: note.id }),
-            },
-            {
-              id: "archive",
-              label: "归档",
-              icon: Archive,
-              onSelect: () => {
-                selectNeighbor(note.id);
-                void archiveNote(note.id);
-              },
-            },
-            {
-              id: "delete",
-              label: "删除",
-              icon: Trash2,
-              danger: true,
-              onSelect: () => {
-                selectNeighbor(note.id);
-                void deleteNote(note.id);
-              },
-            },
-          ]}
-        />
+        <RowMenu onOpenChange={setMenuOpen} actions={menu} />
       </div>
     </motion.div>
   );

@@ -16,6 +16,7 @@ const note = (id: string, title: string, contentMd: string): Note => ({
   updatedAt: 1,
   relPath: `笔记/${title}.md`,
   conflictOf: null,
+  idInFile: true,
 });
 
 const day: DayDoc = {

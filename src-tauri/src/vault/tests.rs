@@ -182,6 +182,34 @@ fn old_trash_is_purged() {
     assert!(!trashed.exists());
 }
 
+#[test]
+fn the_trash_lists_deleted_notes_newest_first() {
+    let mut f = fixture();
+    assert!(f.vault.trash_list().unwrap().is_empty(), "还没有回收站");
+    let old = f.vault.note_create("旧的", "早就删了").unwrap();
+    f.vault.folder_create("", "工作").unwrap();
+    let new = f.vault.note_create_in("工作", "周报", "刚删的").unwrap();
+    f.vault.note_delete(&old).unwrap();
+    f.vault.note_delete(&new).unwrap();
+    let day = 86_400_000;
+    fsio::set_mtime(&fsio::abs(&f.root, &format!(".odea/trash/{old}.md")), now_ms() - 3 * day).unwrap();
+    // 退役的共享仓库挪进来的文件夹不算
+    std::fs::create_dir_all(fsio::abs(&f.root, ".odea/trash/share-1")).unwrap();
+
+    let trash = f.vault.trash_list().unwrap();
+    assert_eq!(trash.len(), 2);
+    assert_eq!(trash[0].id, new, "最近删的在前");
+    assert_eq!(trash[0].title, "周报");
+    assert_eq!(trash[0].from, "笔记/工作/周报.md");
+    assert_eq!(trash[0].excerpt, "刚删的");
+    assert_eq!(trash[1].title, "旧的");
+    assert_eq!(trash[1].purge_at - trash[1].deleted_at, TRASH_KEEP_DAYS * day);
+
+    f.vault.note_undelete(&trash[1].id).unwrap();
+    assert_eq!(f.vault.note_get(&old).unwrap().content_md, "早就删了");
+    assert_eq!(f.vault.trash_list().unwrap().len(), 1);
+}
+
 fn find(f: &Fixture, query: &str, options: FindOptions) -> FindResult {
     find_text(&f.vault.db, query, options, || false).unwrap().unwrap()
 }
@@ -657,6 +685,78 @@ fn saving_over_an_unseen_external_edit_keeps_both_versions() {
     assert_eq!(announced.len(), 1);
     assert_eq!(announced[0].conflicts.len(), 1);
     assert_eq!(announced[0].notes.len(), 1, "新出现的冲突副本要进列表");
+}
+
+#[test]
+fn renaming_and_saving_each_write_only_their_own_part() {
+    let mut f = fixture();
+    let id = f.vault.note_create("初稿", "正文").unwrap();
+
+    // 改标题：文件改名，正文不动、版本不变
+    let renamed = f.vault.note_rename(&id, "  周报: 第 3 期 ").unwrap();
+    assert_eq!(f.files(), vec!["笔记/周报： 第 3 期.md"]);
+    assert_eq!(renamed.title, "周报: 第 3 期");
+    assert_eq!(renamed.content_md, "正文");
+    assert!(f.vault.note_rename(&id, "  ").is_err(), "空标题不收");
+
+    // 别的程序刚改了正文（还没扫到）：改标题用磁盘上的正文，不拿索引里旧的那一版覆盖它
+    let theirs = f.read("笔记/周报： 第 3 期.md").replace("正文", "别处改的");
+    f.write_externally("笔记/周报： 第 3 期.md", &theirs);
+    let renamed = f.vault.note_rename(&id, "周报").unwrap();
+    assert_eq!(renamed.content_md, "别处改的");
+    assert_eq!(f.files(), vec!["笔记/周报.md"], "不出冲突副本：两样各写各的");
+
+    // 存正文：标题照磁盘上的留着
+    let base = fsio::fingerprint(&renamed.content_md);
+    let saved = f.vault.note_save(&id, "我改的", Some(&base)).unwrap();
+    assert_eq!(saved.title, "周报");
+    assert_eq!(saved.content_md, "我改的");
+    assert_eq!(f.files(), vec!["笔记/周报.md"]);
+}
+
+#[test]
+fn saving_from_a_stale_version_keeps_the_newer_one_as_a_conflict_copy() {
+    let mut f = fixture();
+    let id = f.vault.note_create("周报", "原来的").unwrap();
+    let base = fsio::fingerprint(&f.vault.note_get(&id).unwrap().content_md);
+
+    // 别处改了、索引也已经扫到了（只比索引的 keep_external_edits 看不出来），前端还没刷新
+    let theirs = f.read("笔记/周报.md").replace("原来的", "别处改的");
+    f.write_externally("笔记/周报.md", &theirs);
+    f.vault.rescan().unwrap();
+    f.take_announced();
+
+    let saved = f.vault.note_save(&id, "我改的", Some(&base)).unwrap();
+    assert_eq!(saved.content_md, "我改的");
+    let files = f.files();
+    assert_eq!(files.len(), 2, "{files:?}");
+    let copy = files.iter().find(|rel| rel.contains("冲突")).unwrap();
+    assert!(f.read(copy).ends_with("别处改的"));
+    let announced = f.take_announced();
+    assert_eq!(announced.len(), 1);
+    assert_eq!(announced[0].conflicts.len(), 1, "提示条说一声");
+
+    // 照着最新的一版接着改：不再出副本
+    f.vault.note_save(&id, "我又改了", Some(&fsio::fingerprint(&saved.content_md))).unwrap();
+    // 磁盘上已经和要写的一样（两边改成了同样的字）：也不出
+    let stale = fsio::fingerprint(&saved.content_md);
+    let current = f.read("笔记/周报.md").replace("我又改了", "一样的");
+    f.write_externally("笔记/周报.md", &current);
+    f.vault.note_save(&id, "一样的", Some(&stale)).unwrap();
+    assert_eq!(f.files().len(), 2);
+}
+
+#[test]
+fn only_an_id_written_in_the_file_is_stable_across_devices() {
+    let mut f = fixture();
+    f.write_externally("笔记/外面的.md", "别的工具建的");
+    f.vault.rescan().unwrap();
+    let note = f.vault.note_list(false).unwrap().remove(0);
+    assert!(!note.id_in_file, "索引临时给的 id，换台设备就不一样");
+    let saved = f.vault.note_save(&note.id, "改了一下", None).unwrap();
+    assert!(saved.id_in_file, "第一次保存时写进属性块");
+    let id = f.vault.note_create("新的", "").unwrap();
+    assert!(f.vault.note_get(&id).unwrap().id_in_file);
 }
 
 #[test]
@@ -1572,6 +1672,36 @@ fn a_folder_without_journal_is_all_notes_with_the_whole_vault_as_the_tree() {
     let info = vault.info().unwrap();
     assert!(!info.layout.journal);
     assert_eq!(info.layout.notes_dir, "");
+}
+
+#[test]
+fn archive_works_without_the_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    fsio::write_atomic(&fsio::abs(&root, "归档/早就有的.md"), "别人的归档文件夹").unwrap();
+    let index = dir.path().join("index.db");
+    let (mut vault, _) = Vault::open_quick(&root, &index).unwrap();
+    let id = vault.note_create_in("", "旧资料", "x").unwrap();
+    assert!(vault.note_archive(&id, None).is_err(), "打开的文件夹默认不开归档");
+    assert_eq!(vault.note_list(true).unwrap().len(), 0, "别人的「归档」文件夹只是普通文件夹");
+
+    vault.set_archive(true).unwrap();
+    let info = vault.info().unwrap();
+    assert!(info.layout.archive && !info.layout.journal, "只开归档，不开日程");
+    assert_eq!(vault.note_list(true).unwrap().len(), 1, "开了以后「归档」里的是归档的笔记");
+    vault.note_archive(&id, None).unwrap();
+    assert!(root.join("归档/旧资料.md").is_file());
+    assert_eq!(vault.note_list(true).unwrap().len(), 2);
+    assert!(!vault.folders().contains(&"归档".to_string()), "归档不在树上");
+    assert!(vault.save_day("2026-10-21", "", "x").is_err(), "日程照旧关着");
+    vault.note_restore(&id).unwrap();
+    assert!(root.join("旧资料.md").is_file());
+
+    // 关日程不带走归档
+    vault.set_journal(true).unwrap();
+    vault.set_journal(false).unwrap();
+    assert!(vault.info().unwrap().layout.archive);
 }
 
 #[test]

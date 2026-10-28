@@ -45,8 +45,11 @@ export interface LauncherApi {
   defaultParent(): Promise<string>;
   /** 换个位置。取消了返回 null */
   pickParent(from: string): Promise<string | null>;
-  /** 在 parent 下面建一个叫 name 的文件夹，放使用指南，打开 */
-  create(parent: string, name: string): Promise<void>;
+  /**
+   * 在 parent 下面建一个叫 name 的文件夹，放使用指南，打开。logical：建成逻辑目录（树记在清单里，
+   * 笔记平放）；否则是真实文件夹（树就是硬盘上的文件夹）
+   */
+  create(parent: string, name: string, logical: boolean): Promise<void>;
   /** 从列表里拿掉（不碰文件），返回剩下的 */
   forget(path: string): Promise<VaultEntry[]>;
   reveal(path: string): Promise<void>;
@@ -96,8 +99,8 @@ const tauriApi: LauncherApi = {
   openFolder: async () => unwrap(await commands.launcherOpenFolder()),
   defaultParent: async () => unwrap(await commands.launcherDefaultParent()),
   pickParent: async (from) => unwrap(await commands.launcherPickParent(from)),
-  create: async (parent, name) => {
-    unwrap(await commands.launcherCreate(parent, name));
+  create: async (parent, name, logical) => {
+    unwrap(await commands.launcherCreate(parent, name, logical));
   },
   forget: async (path) => unwrap(await commands.launcherForget(path)),
   reveal: async (path) => {
@@ -175,7 +178,7 @@ const mockApi: LauncherApi = {
   },
   defaultParent: async () => "C:\\Users\\你\\Documents",
   pickParent: async () => null,
-  create: async (parent, name) => {
+  create: async (parent, name, _logical) => {
     await wait();
     if (mockVaults.some((vault) => vault.name === name))
       throw new Error(

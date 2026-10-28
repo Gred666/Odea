@@ -12,19 +12,19 @@ import type {
   Status,
   TrustedPeer,
 } from "@/lib/bindings";
-import { type CollabNet, type Frame, PIPE } from "./net";
+import { type CollabNet, type ControlListener, type Frame, PIPE } from "./net";
 import { CollabSession, type Peer, peerColor } from "./session";
 
 /* ============================================================
-   浏览器预览里的协作网络（没有 Rust）。和 Rust 那边说同一套帧（net.ts 的 PIPE，每一帧带着是哪篇），
-   所以前端的会话、界面一行不用改：
-   - 主持：一会儿以后「Alex 想加入」；允许了，Alex 要开一篇（一篇的范围就是那一篇，文件夹、整个仓库是
-     树里的第一篇），你那边给了，他用一个真的会话和你同步，隔一会儿在第一段后面打一句话、光标跟着动
+   浏览器预览里的协作网络（没有 Rust）。和 Rust 那边说同一套帧（net.ts 的 PIPE，每一帧带着会话号、是哪篇），
+   所以前端的会话、界面一行不用改。同时好几个会话（docs/协同编辑.md §25）：每个会话各模拟一位对面的人：
+   - 主持：一会儿以后有人想加入（同时主持着的第一个会话是 Alex，第二个 Mia……）；允许了，他要开一篇（一篇的范围就是那一篇，
+     文件夹、整个仓库是树里的第一篇），你那边给了，他用一个真的会话和你同步，隔一会儿在第一段后面打一句话
    - 加入：连接中 → 等确认 → 进来，对面「林夕」的文档同步过来，她也会打几个字。链接里有 folder 的是
      一个文件夹的范围：先给树（两篇），开哪篇同步哪篇，新建的也在树上
    - 互联网上（P10.2）：主持时过一会儿报「只有同一网络里的人能加入」（配了中继的话是经由它）；
      链接里有 far 的连不上（3 秒给结论），生成回连链接以后过一会儿「主持人拨过来了」；
-     链接里有 relay 的带着主持人的中继；主持时打开回连链接，过一会儿「Sam 想加入」
+     链接里有 relay 的带着主持人的中继；主持时打开回连链接，过一会儿「Sam 想加入」（最近开始的那个会话）
    - 中继：存在内存里；地址里有 bad 的测试时令牌被拒
    - 附近：过一会儿列出林夕和 Sam；点了照常进来
    - 落盘：交来的每篇的状态存在内存里；单测用 simulateCrash() 假装崩了，再「继续上次的协作」
@@ -40,13 +40,13 @@ export interface MockNetOptions {
 }
 
 export interface MockNet extends CollabNet {
-  /** 单测：让对面那位在 doc（默认最近开的那一篇）里打几个字 */
-  remoteType(text: string, at?: number, doc?: string): void;
+  /** 单测：让对面那位在 doc（默认最近开的那一篇）里打几个字。session 默认最近开始的、有对面的人的那个 */
+  remoteType(text: string, at?: number, doc?: string, session?: number): void;
   /** 单测：对面那位那一篇的正文（默认最近开的那一篇） */
-  remoteText(doc?: string): string;
+  remoteText(doc?: string, session?: number): string;
   /** 单测：主持人最近交来的某一篇（默认主持的那一篇）的附件引用 */
-  attachmentRefs(doc?: string): AttachmentRef[];
-  /** 单测：假装崩了 —— 落盘的留着，会话没了（下次 resumeInfo 里有） */
+  attachmentRefs(doc?: string, session?: number): AttachmentRef[];
+  /** 单测：假装崩了 —— 落盘的留着，会话都没了（下次 resumeInfo 里有） */
   simulateCrash(): void;
 }
 
@@ -72,6 +72,34 @@ const FOLDER_DOCS: { id: string; title: string; folder: string; text: string }[]
   },
 ];
 
+/** 主持时来敲门的人：第一个会话是 Alex，第二个 Mia…… */
+const VISITORS = ["Alex", "Mia", "Leo", "Ivy"];
+
+const PLACEHOLDER = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="240" height="120" fill="#e5e5df"/><text x="120" y="66" font-size="14" text-anchor="middle" fill="#74746e">主持人那边的图</text></svg>',
+)}`;
+
+const farDiagnosis: Diagnosis = {
+  lan: ["192.168.7.5"],
+  ipv6: [],
+  ipv4: [],
+  relay: null,
+  sameNetwork: false,
+  seenNearby: false,
+  hasIpv6: true,
+  cause: { kind: "differentNetwork" },
+};
+
+/** 崩了留下来的一次 */
+interface Left {
+  key: string;
+  host: boolean;
+  states: Map<string, Uint8Array>;
+  note: string;
+  scope: Scope | null;
+  title: string;
+}
+
 export function createMockNet(options: MockNetOptions = {}): MockNet {
   const speed = options.speed ?? 1;
   const bots = options.bots ?? true;
@@ -82,65 +110,14 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
     name: "我",
   };
   let onFrame: ((frame: Frame) => void) | null = null;
-  const controls = new Set<(control: Control) => void>();
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const schedule = (ms: number, run: () => void) => {
-    const timer = later(ms, () => {
-      timers.delete(timer);
-      run();
-    });
-    timers.add(timer);
-  };
-  const emit = (control: Control) => {
-    for (const listener of controls) listener(control);
-  };
-  const status = (status: Status) => emit({ type: "status", status });
-  const frame = (kind: number, member: number, doc: string, payload: Uint8Array) => {
-    // 和真的 Channel 一样异步到
-    queueMicrotask(() => onFrame?.({ kind, member, doc, payload }));
-  };
-
-  /** 对面那位：成员号、权限；他开着的每一篇各一个真的会话 */
-  let remote: {
-    member: number;
-    peer: Peer;
-    permission: Permission;
-    docs: Map<string, CollabSession>;
-    /** 最近开的那一篇（自己打字打在这里） */
-    last: string | null;
-    bot: ReturnType<typeof setInterval> | null;
-  } | null = null;
-  let role: "idle" | "host" | "guest" = "idle";
-  let title = "";
-  let pendingRequest: number | null = null;
-  let pendingPeer: Peer | null = null;
+  const controls = new Set<ControlListener>();
   /** 记住的人（真的存在 config.json，这里只在这个模拟网络活着的时候有） */
   let trusted: TrustedPeer[] = [];
-  let hostLink = "";
-  let joining = "";
   let relays: RelayInfo[] = [];
-  /** 主持人：主持的那一篇、范围、范围里的树（前端给的）、等着回话的「要开这一篇」 */
-  let hostNote = "";
-  let hostScope: Scope | null = null;
-  let hostTree: { docs: { id: string }[] } | null = null;
-  const pendingDocs = new Map<number, string>();
-  let nextDocRequest = 100;
-  /** 访客：这一次的范围、对面的那几篇（文件夹的范围里新建的也在这里） */
-  let guestScope: Scope | null = null;
-  let guestDocs = FOLDER_DOCS.map((doc) => ({ ...doc }));
-  const refs = new Map<string, AttachmentRef[]>();
-  /** 落盘：现在这一次的（每篇一份）、崩了留下来的 */
-  let saved = new Map<string, Uint8Array>();
-  let left: {
-    host: boolean;
-    states: Map<string, Uint8Array>;
-    note: string;
-    scope: Scope | null;
-    title: string;
-  } | null = null;
-  const PLACEHOLDER = `data:image/svg+xml;utf8,${encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="240" height="120" fill="#e5e5df"/><text x="120" y="66" font-size="14" text-anchor="middle" fill="#74746e">主持人那边的图</text></svg>',
-  )}`;
+  let left: Left[] = [];
+  const sessions = new Map<number, ReturnType<typeof mockSession>>();
+  /** 不属于哪个会话的（「附近」的列表） */
+  const globalTimers = new Set<ReturnType<typeof setTimeout>>();
 
   /** 主持人的自检：先「在查」，过一会儿出结果（配了中继的话经由它） */
   const reachOf = (checking: boolean): Reach => ({
@@ -156,386 +133,600 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
       state: checking ? { state: "connecting" } : { state: "connected", latency: 38 },
     })),
   });
-  const farDiagnosis: Diagnosis = {
-    lan: ["192.168.7.5"],
-    ipv6: [],
-    ipv4: [],
-    relay: null,
-    sameNetwork: false,
-    seenNearby: false,
-    hasIpv6: true,
-    cause: { kind: "differentNetwork" },
-  };
-  const guestTree = () =>
-    JSON.stringify({
-      docs: guestDocs.map(({ id, title, folder }) => ({ id, title, folder })),
-    });
 
-  /** 等确认 → 进来（加入、回连都走这里） */
-  const admitGuest = () => {
-    status({ state: "waiting" });
-    schedule(900, () => {
-      if (role !== "guest") return;
-      const linxi = { id: "mock-linxi", name: "林夕", color: peerColor("mock-linxi") };
-      remote = {
-        member: 0,
-        peer: linxi,
-        permission: "edit",
-        docs: new Map(),
-        last: null,
-        bot: null,
-      };
-      emit({ type: "members", members: members() });
-      if (/folder/i.test(joining)) {
-        // 一个文件夹：先给树，访客开哪篇同步哪篇
-        title = "项目";
-        guestScope = { kind: "folder", doc: "", name: "项目" };
-        emit({ type: "tree", tree: guestTree() });
-        status({ state: "connected", member: 1, permission: "edit", title, scope: guestScope });
-      } else {
-        // 一篇：Rust 那边进来就开那一篇
-        title = "周会记录";
-        guestScope = { kind: "doc", doc: "mock-doc", name: title };
-        status({ state: "connected", member: 1, permission: "edit", title, scope: guestScope });
-        openRemote("mock-doc", SAMPLE);
-      }
-      emit({ type: "route", relayed: false });
-    });
-  };
-
-  const selfInfo = (member: number): MemberInfo => ({
-    member,
-    id: identity.id,
-    name: identity.name,
-    permission: "edit",
-    host: role === "host",
-    via: null,
-    docs: [],
-  });
-  const members = (): MemberInfo[] => {
-    if (!remote) return [selfInfo(0)];
-    const other: MemberInfo = {
-      member: remote.member,
-      id: remote.peer.id,
-      name: remote.peer.name,
-      permission: remote.permission,
-      host: role === "guest",
-      via: null,
-      // 主持人这边看得到他开着哪几篇
-      docs: role === "host" ? [...remote.docs.keys()].sort() : [],
+  /** 一个会话的模拟：对面的那位、范围、落盘…… */
+  function mockSession(id: number) {
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const schedule = (ms: number, run: () => void) => {
+      const timer = later(ms, () => {
+        timers.delete(timer);
+        run();
+      });
+      timers.add(timer);
     };
-    return role === "host" ? [selfInfo(0), other] : [other, selfInfo(1)];
-  };
+    const emit = (control: Control) => {
+      for (const listener of controls) listener(id, control);
+    };
+    const status = (next: Status) => emit({ type: "status", status: next });
+    const frame = (kind: number, member: number, doc: string, payload: Uint8Array) => {
+      // 和真的 Channel 一样异步到
+      queueMicrotask(() => onFrame?.({ kind, session: id, member, doc, payload }));
+    };
 
-  /** 对面那位开了一篇：建会话，双方互发 Sync1（text：做客时对面那篇本来的正文） */
-  const openRemote = (doc: string, text?: string) => {
-    if (!remote || remote.docs.has(doc)) return;
-    const member = remote.member;
-    const session = new CollabSession({
-      self: remote.peer,
-      initialText: text,
-      transport: {
-        sendUpdate: (update) => {
-          // 只读的访客发的更新，主持人那边（Rust）会丢掉
-          if (role === "host" && remote?.permission === "read") return;
-          frame(PIPE.update, member, doc, update);
-        },
-        sendCursor: (payload) => frame(PIPE.cursor, member, doc, payload),
-      },
-    });
-    remote.docs.set(doc, session);
-    remote.last = doc;
-    if (role === "host") emit({ type: "members", members: members() });
-    // 请前端把状态向量发过来；对面也把自己的发过去
-    frame(PIPE.syncVector, member, doc, new Uint8Array());
-    frame(PIPE.syncReply, member, doc, session.stateVector());
-    if (bots) startBot(doc);
-  };
+    /** 对面那位：成员号、权限；他开着的每一篇各一个真的会话 */
+    let remote: {
+      member: number;
+      peer: Peer;
+      permission: Permission;
+      docs: Map<string, CollabSession>;
+      /** 最近开的那一篇（自己打字打在这里） */
+      last: string | null;
+      bot: ReturnType<typeof setInterval> | null;
+    } | null = null;
+    let role: "idle" | "host" | "guest" = "idle";
+    let title = "";
+    let pendingRequest: number | null = null;
+    let pendingPeer: Peer | null = null;
+    let hostLink = "";
+    let joining = "";
+    /** 主持人：主持的那一篇、范围、范围里的树（前端给的）、等着回话的「要开这一篇」 */
+    let hostNote = "";
+    let hostScope: Scope | null = null;
+    let hostTree: { docs: { id: string }[] } | null = null;
+    const pendingDocs = new Map<number, string>();
+    let nextDocRequest = 100;
+    /** 访客：这一次的范围、对面的那几篇（文件夹的范围里新建的也在这里） */
+    let guestScope: Scope | null = null;
+    let guestDocs = FOLDER_DOCS.map((doc) => ({ ...doc }));
+    const refs = new Map<string, AttachmentRef[]>();
+    /** 落盘：这一次的（每篇一份） */
+    let saved = new Map<string, Uint8Array>();
 
-  /** 主持人那边：对面那位进来了，要开一篇（一篇的范围是那一篇，别的是树里的第一篇） */
-  const admitted = (peer: Peer, member: number, permission: Permission) => {
-    remote = { member, peer, permission, docs: new Map(), last: null, bot: null };
-    emit({ type: "members", members: members() });
-    const doc = hostScope?.kind === "doc" ? hostScope.doc : (hostTree?.docs[0]?.id ?? hostNote);
-    if (!doc) return;
-    const request = nextDocRequest++;
-    pendingDocs.set(request, doc);
-    emit({ type: "docOpen", request, member, doc });
-  };
+    const guestTree = () =>
+      JSON.stringify({
+        docs: guestDocs.map(({ id: doc, title: name, folder }) => ({
+          id: doc,
+          title: name,
+          folder,
+        })),
+      });
 
-  const stopBot = () => {
-    if (remote?.bot) clearInterval(remote.bot);
-    if (remote) remote.bot = null;
-  };
-
-  const sessionOf = (doc?: string) => {
-    const key = doc ?? remote?.last;
-    return key ? remote?.docs.get(key) : undefined;
-  };
-
-  const remoteType = (text: string, at?: number, doc?: string) => {
-    const session = sessionOf(doc);
-    if (!session) return;
-    let position = at ?? firstParagraphEnd(session.toString());
-    for (const char of text) {
-      session.insertText(Math.min(position, session.text.length), char);
-      position += char.length;
-    }
-    session.setLocalCursor(position);
-  };
-
-  /** 隔一会儿在这一篇里打一句话，一个字一个字地打 */
-  const startBot = (doc: string) => {
-    if (!remote) return;
-    stopBot();
-    const line = role === "host" ? "（Alex：这一条我来跟进。）" : "（林夕：欢迎！）";
-    let index = 0;
-    let position = -1;
-    schedule(2500, () => {
-      if (!remote) return;
-      remote.bot = setInterval(() => {
-        const session = remote?.docs.get(doc);
-        if (!session || remote?.permission === "read") return;
-        if (index >= [...line].length) {
-          stopBot();
-          return;
+    /** 等确认 → 进来（加入、回连都走这里） */
+    const admitGuest = () => {
+      status({ state: "waiting" });
+      schedule(900, () => {
+        if (role !== "guest") return;
+        const linxi = { id: "mock-linxi", name: "林夕", color: peerColor("mock-linxi") };
+        remote = {
+          member: 0,
+          peer: linxi,
+          permission: "edit",
+          docs: new Map(),
+          last: null,
+          bot: null,
+        };
+        emit({ type: "members", members: members() });
+        if (/folder/i.test(joining)) {
+          // 一个文件夹：先给树，访客开哪篇同步哪篇
+          title = "项目";
+          guestScope = { kind: "folder", doc: "", name: "项目" };
+          emit({ type: "tree", tree: guestTree() });
+          status({ state: "connected", member: 1, permission: "edit", title, scope: guestScope });
+        } else {
+          // 一篇：Rust 那边进来就开那一篇
+          title = "周会记录";
+          guestScope = { kind: "doc", doc: "mock-doc", name: title };
+          status({ state: "connected", member: 1, permission: "edit", title, scope: guestScope });
+          openRemote("mock-doc", SAMPLE);
         }
-        if (position < 0) position = firstParagraphEnd(session.toString());
-        const char = [...line][index]!;
+        emit({ type: "route", relayed: false });
+      });
+    };
+
+    const selfInfo = (member: number): MemberInfo => ({
+      member,
+      id: identity.id,
+      name: identity.name,
+      permission: "edit",
+      host: role === "host",
+      via: null,
+      docs: [],
+    });
+    const members = (): MemberInfo[] => {
+      if (!remote) return [selfInfo(0)];
+      const other: MemberInfo = {
+        member: remote.member,
+        id: remote.peer.id,
+        name: remote.peer.name,
+        permission: remote.permission,
+        host: role === "guest",
+        via: null,
+        // 主持人这边看得到他开着哪几篇
+        docs: role === "host" ? [...remote.docs.keys()].sort() : [],
+      };
+      return role === "host" ? [selfInfo(0), other] : [other, selfInfo(1)];
+    };
+
+    /** 对面那位开了一篇：建会话，双方互发 Sync1（text：做客时对面那篇本来的正文） */
+    const openRemote = (doc: string, text?: string) => {
+      if (!remote || remote.docs.has(doc)) return;
+      const member = remote.member;
+      const session = new CollabSession({
+        self: remote.peer,
+        initialText: text,
+        transport: {
+          sendUpdate: (update) => {
+            // 只读的访客发的更新，主持人那边（Rust）会丢掉
+            if (role === "host" && remote?.permission === "read") return;
+            frame(PIPE.update, member, doc, update);
+          },
+          sendCursor: (payload) => frame(PIPE.cursor, member, doc, payload),
+        },
+      });
+      remote.docs.set(doc, session);
+      remote.last = doc;
+      if (role === "host") emit({ type: "members", members: members() });
+      // 请前端把状态向量发过来；对面也把自己的发过去
+      frame(PIPE.syncVector, member, doc, new Uint8Array());
+      frame(PIPE.syncReply, member, doc, session.stateVector());
+      if (bots) startBot(doc);
+    };
+
+    /** 主持人那边：对面那位进来了，要开一篇（一篇的范围是那一篇，别的是树里的第一篇） */
+    const admitted = (peer: Peer, member: number, permission: Permission) => {
+      remote = { member, peer, permission, docs: new Map(), last: null, bot: null };
+      emit({ type: "members", members: members() });
+      const doc = hostScope?.kind === "doc" ? hostScope.doc : (hostTree?.docs[0]?.id ?? hostNote);
+      if (!doc) return;
+      const request = nextDocRequest++;
+      pendingDocs.set(request, doc);
+      emit({ type: "docOpen", request, member, doc });
+    };
+
+    const stopBot = () => {
+      if (remote?.bot) clearInterval(remote.bot);
+      if (remote) remote.bot = null;
+    };
+
+    const docSession = (doc?: string) => {
+      const key = doc ?? remote?.last;
+      return key ? remote?.docs.get(key) : undefined;
+    };
+
+    const remoteType = (text: string, at?: number, doc?: string) => {
+      const session = docSession(doc);
+      if (!session) return;
+      let position = at ?? firstParagraphEnd(session.toString());
+      for (const char of text) {
         session.insertText(Math.min(position, session.text.length), char);
         position += char.length;
-        index += 1;
-        session.setLocalCursor(position);
-      }, 180 * speed);
-    });
-  };
+      }
+      session.setLocalCursor(position);
+    };
 
-  const leave = () => {
-    stopBot();
-    for (const session of remote?.docs.values() ?? []) session.destroy();
-    remote = null;
-    pendingDocs.clear();
+    /** 隔一会儿在这一篇里打一句话，一个字一个字地打 */
+    const startBot = (doc: string) => {
+      if (!remote) return;
+      stopBot();
+      const line =
+        role === "host" ? `（${remote.peer.name}：这一条我来跟进。）` : "（林夕：欢迎！）";
+      let index = 0;
+      let position = -1;
+      schedule(2500, () => {
+        if (!remote) return;
+        remote.bot = setInterval(() => {
+          const session = remote?.docs.get(doc);
+          if (!session || remote?.permission === "read") return;
+          if (index >= [...line].length) {
+            stopBot();
+            return;
+          }
+          if (position < 0) position = firstParagraphEnd(session.toString());
+          const char = [...line][index]!;
+          session.insertText(Math.min(position, session.text.length), char);
+          position += char.length;
+          index += 1;
+          session.setLocalCursor(position);
+        }, 180 * speed);
+      });
+    };
+
+    const leave = () => {
+      stopBot();
+      for (const session of remote?.docs.values() ?? []) session.destroy();
+      remote = null;
+      pendingDocs.clear();
+    };
+
+    const clearTimers = () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    };
+
+    return {
+      get role() {
+        return role;
+      },
+      get hasRemote() {
+        return remote !== null;
+      },
+      emit,
+      remoteType,
+      remoteText: (doc?: string) => docSession(doc)?.toString() ?? "",
+      attachmentRefs: (doc?: string) => refs.get(doc ?? hostNote) ?? [],
+      membersChanged: () => {
+        if (role !== "idle") emit({ type: "members", members: members() });
+      },
+      host: async (nextTitle: string, note: string, scope: Scope) => {
+        // 同时主持着几个：第一个来的是 Alex，第二个 Mia……（停了再开还是 Alex）
+        const hosting = [...sessions.values()].filter((other) => other.role === "host").length;
+        const visitor = VISITORS[hosting % VISITORS.length]!;
+        role = "host";
+        title = nextTitle;
+        hostNote = note;
+        hostScope = scope;
+        hostTree = null;
+        await new Promise((resolve) => later(600, () => resolve(null)));
+        // 过一会儿有人拿着链接来了
+        schedule(1500, () => {
+          if (role !== "host" || remote) return;
+          const peerId = `mock-${visitor.toLowerCase()}`;
+          const peer = { id: peerId, name: visitor, color: peerColor(peerId) };
+          // 记住过的：不问，直接按记住的权限进来
+          const known = trusted.find((item) => item.id === peer.id);
+          if (known) {
+            admitted(peer, 1, known.permission);
+            return;
+          }
+          pendingRequest = 1;
+          pendingPeer = peer;
+          emit({
+            type: "joinRequest",
+            request: 1,
+            id: peerId,
+            name: visitor,
+            invited: true,
+            via: null,
+          });
+        });
+        hostLink = `odea://join/mock${identity.id.slice(5)}aaaabbbb${"abcdefgh"[id % 8]}cccdddd`;
+        schedule(20, () => {
+          if (role === "host") emit({ type: "reach", reach: reachOf(true), link: hostLink });
+        });
+        schedule(900, () => {
+          if (role === "host") emit({ type: "reach", reach: reachOf(false), link: hostLink });
+        });
+        return {
+          key: `mockhost${id}`,
+          link: hostLink,
+          id: identity.id,
+          members: members(),
+        };
+      },
+      join: (link: string) => {
+        role = "guest";
+        joining = link;
+        guestDocs = FOLDER_DOCS.map((doc) => ({ ...doc }));
+        status({ state: "connecting" });
+        // 链接里有 far：连不上，3 秒给结论（等回连）
+        if (/far/i.test(link)) {
+          schedule(3000, () => {
+            if (role === "guest" && !remote)
+              status({ state: "unreachable", diagnosis: farDiagnosis });
+          });
+          return;
+        }
+        schedule(500, admitGuest);
+      },
+      calledBack: () => {
+        // 过一会儿主持人打开了回连链接、拨过来了
+        schedule(2500, () => {
+          if (role === "guest" && !remote && /far/i.test(joining)) admitGuest();
+        });
+      },
+      dialedBack: () => {
+        schedule(800, () => {
+          if (role !== "host") return;
+          emit({ type: "dialBack", ok: true, detail: null });
+          pendingRequest = 2;
+          pendingPeer = { id: "mock-sam", name: "Sam", color: peerColor("mock-sam") };
+          emit({
+            type: "joinRequest",
+            request: 2,
+            id: "mock-sam",
+            name: "Sam",
+            invited: true,
+            via: null,
+          });
+        });
+      },
+      saveState: (doc: string, state: Uint8Array) => {
+        saved.set(doc, state.slice());
+      },
+      setAttachmentRefs: (doc: string, next: AttachmentRef[] | null) => {
+        if (next) refs.set(doc, next);
+        else refs.delete(doc);
+      },
+      answerDoc: (request: number, error: string | null) => {
+        const doc = pendingDocs.get(request);
+        if (!doc || !remote) return false;
+        pendingDocs.delete(request);
+        if (!error) openRemote(doc);
+        return true;
+      },
+      setTree: (tree: string) => {
+        try {
+          hostTree = JSON.parse(tree);
+        } catch {
+          hostTree = null;
+        }
+      },
+      openDoc: (doc: string) => {
+        if (role !== "guest" || !remote) return;
+        const found = guestDocs.find((item) => item.id === doc);
+        if (guestScope?.kind === "doc" ? doc !== guestScope.doc : !found) {
+          queueMicrotask(() =>
+            emit({ type: "docRefused", doc, reason: "这一篇不在共享的文件夹里" }),
+          );
+          return;
+        }
+        openRemote(doc, found?.text ?? SAMPLE);
+      },
+      closeDoc: (doc: string) => {
+        remote?.docs.get(doc)?.destroy();
+        remote?.docs.delete(doc);
+      },
+      createDoc: (folder: string, newTitle: string) => {
+        if (role !== "guest" || guestScope?.kind === "doc") throw new Error("这次协作只共享了一篇");
+        const doc = `mock-new-${guestDocs.length + 1}`;
+        guestDocs.push({ id: doc, title: newTitle || "无标题", folder, text: "" });
+        emit({ type: "tree", tree: guestTree() });
+        return doc;
+      },
+      answer: (request: number, allow: Permission | null) => {
+        if (request !== pendingRequest || !pendingPeer) return false;
+        pendingRequest = null;
+        if (allow) {
+          // 模拟的只有一位对面的人：后来的顶替先来的
+          if (remote) leave();
+          admitted(pendingPeer, request, allow);
+        }
+        pendingPeer = null;
+        return true;
+      },
+      setPermission: (member: number, permission: Permission) => {
+        if (remote?.member !== member) return;
+        remote.permission = permission;
+        const peerId = remote.peer.id;
+        trusted = trusted.map((peer) => (peer.id === peerId ? { ...peer, permission } : peer));
+        emit({ type: "members", members: members() });
+      },
+      kick: (member: number) => {
+        if (remote?.member !== member) return;
+        const peerId = remote.peer.id;
+        trusted = trusted.filter((peer) => peer.id !== peerId);
+        leave();
+        emit({ type: "members", members: members() });
+      },
+      setTitle: (next: string) => {
+        title = next;
+      },
+      stop: () => {
+        clearTimers();
+        leave();
+        pendingRequest = null;
+        role = "idle";
+        // 正常结束：落盘的删掉
+        saved = new Map();
+        status({ state: "ended", reason: { kind: "left" } });
+      },
+      /** 假装崩了：落盘的留下来，会话没了 */
+      crash: (): Left | null => {
+        const kept: Left | null =
+          saved.size && role !== "idle"
+            ? {
+                key: role === "host" ? `mockhost${id}` : `mockguest${id}`,
+                host: role === "host",
+                states: new Map(saved),
+                note: hostNote,
+                scope: role === "host" ? hostScope : guestScope,
+                title: title || "周会记录",
+              }
+            : null;
+        clearTimers();
+        leave();
+        pendingRequest = null;
+        role = "idle";
+        saved = new Map();
+        return kept;
+      },
+      receive: (kind: number, member: number, doc: string, payload: Uint8Array) => {
+        const session = remote?.docs.get(doc);
+        if (!session || !remote) return;
+        const bytes = payload.slice();
+        switch (kind) {
+          case PIPE.update:
+            session.receiveUpdate(bytes);
+            return;
+          case PIPE.cursor:
+            session.receiveCursor(
+              { id: identity.id, name: identity.name, color: peerColor(identity.id) },
+              bytes,
+            );
+            return;
+          case PIPE.syncVector:
+            if (member !== remote.member) return;
+            session.answerSync(bytes, (reply) => frame(PIPE.update, member, doc, reply));
+            return;
+          case PIPE.syncReply:
+            if (member !== remote.member) return;
+            session.receiveUpdate(bytes);
+            return;
+        }
+      },
+    };
+  }
+
+  const create = (id: number) => {
+    sessions.get(id)?.stop();
+    const session = mockSession(id);
+    sessions.set(id, session);
+    return session;
   };
+  const need = (id: number) => {
+    const session = sessions.get(id);
+    if (!session) throw new Error("这次协作已经停了");
+    return session;
+  };
+  /** 单测不说是哪个会话时：最近开始的、有对面的人的那个 */
+  const latest = (id?: number) => {
+    if (id !== undefined) return sessions.get(id);
+    const all = [...sessions.values()];
+    return all.reverse().find((session) => session.hasRemote) ?? all[0];
+  };
+  const emitGlobal = (control: Control) => {
+    for (const listener of controls) listener(null, control);
+  };
+  const wait = (ms: number) => new Promise((resolve) => later(ms, () => resolve(null)));
 
   return {
     identity: async () => identity,
     setName: async (name) => {
       identity = { ...identity, name: name.trim() || "我" };
       // 协作中改名：成员表跟着换（Rust 那边是主持人广播、访客发 NAME 帧）
-      if (role !== "idle") emit({ type: "members", members: members() });
+      for (const session of sessions.values()) session.membersChanged();
     },
-    host: async (nextTitle, permission, note, scope, resume) => {
-      leave();
-      role = "host";
-      title = nextTitle;
-      hostNote = note;
-      hostScope = scope;
-      hostTree = null;
-      void resume;
-      await new Promise((resolve) => later(600, () => resolve(null)));
-      // 过一会儿有人拿着链接来了
-      schedule(1500, () => {
-        if (role !== "host" || remote) return;
-        const alex = { id: "mock-alex", name: "Alex", color: peerColor("mock-alex") };
-        // 记住过的：不问，直接按记住的权限进来
-        const known = trusted.find((peer) => peer.id === alex.id);
-        if (known) {
-          admitted(alex, 1, known.permission);
-          return;
-        }
-        pendingRequest = 1;
-        pendingPeer = alex;
-        emit({
-          type: "joinRequest",
-          request: 1,
-          id: "mock-alex",
-          name: "Alex",
-          invited: true,
-          via: null,
-        });
-      });
+    host: async (id, nextTitle, permission, note, scope, resume) => {
       void permission;
-      hostLink = `odea://join/mock${identity.id.slice(5)}aaaabbbbccccdddd`;
-      schedule(20, () => {
-        if (role === "host") emit({ type: "reach", reach: reachOf(true), link: hostLink });
-      });
-      schedule(900, () => {
-        if (role === "host") emit({ type: "reach", reach: reachOf(false), link: hostLink });
-      });
-      return { link: hostLink, id: identity.id, members: members() };
+      void resume;
+      return create(id).host(nextTitle, note, scope);
     },
     resetInvite: async () => `odea://join/mock${Math.random().toString(36).slice(2)}`,
     checkLink: async (link) =>
       /^\s*<?(odea:\/\/join\/)?[a-z2-7]{8,}/i.test(link)
         ? { relay: /relay/i.test(link) ? "relay.example.com" : null }
         : "这不是 Odea 的协作链接",
-    join: async (link, directOnly) => {
+    join: async (id, link, directOnly) => {
       void directOnly;
-      leave();
-      role = "guest";
-      joining = link;
-      guestDocs = FOLDER_DOCS.map((doc) => ({ ...doc }));
-      status({ state: "connecting" });
-      // 链接里有 far：连不上，3 秒给结论（等回连）
-      if (/far/i.test(link)) {
-        schedule(3000, () => {
-          if (role === "guest" && !remote)
-            status({ state: "unreachable", diagnosis: farDiagnosis });
-        });
-        return;
-      }
-      schedule(500, admitGuest);
+      create(id).join(link);
     },
     forwardLink: async () => {
-      await new Promise((resolve) => later(600, () => resolve(null)));
+      await wait(600);
       return {
         link: `odea://join/mock${identity.id.slice(5)}fwdfwdfwdfwdfwdf`,
         reach: { ...reachOf(false), ipv6: ["2408:8207:1234::6"] },
       };
     },
-    callback: async () => {
-      await new Promise((resolve) => later(600, () => resolve(null)));
-      // 过一会儿主持人打开了回连链接、拨过来了
-      schedule(2500, () => {
-        if (role === "guest" && !remote && /far/i.test(joining)) admitGuest();
-      });
+    callback: async (id) => {
+      await wait(600);
+      need(id).calledBack();
       return {
         link: `odea://back/mock${identity.id.slice(5)}eeeeffffgggghhhh`,
         reach: { ...reachOf(false), ipv6: ["2408:8207:1234::5"] },
       };
     },
     dialBack: async (link) => {
-      if (role !== "host") throw new Error("回连链接要在主持协作时打开");
       if (!/^\s*<?odea:\/\/back\//i.test(link)) throw new Error("这不是 Odea 的回连链接");
-      schedule(800, () => {
-        if (role !== "host") return;
-        emit({ type: "dialBack", ok: true, detail: null });
-        pendingRequest = 2;
-        pendingPeer = { id: "mock-sam", name: "Sam", color: peerColor("mock-sam") };
-        emit({
-          type: "joinRequest",
-          request: 2,
-          id: "mock-sam",
-          name: "Sam",
-          invited: true,
-          via: null,
-        });
-      });
+      const host = [...sessions.entries()].reverse().find(([, session]) => session.role === "host");
+      if (!host) throw new Error("回连链接要在主持协作时打开");
+      host[1].dialedBack();
+      return host[0];
     },
     nearbyStart: async () => {
-      schedule(700, () =>
-        emit({
+      const timer = later(700, () => {
+        globalTimers.delete(timer);
+        emitGlobal({
           type: "nearby",
           hosts: [
             { id: "mock-linxi", name: "林夕" },
             { id: "mock-sam", name: "Sam" },
           ],
-        }),
-      );
+        });
+      });
+      globalTimers.add(timer);
     },
     nearbyStop: async () => {},
-    joinNearby: async (id) => {
-      void id;
-      leave();
-      role = "guest";
-      joining = "nearby";
-      status({ state: "connecting" });
-      schedule(500, admitGuest);
+    joinNearby: async (id, nearbyId) => {
+      void nearbyId;
+      create(id).join("nearby");
     },
-    saveState: (doc, state) => {
-      saved.set(doc, state.slice());
+    answerNearby: async () => false,
+    saveState: (id, doc, state) => {
+      sessions.get(id)?.saveState(doc, state);
     },
     resumeInfo: async (): Promise<CollabResume> => ({
-      host:
-        left?.host === true
-          ? {
-              note: left.note,
-              scope: left.scope,
-              title: left.title,
-              guests: 1,
-              savedAt: Date.now(),
-            }
-          : null,
-      guest:
-        left?.host === false ? { title: left.title, hostName: "林夕", savedAt: Date.now() } : null,
+      hosts: left
+        .filter((item) => item.host)
+        .map((item) => ({
+          key: item.key,
+          note: item.note,
+          scope: item.scope,
+          title: item.title,
+          guests: 1,
+          savedAt: Date.now(),
+        })),
+      guests: left
+        .filter((item) => !item.host)
+        .map((item) => ({
+          key: item.key,
+          title: item.title,
+          hostName: "林夕",
+          savedAt: Date.now(),
+        })),
     }),
-    resumeState: async (host, doc) => {
-      const state = left && left.host === host ? left.states.get(doc) : undefined;
+    resumeState: async (host, key, doc) => {
+      const state = left.find((item) => item.key === key && item.host === host)?.states.get(doc);
       if (!state) throw new Error("上次协作的状态已经没了");
       return state;
     },
-    resumeDocs: async () => (left && !left.host ? [...left.states.keys()] : []),
-    rejoin: async () => {
-      leave();
-      role = "guest";
-      joining = "rejoin";
-      left = null;
-      status({ state: "connecting" });
-      schedule(500, admitGuest);
+    resumeDocs: async (key) => [
+      ...(left.find((item) => item.key === key && !item.host)?.states.keys() ?? []),
+    ],
+    rejoin: async (id, key) => {
+      left = left.filter((item) => item.key !== key);
+      create(id).join("rejoin");
     },
-    discardResume: async (host) => {
-      if (left?.host === host) left = null;
+    discardResume: async (host, key) => {
+      left = left.filter((item) => !(item.key === key && item.host === host));
     },
-    setAttachmentRefs: async (doc, next) => {
-      if (next) refs.set(doc, next);
-      else refs.delete(doc);
+    setAttachmentRefs: async (id, doc, next) => {
+      sessions.get(id)?.setAttachmentRefs(doc, next);
     },
-    fetchAttachment: async (doc, path) => {
-      await new Promise((resolve) => later(150, () => resolve(null)));
-      if (role !== "guest") throw new Error("现在没连着主持人");
+    fetchAttachment: async (id, doc, path) => {
+      await wait(150);
+      if (sessions.get(id)?.role !== "guest") throw new Error("现在没连着主持人");
       void doc;
       void path;
       return { url: PLACEHOLDER, file: null };
     },
-    putAttachment: async (doc, name) => {
+    putAttachment: async (id, doc, name) => {
+      void id;
       void doc;
-      await new Promise((resolve) => later(150, () => resolve(null)));
+      await wait(150);
       return {
         link: `附件/${name}`,
         name,
         isImage: /\.(png|jpe?g|gif|webp|svg)$/i.test(name),
       };
     },
-    putAttachmentPath: async (doc, path) => {
+    putAttachmentPath: async (id, doc, path) => {
+      void id;
       void doc;
       const name = path.replace(/\\/g, "/").split("/").pop() ?? path;
       return { link: `附件/${name}`, name, isImage: /\.(png|jpe?g|gif|webp|svg)$/i.test(name) };
     },
-    answerDoc: async (request, error) => {
-      const doc = pendingDocs.get(request);
-      if (!doc || !remote) return false;
-      pendingDocs.delete(request);
-      if (!error) openRemote(doc);
-      return true;
-    },
-    setTree: async (tree) => {
-      try {
-        hostTree = JSON.parse(tree);
-      } catch {
-        hostTree = null;
-      }
+    answerDoc: async (id, request, error) => sessions.get(id)?.answerDoc(request, error) ?? false,
+    setTree: async (id, tree) => {
+      sessions.get(id)?.setTree(tree);
     },
     answerCreate: async () => true,
-    openDoc: async (doc) => {
-      if (role !== "guest" || !remote) return;
-      const found = guestDocs.find((item) => item.id === doc);
-      if (guestScope?.kind === "doc" ? doc !== guestScope.doc : !found) {
-        queueMicrotask(() => emit({ type: "docRefused", doc, reason: "这一篇不在共享的文件夹里" }));
-        return;
-      }
-      openRemote(doc, found?.text ?? SAMPLE);
+    openDoc: async (id, doc) => {
+      sessions.get(id)?.openDoc(doc);
     },
-    closeDoc: async (doc) => {
-      remote?.docs.get(doc)?.destroy();
-      remote?.docs.delete(doc);
+    closeDoc: async (id, doc) => {
+      sessions.get(id)?.closeDoc(doc);
     },
-    createDoc: async (folder, newTitle) => {
-      if (role !== "guest" || guestScope?.kind === "doc") throw new Error("这次协作只共享了一篇");
-      const id = `mock-new-${guestDocs.length + 1}`;
-      guestDocs.push({ id, title: newTitle || "无标题", folder, text: "" });
-      emit({ type: "tree", tree: guestTree() });
-      return id;
-    },
+    createDoc: async (id, folder, newTitle) => need(id).createDoc(folder, newTitle),
     relays: async () => relays,
     relayInspect: async (code) => {
       if (!/odea:\/\/relay\/[a-z2-7]+/i.test(code)) throw new Error("这不是 Odea 的协作链接");
@@ -584,7 +775,7 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
       return "odea://relay/mockaaaabbbbccccdddd";
     },
     relayTest: async (url) => {
-      await new Promise((resolve) => later(700, () => resolve(null)));
+      await wait(700);
       if (/old/i.test(url))
         return {
           connected: false,
@@ -605,52 +796,28 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
           }
         : { connected: true, latencyMs: 38, denied: null, error: null, udp: true, outdated: null };
     },
-    answer: async (request, allow) => {
-      if (request !== pendingRequest || !pendingPeer) return false;
-      pendingRequest = null;
-      if (allow) {
-        // 模拟的只有一位对面的人：后来的顶替先来的
-        if (remote) leave();
-        admitted(pendingPeer, request, allow);
-      }
-      pendingPeer = null;
-      return true;
+    answer: async (id, request, allow) => sessions.get(id)?.answer(request, allow) ?? false,
+    setPermission: async (id, member, permission) => {
+      sessions.get(id)?.setPermission(member, permission);
     },
-    setPermission: async (member, permission) => {
-      if (remote?.member !== member) return;
-      remote.permission = permission;
-      const id = remote.peer.id;
-      trusted = trusted.map((peer) => (peer.id === id ? { ...peer, permission } : peer));
-      emit({ type: "members", members: members() });
-    },
-    kick: async (member) => {
-      if (remote?.member !== member) return;
-      const id = remote.peer.id;
-      trusted = trusted.filter((peer) => peer.id !== id);
-      leave();
-      emit({ type: "members", members: members() });
+    kick: async (id, member) => {
+      sessions.get(id)?.kick(member);
     },
     trusted: async () => trusted,
-    remember: async (id, name, permission) => {
-      trusted = [...trusted.filter((peer) => peer.id !== id), { id, name, permission }];
+    remember: async (peerId, name, permission) => {
+      trusted = [...trusted.filter((peer) => peer.id !== peerId), { id: peerId, name, permission }];
       return trusted;
     },
-    forget: async (id) => {
-      trusted = trusted.filter((peer) => peer.id !== id);
+    forget: async (peerId) => {
+      trusted = trusted.filter((peer) => peer.id !== peerId);
       return trusted;
     },
-    setTitle: async (next) => {
-      title = next;
+    setTitle: async (id, next) => {
+      sessions.get(id)?.setTitle(next);
     },
-    stop: async () => {
-      for (const timer of timers) clearTimeout(timer);
-      timers.clear();
-      leave();
-      pendingRequest = null;
-      role = "idle";
-      // 正常结束：落盘的删掉
-      saved = new Map();
-      status({ state: "ended", reason: { kind: "left" } });
+    stop: async (id) => {
+      sessions.get(id)?.stop();
+      sessions.delete(id);
     },
     openPipe: async (listener) => {
       onFrame = listener;
@@ -658,29 +825,8 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
         if (onFrame === listener) onFrame = null;
       };
     },
-    send: (kind, member, doc, payload) => {
-      const session = remote?.docs.get(doc);
-      if (!session || !remote) return;
-      const bytes = payload.slice();
-      switch (kind) {
-        case PIPE.update:
-          session.receiveUpdate(bytes);
-          return;
-        case PIPE.cursor:
-          session.receiveCursor(
-            { id: identity.id, name: identity.name, color: peerColor(identity.id) },
-            bytes,
-          );
-          return;
-        case PIPE.syncVector:
-          if (member !== remote.member) return;
-          session.answerSync(bytes, (reply) => frame(PIPE.update, member, doc, reply));
-          return;
-        case PIPE.syncReply:
-          if (member !== remote.member) return;
-          session.receiveUpdate(bytes);
-          return;
-      }
+    send: (id, kind, member, doc, payload) => {
+      sessions.get(id)?.receive(kind, member, doc, payload);
     },
     onControl: async (listener) => {
       controls.add(listener);
@@ -693,25 +839,17 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
     },
     takeCopy: async () => null,
     onCopyReady: async () => () => {},
-    remoteType,
-    remoteText: (doc) => sessionOf(doc)?.toString() ?? "",
-    attachmentRefs: (doc) => refs.get(doc ?? hostNote) ?? [],
+    remoteType: (text, at, doc, session) => latest(session)?.remoteType(text, at, doc),
+    remoteText: (doc, session) => latest(session)?.remoteText(doc) ?? "",
+    attachmentRefs: (doc, session) => latest(session)?.attachmentRefs(doc) ?? [],
     simulateCrash: () => {
-      if (saved.size && role !== "idle") {
-        left = {
-          host: role === "host",
-          states: new Map(saved),
-          note: hostNote,
-          scope: role === "host" ? hostScope : guestScope,
-          title: title || "周会记录",
-        };
+      for (const session of sessions.values()) {
+        const kept = session.crash();
+        if (kept) left = [...left.filter((item) => item.key !== kept.key), kept];
       }
-      for (const timer of timers) clearTimeout(timer);
-      timers.clear();
-      leave();
-      pendingRequest = null;
-      role = "idle";
-      saved = new Map();
+      sessions.clear();
+      for (const timer of globalTimers) clearTimeout(timer);
+      globalTimers.clear();
     },
   };
 }

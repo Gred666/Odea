@@ -73,6 +73,21 @@ pub struct SavedVault {
     /// 上次关应用的时候还开着：下次启动打开它（§3.1「上次开着」怎么记）
     #[serde(default)]
     pub open: bool,
+    /// 这个仓库的窗口上次关的时候什么样（workspace::place_hidden）。没记过的最大化开
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<WindowPlacement>,
+}
+
+/// 仓库窗口的样子（docs/仓库与启动器.md §19）：是不是最大化，不最大化时在哪、多大（物理像素）。
+/// Windows 上是 GetWindowPlacement 给的「工作区坐标」，原样交回 SetWindowPlacement
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowPlacement {
+    pub maximized: bool,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// 比较两个仓库路径用的：去掉 Windows 的 `\\?\` 前缀和结尾的分隔符，Windows / macOS 不分大小写。
@@ -107,6 +122,11 @@ pub fn window_label(saved: &SavedVault) -> String {
         .unwrap_or_else(|| format!("vault-{}", fsio::fingerprint(&path_key(&saved.path))))
 }
 
+/// 这个窗口标签是不是仓库窗口（`main`、`vault-…`，被占了加序号的也算，见 workspace::free_label）
+pub fn is_vault_label(label: &str) -> bool {
+    label == "main" || label.starts_with("main-") || label.starts_with("vault-")
+}
+
 impl Config {
     /// 旧配置只记着一个 `vaultRoot`：变成列表里的第一条，标成开着 —— 升级后第一次打开直接进原来的仓库
     pub fn migrate_vaults(&mut self, now: i64) {
@@ -119,6 +139,7 @@ impl Config {
                 window: Some("main".into()),
                 last_opened: now,
                 open: true,
+                placement: None,
             });
         }
     }
@@ -146,6 +167,12 @@ impl Config {
     pub fn set_vault_open(&mut self, root: &Path, open: bool) {
         if let Some(saved) = self.vaults.iter_mut().find(|saved| same_vault(&saved.path, root)) {
             saved.open = open;
+        }
+    }
+
+    pub fn set_vault_placement(&mut self, root: &Path, placement: WindowPlacement) {
+        if let Some(saved) = self.vaults.iter_mut().find(|saved| same_vault(&saved.path, root)) {
+            saved.placement = Some(placement);
         }
     }
 
@@ -779,6 +806,37 @@ mod tests {
         assert_eq!(config.vaults.len(), 1);
         assert_eq!(config.vault_root.as_deref(), Some(c.as_path()));
         assert_ne!(window_label(&SavedVault { path: a.clone(), ..SavedVault::default() }), window_label(&SavedVault { path: b, ..SavedVault::default() }));
+    }
+
+    #[test]
+    fn remembers_how_each_vault_window_was_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+        // 0.4.2 以前的配置：没有 placement，读进来是「没记过」（窗口按最大化开）
+        std::fs::write(
+            dir.path().join("config.json"),
+            serde_json::json!({ "vaults": [{ "path": a, "lastOpened": 1, "open": true }] }).to_string(),
+        )
+        .unwrap();
+        let mut config = Config::load(dir.path());
+        assert_eq!(config.vaults[0].placement, None);
+        config.remember_vault(&b, 2);
+        let left = WindowPlacement { maximized: false, x: -8, y: 40, width: 1200, height: 800 };
+        config.set_vault_placement(&a, left);
+        config.save(dir.path()).unwrap();
+        let config = Config::load(dir.path());
+        assert_eq!(config.saved_vault(&a).unwrap().placement, Some(left));
+        // 只记它自己的
+        assert_eq!(config.saved_vault(&b).unwrap().placement, None);
+    }
+
+    #[test]
+    fn tells_vault_windows_from_the_others() {
+        assert!(is_vault_label("main"));
+        assert!(is_vault_label("main-2"));
+        assert!(is_vault_label(&window_label(&SavedVault { path: "D:/笔记".into(), ..SavedVault::default() })));
+        assert!(!is_vault_label("launcher"));
+        assert!(!is_vault_label("guest"));
     }
 
     #[test]

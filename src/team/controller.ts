@@ -1,5 +1,6 @@
 import { type SavedSnapshot, mergeExternal, snapshot } from "@/collab/external";
-import { type SessionLink, linkSession } from "@/collab/link";
+import type { KeepGuard } from "@/collab/keep";
+import { type SessionLink, ackSaved, linkSession } from "@/collab/link";
 import { type Frame, PIPE } from "@/collab/net";
 import { type CollabScheduler, type CollabSession, type Peer, peerColor } from "@/collab/session";
 import type { DocumentSaveTarget } from "@/data/types";
@@ -34,7 +35,8 @@ import type { TeamNet } from "./net";
    - 主持人自己切走了、还有访客：先存、推一轮 git，再不主持（访客那边接手时拉得到）
 
    同一篇在会话里时只有主持人写盘（规矩 1）：访客的编辑器绑着会话、不存（adapter 里 collab.remote），
-   git 拉来的这一篇的改动也不当外部改动合 —— 那就是主持人存的
+   git 拉来的这一篇的改动也不当外部改动合 —— 那就是主持人存的。访客打的字在主持人存下之前，本机另留一份
+   （TeamIO.keep → collab/keep.ts）：主持人每次存盘后把那一刻的版本向量发给访客（ackSaved），盖住了才删
    ============================================================ */
 
 export interface TeamIO {
@@ -45,6 +47,16 @@ export interface TeamIO {
   save(target: DocumentSaveTarget, text: string): Promise<void>;
   /** 这一篇被别处改了（git 拉来的、别的程序）：给磁盘上的新正文 */
   onExternal(target: DocumentSaveTarget, listener: (disk: string) => void): () => void;
+  /**
+   * 守着这份会话：做客时主持人还没存下的字本机另留一份（collab/keep.ts，docs/协同编辑.md §24）。
+   * host 是现在替我存盘的那位的名字。不给（测试）就不留
+   */
+  keep?(
+    link: SessionLink,
+    target: DocumentSaveTarget,
+    doc: string,
+    host: () => string,
+  ): KeepGuard | null;
 }
 
 export interface TeamTiming {
@@ -75,7 +87,10 @@ const DEFAULT_TIMING: TeamTiming = {
 };
 
 export interface TeamView {
-  /** 文档 id：笔记是相对路径，某一天 `day-日期`，目标 `goal-周期-开始日期` */
+  /**
+   * 文档 id：笔记是属性块里的 id（`note-<id>`，属性块里没写 id 的是相对路径），某一天 `day-日期`，
+   * 目标 `goal-周期-开始日期`（team/store.ts 的 teamDocId）
+   */
   doc: string;
   target: DocumentSaveTarget;
 }
@@ -147,6 +162,8 @@ export class TeamController {
   private readonly selfPeer: Peer;
   private destroyed = false;
   private lastPresence = "";
+  /** 每份会话的本机留底（TeamIO.keep） */
+  private readonly guards = new WeakMap<SessionLink, KeepGuard>();
 
   constructor(
     private readonly net: TeamNet,
@@ -550,12 +567,18 @@ export class TeamController {
       if (timer) clearTimeout(timer);
       timer = null;
       const shot = snapshot(session);
+      // 和正文是同一刻的：存盘这一会儿里别人的字可能又到了
+      const vector = session.stateVector();
       try {
         await this.io.save(entry.target, shot.text);
         saved = shot;
       } catch {
         // 存失败的提示由数据层给；下次改动再存
+        return;
       }
+      // 访客据此知道自己的字存下了，本机留的那份可以删了（keep.ts）；自己做客时留的那份也不用了
+      this.guards.get(link)?.owner();
+      ackSaved(this.net, entry.doc, entry.guests, vector);
     };
     const stopChanges = session.onChange(() => {
       if (timer) clearTimeout(timer);
@@ -593,7 +616,7 @@ export class TeamController {
     await this.net.host(entry.doc, false).catch(() => {});
     entry.serving = false;
     if (entry.epoch !== epoch) return;
-    entry.link?.destroy();
+    this.destroyLink(entry.link);
     entry.link = null;
     entry.lineage = null;
     entry.guests.clear();
@@ -611,7 +634,7 @@ export class TeamController {
       entry.link = null;
       await this.stopHosting(entry);
       if (!link || !this.isOpen(entry)) {
-        link?.destroy();
+        this.destroyLink(link);
         return;
       }
       entry.link = link;
@@ -636,9 +659,13 @@ export class TeamController {
     const epoch = this.setRole(entry, "joining");
     entry.host = host.member;
     if (previous) {
-      await this.io.save(entry.target, previous.session.toString()).catch(() => {});
+      // 存进去了：那份会话里的字在自己磁盘上了，不用另留
+      await this.io.save(entry.target, previous.session.toString()).then(
+        () => this.guards.get(previous)?.owner(),
+        () => {},
+      );
       await this.unserve(entry);
-      previous.destroy();
+      this.destroyLink(previous);
       entry.link = null;
       this.emit();
     }
@@ -686,6 +713,7 @@ export class TeamController {
       }
     }
     this.setRole(entry, "guest");
+    this.guards.get(link)?.guest(host.member);
     entry.lineage = lineage ?? this.lineageOf(host, entry.doc);
     await this.serve(entry);
     this.publish();
@@ -710,6 +738,7 @@ export class TeamController {
   private async rejoin(entry: Entry, host: TeamPeer): Promise<void> {
     const epoch = this.setRole(entry, "guest");
     entry.host = host.member;
+    if (entry.link) this.guards.get(entry.link)?.guest(host.member);
     try {
       await this.net.open(entry.doc, host.member);
     } catch {
@@ -764,7 +793,7 @@ export class TeamController {
       void this.net.close(entry.doc).catch(() => {});
     // 连着我的下游那边断开，他们自己再找
     if (entry.serving) void this.unserve(entry);
-    entry.link?.destroy();
+    this.destroyLink(entry.link);
     entry.link = null;
     entry.lineage = null;
     entry.host = null;
@@ -812,7 +841,21 @@ export class TeamController {
       scheduler: this.scheduler,
     });
     link.setMembers(this.peers);
+    const guard = this.io.keep?.(
+      link,
+      entry.target,
+      entry.doc,
+      () => this.peers.find((peer) => peer.member === entry.host)?.name ?? "主持人",
+    );
+    if (guard) this.guards.set(link, guard);
     return link;
+  }
+
+  /** 收掉一份会话：做客时主持人还没存下的字，本机留着那一份（keep.ts 的 stop） */
+  private destroyLink(link: SessionLink | null | undefined): void {
+    if (!link) return;
+    this.guards.get(link)?.stop();
+    link.destroy();
   }
 
   /** 做一个转换：同一篇同一时刻只有一个，做完再按 Presence 判断一次 */

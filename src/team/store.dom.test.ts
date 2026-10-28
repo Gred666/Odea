@@ -63,15 +63,21 @@ afterEach(async () => {
 });
 
 describe("团队仓库的窗口", () => {
-  it("文档 id：笔记是相对路径，某一天、目标按日期；做客的那篇没有", () => {
+  it("文档 id：笔记是属性块里的 id（没写的按相对路径），某一天、目标按日期；做客的那篇没有", () => {
     const base = { key: "k", title: "", bodyMd: "", statusParts: [] } as unknown as DocumentModel;
-    expect(
-      teamDocId({
-        ...base,
-        relPath: DOC,
-        editor: { target: { kind: "note", id: "n1" }, titleEditable: true },
-      }),
-    ).toBe(DOC);
+    const note = (id: string, relPath: string, idInFile: boolean): DocumentModel => ({
+      ...base,
+      relPath,
+      idInFile,
+      editor: { target: { kind: "note", id }, titleEditable: true },
+    });
+    expect(teamDocId(note("n1", DOC, true))).toBe("note-n1");
+    // 开着的时候改了名（文件跟着改名）：还是这一篇的那份会话
+    expect(teamDocId(note("n1", "笔记/周会（改）.md", true))).toBe("note-n1");
+    // 属性块里没写 id（别的工具建的）：索引给的 id 只在本机，按相对路径认
+    expect(teamDocId(note("n2", DOC, false))).toBe(DOC);
+    // 开着的时候第一次存盘把 id 写进了属性块：不换，不然会话当场分成两份
+    expect(teamDocId(note("n2", DOC, true))).toBe(DOC);
     expect(
       teamDocId({
         ...base,

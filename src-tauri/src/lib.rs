@@ -12,6 +12,7 @@ mod commands;
 mod db;
 mod domain;
 mod error;
+mod keep;
 #[cfg(feature = "desktop-runtime")]
 mod memory;
 mod old_name;
@@ -48,7 +49,9 @@ use state::AppState;
 fn ready(window: WebviewWindow) {
     #[cfg(windows)]
     use_app_icon_resource(&window);
-    workspace::place_pending(&window);
+    // 仓库窗口按上次的样子显示（没记过的最大化，workspace::show_placed）；日程切换器给了位置的照它
+    let jumped = workspace::place_pending(&window);
+    workspace::show_placed(&window, jumped);
     let _ = window.show();
     let _ = window.set_focus();
     if let Some(workspace) = window.try_state::<AppState>().and_then(|state| state.workspace(window.label())) {
@@ -188,7 +191,7 @@ fn collab_hub(app: &tauri::App) -> Arc<commands::CollabHub> {
         }
     }
     let handle = app.handle().clone();
-    // 交给最近用过的仓库窗口（一次只有一个会话、属于一个窗口，docs/仓库与启动器.md §4.3）
+    // 交给最近用过的仓库窗口（会话属于开始它的窗口，docs/仓库与启动器.md §4.3）
     app.deep_link().on_open_url(move |event| {
         for url in event.urls().iter().filter(|url| is_join(url)) {
             workspace::deliver_link(&handle, url.to_string());
@@ -221,12 +224,17 @@ fn command_builder() -> Builder<tauri::Wry> {
         win_start_dragging,
         commands::note_list,
         commands::note_get,
-        commands::note_upsert,
+        commands::note_save,
+        commands::note_rename,
         commands::note_set_pinned,
         commands::note_archive,
         commands::note_restore,
         commands::note_delete,
         commands::note_undelete,
+        commands::trash_list,
+        commands::guest_copy_put,
+        commands::guest_copy_drop,
+        commands::guest_copy_list,
         commands::note_create,
         commands::note_move,
         commands::folder_list,
@@ -262,11 +270,11 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::guide_open,
         commands::vault_info,
         commands::vault_set_journal::<tauri::Wry>,
+        commands::vault_set_archive::<tauri::Wry>,
         commands::vault_relayout::<tauri::Wry>,
         commands::index_progress,
         commands::vault_reveal,
         commands::vault_open_folder,
-        commands::vault_keep_conflict_copy,
         commands::note_backlinks,
         commands::note_relink,
         commands::note_relink_undo,
@@ -344,6 +352,7 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::collab_nearby_start::<tauri::Wry>,
         commands::collab_nearby_stop,
         commands::collab_join_nearby::<tauri::Wry>,
+        commands::collab_answer_nearby,
         commands::collab_resume_info,
         commands::collab_rejoin::<tauri::Wry>,
         commands::collab_discard_resume,
@@ -393,12 +402,17 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
     let builder = Builder::<tauri::test::MockRuntime>::new().commands(collect_commands![
         commands::note_list,
         commands::note_get,
-        commands::note_upsert,
+        commands::note_save,
+        commands::note_rename,
         commands::note_set_pinned,
         commands::note_archive,
         commands::note_restore,
         commands::note_delete,
         commands::note_undelete,
+        commands::trash_list,
+        commands::guest_copy_put,
+        commands::guest_copy_drop,
+        commands::guest_copy_list,
         commands::note_create,
         commands::note_move,
         commands::folder_list,
@@ -434,11 +448,11 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::guide_open,
         commands::vault_info,
         commands::vault_set_journal::<tauri::test::MockRuntime>,
+        commands::vault_set_archive::<tauri::test::MockRuntime>,
         commands::vault_relayout::<tauri::test::MockRuntime>,
         commands::index_progress,
         commands::vault_reveal,
         commands::vault_open_folder,
-        commands::vault_keep_conflict_copy,
         commands::note_backlinks,
         commands::note_relink,
         commands::note_relink_undo,
@@ -516,6 +530,7 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::collab_nearby_start::<tauri::test::MockRuntime>,
         commands::collab_nearby_stop,
         commands::collab_join_nearby::<tauri::test::MockRuntime>,
+        commands::collab_answer_nearby,
         commands::collab_resume_info,
         commands::collab_rejoin::<tauri::test::MockRuntime>,
         commands::collab_discard_resume,
@@ -608,7 +623,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         // 每个仓库窗口记着自己的位置（标签按仓库定）；启动器每次都在屏幕中间
-        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&[workspace::LAUNCHER]).build())
+        // 启动器每次都在屏幕中间；仓库窗口自己记（workspace::place_hidden，插件只在正常退出时写盘、
+        // 还原最大化会提前把藏着的窗口显示出来）。剩下的访客窗口只记位置大小，不还原「可见」「最大化」
+        .plugin({
+            use tauri_plugin_window_state::StateFlags;
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[workspace::LAUNCHER])
+                .with_filter(|label| !boot::is_vault_label(label))
+                .with_state_flags(StateFlags::SIZE | StateFlags::POSITION)
+                .build()
+        })
         // 只在 Rust 里用（update.rs），前端没有它的权限
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler({
@@ -632,6 +656,16 @@ pub fn run() {
             // 最小化 / 还原：前者也会失焦，还原时会改大小
             if matches!(event, tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Resized(_)) {
                 memory::follow_window(window);
+            }
+            // 启动器的关闭按钮、Alt+F4：先藏、过一会儿再销毁（workspace::close_launcher 说了为什么）。
+            // 仓库窗口：记下这时候的样子，下次打开照样摆
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == workspace::LAUNCHER {
+                    api.prevent_close();
+                    workspace::close_launcher(window.app_handle());
+                } else {
+                    workspace::remember_placement(window);
+                }
             }
             if let tauri::WindowEvent::Destroyed = event {
                 memory::forget_window(window.label());

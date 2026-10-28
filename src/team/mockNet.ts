@@ -81,7 +81,7 @@ export function createMockTeamHub(): MockTeamHub {
     payload: Uint8Array,
   ) => {
     const copy = payload.slice();
-    later(() => to.pipe?.({ kind, member, doc, payload: copy }));
+    later(() => to.pipe?.({ kind, session: 0, member, doc, payload: copy }));
   };
   const announce = () => {
     for (const device of devices.values())

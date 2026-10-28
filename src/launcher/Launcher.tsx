@@ -14,7 +14,8 @@ import { Button, FIELD, PanelHeader } from "./parts";
 
 /* ============================================================
    启动器（docs/仓库与启动器.md §3）：左边是用过的仓库，右边是新建 / 打开文件夹 / 从同步仓库拉一份 /
-   加入协同编辑。新建的是逻辑目录（§7）；加入协同编辑开一个不带仓库的访客窗口。
+   加入协同编辑。新建时选真实文件夹还是逻辑目录（§7、§15），默认真实文件夹；加入协同编辑开一个
+   不带仓库的访客窗口。
    新装第一次打开、已经在运行时再双击图标、仓库窗口里「打开别的仓库…」时出现。
    打开了一个仓库，新窗口画出来以后它自己关掉（Rust 那边关）。
 
@@ -165,7 +166,9 @@ export function Launcher() {
                   first={vaults?.length === 0}
                   busy={busy}
                   onBack={() => go("home")}
-                  onCreate={(parent, name) => void run(() => api.create(parent, name))}
+                  onCreate={(parent, name, logical) =>
+                    void run(() => api.create(parent, name, logical))
+                  }
                 />
               )}
               {panel === "clone" && (
@@ -318,6 +321,23 @@ function ActionRow({
   );
 }
 
+/**
+ * 新建的仓库里文件夹怎么摆（docs/仓库与启动器.md §15）。两样的区别当场说清楚、让用户选：
+ * 真实文件夹换别的编辑器打开结构不变；逻辑目录能手动排序、随便拖，但硬盘上笔记是平放的
+ */
+const LAYOUTS = [
+  {
+    logical: false,
+    title: "真实文件夹",
+    detail: "树就是硬盘上的文件夹，换别的编辑器打开也一样",
+  },
+  {
+    logical: true,
+    title: "逻辑目录",
+    detail: "文件夹只在 Odea 里，能手动排序；硬盘上笔记平放",
+  },
+] as const;
+
 function CreatePanel({
   first,
   busy,
@@ -328,10 +348,11 @@ function CreatePanel({
   first: boolean;
   busy: boolean;
   onBack: () => void;
-  onCreate: (parent: string, name: string) => void;
+  onCreate: (parent: string, name: string, logical: boolean) => void;
 }) {
   const [name, setName] = useState(first ? "Odea" : "");
   const [parent, setParent] = useState("");
+  const [logical, setLogical] = useState(false);
   const nameInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     void api.defaultParent().then((dir) => setParent((now) => now || dir));
@@ -345,7 +366,7 @@ function CreatePanel({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (target && !busy) onCreate(parent, name.trim());
+        if (target && !busy) onCreate(parent, name.trim(), logical);
       }}
       onKeyDown={(e) => {
         if (e.key === "Escape") onBack();
@@ -380,6 +401,40 @@ function CreatePanel({
         >
           换个位置…
         </Button>
+      </div>
+      <p className="mt-4 text-[12.5px] text-muted" id="launcher-layout">
+        文件夹
+      </p>
+      {/* 选中只换底色和描边，直接换上（描边是 box-shadow，不做过渡，CLAUDE.md 规矩 2） */}
+      <div
+        role="radiogroup"
+        aria-labelledby="launcher-layout"
+        className="mt-1.5 grid grid-cols-2 gap-2"
+      >
+        {LAYOUTS.map((option) => {
+          const checked = option.logical === logical;
+          return (
+            <button
+              key={option.title}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              disabled={busy}
+              onClick={() => setLogical(option.logical)}
+              className={cn(
+                "rounded-lg px-3 py-2 text-left ring-1 transition-colors duration-[120ms]",
+                checked
+                  ? "bg-accent/[0.07] ring-accent"
+                  : "bg-canvas ring-line-strong hover:bg-raised",
+              )}
+            >
+              <span className="block text-[13px] font-medium text-ink">{option.title}</span>
+              <span className="mt-0.5 block text-[11.5px] leading-[1.5] text-muted">
+                {option.detail}
+              </span>
+            </button>
+          );
+        })}
       </div>
       <div className="mt-5 flex items-center gap-3">
         <p className="min-w-0 flex-1 truncate text-[12px] text-faint" title={target}>

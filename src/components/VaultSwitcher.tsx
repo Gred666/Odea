@@ -1,3 +1,4 @@
+import { useApp } from "@/app/store";
 import { backend } from "@/data/backend";
 import { useData } from "@/data/store";
 import { useTeam } from "@/data/team";
@@ -6,6 +7,8 @@ import { cn } from "@/lib/cn";
 import { isTauri } from "@/lib/tauri";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
+  Archive,
+  ArchiveX,
   CalendarCheck,
   CalendarOff,
   ChevronsUpDown,
@@ -14,9 +17,10 @@ import {
   FolderSearch,
   FolderTree,
   type LucideIcon,
+  Trash2,
   Users,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /* ============================================================
    列表栏底下的「仓库名 ⌄」（docs/仓库与启动器.md §3.2、§6；Obsidian 也放在这里）。
@@ -25,6 +29,7 @@ import { useState } from "react";
    打开别的仓库…（启动器）、开 / 关日程、转成逻辑目录 / 导出成真实文件夹（§7）、共享（docs/协同编辑.md §20）、
    在文件夹中显示。共享仓库在仓库名后面带一个小标记：几个人在线（静态，不做动画）。
    菜单只淡入淡出（.odea-menu），和别的下拉菜单一样不挂 modal（见 RowMenu）。
+   别的仓库在点开之前就取好了（见 refresh）：菜单出来就是它最后的样子，不再在眼前长高。
    ============================================================ */
 
 /** 菜单里最多列几个别的仓库，再多的去启动器里找 */
@@ -44,39 +49,63 @@ export function VaultSwitcher() {
   const root = useData((s) => s.vaultRoot);
   const journal = useData((s) => s.layout.journal);
   const setJournal = useData((s) => s.setJournal);
+  const archive = useData((s) => s.layout.archive);
+  const setArchive = useData((s) => s.setArchive);
+  const setTrashOpen = useApp((s) => s.setTrashOpen);
   const logical = useData((s) => s.layout.logical);
   const team = useData((s) => s.team);
   const makeLogical = useData((s) => s.makeLogical);
   const exportTree = useData((s) => s.exportTree);
   const openVaultFolder = useData((s) => s.openVaultFolder);
   const [others, setOthers] = useState<VaultEntry[] | null>(null);
+  const open = useRef(false);
   // 浏览器预览里没有仓库文件夹
   const name = root ? folderName(root) : "Odea";
 
   const fail = (error: unknown) =>
     useData.setState({ error: error instanceof Error ? error.message : String(error) });
 
-  const onOpenChange = (open: boolean) => {
-    if (!open) return;
-    // 每次打开现取：别的窗口可能刚开了、关了一个仓库
+  /**
+   * 别的仓库先取好，菜单一打开就是全的。以前是打开时现取：菜单先弹出来，「切换仓库」那一段
+   * 过一会儿（桌面端几毫秒、浏览器预览 120ms）才插到最上面，菜单是往上弹的，整块先往下多出一截、
+   * 下一帧再往上跳一百多像素（docs/仓库与启动器.md §18）。
+   * 什么时候取：窗口出来、窗口拿到焦点（别的窗口可能刚开了、关了一个仓库）、指针移到按钮上、
+   * 键盘焦点到按钮上 —— 都在点开之前。菜单开着的时候不换，里面的行不会在眼前跳
+   */
+  const refresh = useCallback(() => {
+    if (open.current) return;
     launcherApi
       .vaults()
-      .then((vaults) =>
+      .then((vaults) => {
+        if (open.current) return;
         setOthers(
           vaults
             .filter((vault) => !root || pathKey(vault.path) !== pathKey(root))
             .slice(0, OTHERS_SHOWN),
-        ),
-      )
-      .catch(() => setOthers([]));
-  };
+        );
+      })
+      .catch(() => setOthers((previous) => previous ?? []));
+  }, [root]);
+
+  useEffect(() => {
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [refresh]);
 
   return (
     <div className="w-[300px] shrink-0 border-t border-r border-line-strong/60 px-3 py-2">
-      <DropdownMenu.Root modal={false} onOpenChange={onOpenChange}>
+      <DropdownMenu.Root
+        modal={false}
+        onOpenChange={(next) => {
+          open.current = next;
+        }}
+      >
         <DropdownMenu.Trigger asChild>
           <button
             type="button"
+            onPointerEnter={refresh}
+            onFocus={refresh}
             title={root ?? undefined}
             className="group flex h-9 w-full items-center gap-2 rounded-lg pr-2 pl-[7px] text-left outline-none
                        transition-colors duration-[140ms] hover:bg-raised/55 focus-visible:ring-2
@@ -148,8 +177,20 @@ export function VaultSwitcher() {
             <MenuItem
               icon={journal ? CalendarOff : CalendarCheck}
               label={journal ? "关闭日程" : "启用日程"}
-              hint={journal ? "日记、目标的文件都留着" : "今日TODO、目标、日历、归档"}
+              hint={journal ? "日记、目标的文件都留着" : "今日TODO、目标、日历"}
               onSelect={() => void setJournal(!journal)}
+            />
+            <MenuItem
+              icon={archive ? ArchiveX : Archive}
+              label={archive ? "关闭归档" : "启用归档"}
+              hint={archive ? "归档的笔记回到文件树" : "旧笔记挪进「归档」，和日程无关"}
+              onSelect={() => void setArchive(!archive)}
+            />
+            <MenuItem
+              icon={Trash2}
+              label="回收站…"
+              hint="删掉的笔记留 30 天"
+              onSelect={() => setTrashOpen(true)}
             />
             {logical ? (
               <MenuItem

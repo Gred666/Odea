@@ -58,7 +58,6 @@ import {
   type JournalVault,
   type LinkRewrite,
   type Note,
-  type NoteInput,
   type NoteSummary,
   ODEA_LAYOUT,
   type Relink,
@@ -96,7 +95,11 @@ const LS_KEY = "odea.mock.v5";
  * 使用指南那几篇多一个记号（桌面版写在文件的属性块里）：上一次给它的是哪个版本带的指南、
  * 那一版正文的指纹
  */
-type MockNote = Note & { guide?: { name: GuideName; version: string; hash: string } };
+/** 预览里的笔记都是 Odea 建的，id 都写在属性块里（idInFile 不写就是 true） */
+type MockNote = Omit<Note, "idInFile"> & {
+  idInFile?: boolean;
+  guide?: { name: GuideName; version: string; hash: string };
+};
 
 interface MockState {
   notes: MockNote[];
@@ -206,6 +209,7 @@ function present({ guide: _mark, ...note }: MockNote): Note {
     ...note,
     relPath: note.relPath ?? `${note.isArchived ? "归档" : "笔记"}/${fileStemFor(note.title)}.md`,
     conflictOf: original?.id ?? null,
+    idInFile: note.idInFile ?? true,
   };
 }
 
@@ -318,11 +322,12 @@ function matchesQuery(query: string, note: MockNote, folder: string, now: number
   });
 }
 
-/* ---------------- 日程开关 ----------------
-   浏览器预览里只管窄栏上有没有日程那几项：日记、目标照旧是日记、目标，树根照旧是「笔记」。
+/* ---------------- 日程、归档开关 ----------------
+   浏览器预览里只管窄栏上有没有日程、归档那几项：日记、目标照旧是日记、目标，树根照旧是「笔记」。
    关了日程以后「整个仓库是一棵树」的样子要在桌面版里看（Rust 的 vault/layout.rs） */
 
 const JOURNAL_KEY = "odea.mock.journal";
+const ARCHIVE_KEY = "odea.mock.archive";
 
 /* ---------------- 团队仓库 ----------------
    浏览器预览里：邀请过谁就算团队仓库，邀请的人是「等他接受」。
@@ -357,12 +362,26 @@ function saveMockTeam(team: MockTeam) {
 
 function mockLayout() {
   let journal = true;
+  let archive = true;
   try {
     journal = localStorage.getItem(JOURNAL_KEY) !== "off";
+    archive = localStorage.getItem(ARCHIVE_KEY) !== "off";
   } catch {
     /* 隐私模式：开着 */
   }
-  return { ...ODEA_LAYOUT, journal, hiddenDirs: journal ? ODEA_LAYOUT.hiddenDirs : [] };
+  const hiddenDirs = [
+    ...(journal ? [ODEA_LAYOUT.daysDir, ODEA_LAYOUT.goalsDir] : []),
+    ...(archive ? [ODEA_LAYOUT.archiveDir] : []),
+  ];
+  return { ...ODEA_LAYOUT, journal, archive, hiddenDirs };
+}
+
+function setMockSwitch(key: string, on: boolean) {
+  try {
+    localStorage.setItem(key, on ? "" : "off");
+  } catch {
+    /* 忽略：刷新后又是开着的 */
+  }
 }
 
 /** 文件夹在不在（空串是「笔记」本身，总在） */
@@ -382,7 +401,7 @@ const uniqueFolder = (parent: string, name: string, keep?: string) =>
 const tick = () => new Promise<void>((r) => setTimeout(r, 8));
 
 /** 某个列表（笔记 / 归档）的笔记，顺序和 Rust 侧一样：置顶在前，再按更新 / 归档时间倒序 */
-function listed(archived: boolean): Note[] {
+function listed(archived: boolean): MockNote[] {
   const key = archived ? "archivedAt" : "updatedAt";
   return state.notes
     .filter((n) => n.isArchived === archived)
@@ -706,45 +725,36 @@ export const mockBackend: Backend = {
     return present(n);
   },
 
-  async noteUpsert(input: NoteInput) {
+  // 浏览器预览里没有别的程序改文件：base 用不上（版本对不上另存冲突副本是 Rust 的事，见 keep_unseen_edits）
+  async noteSave(id, contentMd) {
     await tick();
-    const now = Date.now();
-    const id = input.id ?? crypto.randomUUID();
     const current = state.notes.find((x) => x.id === id);
-    const contentMd = input.contentMd;
-    const excerpt = makeExcerpt(contentMd, 60);
-
-    if (current) {
-      if (current.title !== input.title) {
-        // 和后端一样按标题起文件名：标题里的 `/` 不能变成一层文件夹（那篇会从列表里消失）
-        const dir = current.relPath.slice(0, current.relPath.lastIndexOf("/"));
-        current.relPath = `${dir}/${fileStemFor(input.title)}.md`;
-      }
-      current.title = input.title;
-      current.contentMd = contentMd;
-      current.excerpt = excerpt;
-      current.wordCount = countWords(contentMd);
-      current.updatedAt = now;
-      recordVersion(`note:${id}`, contentMd, input.title);
-    } else {
-      state.notes.unshift({
-        id,
-        title: input.title,
-        contentMd,
-        excerpt,
-        wordCount: countWords(contentMd),
-        isPinned: false,
-        isArchived: false,
-        archiveCategory: null,
-        archivedAt: null,
-        createdAt: now,
-        updatedAt: now,
-        relPath: `笔记/${fileStemFor(input.title)}.md`,
-        conflictOf: null,
-      });
-    }
+    if (!current) notFound(`note ${id}`);
+    current.contentMd = contentMd;
+    current.excerpt = makeExcerpt(contentMd, 60);
+    current.wordCount = countWords(contentMd);
+    current.updatedAt = Date.now();
+    recordVersion(`note:${id}`, contentMd, current.title);
     save(state);
-    return id;
+    return present(current);
+  },
+
+  async noteRename(id, title) {
+    await tick();
+    const current = state.notes.find((x) => x.id === id);
+    if (!current) notFound(`note ${id}`);
+    const clean = title.trim();
+    if (!clean) throw { kind: "Invalid", message: "标题不能是空的" };
+    if (current.title !== clean) {
+      // 和后端一样按标题起文件名：标题里的 `/` 不能变成一层文件夹（那篇会从列表里消失）
+      const dir = current.relPath.slice(0, current.relPath.lastIndexOf("/"));
+      current.relPath = `${dir}/${fileStemFor(clean)}.md`;
+      current.title = clean;
+      current.updatedAt = Date.now();
+      recordVersion(`note:${id}`, current.contentMd, clean);
+      save(state);
+    }
+    return present(current);
   },
 
   async noteSetPinned(id, pinned) {
@@ -787,6 +797,21 @@ export const mockBackend: Backend = {
     const [removed] = state.notes.splice(i, 1);
     state.trash = [...(state.trash ?? []), { ...removed!, updatedAt: Date.now() }];
     save(state);
+  },
+
+  async trashList() {
+    await tick();
+    const keep = 30 * 86_400_000;
+    return (state.trash ?? [])
+      .map((note) => ({
+        id: note.id,
+        title: note.title,
+        from: note.relPath,
+        excerpt: note.excerpt,
+        deletedAt: note.updatedAt,
+        purgeAt: note.updatedAt + keep,
+      }))
+      .sort((a, b) => b.deletedAt - a.deletedAt);
   },
 
   async noteUndelete(id) {
@@ -1291,7 +1316,7 @@ export const mockBackend: Backend = {
     return g ? { ...g, relPath: goalRelPath(periodStart) } : emptyGoal(horizon, periodStart);
   },
 
-  async goalSave(horizon, periodStart, contentMd): Promise<Goal> {
+  async goalSave(horizon, periodStart, contentMd, _base): Promise<Goal> {
     await tick();
     const key = goalKey(horizon, periodStart);
     const now = Date.now();
@@ -1339,7 +1364,7 @@ export const mockBackend: Backend = {
     };
   },
 
-  async calendarDaySave(date, title, noteMd): Promise<DayDoc> {
+  async calendarDaySave(date, title, noteMd, _base): Promise<DayDoc> {
     await tick();
     state.days[date] = { title, noteMd, updatedAt: Date.now() };
     recordVersion(`day:${date}`, noteMd);
@@ -1416,11 +1441,13 @@ export const mockBackend: Backend = {
 
   async vaultSetJournal(on: boolean): Promise<VaultInfo> {
     await tick();
-    try {
-      localStorage.setItem(JOURNAL_KEY, on ? "" : "off");
-    } catch {
-      /* 忽略：刷新后又是开着的 */
-    }
+    setMockSwitch(JOURNAL_KEY, on);
+    return mockBackend.vaultInfo();
+  },
+
+  async vaultSetArchive(on: boolean): Promise<VaultInfo> {
+    await tick();
+    setMockSwitch(ARCHIVE_KEY, on);
     return mockBackend.vaultInfo();
   },
 
@@ -1438,11 +1465,6 @@ export const mockBackend: Backend = {
   async vaultOpenFolder() {
     await tick();
     desktopOnly();
-  },
-
-  async vaultKeepConflictCopy() {
-    await tick();
-    return null;
   },
 
   async vaultChangeRoot() {

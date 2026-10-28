@@ -644,15 +644,44 @@ body {
   opacity: 0;
 }
 
+/* 窗口最上面那条里的「路径 / 标题」（DocumentView 的 TitleStrip）：大标题钻进去才淡进来。
+   只淡 opacity，一直待在自己的图层上（CLAUDE.md 规矩 1、3）。藏起来的时候 visibility 也藏：
+   字那一层在标题栏（拖动区）上面，看不见的按钮不能挡着拖窗口。出来时立刻可见再淡入；
+   收起时先淡完、再藏 */
+.odea-doc-strip {
+  opacity: 0;
+  visibility: hidden;
+  will-change: opacity;
+  transition: opacity 180ms var(--ease-out-quint), visibility 0s linear 180ms;
+}
+.odea-doc-strip[data-shown] {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 220ms var(--ease-out-quint), visibility 0s;
+}
+
+/* 主内容换版面（列表栏出现 / 没了，app/Shell.tsx）：退场的那一屏盖在新的一屏上面退掉。
+   data-motion-pop-id 是 Motion 的 popLayout 在退场那一刻、画之前挂上的（退完就拿掉）。
+   不抬的话新的一屏（根是 relative、DOM 里在后面）把旧的盖住，溶解就成了硬切 */
+.odea-frame[data-motion-pop-id] {
+  z-index: 1;
+}
+
 /* 换文档时旧内容的静态快照（components/SwapFade.tsx），盖在新内容上淡出。
+   铺着底色、盖满整块可视区：退的时候每个像素从旧的直接过渡到新的，不会两份都半透明、整块变淡一下。
    克隆出来的 DOM 会把 CSS 入场动画从头再播一遍（替身淡入、光标闪烁），这里全部冻住；
-   光标、查找面板这些跟着编辑器活的东西不带过去。 */
+   光标、查找面板这些跟着编辑器活的东西不带过去。
+   它自己也是一个尺寸容器：正文区的大标题、分段控件按容器宽度换字号（DocumentView 滚动容器上的
+   @container），快照挪出了那个容器，不补的话里面的 @min-[480px] 全不成立 —— 标题从 38px 掉回 30px，
+   标题以下整篇往上缩 10px，切换的第一帧旧内容整块跳一下。快照层和宿主一样宽，宿主就是那个容器的内容盒 */
 .odea-swap-ghost {
   position: absolute;
   inset: 0;
   z-index: 5;
   overflow: hidden;
   pointer-events: none;
+  background: var(--color-canvas);
+  container-type: inline-size;
 }
 .odea-swap-ghost *,
 .odea-swap-ghost *::before,
@@ -1241,7 +1270,9 @@ body.odea-dragging .odea-row-actions {
 }
 
 /* Typora 式聚焦编辑：未聚焦的标记由 decoration 折叠，当前语法范围按原位展开。
-   展开的瞬间标记淡入，和替身淡出的节奏对上。 */
+   展开、收起都是一帧之内（和 Obsidian 一样），不淡入。2026-10-28 以前标记淡入 160ms：
+   标记一出来就占了位置，后面的字当场让开，标记本身却还是透明的、过一会儿才浮出来 ——
+   字先跳、源码后到，用户说「源码是闪出来的」；每个标记淡入时还各提成一层，淡完放回页面重画一次 */
 .odea-editor .cm-odea-syntax-marker {
   color: var(--color-faint);
   font-size: 0.78em;
@@ -1249,7 +1280,6 @@ body.odea-dragging .odea-row-actions {
      后面的字被裁掉。短标记（`**`、`[`）没有可断的地方，照样不会被拆开 */
   overflow-wrap: anywhere;
   vertical-align: 0.08em;
-  animation: odea-fade-in 160ms var(--ease-out-quint) both;
 }
 /* 标题的 `#` 和标题字一样大、坐在同一条基线上（和 Typora 一样）。以前也是 0.78em、
    往上提一点：大标题前面一个小小的 `#` 浮在半空，和后面的字对不齐 */
