@@ -88,7 +88,7 @@ export function Launcher() {
       <aside className="flex h-full w-[272px] shrink-0 flex-col bg-rail pt-[38px]">
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {vaults !== null && vaults.length === 0 && (
-            <p className="px-3 pt-2 text-[12.5px] leading-[1.6] text-faint">用过的仓库会列在这里</p>
+            <p className="px-3 pt-2 text-[13px] leading-[1.6] text-muted">用过的仓库会列在这里</p>
           )}
           {vaults?.map((vault) => (
             <VaultRow
@@ -112,7 +112,7 @@ export function Launcher() {
       <main className="relative flex h-full min-w-0 flex-1 flex-col items-center pt-[38px]">
         <div className="flex flex-col items-center pt-9">
           <LauncherLogo />
-          <p className="mt-2 text-[12.5px] text-muted">版本 {APP_VERSION}</p>
+          <p className="mt-2 text-[13px] text-muted">版本 {APP_VERSION}</p>
         </div>
 
         <div className="mt-6 w-full max-w-[440px] px-6">
@@ -194,7 +194,7 @@ export function Launcher() {
 
           <p
             role={error ? "alert" : undefined}
-            className="mt-3 min-h-[20px] text-[12.5px] leading-[1.6] text-danger"
+            className="mt-3 min-h-[20px] text-[13px] leading-[1.6] text-danger"
           >
             {error}
           </p>
@@ -245,7 +245,7 @@ function VaultRow({
           </span>
           {vault.logical && (
             <FolderTree
-              size={13}
+              size={14}
               strokeWidth={1.9}
               aria-label="逻辑目录"
               className="shrink-0 text-faint"
@@ -274,7 +274,7 @@ function VaultRow({
                 menuOpen ? "bg-canvas text-ink" : "text-faint",
               )}
             >
-              <MoreVertical size={15} strokeWidth={1.9} />
+              <MoreVertical size={16} strokeWidth={1.9} />
             </button>
           }
         />
@@ -312,7 +312,7 @@ function ActionRow({
     <div className="flex items-center gap-4 border-line border-b px-5 py-4 last:border-b-0">
       <div className="min-w-0 flex-1">
         <p className="text-[14px] font-medium text-ink">{title}</p>
-        <p className="mt-0.5 text-[12.5px] leading-[1.55] text-muted">{detail}</p>
+        <p className="mt-0.5 text-[13px] leading-[1.55] text-muted">{detail}</p>
       </div>
       <Button primary={primary} disabled={disabled} onClick={onClick}>
         {button}
@@ -373,7 +373,7 @@ function CreatePanel({
       }}
     >
       <PanelHeader title="新建仓库" onBack={onBack} />
-      <label className="block text-[12.5px] text-muted" htmlFor="launcher-name">
+      <label className="block text-[13px] text-muted" htmlFor="launcher-name">
         名字
       </label>
       <input
@@ -386,7 +386,7 @@ function CreatePanel({
         placeholder="给仓库起个名字"
         className={cn(FIELD, "mt-1.5")}
       />
-      <p className="mt-4 text-[12.5px] text-muted">位置</p>
+      <p className="mt-4 text-[13px] text-muted">位置</p>
       <div className="mt-1.5 flex gap-2">
         <p className={cn(FIELD, "flex items-center truncate text-body")} title={parent}>
           {parent}
@@ -402,7 +402,7 @@ function CreatePanel({
           换个位置…
         </Button>
       </div>
-      <p className="mt-4 text-[12.5px] text-muted" id="launcher-layout">
+      <p className="mt-4 text-[13px] text-muted" id="launcher-layout">
         文件夹
       </p>
       {/* 选中只换底色和描边，直接换上（描边是 box-shadow，不做过渡，CLAUDE.md 规矩 2） */}
@@ -429,7 +429,7 @@ function CreatePanel({
               )}
             >
               <span className="block text-[13px] font-medium text-ink">{option.title}</span>
-              <span className="mt-0.5 block text-[11.5px] leading-[1.5] text-muted">
+              <span className="mt-0.5 block text-[12px] leading-[1.5] text-muted">
                 {option.detail}
               </span>
             </button>
@@ -437,7 +437,7 @@ function CreatePanel({
         })}
       </div>
       <div className="mt-5 flex items-center gap-3">
-        <p className="min-w-0 flex-1 truncate text-[12px] text-faint" title={target}>
+        <p className="min-w-0 flex-1 truncate text-[12px] text-muted" title={target}>
           {target ? `会建在 ${target}` : ""}
         </p>
         <Button type="submit" primary disabled={busy || !target}>
@@ -481,7 +481,7 @@ function JoinPanel({
         aria-label="邀请链接"
         className={cn(FIELD, "font-mono")}
       />
-      <p className="mt-2 text-[12px] leading-[1.6] text-faint">
+      <p className="mt-2 text-[12px] leading-[1.6] text-muted">
         协作的那一篇在单独的一个窗口里打开，不用开仓库，也不会存进仓库；想留着就在那里「存一份到我的笔记」。
       </p>
       <div className="mt-5 flex justify-end">

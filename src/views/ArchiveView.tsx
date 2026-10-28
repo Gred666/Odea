@@ -148,9 +148,10 @@ const ArchiveCard = memo(function ArchiveCard({
     <motion.div
       layout="position"
       layoutDependency={index}
-      initial={appear ? { opacity: 0, y: 7 } : false}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, x: -12, transition: tween.fast }}
+      // 进出只淡，不位移：行里是字，位移时整层当位图重采样，停下那一帧字会糊一下再变清楚（CLAUDE.md 动效规矩 1）
+      initial={appear ? { opacity: 0 } : false}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, transition: tween.fast }}
       transition={{ ...tween.base, delay: Math.min(index, 9) * 0.028 }}
       data-note-row={note.id}
       className={cn(
@@ -188,10 +189,10 @@ const ArchiveCard = memo(function ArchiveCard({
               {note.conflictOf && <ConflictTag title={note.title} />}
               {animatedEmojiText(note.excerpt)}
             </span>
-            <span className="mt-[5px] flex items-center gap-1.5 text-[12px] text-faint">
+            <span className="mt-[5px] flex items-center gap-1.5 text-[12px] text-muted">
               <span>{note.archiveCategory}</span>
               <span className="opacity-50">·</span>
-              <span className="font-mono tabular-nums">{dateLabel}</span>
+              <span className="tabular-nums">{dateLabel}</span>
             </span>
           </span>
         </span>
@@ -199,16 +200,17 @@ const ArchiveCard = memo(function ArchiveCard({
 
       {/* 右上角两个按钮：删除（悬停才出现）、恢复（选中时常亮）。
           以前只有恢复 —— 归档里的笔记删不掉，得先恢复出来再删 */}
-      <div className="absolute right-3 top-[11px] z-20 flex items-center gap-1">
+      <div className="absolute right-3 top-[9px] z-20 flex items-center gap-0.5">
         <button
           type="button"
           aria-label={`删除「${title}」`}
           title="删除（可以撤销）"
           onClick={() => actions.remove(note.id)}
-          className="grid h-5 w-5 place-items-center rounded text-faint opacity-0 transition-[opacity,color]
-                     duration-[150ms] hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+          // 一列每行都有：淡的是颜色，不是 opacity，不进合成层（CLAUDE.md 动效规矩 3）
+          className="grid h-6 w-6 place-items-center rounded-md text-transparent transition-colors
+                     duration-[150ms] hover:!text-danger focus-visible:text-muted group-hover:text-muted"
         >
-          <Trash2 size={12} strokeWidth={2} />
+          <Trash2 size={14} strokeWidth={1.9} />
         </button>
         {/* 恢复按钮：悬停旋转一圈，是「转回去」的直观隐喻 */}
         <motion.button
@@ -220,12 +222,14 @@ const ArchiveCard = memo(function ArchiveCard({
           whileTap={{ scale: 0.85, rotate: -300 }}
           transition={spring.smooth}
           className={cn(
-            "grid h-5 w-5 place-items-center rounded",
-            "transition-opacity duration-[150ms] hover:text-accent focus-visible:opacity-100",
-            selected ? "text-accent opacity-100" : "text-faint opacity-0 group-hover:opacity-100",
+            "grid h-6 w-6 place-items-center rounded-md",
+            "transition-colors duration-[150ms] hover:!text-accent",
+            selected
+              ? "text-accent"
+              : "text-transparent focus-visible:text-muted group-hover:text-muted",
           )}
         >
-          <RotateCcw size={12.5} strokeWidth={2} />
+          <RotateCcw size={14} strokeWidth={1.9} />
         </motion.button>
       </div>
     </motion.div>

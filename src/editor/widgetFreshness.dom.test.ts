@@ -5,6 +5,7 @@ import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { typoraDecorations } from "./MarkdownEditor";
 import { markdownSupport } from "./markdownParser";
+import { HorizontalRuleWidget } from "./widgets";
 
 /*
  * 替身的身份和入场动画。
@@ -148,5 +149,14 @@ describe("入场动画只给新内容", () => {
     expect(parent.querySelector(".cm-odea-table-block")).toBeNull();
     view.dispatch({ selection: { anchor: 0 } });
     expect(settled(parent.querySelector(".cm-odea-table-block"))).toBe(true);
+  });
+});
+
+describe("同一个替身再画一份 DOM", () => {
+  it("only animates the first DOM a widget draws (scrolling back, redraws around it)", () => {
+    // 刚打开时建的替身是新的；CodeMirror 拿着同一个对象再画（滚出视口又滚回来）不算新出现
+    const widget = new HorizontalRuleWidget();
+    expect(settled(widget.toDOM())).toBe(false);
+    expect(settled(widget.toDOM())).toBe(true);
   });
 });

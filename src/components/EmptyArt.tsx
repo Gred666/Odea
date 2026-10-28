@@ -175,7 +175,7 @@ export function EmptyState({
             "max-w-[300px] text-muted",
             large
               ? "mt-1.5 text-[13px] leading-[1.6]"
-              : "mt-1 text-[12px] leading-[1.55] text-faint",
+              : "mt-1 text-[12px] leading-[1.55] text-muted",
           )}
         >
           {hint}

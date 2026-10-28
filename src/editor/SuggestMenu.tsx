@@ -162,7 +162,7 @@ export function SuggestMenu({
     >
       <div className="w-[300px] max-w-[calc(100vw-16px)] shrink-0">
         <div className="flex h-[32px] items-center gap-2 border-b border-line px-3">
-          <TitleIcon size={12.5} strokeWidth={1.9} className="shrink-0 text-faint" />
+          <TitleIcon size={14} strokeWidth={1.9} className="shrink-0 text-muted" />
           <span className="text-[12px] font-medium text-muted">{title}</span>
         </div>
 
@@ -175,7 +175,7 @@ export function SuggestMenu({
           style={{ maxHeight: place.gridMax ?? LIST_MAX }}
         >
           {rows.length === 0 ? (
-            <p className="px-2 py-2.5 text-[12px] text-faint">{empty}</p>
+            <p className="px-2 py-2.5 text-[12px] text-muted">{empty}</p>
           ) : (
             rows.map((row, index) => {
               const selected = index === active;
@@ -219,7 +219,7 @@ export function SuggestMenu({
                     <Marked text={row.label} ranges={row.ranges} />
                   </span>
                   {row.hint && (
-                    <span className="relative z-10 max-w-[40%] shrink-0 truncate text-[12px] text-faint">
+                    <span className="relative z-10 max-w-[40%] shrink-0 truncate text-[12px] text-muted">
                       {row.hint}
                     </span>
                   )}
@@ -229,12 +229,12 @@ export function SuggestMenu({
           )}
         </div>
 
-        <div className="flex h-[30px] items-center gap-1 border-t border-line px-3 text-[12px] text-faint">
+        <div className="flex h-[30px] items-center gap-1 border-t border-line px-3 text-[12px] text-muted">
           {/* 按键画成图标，不用箭头、回车这类字（见 popupGlyphs.test.ts） */}
-          <ArrowUp size={10.5} strokeWidth={2} aria-label="上" />
-          <ArrowDown size={10.5} strokeWidth={2} aria-label="下" />
+          <ArrowUp size={12} strokeWidth={2} aria-label="上" />
+          <ArrowDown size={12} strokeWidth={2} aria-label="下" />
           <span>选择 ·</span>
-          <CornerDownLeft size={10.5} strokeWidth={2} aria-label="回车" />
+          <CornerDownLeft size={12} strokeWidth={2} aria-label="回车" />
           <span>插入</span>
           <span className="ml-auto">Esc 关闭</span>
         </div>

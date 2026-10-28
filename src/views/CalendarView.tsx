@@ -114,10 +114,10 @@ export function CalendarPanel({ marks }: { marks: CalendarMarks }) {
 
           <div className="flex shrink-0 items-center">
             <StepButton label="上一月" onClick={() => go(-1)}>
-              <ChevronLeft size={15} strokeWidth={1.8} />
+              <ChevronLeft size={16} strokeWidth={1.8} />
             </StepButton>
             <StepButton label="下一月" onClick={() => go(1)}>
-              <ChevronRight size={15} strokeWidth={1.8} />
+              <ChevronRight size={16} strokeWidth={1.8} />
             </StepButton>
           </div>
         </div>
@@ -125,9 +125,9 @@ export function CalendarPanel({ marks }: { marks: CalendarMarks }) {
     >
       {/* 表头：「周」+ 七天，同一排字号，周数列不再是一块空白 */}
       <div className="mt-1 grid grid-cols-[24px_repeat(7,1fr)] px-1 pb-1">
-        <span className="text-center text-[12px] font-medium text-faint/75">周</span>
+        <span className="text-center text-[12px] font-medium text-faint">周</span>
         {WEEKDAYS.map((w) => (
-          <span key={w} className="text-center text-[12px] font-medium text-faint">
+          <span key={w} className="text-center text-[12px] font-medium text-muted">
             {w}
           </span>
         ))}
@@ -206,7 +206,8 @@ function WeekRow({
         <span
           className={cn(
             "text-[11px] tabular-nums transition-colors duration-200",
-            highlighted ? "text-muted" : "text-faint/65",
+            // 以前 faint/65：亮色下对比度不到 2:1，几乎看不见
+            highlighted ? "text-muted" : "text-faint",
           )}
         >
           {weekNo}
@@ -394,7 +395,7 @@ function StepButton({
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="grid h-[26px] w-[26px] place-items-center rounded-md text-faint
+      className="grid h-7 w-7 place-items-center rounded-md text-muted
                  transition-colors duration-[140ms] hover:bg-raised hover:text-ink
                  active:bg-raised/70"
     >

@@ -133,12 +133,12 @@ export function ClonePanel({
       {step.kind === "provider" && (
         <>
           {target ? (
-            <p data-clone-target className="text-[12.5px] leading-[1.65] text-body">
+            <p data-clone-target className="text-[13px] leading-[1.65] text-body">
               要拉的是团队仓库 <span className="font-mono text-ink">{target.fullName}</span>
               ：先登录 {PROVIDERS[target.provider].label}（邀请发给的那个账号）。
             </p>
           ) : (
-            <p className="text-[12.5px] leading-[1.65] text-muted">
+            <p className="text-[13px] leading-[1.65] text-muted">
               在别的电脑上开过同步的话，把那个仓库拉到这台上，以后两边自动同步。别人邀请你加入的团队仓库也在这里。
             </p>
           )}
@@ -205,12 +205,12 @@ export function ClonePanel({
       )}
 
       {working && (
-        <p className="mt-3 flex items-center gap-1.5 text-[12.5px] text-muted">
-          <LoaderCircle size={13} strokeWidth={2} className="animate-spin" />
+        <p className="mt-3 flex items-center gap-1.5 text-[13px] text-muted">
+          <LoaderCircle size={14} strokeWidth={2} className="animate-spin" />
           {working}
         </p>
       )}
-      {error && <p className="mt-3 text-[12.5px] leading-[1.6] text-danger">{error}</p>}
+      {error && <p className="mt-3 text-[13px] leading-[1.6] text-danger">{error}</p>}
     </div>
   );
 }
@@ -228,21 +228,21 @@ function GitHubCode({ code }: { code: SyncDeviceCode }) {
   };
   return (
     <div>
-      <p className="text-[12.5px] leading-[1.65] text-muted">
+      <p className="text-[13px] leading-[1.65] text-muted">
         在浏览器里登录
         GitHub，输入下面的验证码，再点「Authorize」同意。令牌只存在这台电脑的系统钥匙串里。
       </p>
-      <p className="mt-3 rounded-xl bg-raised/50 py-3 text-center font-mono text-[22px] font-semibold tracking-[0.12em] text-ink select-all">
+      <p className="mt-3 rounded-xl bg-raised/50 py-3 text-center font-mono text-[24px] font-semibold tracking-[0.12em] text-ink select-all">
         {code.userCode}
       </p>
       <div className="mt-3 flex items-center gap-3">
         <Button primary onClick={() => void open()}>
           <span className="flex items-center gap-1.5">
-            <Copy size={13} strokeWidth={2} />
+            <Copy size={14} strokeWidth={2} />
             {copied ? "再开一次 GitHub" : "复制验证码并打开 GitHub"}
           </span>
         </Button>
-        <span className="flex items-center gap-1.5 text-[12px] text-faint">
+        <span className="flex items-center gap-1.5 text-[12px] text-muted">
           <LoaderCircle size={12} strokeWidth={2} className="animate-spin" />
           等你在浏览器里确认…
         </span>
@@ -266,7 +266,7 @@ function GiteeToken({
         if (token.trim()) onLogin(token.trim());
       }}
     >
-      <p className="text-[12.5px] leading-[1.65] text-muted">
+      <p className="text-[13px] leading-[1.65] text-muted">
         在 Gitee 的「设置 → 私人令牌」里生成一个（权限勾上 projects），粘贴到这里。{" "}
         <button
           type="button"
@@ -345,7 +345,7 @@ function RepoList({
     !invitations.some((i) => isTarget(i.repo));
   return (
     <div>
-      <p className="text-[12.5px] text-muted">
+      <p className="text-[13px] text-muted">
         已登录 {label} · <span className="text-body">{account.login}</span>　选一个开过同步的仓库：
       </p>
       {invitations.length > 0 && (
@@ -362,7 +362,7 @@ function RepoList({
               )}
             >
               <Users size={12} strokeWidth={2} className="shrink-0 text-accent" />
-              <span className="min-w-0 flex-1 truncate text-[12.5px] text-body">
+              <span className="min-w-0 flex-1 truncate text-[13px] text-body">
                 {invitation.inviter} 邀请你加入{" "}
                 <span className="font-mono text-ink">{invitation.repo.fullName}</span>
               </span>
@@ -374,15 +374,15 @@ function RepoList({
         </div>
       )}
       {missing && (
-        <p className="mt-2 text-[12.5px] leading-[1.6] text-warning">
+        <p className="mt-2 text-[13px] leading-[1.6] text-warning">
           {`这个账号还看不到 ${target?.fullName}：他可能还没邀请你，或者邀请发给了别的账号。`}
         </p>
       )}
       <div className="mt-2 overflow-hidden rounded-xl border border-line-strong">
         {repos === null ? (
-          <p className="px-3.5 py-3 text-[13px] text-faint">读取中…</p>
+          <p className="px-3.5 py-3 text-[13px] text-muted">读取中…</p>
         ) : repos.length === 0 ? (
-          <p className="px-3.5 py-3 text-[13px] text-faint">这个账号下还没有仓库</p>
+          <p className="px-3.5 py-3 text-[13px] text-muted">这个账号下还没有仓库</p>
         ) : (
           <div className="scroll-thin max-h-[168px] overflow-y-auto">
             {repos.map((repo) => (
@@ -404,9 +404,9 @@ function RepoList({
                 {repo.owner.toLowerCase() !== account.login.toLowerCase() && (
                   <span
                     title={`团队仓库 · 主人是 ${repo.owner}`}
-                    className="flex shrink-0 items-center gap-1 text-[12px] text-faint"
+                    className="flex shrink-0 items-center gap-1 text-[12px] text-muted"
                   >
-                    <Users size={11} strokeWidth={2} />
+                    <Users size={12} strokeWidth={2} />
                     团队
                   </span>
                 )}
@@ -446,10 +446,10 @@ function Place({
         if (target && !busy) onClone(parent, name.trim());
       }}
     >
-      <p className="text-[12.5px] text-muted">
+      <p className="text-[13px] text-muted">
         <span className="font-mono text-body">{repo.fullName}</span> 拉到这台电脑的
       </p>
-      <label className="mt-3 block text-[12.5px] text-muted" htmlFor="clone-name">
+      <label className="mt-3 block text-[13px] text-muted" htmlFor="clone-name">
         文件夹名
       </label>
       <input
@@ -477,7 +477,7 @@ function Place({
         </Button>
       </div>
       <div className="mt-4 flex items-center gap-3">
-        <p className="min-w-0 flex-1 truncate text-[12px] text-faint" title={target}>
+        <p className="min-w-0 flex-1 truncate text-[12px] text-muted" title={target}>
           {busy ? "正在拉取，笔记多的话要一会儿…" : target ? `会放在 ${target}` : ""}
         </p>
         <Button type="submit" primary disabled={busy || !target}>

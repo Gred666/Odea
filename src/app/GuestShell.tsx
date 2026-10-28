@@ -97,7 +97,7 @@ function GuestSection({ id, fill }: { id: number; fill: boolean }) {
         className="flex h-8 items-center gap-2 rounded-md px-2 text-left transition-colors duration-[140ms] hover:bg-raised/60"
       >
         {host && <PeerAvatar id={host.id} name={host.name} />}
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
           {hostNameOf(session)}
           <span className="font-normal text-faint">{ended ? " · 已结束" : ""}</span>
         </span>
@@ -115,7 +115,7 @@ function GuestSection({ id, fill }: { id: number; fill: boolean }) {
         </button>
       ) : (
         <>
-          <p className="truncate px-2 pb-1 text-[11.5px] text-faint" title={session.scope?.name}>
+          <p className="truncate px-2 pb-1 text-[12px] text-muted" title={session.scope?.name}>
             {sessionName(session)}
           </p>
           <SharedTree id={id} compact />

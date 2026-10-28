@@ -51,7 +51,7 @@ export function ErrorToast() {
           className="pointer-events-auto flex max-w-[520px] items-center gap-3 rounded-xl
                      bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
         >
-          <AlertTriangle size={13} strokeWidth={2} className="shrink-0 text-danger" />
+          <AlertTriangle size={14} strokeWidth={2} className="shrink-0 text-danger" />
           <span className="min-w-0 truncate" title={error}>
             {initialized ? "操作失败" : "加载失败"}：{error}
           </span>
@@ -115,7 +115,7 @@ export function NoticeToast() {
           className="pointer-events-auto flex max-w-[560px] items-center gap-3 rounded-xl
                      bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
         >
-          <Info size={13} strokeWidth={2} className="shrink-0 text-accent" />
+          <Info size={14} strokeWidth={2} className="shrink-0 text-accent" />
           <span className="min-w-0 truncate" title={notice}>
             {notice}
           </span>
@@ -156,7 +156,7 @@ export function LayoutChangeToast() {
           className="pointer-events-auto flex max-w-[560px] items-center gap-3 rounded-xl
                      bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
         >
-          <RefreshCw size={13} strokeWidth={2} className="shrink-0 text-accent" />
+          <RefreshCw size={14} strokeWidth={2} className="shrink-0 text-accent" />
           <span className="min-w-0 truncate">
             这个仓库的设置在别的设备上改了（日程、目录的样子）
           </span>

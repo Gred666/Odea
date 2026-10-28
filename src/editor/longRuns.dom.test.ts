@@ -37,3 +37,36 @@ describe("很长的西文串", () => {
     expect(marked(`${"a".repeat(20)}中${"b".repeat(20)}`)).toEqual([]);
   });
 });
+
+describe("组字的那一行", () => {
+  const composingLines = (parent: HTMLElement) =>
+    [...parent.querySelectorAll(".cm-odea-composing")].map((el) => el.textContent ?? "");
+
+  it("lets the line being composed break anywhere, from the first composed change until it ends", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const doc = "第一行\n两端对齐的正文里打字";
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({ doc, selection: { anchor: doc.length }, extensions: [longRuns] }),
+    });
+    views.push(view);
+
+    // 刚开始组字时不动 DOM（输入法这时刚起头），第一笔组字的改动进来才加
+    view.contentDOM.dispatchEvent(new Event("compositionstart", { bubbles: true }));
+    expect(composingLines(parent)).toEqual([]);
+    view.dispatch({
+      changes: { from: doc.length, insert: "zh" },
+      selection: { anchor: doc.length + 2 },
+      userEvent: "input.type.compose",
+    });
+    expect(composingLines(parent)).toEqual(["两端对齐的正文里打字zh"]);
+    // 别的改动（不是组字）不加也不摘
+    view.dispatch({ changes: { from: 0, insert: "前" } });
+    expect(composingLines(parent)).toEqual(["两端对齐的正文里打字zh"]);
+
+    view.contentDOM.dispatchEvent(new Event("compositionend", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(composingLines(parent)).toEqual([]);
+  });
+});

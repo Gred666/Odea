@@ -82,7 +82,7 @@ export function RelayDialog() {
                 className="flex items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Server size={15} strokeWidth={2} className="shrink-0 text-faint" />
+                <Server size={16} strokeWidth={2} className="shrink-0 text-faint" />
                 <p className="flex-1 text-[14px] font-medium text-ink">协作中继</p>
                 <button
                   type="button"
@@ -111,14 +111,14 @@ function RelayBody() {
   const error = useRelays((s) => s.error);
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-[12.5px] leading-[1.7] text-body">
+      <p className="text-[13px] leading-[1.7] text-body">
         {
           "不在同一个网络的人，靠中继连上：打洞时它当介绍人，打不通时由它转发（只转发加密过的内容，看不到你们写了什么）。Odea 不提供中继：团队里有一个人架好，把中继码发给大家，每人添加一次。"
         }
       </p>
       {pending && <ConfirmCard info={pending.info} />}
       <section>
-        <p className="mb-1.5 text-[12px] text-faint">
+        <p className="mb-1.5 text-[12px] text-muted">
           {relays.length ? `配好的 · ${relays.length}` : "还没有配中继"}
         </p>
         {relays.length > 0 && (
@@ -159,10 +159,10 @@ function DeviceId() {
   return (
     <section data-relay-device className="flex items-center gap-2">
       <div className="min-w-0 flex-1">
-        <p className="text-[12px] text-faint">
+        <p className="text-[12px] text-muted">
           这台设备的公钥（中继只放行固定几台时，填进 access.allowlist）
         </p>
-        <p className="truncate font-mono text-[11.5px] text-body" title={deviceId}>
+        <p className="truncate font-mono text-[12px] text-body" title={deviceId}>
           {deviceId}
         </p>
       </div>
@@ -185,7 +185,7 @@ function ConfirmCard({ info }: { info: RelayInfo }) {
       className="rounded-lg border border-accent-line bg-accent-wash px-3 py-2.5"
     >
       <p className="text-[13px] font-medium text-ink">添加中继 {info.host}？</p>
-      <p className="mt-1 text-[12.5px] leading-[1.65] text-body">
+      <p className="mt-1 text-[13px] leading-[1.65] text-body">
         {[
           info.name ? `名字「${info.name}」` : "",
           info.hasToken ? "带着令牌" : "没有令牌",
@@ -316,7 +316,7 @@ function AddForm() {
     }
   };
   const field =
-    "h-9 min-w-0 rounded-lg bg-raised px-3 text-[12.5px] text-ink outline-none placeholder:text-faint";
+    "h-9 min-w-0 rounded-lg bg-raised px-3 text-[13px] text-ink outline-none placeholder:text-faint";
   return (
     <section className="flex flex-col gap-2">
       <div className="flex h-10 items-center gap-2 rounded-lg bg-raised pl-3 pr-1">
@@ -335,7 +335,7 @@ function AddForm() {
           data-relay-add
           disabled={!value.trim() || busy}
           onClick={() => void submit()}
-          className="h-8 shrink-0 rounded-md bg-accent px-3 text-[12.5px] font-medium text-accent-ink
+          className="h-8 shrink-0 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-ink
                      transition-colors duration-[140ms] hover:bg-accent-hover disabled:opacity-50"
         >
           添加

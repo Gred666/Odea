@@ -65,7 +65,7 @@ export function Backlinks({ noteId, title }: { noteId: string; title: string }) 
       className="mt-14"
     >
       <div className="mb-2.5 flex items-center gap-2">
-        <Link2 size={13} strokeWidth={2} className="text-faint" />
+        <Link2 size={14} strokeWidth={2} className="text-faint" />
         <h2 className="text-[12px] font-semibold tracking-[0.04em] text-muted">反向链接</h2>
         <span className="rounded-full bg-raised px-1.5 text-[11px] leading-[17px] text-muted tabular-nums">
           {links.length}
@@ -93,13 +93,13 @@ function BacklinkCard({ link, title }: { link: Backlink; title: string }) {
         className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors
                    duration-[140ms] hover:bg-raised/60"
       >
-        <Icon size={13} strokeWidth={1.9} className="shrink-0 text-faint" />
+        <Icon size={14} strokeWidth={1.9} className="shrink-0 text-faint" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-ink/90">
           {link.title}
         </span>
-        {link.archived && <span className="shrink-0 text-[12px] text-faint">已归档</span>}
+        {link.archived && <span className="shrink-0 text-[12px] text-muted">已归档</span>}
         {link.count > 1 && (
-          <span className="shrink-0 font-mono text-[12px] text-faint tabular-nums">
+          <span className="shrink-0 font-mono text-[12px] text-muted tabular-nums">
             {link.count} 处
           </span>
         )}

@@ -44,7 +44,7 @@ export function PanelHeader({ title, onBack }: { title: string; onBack: () => vo
         aria-label="返回"
         className="-ml-2 grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
       >
-        <ChevronLeft size={17} strokeWidth={1.9} />
+        <ChevronLeft size={18} strokeWidth={1.8} />
       </button>
       <p className="text-[15px] font-semibold text-ink">{title}</p>
     </div>

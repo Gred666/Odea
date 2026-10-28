@@ -60,7 +60,8 @@ const EMPTY: HeadingFoldState = { heads: [], sections: [] };
 const HEADING_RE = /^(?:ATX|Setext)Heading([1-6])$/;
 /** 看着像标题的一行：ATX 的 `#`，或者下一行是 Setext 的下划线 */
 const ATX_LINE_RE = /^ {0,3}#{1,6}(?:[ \t]|$)/;
-const SETEXT_UNDERLINE_RE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+/** 至少三个，和解析器一样（markdownParser.ts 的 StrictSetextHeading） */
+const SETEXT_UNDERLINE_RE = /^ {0,3}(?:={3,}|-{3,})[ \t]*$/;
 
 const levelOf = (name: string) => {
   const match = HEADING_RE.exec(name);

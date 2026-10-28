@@ -98,7 +98,7 @@ export function SyncDialog() {
                 className="flex items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Cloud size={15} strokeWidth={2} className="shrink-0 text-faint" />
+                <Cloud size={16} strokeWidth={2} className="shrink-0 text-faint" />
                 <p className="flex-1 text-[14px] font-medium text-ink">同步</p>
                 <button
                   type="button"
@@ -218,7 +218,7 @@ function SetupFlow() {
           className="-ml-1 mb-3 flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[12px] text-muted
                      transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
         >
-          <ChevronLeft size={13} strokeWidth={2} />
+          <ChevronLeft size={14} strokeWidth={2} />
           换个托管方
         </button>
       )}
@@ -337,7 +337,7 @@ function GitHubLogin({ code }: { code: SyncDeviceCode }) {
       </div>
       <div className="mt-4 flex items-center gap-2">
         <PrimaryButton onClick={() => void openGitHub()}>
-          <Copy size={13} strokeWidth={2} />
+          <Copy size={14} strokeWidth={2} />
           {copied ? "已复制，再开一次 GitHub" : "复制验证码并打开 GitHub"}
         </PrimaryButton>
       </div>
@@ -467,7 +467,7 @@ function RepoStep({
                      text-[13px] text-ink outline-none focus:border-accent"
         />
         <PrimaryButton type="submit" disabled={!name.trim() || !!busy}>
-          <Plus size={13} strokeWidth={2.2} />
+          <Plus size={14} strokeWidth={2.2} />
           新建
         </PrimaryButton>
       </form>
@@ -475,9 +475,9 @@ function RepoStep({
       <p className="mt-5 text-[12px] font-medium text-muted">或者选一个已有的</p>
       <div className="mt-1.5 overflow-hidden rounded-xl border border-line-strong">
         {repos === null ? (
-          <p className="px-3.5 py-3 text-[13px] text-faint">读取中…</p>
+          <p className="px-3.5 py-3 text-[13px] text-muted">读取中…</p>
         ) : repos.length === 0 ? (
-          <p className="px-3.5 py-3 text-[13px] text-faint">这个账号下还没有仓库</p>
+          <p className="px-3.5 py-3 text-[13px] text-muted">这个账号下还没有仓库</p>
         ) : (
           <div className="scroll-thin max-h-[208px] overflow-y-auto">
             {repos.map((repo) => (
@@ -670,7 +670,7 @@ function StatusView({ status }: { status: SyncStatus }) {
           {label}
         </p>
         {status.state === "syncing" && (
-          <LoaderCircle size={13} strokeWidth={2.2} className="animate-spin text-muted" />
+          <LoaderCircle size={14} strokeWidth={2.2} className="animate-spin text-muted" />
         )}
       </div>
       {status.remote && (

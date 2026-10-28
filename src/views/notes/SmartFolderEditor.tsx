@@ -109,12 +109,12 @@ export function SmartFolderEditor({
                  shadow-float ring-1 ring-line-strong"
     >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
-        <ListFilter size={13} strokeWidth={2} className="shrink-0 text-faint" />
+        <ListFilter size={14} strokeWidth={2} className="shrink-0 text-faint" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
           {path ? "改智能文件夹" : "新建智能文件夹"}
         </span>
         {!path && parent && (
-          <span className="min-w-0 max-w-[45%] truncate text-[12px] text-faint">
+          <span className="min-w-0 max-w-[45%] truncate text-[12px] text-muted">
             在「{folderLabel(parent)}」里
           </span>
         )}
@@ -146,7 +146,7 @@ export function SmartFolderEditor({
             onKeyDown={keys}
             placeholder="#复盘 updated:30d"
             spellCheck={false}
-            className={cn(FIELD, "font-mono text-[12.5px]")}
+            className={cn(FIELD, "font-mono text-[13px]")}
           />
         </label>
         <ul className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-[3px] pt-0.5 text-[12px]">

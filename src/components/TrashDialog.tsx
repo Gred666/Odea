@@ -131,7 +131,7 @@ export function TrashDialog() {
                 className="flex shrink-0 items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Trash2 size={15} strokeWidth={2} className="shrink-0 text-faint" />
+                <Trash2 size={16} strokeWidth={2} className="shrink-0 text-faint" />
                 <p className="min-w-0 flex-1 truncate text-[14px] text-ink">
                   <span className="font-medium">回收站</span>
                   <span className="text-muted"> · 删掉的笔记留 30 天</span>
@@ -324,7 +324,7 @@ function SectionTitle({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="px-2 pt-3 pb-1.5">
       <p className="text-[12px] font-medium text-muted">{title}</p>
-      {hint && <p className="mt-0.5 text-[11.5px] text-faint">{hint}</p>}
+      {hint && <p className="mt-0.5 text-[12px] text-muted">{hint}</p>}
     </div>
   );
 }
@@ -343,8 +343,8 @@ function Row({
   return (
     <div className="flex items-start gap-3 rounded-lg px-2 py-2.5 transition-colors duration-[120ms] hover:bg-raised/60">
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[13.5px] font-medium text-ink">{title}</p>
-        <p className="mt-0.5 truncate text-[11.5px] text-faint">{meta}</p>
+        <p className="truncate text-[14px] font-medium text-ink">{title}</p>
+        <p className="mt-0.5 truncate text-[12px] text-muted">{meta}</p>
         {excerpt.trim() && (
           <p className="mt-1 line-clamp-2 text-[12px] leading-[1.55] text-muted">{excerpt}</p>
         )}
@@ -372,8 +372,8 @@ function RowButton({
       onClick={onClick}
       className={
         primary
-          ? "h-7 rounded-md bg-accent px-2.5 text-[12.5px] font-medium text-accent-ink transition-colors duration-[120ms] hover:bg-accent-hover disabled:opacity-50"
-          : "h-7 rounded-md px-2.5 text-[12.5px] text-muted ring-1 ring-line-strong transition-colors duration-[120ms] hover:bg-raised hover:text-ink disabled:opacity-50"
+          ? "h-7 rounded-md bg-accent px-2.5 text-[13px] font-medium text-accent-ink transition-colors duration-[120ms] hover:bg-accent-hover disabled:opacity-50"
+          : "h-7 rounded-md px-2.5 text-[13px] text-muted ring-1 ring-line-strong transition-colors duration-[120ms] hover:bg-raised hover:text-ink disabled:opacity-50"
       }
     >
       {children}

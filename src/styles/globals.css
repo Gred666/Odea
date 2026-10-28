@@ -894,8 +894,11 @@ body.odea-dragging .odea-row-actions {
   text-autospace: normal;
 }
 /* 很长、中间没有断点的西文串（网址、哈希、一直按着的 kkkk）在串里任意处断行：不然浏览器把整串
-   挪到下一行，两端对齐会把前一行剩下的几个字撑满整行（editor/longRuns.ts） */
-.odea-editor .cm-odea-long-run {
+   挪到下一行，两端对齐会把前一行剩下的几个字撑满整行（editor/longRuns.ts）。
+   输入法组字时光标那一行也是：拼音是一串西文，整串挪到下一行的话这一行被撑开、上屏又缩回去，
+   一个词抖一下（同一个文件，只在光标前面的折行都不在西文跟前时才加） */
+.odea-editor .cm-odea-long-run,
+.odea-editor .cm-line.cm-odea-composing {
   word-break: break-all;
 }
 /* 不跟着两端对齐、不自动加间距的：标题（一般就一行，折行时左齐更像标题）、
@@ -2198,6 +2201,10 @@ body.odea-dragging .odea-row-actions {
 }
 /* 比正文宽的表格横向滑动；纵向永远不滚（overflow-x: auto 会顺带把 y 也变成 auto） */
 .odea-editor .cm-odea-table-scroll {
+  /* 宽度不跟着表格走：每格至少 72px，十几列的表最小宽度会一路传上去，.cm-content 是 flex 子项、
+     min-width 是 auto，整列正文被撑得和表一样宽 —— 超出正文栏的那截被文档区裁掉，同一篇里
+     所有表格、正文的右边都缺一块（2026-10-28）。overflow-x: auto 隔不断这一层，得靠 inline-size 包含 */
+  contain: inline-size;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
@@ -3057,6 +3064,10 @@ body.odea-dragging .odea-row-actions {
   padding: 0.35em 0;
 }
 .odea-editor .cm-odea-html-widget {
+  /* 宽的 HTML 表格、写死宽度的图：在这一块里横向滑，别把整列正文撑宽（同上面的表格） */
+  contain: inline-size;
+  overflow-x: auto;
+  overflow-y: hidden;
   cursor: text;
   animation: odea-block-in var(--duration-base) var(--ease-out-quint) both;
   /* 编辑区是 break-spaces，不改回来的话 `<li>` 之间的换行和缩进都会变成空行 */
@@ -3241,6 +3252,8 @@ body.odea-dragging .odea-row-actions {
   padding: 0.5em 0;
 }
 .odea-editor .cm-odea-diagram {
+  /* 很宽的图在框里横向滑，别把整列正文撑宽（同表格） */
+  contain: inline-size;
   overflow-x: auto;
   border: 1px solid var(--color-line-strong);
   border-radius: 8px;

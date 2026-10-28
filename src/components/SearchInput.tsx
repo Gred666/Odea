@@ -31,7 +31,7 @@ export function SearchInput({
         transition={spring.snappy}
         className={cn("shrink-0 transition-colors", focused ? "text-muted" : "text-faint")}
       >
-        <Search size={13} strokeWidth={2} />
+        <Search size={14} strokeWidth={2} />
       </motion.span>
 
       <input
@@ -47,7 +47,7 @@ export function SearchInput({
           }
         }}
         placeholder={placeholder}
-        className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none
+        className="min-w-0 flex-1 bg-transparent text-[14px] text-ink outline-none
                    placeholder:text-faint selection:bg-accent/20"
       />
 
@@ -64,10 +64,10 @@ export function SearchInput({
               onChange("");
               ref.current?.focus();
             }}
-            className="grid h-4 w-4 shrink-0 place-items-center rounded-full text-faint
+            className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-muted
                        transition-colors hover:bg-raised hover:text-body"
           >
-            <X size={10} strokeWidth={2.6} />
+            <X size={12} strokeWidth={2.4} />
           </motion.button>
         )}
       </AnimatePresence>

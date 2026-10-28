@@ -304,6 +304,20 @@ export function renderMarkdown(md: string, ns = "h"): ReactNode[] {
 
 const OUTLINE_FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 const OUTLINE_CLOSING_FENCE_RE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+/** Setext 下划线：至少三个 `=` / `-`，和编辑器的解析器一个规矩（editor/markdownParser.ts 的 StrictSetextHeading） */
+const OUTLINE_SETEXT_RE = /^\s{0,3}(={3,}|-{3,})\s*$/;
+/** 长得像别的块的开头（列表、引用、表格）：它下面的 `---` 不是它的下划线 */
+const OUTLINE_BLOCK_START_RE = /^\s{0,3}(?:[-*+]\s|\d+[.)]\s|>|\|)/;
+/** 上一行结束了一个块（标题、分隔线、Setext 下划线、围栏）：这一行另起一段 */
+const OUTLINE_BLOCK_END_RE =
+  /^\s{0,3}(?:#{1,6}(?:\s|$)|(?:[-*_][ \t]*){3,}$|={3,}\s*$|`{3,}|~{3,})/;
+
+/**
+ * 这一行是不是自己单独一段的第一行。Setext 标题只能是一行：几行字下面跟着 `---`，
+ * 编辑器按「段落 + 分隔线」画，目录也不收
+ */
+const startsParagraph = (previous: string | undefined) =>
+  previous === undefined || !previous.trim() || OUTLINE_BLOCK_END_RE.test(previous);
 
 /** 开头的 YAML 属性块有几行（没有是 0）。和编辑器的 frontMatterRange 同一个规矩 */
 function frontMatterLines(lines: string[]): number {
@@ -322,7 +336,8 @@ export function buildOutline(md: string): OutlineItem[] {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
   /** 正在哪种围栏代码里（开头那串 ``` / ~~~）；里面的 `# 注释` 不是标题 */
   let fence: string | null = null;
-  for (let lineIndex = frontMatterLines(lines); lineIndex < lines.length; lineIndex += 1) {
+  const start = frontMatterLines(lines);
+  for (let lineIndex = start; lineIndex < lines.length; lineIndex += 1) {
     const source = lines[lineIndex]!;
     if (fence) {
       const closing = OUTLINE_CLOSING_FENCE_RE.exec(source)?.[1];
@@ -335,7 +350,11 @@ export function buildOutline(md: string): OutlineItem[] {
       continue;
     }
     const heading = /^\s*(#{1,6})\s+(.+?)\s*$/.exec(source);
-    const setext = lineIndex + 1 < lines.length && /^\s*(=+|-+)\s*$/.exec(lines[lineIndex + 1]!);
+    const setext =
+      lineIndex + 1 < lines.length &&
+      !OUTLINE_BLOCK_START_RE.test(source) &&
+      startsParagraph(lineIndex > start ? lines[lineIndex - 1] : undefined) &&
+      OUTLINE_SETEXT_RE.exec(lines[lineIndex + 1]!);
     const callout = /^\s*>\s*\[!(.+?)\][+-]?(?:[ \t]+(\S.*?))?\s*$/.exec(source);
     if (heading) {
       const text = animatedEmojiText(heading[2]!.replace(/\s+#+\s*$/, "").trim());

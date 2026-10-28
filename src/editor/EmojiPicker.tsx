@@ -454,7 +454,7 @@ export function EmojiPicker({
           ) : (
             sections.map((section) => (
               <div key={section.id} role="group" aria-label={section.label}>
-                <p className="px-1.5 pb-0.5 pt-1.5 text-[12px] font-medium tracking-[0.05em] text-faint">
+                <p className="px-1.5 pb-0.5 pt-1.5 text-[12px] font-medium tracking-[0.05em] text-muted">
                   {section.label}
                 </p>
                 <div className="grid grid-cols-6">
@@ -506,7 +506,7 @@ export function EmojiPicker({
           )}
         </div>
 
-        <div className="flex h-[34px] items-center gap-2 border-t border-line px-3 text-[12px] text-faint">
+        <div className="flex h-[34px] items-center gap-2 border-t border-line px-3 text-[12px] text-muted">
           {current ? (
             <>
               <span className="truncate font-medium text-body">{current.name}</span>
@@ -516,7 +516,7 @@ export function EmojiPicker({
           {/* 回车画成图标，不用 ↵：正文字体里没有这个字，第一次画它浏览器要把系统字体
             挨个找一遍（装的字体越多越慢），打开选择器就卡在这一下 */}
           <span className="ml-auto flex shrink-0 items-center gap-1">
-            <CornerDownLeft size={10.5} strokeWidth={2} aria-label="回车" />
+            <CornerDownLeft size={12} strokeWidth={2} aria-label="回车" />
             插入 · Esc 关闭 · {shortcut("E")}
           </span>
         </div>

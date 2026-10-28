@@ -154,8 +154,8 @@ const INDENT: Record<OutlineItem["level"], number> = { 1: 20, 2: 32, 3: 44 };
  * 平稳地少走一点，没有停住的帧（2026-10-17）。quint（tween.base）头一帧就冲出 37px，太猛
  */
 const FOLD_EASE = [0.33, 1, 0.68, 1] as const;
-/** 一行的高度（上下 5px + 行高 18px + 行间 1px），估子树多高用 */
-const ROW_HEIGHT = 29;
+/** 一行的高度（上下 5px + 行高 20px + 行间 1px），估子树多高用 */
+const ROW_HEIGHT = 31;
 /** 子树越高动得越久（220–320ms），和 glide.ts 的滑动一个道理：一样的时长，长距离会显得猛 */
 const foldTransition = (rows: number): Transition => ({
   duration: Math.min(0.32, 0.22 + (rows * ROW_HEIGHT) / 4000),
@@ -339,7 +339,7 @@ function RailOutline({
       {/* 「全部收起」紧跟在字后面：这一行的右上角压着专注模式的按钮（ZenToggle） */}
       <div className="mb-3 flex shrink-0 items-center gap-1.5">
         <motion.p
-          className="pl-5 text-[12px] tracking-[0.08em] text-faint"
+          className="pl-5 text-[12px] tracking-[0.08em] text-muted"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={tween.base}
@@ -358,7 +358,7 @@ function RailOutline({
             // 和箭头一样淡的是颜色，不是 opacity（见 OutlineRow）
             className="grid h-5 w-5 place-items-center rounded-[5px] text-transparent
                        transition-[color,background-color] duration-[140ms]
-                       focus-visible:text-faint group-hover/rail:text-faint
+                       focus-visible:text-muted group-hover/rail:text-muted
                        hover:bg-raised group-hover/rail:hover:text-ink"
           >
             {anyCollapsed ? (
@@ -508,11 +508,11 @@ function OutlineRow({
           title={open ? "收起（按住 Alt 连下面各层一起）" : "展开（按住 Alt 连下面各层一起）"}
           style={{ left: indent - 18 }}
           className={cn(
-            // 16px、贴着第一行字的中线（上 5px + 行高 18px 的一半 - 8px）
-            "absolute top-[6px] z-10 grid h-4 w-4 place-items-center rounded-[4px]",
+            // 16px、贴着第一行字的中线（上 5px + 行高 20px 的一半 - 8px）
+            "absolute top-[7px] z-10 grid h-4 w-4 place-items-center rounded-[4px]",
             "transition-[color,background-color] duration-[140ms]",
             "hover:bg-raised group-hover/rail:hover:text-ink",
-            open ? "text-transparent group-hover/rail:text-faint" : "text-faint",
+            open ? "text-transparent group-hover/rail:text-muted" : "text-muted",
           )}
         >
           {/* 淡入淡出的是颜色，不是 opacity；转的是 SVG 里的 <path>，不是外面的盒子。
@@ -563,9 +563,11 @@ function OutlineRow({
         }}
         style={{ paddingLeft: indent }}
         className={cn(
-          "relative w-full rounded-r-sm py-[5px] pr-2 text-left text-[12px] leading-[1.5]",
+          // 13px / 20px：目录是要扫着读、点着跳的（VitePress、Docusaurus 的目录都是 13px 上下）。
+          // 以前 12px faint，亮色下对比度 3:1，和占位符一样淡
+          "relative w-full rounded-r-sm py-[5px] pr-2 text-left text-[13px] leading-5",
           "transition-colors duration-[160ms]",
-          active ? "text-ink" : "text-faint hover:text-muted",
+          active ? "text-ink" : "text-muted hover:text-ink",
         )}
       >
         {active && (
@@ -699,15 +701,15 @@ function ZenOutline({
               onClick={() => onJump(it.id)}
               className={cn(
                 "flex w-full items-start gap-2 rounded-lg py-[5px] pl-2 pr-2.5 text-left",
-                "text-[12px] leading-[1.5] transition-colors duration-[140ms]",
+                "text-[13px] leading-5 transition-colors duration-[140ms]",
                 ZEN_INDENT[it.level],
                 active ? "text-ink" : "text-muted hover:bg-raised/50 hover:text-ink",
               )}
             >
-              {/* 标题会折成多行：横线对齐第一行的中线（行高 18px），不跟着整块居中 */}
+              {/* 标题会折成多行：横线对齐第一行的中线（行高 20px），不跟着整块居中 */}
               <span
                 className={cn(
-                  "mt-2 h-[2px] w-3 shrink-0 rounded-full transition-colors duration-[140ms]",
+                  "mt-[9px] h-[2px] w-3 shrink-0 rounded-full transition-colors duration-[140ms]",
                   active ? "bg-ink" : "bg-line-strong",
                 )}
               />

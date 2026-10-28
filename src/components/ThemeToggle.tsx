@@ -8,7 +8,8 @@ import { createPortal } from "react-dom";
 
 const ORDER: ThemePref[] = ["system", "light", "dark"];
 const LABEL = { system: "跟随系统", light: "亮色", dark: "暗色" } as const;
-const ICON_SIZE = 14.5;
+/** 和窄栏底下那几格的图标一样大（Sidebar 的 FOOT_ICON） */
+const ICON_SIZE = 18;
 
 /**
  * 三态主题切换。
@@ -18,7 +19,7 @@ const ICON_SIZE = 14.5;
  * 和按钮里的图标重合，播完再交回按钮。
  * 飞的那一段对准图标量位置（不是按钮）：导航栏收起 / 展开时按钮自己在动，量图标最准。
  */
-export function ThemeToggle() {
+export function ThemeToggle({ className }: { className: string }) {
   const theme = useApp((s) => s.theme);
   const setTheme = useApp((s) => s.setTheme);
   const glyph = useRef<HTMLSpanElement>(null);
@@ -50,15 +51,14 @@ export function ThemeToggle() {
       title={`主题：${LABEL[theme]}`}
       aria-label={`主题：${LABEL[theme]}，点击切换`}
       onClick={() => setTheme(ORDER[(ORDER.indexOf(theme) + 1) % ORDER.length]!)}
-      className="relative grid h-7 w-7 place-items-center rounded-md text-muted
-                 transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
+      className={className}
     >
       {/* 飞着的那一段落定后交回来：太阳月亮和它一模一样，直接换；落在「跟随系统」上是另一个
           图标，淡入一下。藏起来的那一下总是立刻的，免得和上面那一层叠出两个 */}
       <span
         ref={glyph}
         data-sky-glyph
-        className="relative grid h-[15px] w-[15px] shrink-0 place-items-center"
+        className="relative grid h-[18px] w-[18px] shrink-0 place-items-center"
         style={
           flight
             ? { opacity: 0, transition: "none" }
@@ -75,7 +75,7 @@ export function ThemeToggle() {
             className="absolute grid place-items-center"
           >
             {theme === "system" ? (
-              <Monitor size={ICON_SIZE} strokeWidth={1.9} />
+              <Monitor size={ICON_SIZE} strokeWidth={1.8} />
             ) : (
               <SkyGlyph night={theme === "dark"} />
             )}
@@ -148,7 +148,7 @@ function SkyGlyph({
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.9}
+      strokeWidth={1.8}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

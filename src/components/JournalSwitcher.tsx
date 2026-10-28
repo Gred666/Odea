@@ -97,7 +97,7 @@ export function JournalSwitcher() {
           className="odea-menu z-50 min-w-[220px] overflow-hidden rounded-lg bg-canvas p-1 shadow-float
                      outline-none ring-1 ring-line-strong"
         >
-          <p className="px-2 pt-1 pb-1.5 text-[11.5px] text-faint">谁的日程</p>
+          <p className="px-2 pt-1 pb-1.5 text-[12px] text-muted">谁的日程</p>
           {vaults.map((vault) => (
             <DropdownMenu.Item
               key={vault.path}
@@ -110,14 +110,14 @@ export function JournalSwitcher() {
                          data-[highlighted]:bg-raised data-[highlighted]:text-ink"
             >
               {vault.team ? (
-                <Users size={13} strokeWidth={1.9} className="shrink-0 text-muted" />
+                <Users size={14} strokeWidth={1.9} className="shrink-0 text-muted" />
               ) : (
-                <NotebookPen size={13} strokeWidth={1.9} className="shrink-0 text-muted" />
+                <NotebookPen size={14} strokeWidth={1.9} className="shrink-0 text-muted" />
               )}
               <span className="min-w-0 flex-1 truncate">{vault.name}</span>
-              <span className="text-[11.5px] text-faint">{vault.team ? "团队" : "个人"}</span>
+              <span className="text-[12px] text-muted">{vault.team ? "团队" : "个人"}</span>
               <Check
-                size={13}
+                size={14}
                 strokeWidth={2.2}
                 className={vault.current ? "shrink-0 text-accent" : "shrink-0 opacity-0"}
               />

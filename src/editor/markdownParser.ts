@@ -6,9 +6,12 @@ import {
   Emoji,
   GFM,
   type InlineContext,
+  type LeafBlock,
+  type LeafBlockParser,
   type Line,
   type MarkdownConfig,
   type MarkdownExtension,
+  parser as baseParser,
 } from "@lezer/markdown";
 
 /* ============================================================
@@ -136,6 +139,93 @@ const MathExtension: MarkdownConfig = {
   ],
 };
 
+/* ---------------- Setext 标题：比 CommonMark 收紧两条 ----------------
+   - 下划线至少三个 `=` / `-`。CommonMark 一个就算：在一段字的下一行刚敲一个 `-`（要写列表，
+     或者 `- - -` 分隔线的头一个字），上面那段立刻变成二级标题，再敲一个空格又变回来；
+     敲 `==` 开个高亮也一样，闪成一级标题
+   - 标题只能是一行。CommonMark 里一整段都会变成标题：在几行字和下面的 `---` 中间插一行
+     （比如敲 `/` 叫出插入菜单），整段突然成了二级标题（编辑器只给第一行上了标题样式，
+     看着就是最上面那行莫名其妙变大）。这时按分隔线算：段落到此为止，`---` 是分隔线
+
+   做法：lezer 自带的 Setext 解析器留在列表里 —— 分隔线判断「这一行是不是 Setext 下划线、
+   该不该让给它」认的就是它本身，拿掉了 `标题\n---` 就永远是分隔线 —— 只是每一段开头
+   把它那一份换成这里的。 */
+
+const EQUALS = 61;
+const DASH = 45;
+/** 至少几个 `=` / `-` 才算下划线 */
+const MIN_UNDERLINE = 3;
+
+/** lezer 自带的 Setext 解析器的类：没导出，从基础解析器上拿它的工厂造一个看看 */
+const DefaultSetextParser = (() => {
+  const internals = baseParser as unknown as {
+    blockNames: string[];
+    leafBlockParsers: Array<((cx: unknown, leaf: unknown) => LeafBlockParser | null) | undefined>;
+  };
+  const factory = internals.leafBlockParsers?.[internals.blockNames?.indexOf("SetextHeading")];
+  return factory?.(null, null)?.constructor as (abstract new () => LeafBlockParser) | undefined;
+})();
+
+/** Setext 下划线：一串 `=` 或 `-`（中间不夹空格），后面只能是空白。返回那串有几个，不是返回 -1 */
+function underlineLength(line: Line): number {
+  if ((line.next !== EQUALS && line.next !== DASH) || line.indent >= line.baseIndent + 4) return -1;
+  let pos = line.pos + 1;
+  while (pos < line.text.length && line.text.charCodeAt(pos) === line.next) pos += 1;
+  const end = pos;
+  while (pos < line.text.length && isSpace(line.text.charCodeAt(pos))) pos += 1;
+  return pos === line.text.length ? end - line.pos : -1;
+}
+
+class StrictSetextParser implements LeafBlockParser {
+  nextLine(cx: BlockContext, line: Line, leaf: LeafBlock): boolean {
+    if (lineDepth(line) < cx.depth) return false;
+    const length = underlineLength(line);
+    if (length < 0) return false;
+    const dash = line.next === DASH;
+    if (length >= MIN_UNDERLINE && !leaf.content.includes("\n")) {
+      const from = cx.lineStart + line.pos;
+      const mark = cx.elt("HeaderMark", from, from + length);
+      cx.nextLine();
+      cx.addLeafElement(
+        leaf,
+        cx.elt(dash ? "SetextHeading2" : "SetextHeading1", leaf.start, cx.prevLineEnd(), [
+          ...cx.parser.parseInline(leaf.content, leaf.start),
+          mark,
+        ]),
+      );
+      return true;
+    }
+    // 多行的段落下面的 `---`：段落到此为止，这一行留给下一轮当分隔线（和分隔线打断段落一个走法）
+    if (dash && length >= MIN_UNDERLINE) {
+      (cx as unknown as { finishLeaf(leaf: LeafBlock): void }).finishLeaf(leaf);
+      return true;
+    }
+    // 一两个 `-` / `=`，或者多行段落下面的 `===`：就是段落里的一行字
+    return false;
+  }
+
+  finish() {
+    return false;
+  }
+}
+
+const StrictSetextHeading: MarkdownConfig = {
+  parseBlock: [
+    {
+      name: "StrictSetextHeading",
+      // 排在自带的 Setext 后面：轮到这里时它那一份已经放进 leaf.parsers 了
+      leaf(_cx, leaf) {
+        const index = DefaultSetextParser
+          ? leaf.parsers.findIndex((parser) => parser instanceof DefaultSetextParser)
+          : -1;
+        if (index >= 0) leaf.parsers[index] = new StrictSetextParser();
+        return null;
+      },
+      after: "SetextHeading",
+    },
+  ],
+};
+
 /** 单个 `~` 的删除线。复用 GFM 的节点名，装饰层不用知道它是一个还是两个波浪线。 */
 const SingleTildeDelimiter = { resolve: "Strikethrough", mark: "StrikethroughMark" };
 
@@ -206,6 +296,7 @@ const SuperscriptExtension: MarkdownConfig = {
 /** 编辑器用的全部 Markdown 解析扩展；单测直接拿它配到 commonmark 上。 */
 export const markdownExtensions: MarkdownExtension = [
   GFM,
+  StrictSetextHeading,
   SingleTildeStrikethrough,
   SuperscriptExtension,
   Emoji,

@@ -24,7 +24,7 @@ export function DiffView({
   className?: string;
 }) {
   if (!lines) {
-    return <p className={cn("text-[12px] text-faint", className)}>{tooLong}</p>;
+    return <p className={cn("text-[12px] text-muted", className)}>{tooLong}</p>;
   }
   const hunks = diffHunks(lines);
   return (
@@ -34,7 +34,7 @@ export function DiffView({
         className,
       )}
     >
-      <div className="flex gap-3 px-3 pb-1.5 text-[12px] text-faint">
+      <div className="flex gap-3 px-3 pb-1.5 text-[12px] text-muted">
         <span>
           <span className="text-danger">−</span> {removedLabel}
         </span>

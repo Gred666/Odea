@@ -233,7 +233,7 @@ export function FindDialog() {
               }}
             >
               <div className="flex h-[52px] items-center gap-3 border-b border-line px-4">
-                <TextSearch size={15} strokeWidth={2} className="shrink-0 text-faint" />
+                <TextSearch size={16} strokeWidth={2} className="shrink-0 text-faint" />
                 <input
                   ref={inputRef}
                   role="combobox"
@@ -303,12 +303,12 @@ export function FindDialog() {
                           onClick={() => openRow(rows[first])}
                           className="flex w-full items-center gap-2 rounded-lg px-2.5 pb-1 pt-2 text-left"
                         >
-                          <Icon size={13} strokeWidth={1.9} className="shrink-0 text-muted" />
+                          <Icon size={14} strokeWidth={1.9} className="shrink-0 text-muted" />
                           <span className="min-w-0 truncate text-[13px] font-medium text-ink">
                             {file.title}
                           </span>
                           {hint && (
-                            <span className="min-w-0 shrink truncate text-[12px] text-faint">
+                            <span className="min-w-0 shrink truncate text-[12px] text-muted">
                               {hint}
                             </span>
                           )}
@@ -366,7 +366,7 @@ export function FindDialog() {
                 </div>
               </AutoHeight>
 
-              <div className="flex h-8 items-center gap-3.5 border-t border-line px-4 text-[12px] text-faint">
+              <div className="flex h-8 items-center gap-3.5 border-t border-line px-4 text-[12px] text-muted">
                 <KeyHint keys={[ArrowUp, ArrowDown]} label="选择" />
                 <KeyHint keys={[CornerDownLeft]} label="打开" />
                 <KeyHint keys={["Esc"]} label="关闭" />

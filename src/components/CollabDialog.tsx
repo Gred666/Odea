@@ -137,7 +137,7 @@ export function CollabDialog() {
                 className="flex items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Users size={15} strokeWidth={2} className="shrink-0 text-faint" />
+                <Users size={16} strokeWidth={2} className="shrink-0 text-faint" />
                 <p className="flex-1 text-[14px] font-medium text-ink">{heading}</p>
                 <button
                   type="button"
@@ -152,7 +152,7 @@ export function CollabDialog() {
               {any && <SessionStrip />}
               <div className="scroll-thin max-h-[64vh] overflow-y-auto px-5 py-4">
                 {notice && (
-                  <p data-collab-notice className="mb-3 text-[12.5px] leading-[1.6] text-accent">
+                  <p data-collab-notice className="mb-3 text-[13px] leading-[1.6] text-accent">
                     {notice}
                   </p>
                 )}
@@ -198,11 +198,11 @@ function SessionStrip() {
         onClick={() => setFocus(null)}
         title="加入别人的协作"
         className={cn(
-          "flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[12.5px] transition-colors duration-[140ms]",
+          "flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[13px] transition-colors duration-[140ms]",
           focus === null ? "bg-raised text-ink" : "text-muted hover:bg-raised/60 hover:text-body",
         )}
       >
-        <Plus size={13} strokeWidth={2} />
+        <Plus size={14} strokeWidth={2} />
         加入
       </button>
     </div>
@@ -239,7 +239,7 @@ function SessionTab({ id, active }: { id: number; active: boolean }) {
         session.role === "guest" ? `在 ${hostNameOf(session)} 那里：${name}` : `你在主持：${name}`
       }
       className={cn(
-        "flex h-7 max-w-[200px] shrink-0 items-center gap-1.5 rounded-md px-2 text-[12.5px]",
+        "flex h-7 max-w-[200px] shrink-0 items-center gap-1.5 rounded-md px-2 text-[13px]",
         "transition-colors duration-[140ms]",
         active ? "bg-raised text-ink" : "text-muted hover:bg-raised/60 hover:text-body",
         ended && !active && "text-faint",
@@ -248,9 +248,9 @@ function SessionTab({ id, active }: { id: number; active: boolean }) {
       {host ? (
         <PeerAvatar id={host.id} name={host.name} />
       ) : session.role === "guest" ? (
-        <LoaderCircle size={13} strokeWidth={2} className="shrink-0 animate-spin text-faint" />
+        <LoaderCircle size={14} strokeWidth={2} className="shrink-0 animate-spin text-faint" />
       ) : (
-        <Icon size={13} strokeWidth={2} className="shrink-0 opacity-80" />
+        <Icon size={14} strokeWidth={2} className="shrink-0 opacity-80" />
       )}
       <span className="min-w-0 truncate">{name}</span>
       {/* 有人在等你同意 / 连接有问题：一个小点，静态出现 */}
@@ -314,11 +314,11 @@ function HostBody({ id }: { id: number }) {
           {phase === "preparing" || !link ? (
             <>
               <LoaderCircle
-                size={13}
+                size={14}
                 strokeWidth={2}
                 className="shrink-0 animate-spin text-faint"
               />
-              <span className="flex-1 truncate text-[12.5px] text-muted">正在准备邀请链接…</span>
+              <span className="flex-1 truncate text-[13px] text-muted">正在准备邀请链接…</span>
             </>
           ) : (
             <>
@@ -329,13 +329,13 @@ function HostBody({ id }: { id: number }) {
                 type="button"
                 onClick={() => void copy()}
                 className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5
-                           text-[12.5px] font-medium text-accent-ink transition-colors
+                           text-[13px] font-medium text-accent-ink transition-colors
                            duration-[140ms] hover:bg-accent-hover"
               >
                 {copied ? (
-                  <Check size={13} strokeWidth={2.2} />
+                  <Check size={14} strokeWidth={2.2} />
                 ) : (
-                  <Copy size={13} strokeWidth={2} />
+                  <Copy size={14} strokeWidth={2} />
                 )}
                 {copied ? "已复制" : "复制"}
               </button>
@@ -410,14 +410,14 @@ function ReachPanel({ reach }: { reach: Reach | null }) {
   const rows = reachRows(reach);
   return (
     <div data-collab-reach className="mt-3 rounded-lg border border-line px-3 py-2.5">
-      <p className="flex items-start gap-2 text-[12.5px] leading-[1.6] text-ink">
+      <p className="flex items-start gap-2 text-[13px] leading-[1.6] text-ink">
         <span className="mt-[3px] shrink-0">
           {audience === "checking" ? (
-            <LoaderCircle size={13} strokeWidth={2} className="animate-spin text-faint" />
+            <LoaderCircle size={14} strokeWidth={2} className="animate-spin text-faint" />
           ) : audience === "everyone" ? (
-            <CircleCheck size={13} strokeWidth={2} className="text-success" />
+            <CircleCheck size={14} strokeWidth={2} className="text-success" />
           ) : (
-            <CircleAlert size={13} strokeWidth={2} className="text-warning" />
+            <CircleAlert size={14} strokeWidth={2} className="text-warning" />
           )}
         </span>
         <span data-collab-reach-summary>{reachSummary(reach)}</span>
@@ -468,12 +468,12 @@ function DialBackLine({ dialBack }: { dialBack: CollabSessionState["dialBack"] }
     <p
       data-collab-dialback
       className={cn(
-        "-mt-1 flex items-center gap-2 text-[12.5px]",
+        "-mt-1 flex items-center gap-2 text-[13px]",
         dialBack.state === "failed" ? "text-danger" : "text-body",
       )}
     >
       {dialBack.state === "dialing" && (
-        <LoaderCircle size={13} strokeWidth={2} className="shrink-0 animate-spin text-faint" />
+        <LoaderCircle size={14} strokeWidth={2} className="shrink-0 animate-spin text-faint" />
       )}
       {dialBack.state === "dialing"
         ? "正在按回连链接往对方那边拨…"
@@ -523,7 +523,7 @@ function CallbackField({ onDone }: { onDone: () => void }) {
           type="button"
           disabled={!value.trim()}
           onClick={submit}
-          className="h-8 shrink-0 rounded-md bg-accent px-3 text-[12.5px] font-medium text-accent-ink
+          className="h-8 shrink-0 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-ink
                      transition-colors duration-[140ms] hover:bg-accent-hover disabled:opacity-50"
         >
           拨过去
@@ -751,7 +751,7 @@ function MemberList({ session, editable }: { session: CollabSessionState; editab
   const away = editable ? trusted.filter((peer) => !members.some((m) => m.id === peer.id)) : [];
   return (
     <section>
-      <p className="mb-1.5 text-[12px] text-faint">在这里的人 · {members.length}</p>
+      <p className="mb-1.5 text-[12px] text-muted">在这里的人 · {members.length}</p>
       <ul className="flex flex-col">
         {members.map((member) => {
           const me = member.id === identity?.id;
@@ -763,20 +763,20 @@ function MemberList({ session, editable }: { session: CollabSessionState; editab
                 {member.name}
                 {me && <span className="text-faint">（你）</span>}
                 {member.via !== null && (
-                  <span className="text-[12px] text-faint">
+                  <span className="text-[12px] text-muted">
                     {" "}
                     · 经由 {members.find((other) => other.member === member.via)?.name ?? "别人"}
                   </span>
                 )}
                 {viewing(member) && (
-                  <span data-collab-viewing className="text-[12px] text-faint">
+                  <span data-collab-viewing className="text-[12px] text-muted">
                     {" "}
                     · 在看 {viewing(member)}
                   </span>
                 )}
               </span>
               {member.host ? (
-                <span className="text-[12px] text-faint">主持人</span>
+                <span className="text-[12px] text-muted">主持人</span>
               ) : editable ? (
                 <>
                   {/* 记住：下次拿着链接或者从「附近」进来不问（设计 §8.2）。静态切换，不做动画 */}
@@ -814,7 +814,7 @@ function MemberList({ session, editable }: { session: CollabSessionState; editab
                   </BannerButton>
                 </>
               ) : (
-                <span className="text-[12px] text-faint">
+                <span className="text-[12px] text-muted">
                   {member.permission === "edit" ? "可编辑" : "只读"}
                 </span>
               )}
@@ -824,7 +824,7 @@ function MemberList({ session, editable }: { session: CollabSessionState; editab
       </ul>
       {away.length > 0 && (
         <>
-          <p className="mt-2 mb-1.5 text-[12px] text-faint">
+          <p className="mt-2 mb-1.5 text-[12px] text-muted">
             记住的人 · {away.length}（进来不用再问）
           </p>
           <ul className="flex flex-col">
@@ -832,7 +832,7 @@ function MemberList({ session, editable }: { session: CollabSessionState; editab
               <li key={peer.id} data-collab-trusted className="flex h-9 items-center gap-2.5">
                 <PeerAvatar id={peer.id} name={peer.name} />
                 <span className="min-w-0 flex-1 truncate text-[13px] text-body">{peer.name}</span>
-                <span className="text-[12px] text-faint">
+                <span className="text-[12px] text-muted">
                   {peer.permission === "edit" ? "可编辑" : "只读"}
                 </span>
                 <BannerButton onClick={() => void forget(peer.id)}>忘掉</BannerButton>
@@ -926,7 +926,7 @@ function JoinForm() {
           data-collab-join
           disabled={!joinLink.trim()}
           onClick={submit}
-          className="h-8 shrink-0 rounded-md bg-accent px-3 text-[12.5px] font-medium text-accent-ink
+          className="h-8 shrink-0 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-ink
                      transition-colors duration-[140ms] hover:bg-accent-hover disabled:opacity-50"
         >
           加入
@@ -944,7 +944,7 @@ function JoinForm() {
       {/* 访客要知情：这次经由谁的机器转发（设计 §6.5） */}
       {joinRelay && (
         <div data-collab-join-relay className="-mt-1 rounded-lg border border-line px-3 py-2.5">
-          <p className="text-[12.5px] leading-[1.6] text-body">
+          <p className="text-[13px] leading-[1.6] text-body">
             {`这次经由 ${joinRelay} 转发（主持人配置的）：那台机器看得到你的 IP 地址，看不到内容。`}
           </p>
           <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-[12px] text-muted">
@@ -989,7 +989,7 @@ function NearbyList() {
   const searching = !nearby?.length && since !== null && Date.now() - since < NEARBY_SEARCHING_MS;
   return (
     <section data-collab-nearby className="border-t border-line pt-3">
-      <p className="mb-1.5 text-[12px] text-faint">附近：同一个网络里正在分享的人</p>
+      <p className="mb-1.5 text-[12px] text-muted">附近：同一个网络里正在分享的人</p>
       {error ? (
         <p className="text-[12px] leading-[1.65] text-muted">{error}</p>
       ) : nearby?.length ? (
@@ -1062,7 +1062,7 @@ function GuestBody({ id }: { id: number }) {
     <div className="flex flex-col gap-4">
       <div className="flex min-h-[40px] items-center gap-2.5 rounded-lg bg-raised px-3 py-2">
         {line.busy && (
-          <LoaderCircle size={13} strokeWidth={2} className="shrink-0 animate-spin text-faint" />
+          <LoaderCircle size={14} strokeWidth={2} className="shrink-0 animate-spin text-faint" />
         )}
         <p data-collab-status className="text-[13px] leading-[1.6] text-body">
           {line.text}
@@ -1131,14 +1131,14 @@ export function SharedTree({ id, compact }: { id: number; compact?: boolean }) {
       >
         <span className="min-w-0 flex-1 truncate">{doc.title || "无标题"}</span>
         {openDocs.includes(doc.id) && doc.id !== current && (
-          <span className="text-[11.5px] text-faint">开着</span>
+          <span className="text-[12px] text-muted">开着</span>
         )}
       </button>
     </li>
   );
   return (
     <section data-collab-tree className={compact ? "flex min-h-0 flex-col" : undefined}>
-      {!compact && <p className="mb-1.5 text-[12px] text-faint">里面的笔记 · {docs.length}</p>}
+      {!compact && <p className="mb-1.5 text-[12px] text-muted">里面的笔记 · {docs.length}</p>}
       <div
         className={cn(
           compact
@@ -1147,14 +1147,14 @@ export function SharedTree({ id, compact }: { id: number; compact?: boolean }) {
         )}
       >
         {docs.length === 0 ? (
-          <p className="px-2 py-1.5 text-[12.5px] text-muted">
+          <p className="px-2 py-1.5 text-[13px] text-muted">
             {tree ? "这里面还没有笔记" : "正在拿主持人那边的目录…"}
           </p>
         ) : (
           folders.map((folder) => (
             <div key={folder || "/"} className="mb-1">
               {folder && (
-                <p className="truncate px-2 pt-1.5 pb-0.5 text-[11.5px] text-faint" title={folder}>
+                <p className="truncate px-2 pt-1.5 pb-0.5 text-[12px] text-muted" title={folder}>
                   {folder}
                 </p>
               )}
@@ -1175,7 +1175,7 @@ export function SharedTree({ id, compact }: { id: number; compact?: boolean }) {
             }}
             placeholder="新建一篇：标题"
             aria-label="新建一篇的标题"
-            className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-faint"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-faint"
           />
           <BannerButton disabled={!newTitle.trim()} onClick={() => void create()}>
             新建
@@ -1223,7 +1223,7 @@ function ForwardLink({ id, host }: { id: number; host: string }) {
   const verdict = forwardVerdict(forward.reach);
   return (
     <section>
-      <p className="mb-1.5 text-[12px] text-faint">转发链接（经你加入，{host} 那边照样要同意）</p>
+      <p className="mb-1.5 text-[12px] text-muted">转发链接（经你加入，{host} 那边照样要同意）</p>
       <div className="flex h-10 items-center gap-2 rounded-lg bg-raised pl-3 pr-1">
         <span data-collab-forward className="flex-1 truncate font-mono text-[12px] text-body">
           {forward.link}
@@ -1232,10 +1232,10 @@ function ForwardLink({ id, host }: { id: number; host: string }) {
           type="button"
           onClick={() => void copy()}
           className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5
-                     text-[12.5px] font-medium text-accent-ink transition-colors
+                     text-[13px] font-medium text-accent-ink transition-colors
                      duration-[140ms] hover:bg-accent-hover"
         >
-          {copied ? <Check size={13} strokeWidth={2.2} /> : <Copy size={13} strokeWidth={2} />}
+          {copied ? <Check size={14} strokeWidth={2.2} /> : <Copy size={14} strokeWidth={2} />}
           {copied ? "已复制" : "复制"}
         </button>
       </div>
@@ -1279,13 +1279,13 @@ function Unreachable({ id, diagnosis, host }: { id: number; diagnosis: Diagnosis
           <CircleAlert size={14} strokeWidth={2} className="mt-[3px] shrink-0 text-warning" />
           {text.title}
         </p>
-        <p className="mt-1 pl-[22px] text-[12.5px] leading-[1.65] text-body">{text.detail}</p>
-        <p className="mt-1 pl-[22px] text-[12px] text-faint">{text.tried}</p>
+        <p className="mt-1 pl-[22px] text-[13px] leading-[1.65] text-body">{text.detail}</p>
+        <p className="mt-1 pl-[22px] text-[12px] text-muted">{text.tried}</p>
       </div>
       {text.steps.length > 0 && (
         <section>
-          <p className="mb-1 text-[12px] text-faint">可以这样试</p>
-          <ol className="flex list-decimal flex-col gap-0.5 pl-5 text-[12.5px] leading-[1.65] text-body">
+          <p className="mb-1 text-[12px] text-muted">可以这样试</p>
+          <ol className="flex list-decimal flex-col gap-0.5 pl-5 text-[13px] leading-[1.65] text-body">
             {text.steps.map((step) => (
               <li key={step}>{step}</li>
             ))}
@@ -1302,10 +1302,10 @@ function Unreachable({ id, diagnosis, host }: { id: number; diagnosis: Diagnosis
               type="button"
               onClick={() => void copy()}
               className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5
-                         text-[12.5px] font-medium text-accent-ink transition-colors
+                         text-[13px] font-medium text-accent-ink transition-colors
                          duration-[140ms] hover:bg-accent-hover"
             >
-              {copied ? <Check size={13} strokeWidth={2.2} /> : <Copy size={13} strokeWidth={2} />}
+              {copied ? <Check size={14} strokeWidth={2.2} /> : <Copy size={14} strokeWidth={2} />}
               {copied ? "已复制" : "复制"}
             </button>
           </div>
@@ -1608,7 +1608,7 @@ export function CollabPresence({ docKey }: { docKey: string }) {
       title={only ? "回到协作的那篇" : "正在进行的协作"}
       className={className}
     >
-      <Users size={13} strokeWidth={2} />
+      <Users size={14} strokeWidth={2} />
       <span className="max-w-[180px] truncate">
         {only ? `协作中：${sessionName(only, onlyTitle)}` : `${live.length} 个协作进行中`}
       </span>
@@ -1661,7 +1661,7 @@ export function PeerAvatar({ id, name, ring }: { id: string; name: string; ring?
       aria-hidden
       className={cn(
         `odea-peer-${peerColor(id)} grid size-[18px] shrink-0 place-items-center rounded-full`,
-        "text-[10px] font-semibold leading-none text-white",
+        "text-[11px] font-semibold leading-none text-white",
         ring && "ring-2 ring-canvas",
       )}
       style={{ background: "var(--peer-label)" }}

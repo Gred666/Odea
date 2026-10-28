@@ -94,7 +94,10 @@ export function VaultSwitcher() {
   }, [refresh]);
 
   return (
-    <div className="w-[300px] shrink-0 border-t border-r border-line-strong/60 px-3 py-2">
+    // 和右边正文底下的状态栏是同一条底带：分隔线下面正好 40 高、按钮 32 居中，仓库名和字数、
+    // 日期落在同一条中线上（DocumentView 的 StatusBar 也是 40 高）。以前这里 53 高、状态栏 32 高，
+    // 两边的字差了 10px
+    <div className="w-[300px] shrink-0 border-t border-r border-line-strong/60 px-3 py-1">
       <DropdownMenu.Root
         modal={false}
         onOpenChange={(next) => {
@@ -107,24 +110,24 @@ export function VaultSwitcher() {
             onPointerEnter={refresh}
             onFocus={refresh}
             title={root ?? undefined}
-            className="group flex h-9 w-full items-center gap-2 rounded-lg pr-2 pl-[7px] text-left outline-none
+            className="group flex h-8 w-full items-center gap-2 rounded-lg pr-2 pl-[6px] text-left outline-none
                        transition-colors duration-[140ms] hover:bg-raised/55 focus-visible:ring-2
                        focus-visible:ring-accent/50 data-[state=open]:bg-raised/55"
           >
             <span
               aria-hidden="true"
-              className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-md bg-raised text-[12px]
+              className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-raised text-[12px]
                          font-semibold text-muted"
             >
               {[...name][0]?.toUpperCase()}
             </span>
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink/90">
+            <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink/90">
               {name}
             </span>
             <ChevronsUpDown
-              size={13}
+              size={14}
               strokeWidth={1.9}
-              className="shrink-0 text-faint transition-colors duration-[140ms] group-hover:text-muted"
+              className="shrink-0 text-muted transition-colors duration-[140ms] group-hover:text-body"
             />
           </button>
         </DropdownMenu.Trigger>
@@ -140,7 +143,7 @@ export function VaultSwitcher() {
           >
             {others && others.length > 0 && (
               <>
-                <DropdownMenu.Label className="px-2 pt-1.5 pb-1 text-[12px] text-faint">
+                <DropdownMenu.Label className="px-2 pt-1.5 pb-1 text-[12px] text-muted">
                   切换仓库
                 </DropdownMenu.Label>
                 {others.map((vault) => (
@@ -154,13 +157,13 @@ export function VaultSwitcher() {
                     <span
                       aria-hidden="true"
                       className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[5px] bg-raised
-                                 text-[11px] font-semibold text-muted"
+                                 text-[12px] font-semibold text-muted"
                     >
                       {[...vault.name][0]?.toUpperCase()}
                     </span>
                     <span className="min-w-0 flex-1 truncate">{vault.name}</span>
                     {(vault.open || vault.missing) && (
-                      <span className="shrink-0 text-[12px] text-faint">
+                      <span className="shrink-0 text-[12px] text-muted">
                         {vault.missing ? "找不到" : "已打开"}
                       </span>
                     )}
@@ -228,7 +231,7 @@ export function VaultSwitcher() {
 }
 
 const ITEM =
-  "flex cursor-default select-none items-center gap-2 rounded-md px-2 py-[6px] text-[13px] text-body outline-none " +
+  "flex min-h-8 cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-body outline-none " +
   "transition-colors duration-[110ms] data-[highlighted]:bg-raised data-[highlighted]:text-ink";
 
 function MenuItem({
@@ -245,10 +248,10 @@ function MenuItem({
 }) {
   return (
     <DropdownMenu.Item onSelect={onSelect} className={cn(ITEM, hint && "items-start")}>
-      <Icon size={13} strokeWidth={1.9} className={cn("shrink-0", hint && "mt-[3px]")} />
+      <Icon size={14} strokeWidth={1.9} className={cn("shrink-0", hint && "mt-[2px]")} />
       <span className="min-w-0 flex-1">
         <span className="block">{label}</span>
-        {hint && <span className="block text-[12px] text-faint">{hint}</span>}
+        {hint && <span className="block text-[12px] text-muted">{hint}</span>}
       </span>
     </DropdownMenu.Item>
   );

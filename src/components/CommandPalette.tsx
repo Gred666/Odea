@@ -911,7 +911,7 @@ export function CommandPalette({
               }}
             >
               <div className="flex h-[52px] items-center gap-3 border-b border-line px-4">
-                <Search size={15} strokeWidth={2} className="shrink-0 text-faint" />
+                <Search size={16} strokeWidth={2} className="shrink-0 text-faint" />
                 <input
                   ref={inputRef}
                   // 焦点一直在输入框里，上下键挪的是列表里的高亮（读屏按 activedescendant 念）
@@ -946,7 +946,7 @@ export function CommandPalette({
                     return (
                       <div key={item.id}>
                         {showGroup && (
-                          <p className="px-2.5 pb-1 pt-2.5 text-[12px] font-medium tracking-[0.05em] text-faint">
+                          <p className="px-2.5 pb-1 pt-2.5 text-[12px] font-medium tracking-[0.05em] text-muted">
                             {item.group}
                           </p>
                         )}
@@ -1008,7 +1008,7 @@ export function CommandPalette({
                           )}
                           {active && (
                             <CornerDownLeft
-                              size={11}
+                              size={12}
                               strokeWidth={2}
                               className="relative z-10 mt-[4px] shrink-0 self-start text-accent/60"
                             />
@@ -1020,7 +1020,7 @@ export function CommandPalette({
                 </div>
               </AutoHeight>
 
-              <div className="flex h-8 items-center gap-3.5 border-t border-line px-4 text-[12px] text-faint">
+              <div className="flex h-8 items-center gap-3.5 border-t border-line px-4 text-[12px] text-muted">
                 {/* 按键画成图标，不用箭头、回车这类字：正文字体里没有，第一次画它们浏览器要把
                     系统字体挨个找一遍，打开面板就卡一下（见 editor/popupGlyphs.test.ts） */}
                 <KeyHint keys={[ArrowUp, ArrowDown]} label="选择" />
@@ -1123,10 +1123,10 @@ export function KeyHint({ keys, label }: { keys: (string | LucideIcon)[]; label:
         <kbd
           // biome-ignore lint/suspicious/noArrayIndexKey: 固定的一两个键，不会重排
           key={index}
-          className="grid h-[17px] min-w-[17px] place-items-center rounded border border-line-strong px-1
+          className="grid h-[18px] min-w-[18px] place-items-center rounded border border-line-strong px-1
                      font-sans text-[11px] leading-none text-muted"
         >
-          {typeof Key === "string" ? Key : <Key size={10} strokeWidth={2.2} aria-hidden="true" />}
+          {typeof Key === "string" ? Key : <Key size={12} strokeWidth={2.2} aria-hidden="true" />}
         </kbd>
       ))}
       <span className="ml-0.5">{label}</span>

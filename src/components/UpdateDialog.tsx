@@ -139,7 +139,7 @@ export function UpdateDialog() {
                 style={{ height: HEADER }}
               >
                 <Icon
-                  size={15}
+                  size={16}
                   strokeWidth={2}
                   className={notes ? "shrink-0 text-faint" : "shrink-0 text-accent"}
                 />
@@ -227,7 +227,7 @@ function UpdateBody({
           </FooterButton>
         ) : (
           <FooterButton primary onClick={onInstall} disabled={installing}>
-            {installing && <LoaderCircle size={13} strokeWidth={2.2} className="animate-spin" />}
+            {installing && <LoaderCircle size={14} strokeWidth={2.2} className="animate-spin" />}
             重启并更新
           </FooterButton>
         )}
@@ -299,7 +299,7 @@ function Notes({ markdown, ns }: { markdown: string; ns: string }) {
 function Footer({ hint, children }: { hint?: string; children: ReactNode }) {
   return (
     <div className="flex items-center gap-2 border-t border-line px-4 py-3">
-      <p className="min-w-0 flex-1 truncate text-[12px] text-faint">{hint}</p>
+      <p className="min-w-0 flex-1 truncate text-[12px] text-muted">{hint}</p>
       {children}
     </div>
   );

@@ -130,7 +130,7 @@ export function ExtensionsView() {
           )}
 
           {loading ? (
-            <p className="py-16 text-center text-[13px] text-faint">正在加载扩展目录…</p>
+            <p className="py-16 text-center text-[13px] text-muted">正在加载扩展目录…</p>
           ) : visible.length === 0 ? (
             <div className="grid place-items-center py-20 text-center">
               <PackageOpen size={28} className="text-faint" />
@@ -175,14 +175,14 @@ function ExtensionCard({
     <article className="flex min-h-[174px] flex-col rounded-xl border border-line-strong bg-panel/55 p-5">
       <div className="flex items-start gap-3">
         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-accent-wash text-accent">
-          <PackageOpen size={19} />
+          <PackageOpen size={20} strokeWidth={1.75} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h2 className="truncate text-[16px] font-semibold text-ink">{extension.name}</h2>
+            <h2 className="truncate text-[15px] font-semibold text-ink">{extension.name}</h2>
             {extension.verified && <ShieldCheck size={14} className="shrink-0 text-success" />}
           </div>
-          <p className="mt-0.5 text-[12px] text-faint">
+          <p className="mt-0.5 text-[12px] text-muted">
             {extension.author} · v{extension.version}
           </p>
         </div>
@@ -200,7 +200,7 @@ function ExtensionCard({
               onClick={() => void onRemove()}
               className="grid h-8 w-8 place-items-center rounded-lg text-faint hover:bg-danger/10 hover:text-danger"
             >
-              <Trash2 size={13.5} />
+              <Trash2 size={14} />
             </button>
           )}
           <button
@@ -209,7 +209,7 @@ function ExtensionCard({
             className="flex h-8 items-center gap-1.5 rounded-lg bg-raised px-3 text-[12px]
                        font-medium text-ink hover:bg-line-strong"
           >
-            <Download size={13} />
+            <Download size={14} />
             下载
           </button>
         </div>

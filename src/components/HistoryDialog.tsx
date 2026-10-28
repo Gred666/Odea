@@ -161,7 +161,7 @@ export function HistoryDialog() {
                 className="flex shrink-0 items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <History size={15} strokeWidth={2} className="shrink-0 text-faint" />
+                <History size={16} strokeWidth={2} className="shrink-0 text-faint" />
                 <p className="min-w-0 flex-1 truncate text-[14px] text-ink">
                   <span className="font-medium">历史版本</span>
                   {title && <span className="text-muted"> · {title}</span>}
@@ -324,7 +324,8 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
         aria-label="版本"
         tabIndex={0}
         onKeyDown={onListKey}
-        className="scroll-thin w-[236px] shrink-0 overflow-y-auto border-r border-line p-1.5 outline-none"
+        // 版本之间留 4px：选中的那块和悬停的那块边贴边的话连成一片，看不出是两版（同笔记列表的行）
+        className="scroll-thin flex w-[236px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-line p-1.5 outline-none"
       >
         {versions.map((item, index) => {
           const active = index === selected;
@@ -356,7 +357,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
                   </span>
                 )}
               </span>
-              <span className="mt-0.5 block truncate text-[12px] text-faint">
+              <span className="mt-0.5 block truncate text-[12px] text-muted">
                 {whoOf(item)}
                 {renamed && ` · 当时叫「${item.title}」`}
               </span>
@@ -364,7 +365,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
           );
         })}
         {history.more && (
-          <p className="px-2.5 py-2 text-[12px] leading-[1.6] text-faint">更早的版本没有列出来</p>
+          <p className="px-2.5 py-2 text-[12px] leading-[1.6] text-muted">更早的版本没有列出来</p>
         )}
       </div>
 
@@ -376,7 +377,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
               {version && formatTimestampFull(version.time)}
               <span className="text-faint"> · {version ? whoOf(version) : ""}</span>
             </p>
-            <p className="mt-0.5 font-mono text-[12px] text-faint">
+            <p className="mt-0.5 font-mono text-[12px] text-muted">
               {text === undefined ? (
                 "正在读这一版…"
               ) : same ? (
@@ -441,7 +442,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
               {text || "（这一版是空的）"}
             </pre>
           ) : same ? (
-            <p className="text-[12px] text-faint">这一版和现在的正文一模一样。</p>
+            <p className="text-[12px] text-muted">这一版和现在的正文一模一样。</p>
           ) : (
             <DiffView
               lines={diff}

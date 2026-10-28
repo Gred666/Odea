@@ -45,9 +45,17 @@ const NAV: NavItem[] = [
   { id: "archive", label: "归档", icon: Archive },
 ];
 
-/** 窄栏上一格：左右各 12、图标再往里 12，图标中心落在 31.5（64 宽的正中） */
+/**
+ * 窄栏上一格：40×40，左右各留 12，图标居中，中心落在 32（64 宽的正中）。
+ * 导航项、同步、命令面板、主题都是这一个尺寸（docs/排版规范.md §10）
+ */
 const ROW =
-  "group relative flex w-full items-center rounded-lg px-3 transition-colors duration-[140ms]";
+  "group relative flex h-10 w-full items-center justify-center rounded-lg transition-colors duration-[140ms]";
+
+/** 导航项的图标：窄栏上没有字，只能靠图标认，取 20（macOS 侧栏「中」档、VS Code 活动栏都是图标占格子一半） */
+const NAV_ICON = { size: 20, strokeWidth: 1.75 } as const;
+/** 底下那几格（读索引、新版本、同步、命令面板、主题）：次一级，小一档 */
+const FOOT_ICON = { size: 18, strokeWidth: 1.8 } as const;
 
 /** Logo 里「O」以外那几笔一直是藏着的（窄栏上只有 O） */
 const LOGO_HIDDEN = motionValue(0);
@@ -149,14 +157,13 @@ function IndexRow({ reduce }: { reduce: boolean }) {
             role="status"
             title={`${label}：第一次打开这个文件夹（或者应用升级了）要把笔记都读一遍，读完之前列表和搜索里暂时缺一部分`}
             aria-label={label}
-            className={cn(ROW, "h-8 cursor-default text-muted")}
+            className={cn(ROW, "cursor-default text-muted")}
           >
             {/* 转的是图标（SVG），不是字 */}
             <LoaderCircle
-              size={15}
-              strokeWidth={1.9}
+              {...FOOT_ICON}
               className={cn(
-                "relative z-10 shrink-0 text-faint",
+                "relative z-10 shrink-0 text-muted",
                 !reduce && "animate-spin [animation-duration:1.6s]",
               )}
             />
@@ -199,7 +206,7 @@ function UpdateRow({ reduce }: { reduce: boolean }) {
             onClick={() => setUpdateDialog("update")}
             title={`${label}：点开看看这一版有什么`}
             aria-label={`${label}，点开看看`}
-            className={cn(ROW, "h-8 text-body hover:text-ink")}
+            className={cn(ROW, "text-body hover:text-ink")}
           >
             <span
               className="absolute inset-0 rounded-lg bg-accent-wash opacity-0 transition-opacity
@@ -209,7 +216,7 @@ function UpdateRow({ reduce }: { reduce: boolean }) {
               className="relative z-10 flex shrink-0 text-accent"
               animate={reduce ? undefined : UPDATE_NUDGE}
             >
-              <CircleFadingArrowUp size={15} strokeWidth={1.9} />
+              <CircleFadingArrowUp {...FOOT_ICON} />
             </motion.span>
           </button>
         </motion.div>
@@ -268,7 +275,7 @@ ${online.length ? `${online.join("、")} 在线` : "团队里别人都不在线"
         onClick={() => setSyncOpen(true)}
         title={`${label}：${detail}${team}`}
         aria-label={`${label}：${detail}${team}`}
-        className={cn(ROW, "h-8 text-muted hover:text-ink")}
+        className={cn(ROW, "text-muted hover:text-ink")}
       >
         <span
           className="absolute inset-0 rounded-lg bg-raised opacity-0 transition-opacity
@@ -276,8 +283,7 @@ ${online.length ? `${online.join("、")} 在线` : "团队里别人都不在线"
         />
         {/* 转的是图标（SVG），不是字 */}
         <Icon
-          size={15}
-          strokeWidth={1.9}
+          {...FOOT_ICON}
           className={cn(
             "relative z-10 shrink-0 transition-colors duration-[140ms]",
             tone,
@@ -296,28 +302,24 @@ ${online.length ? `${online.join("、")} 在线` : "团队里别人都不在线"
    开关挪到了正文底下状态栏的最左端（DocumentView 的 StatusBar），紧挨着它收起的那一栏，
    只在有那一栏的几页出现；点窄栏上已经选中的那一项照样收起 / 展开 */
 
-/** 按钮边长，和 ThemeToggle 一样 */
-const KNOB = 28;
-
 function FootControls() {
   const setPaletteOpen = useApp((s) => s.setPaletteOpen);
   const combo = shortcut("K");
 
+  // 和上面的导航项、同步一样是 40×40 一格（以前是 28×28，底下三颗三个尺寸）
   return (
-    <div className="flex shrink-0 flex-col items-center gap-1 pt-3 pb-4">
+    <div className="flex shrink-0 flex-col gap-1 px-3 pt-3 pb-4">
       <button
         type="button"
         onClick={() => setPaletteOpen(true)}
         aria-label={`打开命令面板（${combo}）`}
         title={`命令面板（${combo}）`}
-        style={{ width: KNOB, height: KNOB }}
-        className="grid place-items-center rounded-md text-muted transition-colors duration-[140ms]
-                   hover:bg-raised hover:text-ink"
+        className={cn(ROW, "text-muted hover:bg-raised hover:text-ink")}
       >
-        <Search size={14} strokeWidth={1.9} />
+        <Search {...FOOT_ICON} />
       </button>
 
-      <ThemeToggle />
+      <ThemeToggle className={cn(ROW, "text-muted hover:bg-raised hover:text-ink")} />
     </div>
   );
 }
@@ -535,7 +537,7 @@ function NavRow({
       transition={{ ...tween.base, delay: 0.3 + index * 0.04 }}
       aria-hidden={leaving || undefined}
       className={cn(
-        "shrink-0 pb-[2px] will-change-[opacity,transform]",
+        "shrink-0 pb-1 will-change-[opacity,transform]",
         leaving && "pointer-events-none",
       )}
     >
@@ -551,7 +553,7 @@ function NavRow({
         aria-current={active ? "page" : undefined}
         aria-label={item.label}
         title={item.label}
-        className={cn(ROW, "h-9", active ? "text-ink" : "text-body hover:text-ink")}
+        className={cn(ROW, active ? "text-ink" : "text-body hover:text-ink")}
       >
         {/* 活动指示：同一个 layoutId 在导航项之间滑动 */}
         {active && (
@@ -575,8 +577,7 @@ function NavRow({
           className="relative z-10 flex shrink-0"
         >
           <Icon
-            size={15}
-            strokeWidth={1.9}
+            {...NAV_ICON}
             className={cn(
               "transition-colors duration-[140ms]",
               active ? "text-ink" : "text-muted group-hover:text-body",

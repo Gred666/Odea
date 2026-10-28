@@ -30,7 +30,7 @@ export function TeamRelayToast() {
           className="pointer-events-auto flex max-w-[600px] items-center gap-3 rounded-xl
                      bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
         >
-          <Radio size={13} strokeWidth={2} className="shrink-0 text-accent" />
+          <Radio size={14} strokeWidth={2} className="shrink-0 text-accent" />
           <span
             className="min-w-0 truncate"
             title="经中继转的时候，它看得到你的 IP 地址，看不到内容"

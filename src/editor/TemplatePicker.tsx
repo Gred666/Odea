@@ -167,7 +167,7 @@ export function TemplatePicker({
     >
       <div ref={contentRef} className="shrink-0">
         <div className="flex h-[36px] items-center gap-2 border-b border-line px-3.5">
-          <LayoutTemplate size={13} strokeWidth={1.9} className="shrink-0 text-faint" />
+          <LayoutTemplate size={14} strokeWidth={1.9} className="shrink-0 text-faint" />
           <span className="text-[12px] font-medium text-body">模板</span>
           <span className="text-faint/60">·</span>
           <span className="truncate text-[12px] text-muted">{scopeLabel(context)}</span>
@@ -229,7 +229,7 @@ export function TemplatePicker({
                     >
                       {template.name}
                     </span>
-                    <span className="block truncate text-[12px] leading-[16px] text-faint">
+                    <span className="block truncate text-[12px] leading-[16px] text-muted">
                       {template.description}
                     </span>
                   </span>
@@ -250,19 +250,19 @@ export function TemplatePicker({
           </div>
         </div>
 
-        <div className="flex h-[32px] items-center gap-2 border-t border-line px-3.5 text-[12px] text-faint">
+        <div className="flex h-[32px] items-center gap-2 border-t border-line px-3.5 text-[12px] text-muted">
           {/* 按键画成图标，不用 ↑↓ ↵ ⇧：正文字体里没有这些字，第一次画它们浏览器要把系统
             字体挨个找一遍，打开选择器就卡一下（表情选择器踩过，见 EmojiPicker） */}
           <span className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap">
-            <ArrowUp size={10.5} strokeWidth={2} aria-label="上" />
-            <ArrowDown size={10.5} strokeWidth={2} aria-label="下" />
+            <ArrowUp size={12} strokeWidth={2} aria-label="上" />
+            <ArrowDown size={12} strokeWidth={2} aria-label="下" />
             选择 ·
-            <CornerDownLeft size={10.5} strokeWidth={2} aria-label="回车" />
+            <CornerDownLeft size={12} strokeWidth={2} aria-label="回车" />
             插入
             {replaceable && (
               <span className="flex items-center gap-1 text-muted">
                 · Shift+
-                <CornerDownLeft size={10.5} strokeWidth={2} aria-label="回车" />
+                <CornerDownLeft size={12} strokeWidth={2} aria-label="回车" />
                 <span>
                   替换全文
                   {carried > 0 && <span className="text-faint">，带上 {carried} 项未完成</span>}

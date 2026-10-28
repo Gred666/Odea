@@ -75,7 +75,7 @@ export function TeamDialog() {
                 className="flex items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Users size={15} strokeWidth={2} className="shrink-0 text-faint" />
+                <Users size={16} strokeWidth={2} className="shrink-0 text-faint" />
                 <p className="flex-1 text-[14px] font-medium text-ink">
                   {team ? "团队成员" : "邀请成员"}
                 </p>
@@ -108,10 +108,10 @@ function TeamBody() {
   // 第一次取成员（要问 GitHub）：先占着一行
   if (!info) {
     return error ? (
-      <p className="text-[12.5px] text-danger">{error}</p>
+      <p className="text-[13px] text-danger">{error}</p>
     ) : (
-      <p className="flex items-center gap-2 py-2 text-[12.5px] text-muted">
-        <LoaderCircle size={13} strokeWidth={2} className="animate-spin" />
+      <p className="flex items-center gap-2 py-2 text-[13px] text-muted">
+        <LoaderCircle size={14} strokeWidth={2} className="animate-spin" />
         正在看这个仓库有谁…
       </p>
     );
@@ -119,13 +119,13 @@ function TeamBody() {
   if (!info.provider || !info.repo) return <NeedSync />;
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-[12.5px] leading-[1.7] text-body">
+      <p className="text-[13px] leading-[1.7] text-body">
         {`邀请的人能读写这个同步仓库（${info.repo}），在 GitHub 上是它的协作者。他在 Odea 里点你发的链接，就能拉一份下来；之后大家的改动经同步合在一起，谁改的写在历史版本里。`}
       </p>
       {info.provider === "github" ? (
         <InviteForm />
       ) : (
-        <p className="rounded-lg bg-raised px-3 py-2.5 text-[12.5px] leading-[1.65] text-body">
+        <p className="rounded-lg bg-raised px-3 py-2.5 text-[13px] leading-[1.65] text-body">
           Gitee 的仓库请在 Gitee 网页上的「仓库成员管理」里添加成员；对方在 Odea
           的启动器「从同步仓库拉一份」里就能看到这个仓库。
         </p>
@@ -133,9 +133,9 @@ function TeamBody() {
       <Invited />
       {error && <p className="text-[12px] text-danger">{error}</p>}
       <section>
-        <p className="mb-1.5 flex items-center gap-1.5 text-[12px] text-faint">
+        <p className="mb-1.5 flex items-center gap-1.5 text-[12px] text-muted">
           成员 · {info.people.length}
-          {loading && <LoaderCircle size={11} strokeWidth={2} className="animate-spin" />}
+          {loading && <LoaderCircle size={12} strokeWidth={2} className="animate-spin" />}
         </p>
         <ul className="flex flex-col divide-y divide-line rounded-lg border border-line">
           {info.people.map((person) => (
@@ -158,7 +158,7 @@ function NeedSync() {
   const close = useTeam((s) => s.close);
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-[12.5px] leading-[1.7] text-body">
+      <p className="text-[13px] leading-[1.7] text-body">
         团队仓库靠同步在成员之间传改动：先把这个仓库同步到
         GitHub（一个私有仓库），再邀请别人当它的协作者。
       </p>
@@ -169,7 +169,7 @@ function NeedSync() {
             close();
             setSyncOpen(true);
           }}
-          className="rounded-md bg-accent px-3 py-1.5 text-[12.5px] font-medium text-accent-ink
+          className="rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-ink
                      transition-colors duration-[140ms] hover:bg-accent-hover"
         >
           开启同步…
@@ -197,14 +197,14 @@ function InviteForm() {
         placeholder="对方在 GitHub 上的用户名"
         aria-label="GitHub 用户名"
         spellCheck={false}
-        className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-faint"
+        className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-faint"
       />
       <button
         type="button"
         data-team-invite
         disabled={!login.trim() || busy}
         onClick={() => void submit()}
-        className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 text-[12.5px] font-medium
+        className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium
                    text-accent-ink transition-colors duration-[140ms] hover:bg-accent-hover disabled:opacity-50"
       >
         {busy && <LoaderCircle size={12} strokeWidth={2} className="animate-spin" />}
@@ -234,14 +234,11 @@ function Invited() {
           ? `${invited.login} 本来就有这个仓库的权限`
           : `邀请发给 ${invited.login} 了，等他在 GitHub 上接受`}
       </p>
-      <p className="mt-1 text-[12.5px] leading-[1.65] text-body">
+      <p className="mt-1 text-[13px] leading-[1.65] text-body">
         把这个链接发给他，他用 Odea 打开就能拉一份下来：
       </p>
       <div className="mt-1.5 flex items-center gap-2">
-        <p
-          className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-body"
-          title={invited.link}
-        >
+        <p className="min-w-0 flex-1 truncate font-mono text-[12px] text-body" title={invited.link}>
           {invited.link}
         </p>
         <BannerButton onClick={() => void copy()}>
@@ -306,7 +303,7 @@ function PersonRow({ person }: { person: TeamPerson }) {
             </BannerButton>
           ))}
       </div>
-      <p className="mt-0.5 truncate text-[12px] text-faint" title={devices || undefined}>
+      <p className="mt-0.5 truncate text-[12px] text-muted" title={devices || undefined}>
         {confirming
           ? "GitHub 上去掉他的权限，名单里他的设备也去掉。他已经拉下来的那一份收不回来"
           : devices ||

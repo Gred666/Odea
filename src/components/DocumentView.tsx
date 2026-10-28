@@ -376,7 +376,7 @@ export function DocumentView({
                           transition={tween.base}
                           className="mb-7 flex items-center gap-2 rounded-lg bg-raised/70 px-3.5 py-2.5"
                         >
-                          <Archive size={12.5} strokeWidth={1.9} className="shrink-0 text-muted" />
+                          <Archive size={14} strokeWidth={1.9} className="shrink-0 text-muted" />
                           <span className="text-[12px] text-body">{doc.banner.text}</span>
                         </motion.div>
                       )}
@@ -768,7 +768,7 @@ function ZenToggle({ zen, onToggle }: { zen: boolean; onToggle: () => void }) {
           transition={spring.snappy}
           className="grid place-items-center"
         >
-          <Icon size={14.5} strokeWidth={2} />
+          <Icon size={16} strokeWidth={2} />
         </motion.span>
       </AnimatePresence>
     </motion.button>
@@ -993,9 +993,14 @@ function Dot() {
   );
 }
 
-/** 状态栏右端的小按钮 */
+/** 状态栏右端的小按钮：28×28，图标 14 */
 const BAR_BUTTON =
-  "grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint transition-colors duration-[140ms]";
+  "grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint transition-colors duration-[140ms]";
+/**
+ * 状态栏里的字：12px 的元信息，要读的，用 muted。数字等宽（tabular-nums）—— 字数一直在变，
+ * 后面的字不跟着左右挪。以前用 font-mono 做到这一点，一行里中文是雅黑、数字是 Cascadia，两种字混排
+ */
+const BAR_TEXT = "text-[12px] leading-none tabular-nums";
 
 /**
  * 正文底下的状态栏：贴着窗口底边，不跟着正文滚（像 Typora）。
@@ -1041,7 +1046,8 @@ function StatusBar({
   const toggleLabel = panelToggle?.collapsed ? "展开侧栏" : "收起侧栏";
   return (
     <footer
-      className="relative z-10 flex h-8 shrink-0 items-center gap-1 bg-canvas pr-2.5"
+      // 40 高：和左边列表栏底下的仓库切换器同一条中线（VaultSwitcher）
+      className="relative z-10 flex h-10 shrink-0 items-center gap-1 bg-canvas pr-2"
       style={{ marginLeft: -RAIL_WIDTH, paddingLeft: RAIL_WIDTH + (panelToggle ? 6 : 16) }}
     >
       {panelToggle && (
@@ -1052,7 +1058,7 @@ function StatusBar({
           title={toggleLabel}
           className={cn(BAR_BUTTON, "mr-1.5 hover:bg-raised hover:text-ink")}
         >
-          <ToggleIcon size={13.5} strokeWidth={1.8} />
+          <ToggleIcon size={14} strokeWidth={1.9} />
         </button>
       )}
 
@@ -1062,7 +1068,7 @@ function StatusBar({
           {parts.map((p, i) => (
             <span key={p} className="flex items-center">
               {i > 0 && <Dot />}
-              <span className="font-mono text-[12px] leading-none text-faint">{p}</span>
+              <span className={cn(BAR_TEXT, "text-muted")}>{p}</span>
             </span>
           ))}
         </SwapFade>
@@ -1075,17 +1081,12 @@ function StatusBar({
           role="status"
           title={saveError}
         >
-          <AlertTriangle size={11} strokeWidth={2} className="mr-1.5 shrink-0 text-danger" />
-          <span className="truncate font-mono text-[12px] leading-none text-danger">
-            保存失败：{saveError}
-          </span>
+          <AlertTriangle size={12} strokeWidth={2.2} className="mr-1.5 shrink-0 text-danger" />
+          <span className={cn(BAR_TEXT, "truncate text-danger")}>保存失败：{saveError}</span>
         </span>
       ) : (
         slowSave && (
-          <span
-            className="shrink-0 px-1.5 font-mono text-[12px] leading-none text-muted"
-            role="status"
-          >
+          <span className={cn(BAR_TEXT, "shrink-0 px-1.5 text-muted")} role="status">
             保存中…
           </span>
         )
@@ -1093,7 +1094,7 @@ function StatusBar({
       {/* 做客时这一篇由主持人存：分清「这台电脑上留着」和「主持人已经存下」（docs/协同编辑.md §24） */}
       {guestCopy && (
         <span
-          className="shrink-0 px-1.5 font-mono text-[12px] leading-none text-muted"
+          className={cn(BAR_TEXT, "shrink-0 px-1.5 text-muted")}
           role="status"
           title={
             guestCopy === "kept"
@@ -1113,7 +1114,7 @@ function StatusBar({
           title="历史版本"
           className={cn(BAR_BUTTON, "hover:bg-raised hover:text-ink")}
         >
-          <History size={13} strokeWidth={1.8} />
+          <History size={14} strokeWidth={1.9} />
         </button>
       )}
 
@@ -1125,7 +1126,7 @@ function StatusBar({
           title="在文件夹中显示"
           className={cn(BAR_BUTTON, "hover:bg-raised hover:text-ink")}
         >
-          <FolderOpen size={13} strokeWidth={1.8} />
+          <FolderOpen size={14} strokeWidth={1.9} />
         </button>
       )}
 
@@ -1137,7 +1138,7 @@ function StatusBar({
           title="删除（可以撤销）"
           className={cn(BAR_BUTTON, "hover:bg-danger/10 hover:text-danger")}
         >
-          <Trash2 size={13} strokeWidth={1.8} />
+          <Trash2 size={14} strokeWidth={1.9} />
         </button>
       )}
     </footer>

@@ -81,9 +81,15 @@ export abstract class OtwWidget extends WidgetType {
     return (key !== null && measuredHeights.get(key)) || this.guessHeight();
   }
 
-  /** toDOM 返回根节点前过一下：不是新内容就标成 is-settled；块级替身开始记高度 */
+  /**
+   * toDOM 返回根节点前过一下：不是新内容就标成 is-settled；块级替身开始记高度。
+   * 入场动画只给这个替身画的第一份 DOM：CodeMirror 有时拿着同一个替身再画一份（改了
+   * 别处的块、它所在的那一段被重排），那不是新出现。以前整篇打开时建的公式替身 fresh
+   * 一直是 true，在下面那个公式里删个字、光标从它里面出来，上面的公式就从透明重新淡入一遍
+   */
   protected settle<T extends Element>(dom: T): T {
     if (!this.fresh) dom.classList.add("is-settled");
+    this.fresh = false;
     this.trackHeight(dom);
     return dom;
   }

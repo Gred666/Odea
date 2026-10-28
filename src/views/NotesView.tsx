@@ -725,7 +725,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
   if (view.pinned.length) {
     groups.push({
       key: "pinned",
-      label: <GroupLabel icon={<Pin size={10} strokeWidth={2} />} text="置顶" />,
+      label: <GroupLabel icon={<Pin size={12} strokeWidth={2} />} text="置顶" />,
       body: flat
         ? view.pinned.map((n, i) => (
             <NoteCard
@@ -840,13 +840,13 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={tween.fast}
-                    className="truncate font-display text-[25px] font-bold leading-tight text-ink"
+                    className="truncate font-display text-[24px] font-bold leading-tight text-ink"
                   >
                     {folderName(folder)}
                   </motion.span>
                 </AnimatePresence>
                 <ChevronDown
-                  size={15}
+                  size={16}
                   strokeWidth={2}
                   className={cn(
                     "mt-1 shrink-0 text-faint transition-[rotate,color] duration-[220ms] group-hover:text-muted",
@@ -866,7 +866,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
                   <ColumnButton
                     label={`排序：${SORT_LABEL[sortMode]}${excerpts ? "，显示摘要" : ""}`}
                   >
-                    <ArrowUpDown size={13} strokeWidth={1.9} />
+                    <ArrowUpDown size={16} strokeWidth={1.8} />
                   </ColumnButton>
                 }
                 actions={[
@@ -892,7 +892,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
                   <ActionMenu
                     trigger={
                       <ColumnButton label="新建文件夹">
-                        <FolderPlus size={14} strokeWidth={1.9} />
+                        <FolderPlus size={16} strokeWidth={1.8} />
                       </ColumnButton>
                     }
                     actions={[
@@ -920,7 +920,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
                   <ActionMenu
                     trigger={
                       <ColumnButton label="新建文件夹">
-                        <FolderPlus size={14} strokeWidth={1.9} />
+                        <FolderPlus size={16} strokeWidth={1.8} />
                       </ColumnButton>
                     }
                     actions={[
@@ -940,7 +940,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
                   />
                 ))}
               <ColumnButton label="新建笔记" onClick={() => void handleCreate()}>
-                <Plus size={15} strokeWidth={2.1} />
+                <Plus size={16} strokeWidth={2} />
               </ColumnButton>
             </div>
           }
@@ -1374,9 +1374,11 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
       <span
         key={flashing ? tree.flash?.at : undefined}
         className={cn(
-          "absolute inset-x-0 inset-y-[2px] rounded-lg transition-[background-color,box-shadow] duration-[150ms]",
+          // 描边画在里面（ring-inset）：这一行贴着子树、列表那几层 overflow-clip 的左右边，
+          // 画在外面的那 1px 会被裁掉，拖到文件夹上时框只剩上下两条边。描边直接出现，不做过渡
+          "absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors duration-[150ms]",
           dropOn
-            ? "bg-accent-wash ring-1 ring-accent-line"
+            ? "bg-accent-wash ring-1 ring-accent-line ring-inset"
             : menuOpen
               ? "bg-raised/40"
               : "group-hover:bg-raised/40",
@@ -1395,13 +1397,13 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
       </span>
       <span
         className={cn(
-          "relative z-10 min-w-0 flex-1 truncate text-[13px] font-medium",
+          "relative z-10 min-w-0 flex-1 truncate text-[14px] font-medium",
           dropOn ? "text-accent" : "text-ink/90",
         )}
       >
         {folderName(path)}
         {hint && parentOf(path) && (
-          <span className="ml-1.5 text-[12px] font-normal text-faint">
+          <span className="ml-1.5 text-[12px] font-normal text-muted">
             {folderLabel(parentOf(path))}
           </span>
         )}
@@ -1413,10 +1415,10 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
           className={cn(
             "col-start-1 row-start-1 pr-[3px] text-[12px] tabular-nums transition-colors duration-[150ms]",
             unsorted
-              ? "text-faint"
+              ? "text-muted"
               : menuOpen
                 ? "text-transparent"
-                : "text-faint group-hover:text-transparent",
+                : "text-muted group-hover:text-transparent",
           )}
         >
           {count}
@@ -1553,8 +1555,8 @@ function FolderGlyph({
   const Icon = icon ?? (open ? FolderOpen : Folder);
   return (
     <Icon
-      size={14}
-      strokeWidth={1.9}
+      size={16}
+      strokeWidth={1.8}
       className={cn(
         "col-start-1 row-start-1 transition-colors duration-[150ms]",
         // 拖到上面时一直是打开的文件夹（箭头这时候让位）
@@ -1576,16 +1578,16 @@ function Twisty({ open, hidden }: { open: boolean; hidden: boolean }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      width={13}
-      height={13}
+      width={16}
+      height={16}
       fill="none"
       stroke="currentColor"
-      strokeWidth={2.2}
+      strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"
       className={cn(
         "col-start-1 row-start-1 text-transparent transition-colors duration-[150ms]",
-        !hidden && "group-hover:text-faint",
+        !hidden && "group-hover:text-muted",
       )}
     >
       <title>{open ? "收起（按住 Alt 连子文件夹一起）" : "展开（按住 Alt 连子文件夹一起）"}</title>
@@ -1671,23 +1673,23 @@ const TreeNoteRow = memo(function TreeNoteRow({
         )}
       />
       <span className="relative z-10 grid h-5 w-5 shrink-0 place-items-center text-faint">
-        <FileText size={13} strokeWidth={1.8} />
+        <FileText size={16} strokeWidth={1.8} />
       </span>
       <span className="relative z-10 min-w-0 flex-1">
         <span
           className={cn(
-            "block truncate text-[13px]",
+            "block truncate text-[14px]",
             excerpts && "leading-5",
             selected && !filtered ? "font-medium text-ink" : selected ? "text-ink" : "text-body",
           )}
         >
           {title}
           {where !== undefined && (
-            <span className="ml-1.5 text-[12px] font-normal text-faint">{folderLabel(where)}</span>
+            <span className="ml-1.5 text-[12px] font-normal text-muted">{folderLabel(where)}</span>
           )}
         </span>
         {excerpts && (
-          <span className="block truncate text-[12px] leading-[17px] text-muted">
+          <span className="block truncate text-[13px] leading-[18px] text-muted">
             {animatedEmojiText(note.excerpt)}
           </span>
         )}
@@ -1706,7 +1708,7 @@ const TreeNoteRow = memo(function TreeNoteRow({
       <span className="relative z-20 -mr-1 grid shrink-0 place-items-center">
         {note.isPinned && (
           <Pin
-            size={10.5}
+            size={12}
             strokeWidth={2}
             aria-hidden="true"
             className={cn(
@@ -1845,7 +1847,7 @@ const TreeShortcutRow = memo(function TreeShortcutRow({
         )}
       />
       <span className="relative z-10 grid h-5 w-5 shrink-0 place-items-center text-faint">
-        <FileSymlink size={13} strokeWidth={1.8} />
+        <FileSymlink size={16} strokeWidth={1.8} />
       </span>
       <ShortcutTitle note={note} selected={selected} />
       <div
@@ -1882,7 +1884,7 @@ function ShortcutTitle({ note, selected }: { note: NoteSummary; selected: boolea
   return (
     <span
       className={cn(
-        "relative z-10 min-w-0 flex-1 truncate text-[13px] italic",
+        "relative z-10 min-w-0 flex-1 truncate text-[14px] italic",
         selected ? "text-ink" : "text-body",
       )}
     >
@@ -1956,13 +1958,13 @@ const TreeFileRow = memo(function TreeFileRow({
             className="h-4 w-4 rounded-[3px] object-cover ring-1 ring-line-strong"
           />
         ) : (
-          <FileType size={13} strokeWidth={1.8} />
+          <FileType size={16} strokeWidth={1.8} />
         )}
       </span>
-      <span className="relative z-10 min-w-0 flex-1 truncate text-[13px] text-body">
+      <span className="relative z-10 min-w-0 flex-1 truncate text-[14px] text-body">
         {file.name}
         {hint && file.folder && (
-          <span className="ml-1.5 text-[12px] text-faint">{folderLabel(file.folder)}</span>
+          <span className="ml-1.5 text-[12px] text-muted">{folderLabel(file.folder)}</span>
         )}
       </span>
       <div
@@ -2025,7 +2027,7 @@ function FolderNameInput({
         className="relative flex h-[34px] items-center gap-1.5 pr-3"
       >
         <span className="grid h-5 w-5 shrink-0 place-items-center text-faint">
-          <Folder size={14} strokeWidth={1.9} />
+          <Folder size={16} strokeWidth={1.8} />
         </span>
         <input
           ref={input}
@@ -2046,7 +2048,7 @@ function FolderNameInput({
           // 框往左多出 7px，框里的字和起好名之后那一行的名字对齐（同样的字号、字重、颜色）：
           // 回车之后字原地不动，只是框没了
           className={cn(
-            "-ml-[7px] h-[26px] min-w-0 flex-1 rounded-md bg-canvas px-[7px] text-[13px] outline-none",
+            "-ml-[7px] h-7 min-w-0 flex-1 rounded-md bg-canvas px-[7px] text-[14px] outline-none",
             "font-medium text-ink/90 ring-1 ring-accent-line focus:shadow-[0_0_0_3px_var(--color-accent-wash)]",
           )}
         />
@@ -2063,7 +2065,7 @@ function Crumbs({ folder, onNavigate }: { folder: string; onNavigate: (path: str
   return (
     <nav
       aria-label="所在位置"
-      className="mt-2 -ml-[5px] flex h-[22px] min-w-0 items-center gap-0.5 text-[12px]"
+      className="mt-2 -ml-[5px] flex h-6 min-w-0 items-center gap-0.5 text-[13px]"
     >
       {ancestors.map((path, i) => (
         <Fragment key={path || "/"}>
@@ -2088,13 +2090,13 @@ function Crumb({
       title={folderLabel(path)}
       onClick={() => onNavigate(path)}
       className={cn(
-        "flex h-[22px] min-w-0 items-center gap-0.5 rounded-md px-[5px] text-muted",
+        "flex h-6 min-w-0 items-center gap-0.5 rounded-md px-[5px] text-muted",
         "transition-colors duration-[140ms] hover:bg-raised/60 hover:text-ink",
         first ? "shrink-0" : "max-w-[96px]",
         dropOn && "bg-accent-wash text-accent ring-1 ring-accent-line",
       )}
     >
-      {first && <ChevronLeft size={12} strokeWidth={2} className="shrink-0" />}
+      {first && <ChevronLeft size={14} strokeWidth={2} className="shrink-0" />}
       <span className="truncate">{path ? nameOf(path) : rootLabel()}</span>
     </button>
   );
@@ -2123,7 +2125,7 @@ function NoteDragGhost() {
     >
       <span className="block truncate text-[13px] font-semibold text-ink">{item.title}</span>
       <span
-        className={cn("block truncate text-[12px]", target !== null ? "text-accent" : "text-faint")}
+        className={cn("block truncate text-[12px]", target !== null ? "text-accent" : "text-muted")}
       >
         {hint}
       </span>
@@ -2213,7 +2215,8 @@ const NoteCard = memo(function NoteCard({
           layoutId="note-selection"
           className={cn(
             "absolute inset-x-0 inset-y-[2px] rounded-lg bg-accent-wash",
-            boxed && "ring-1 ring-accent-line/70",
+            // 画在里面：画在外面的那 1px 会被列表的 overflow-clip 裁掉左右两边
+            boxed && "ring-1 ring-accent-line/70 ring-inset",
           )}
           transition={spring.smooth}
         />
@@ -2279,7 +2282,7 @@ const NoteCard = memo(function NoteCard({
               animate={{ scale: 1, rotate: 45 }}
               transition={spring.bouncy}
             >
-              <Pin size={11.5} strokeWidth={2} className="block" />
+              <Pin size={12} strokeWidth={2} className="block" />
             </motion.span>
           </span>
         )}
@@ -2296,7 +2299,7 @@ function FolderChip({ path }: { path: string }) {
       className="mr-1.5 inline-flex max-w-[60%] shrink-0 items-center gap-[3px] rounded-[4px] bg-raised/70 py-px pr-[5px] pl-1
                  text-[12px] font-medium text-muted"
     >
-      <Folder size={10} strokeWidth={2} className="shrink-0" />
+      <Folder size={12} strokeWidth={2} className="shrink-0" />
       <span className="truncate">{nameOf(path)}</span>
     </span>
   );
@@ -2359,7 +2362,7 @@ export function EmptyResult({
         ) : (
           <div className="text-center">
             <p className="text-[13px] text-muted">{emptyTitle}</p>
-            <p className="mt-1 text-[12px] text-faint">{emptyHint}</p>
+            <p className="mt-1 text-[12px] text-muted">{emptyHint}</p>
           </div>
         )}
       </motion.div>

@@ -93,3 +93,40 @@ describe("上标", () => {
     expect(nodes("看[x^2^]", /Superscript$/)).toEqual(["Superscript:^2^"]);
   });
 });
+
+describe("Setext 标题", () => {
+  const blocks = (source: string) =>
+    nodes(source, /^(Paragraph|SetextHeading\d|HorizontalRule|BulletList)$/);
+
+  it("still reads a one-line title over === or ---", () => {
+    expect(blocks("一级标题\n===\n\n二级标题\n----------")).toEqual([
+      "SetextHeading1:一级标题\n===",
+      "SetextHeading2:二级标题\n----------",
+    ]);
+    // 引用、列表里也一样
+    expect(nodes("> 标题\n> ---", /SetextHeading/)).toEqual(["SetextHeading2:标题\n> ---"]);
+  });
+
+  it("does not turn the line above into a heading while - or == is being typed", () => {
+    for (const typed of ["-", "- ", "--", "=", "==", "== "]) {
+      expect(blocks(`闭源\n宣传视频\n${typed}`)).toEqual([`Paragraph:闭源\n宣传视频\n${typed}`]);
+      expect(blocks(`宣传视频\n${typed}`)).toEqual([`Paragraph:宣传视频\n${typed}`]);
+    }
+    // `- -` 是嵌套的列表，`- - -` 是分隔线：都只管这一行，上面那段还是段落
+    expect(blocks("宣传视频\n- -")).toEqual([
+      "Paragraph:宣传视频",
+      "BulletList:- -",
+      "BulletList:-",
+    ]);
+    expect(blocks("宣传视频\n- - -")).toEqual(["Paragraph:宣传视频", "HorizontalRule:- - -"]);
+  });
+
+  it("ends a paragraph of several lines at --- instead of making it all a heading", () => {
+    expect(blocks("闭源\n重新取名 Odea\n宣传视频\n/\n---\n多人编辑")).toEqual([
+      "Paragraph:闭源\n重新取名 Odea\n宣传视频\n/",
+      "HorizontalRule:---",
+      "Paragraph:多人编辑",
+    ]);
+    expect(blocks("两行\n的段落\n===")).toEqual(["Paragraph:两行\n的段落\n==="]);
+  });
+});

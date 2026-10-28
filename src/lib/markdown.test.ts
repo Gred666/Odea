@@ -29,6 +29,14 @@ describe("Markdown outline", () => {
     ]);
   });
 
+  it("skips what the editor no longer reads as Setext: short underlines, several lines over ---", () => {
+    const outline = buildOutline("闭源\n宣传视频\n/\n---\n\n列表\n-\n\n- 一项\n---\n\n标题\n---");
+    expect(outline.map(({ text, line }) => [text, line])).toEqual([
+      ["概览", 1],
+      ["标题", 12],
+    ]);
+  });
+
   it("shows animated emoji short codes as Unicode in the outline", () => {
     const outline = buildOutline("## 冲刺 :odea_fire:\n\n> [!NOTE] 完成 :odea_done:\n> 内容");
     expect(outline.map((item) => item.text)).toContain("冲刺 🔥");

@@ -140,7 +140,7 @@ export function FolderPicker({
                  shadow-float ring-1 ring-line-strong"
     >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3 text-faint">
-        <Search size={13} strokeWidth={2} className="shrink-0" />
+        <Search size={14} strokeWidth={2} className="shrink-0" />
         <input
           // biome-ignore lint/a11y/noAutofocus: 打开就是为了马上选，焦点直接给筛选框
           autoFocus
@@ -181,7 +181,7 @@ export function FolderPicker({
       </div>
 
       {mode !== "jump" && noteTitle && (
-        <div className="truncate px-3 pb-0.5 pt-2 text-[12px] text-faint">
+        <div className="truncate px-3 pb-0.5 pt-2 text-[12px] text-muted">
           {mode === "shortcut" ? `给「${noteTitle}」放一个快捷方式到` : `移动「${noteTitle}」到`}
         </div>
       )}
@@ -195,7 +195,7 @@ export function FolderPicker({
         className="scroll-thin max-h-[296px] shrink-0 overflow-y-auto p-1"
       >
         {entries.length === 0 && (
-          <div className="px-2 py-5 text-center text-[12px] text-faint">没有叫这个名字的文件夹</div>
+          <div className="px-2 py-5 text-center text-[12px] text-muted">没有叫这个名字的文件夹</div>
         )}
         {entries.map((entry, index) => {
           const isCurrent = entry.path === current;
@@ -223,7 +223,7 @@ export function FolderPicker({
               )}
             >
               <Icon
-                size={13}
+                size={14}
                 strokeWidth={1.9}
                 className={cn(
                   "shrink-0",
@@ -232,9 +232,9 @@ export function FolderPicker({
               />
               <span className="min-w-0 truncate">{folderName(entry.path)}</span>
               {entry.hint && (
-                <span className="min-w-0 truncate text-[12px] text-faint">{entry.hint}</span>
+                <span className="min-w-0 truncate text-[12px] text-muted">{entry.hint}</span>
               )}
-              <span className="ml-auto shrink-0 pl-2 text-[12px] tabular-nums text-faint">
+              <span className="ml-auto shrink-0 pl-2 text-[12px] tabular-nums text-muted">
                 {off ? (
                   smart ? (
                     "智能文件夹"
@@ -244,7 +244,7 @@ export function FolderPicker({
                     "当前位置"
                   )
                 ) : isCurrent && mode === "jump" ? (
-                  <Check size={13} strokeWidth={2.2} className="text-accent" />
+                  <Check size={14} strokeWidth={2.2} className="text-accent" />
                 ) : smart ? (
                   ""
                 ) : entry.path === UNSORTED ? (
@@ -258,7 +258,7 @@ export function FolderPicker({
         })}
       </div>
 
-      <div className="flex shrink-0 gap-3 border-t border-line px-3 pb-2 pt-[7px] text-[12px] text-faint">
+      <div className="flex shrink-0 gap-3 border-t border-line px-3 pb-2 pt-[7px] text-[12px] text-muted">
         <span>
           <Kbd>↑↓</Kbd>选择
         </span>

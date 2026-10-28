@@ -144,7 +144,7 @@ export function ConflictBanner({
                     className="mt-3 max-h-[300px]"
                   />
                 ) : (
-                  <p className="mt-3 text-[12px] text-faint">正在读原文…</p>
+                  <p className="mt-3 text-[12px] text-muted">正在读原文…</p>
                 )}
               </motion.div>
             )}

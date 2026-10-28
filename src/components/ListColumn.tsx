@@ -29,13 +29,14 @@ export function ListColumn({
   return (
     <div className="relative flex h-full w-[300px] shrink-0 flex-col border-r border-line-strong/60 bg-panel">
       <div className="shrink-0 px-6 pt-[42px]">
-        <div className="flex items-center justify-between gap-3">
+        {/* 至少 32 高（栏头按钮的高度）：没有按钮的那一栏（归档）标题行也一样高，切过去时下面的列表不跳 */}
+        <div className="flex min-h-8 items-center justify-between gap-3">
           {titleSlot ?? (
             <motion.h2
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={tween.base}
-              className="truncate font-display text-[25px] font-bold leading-tight text-ink"
+              className="truncate font-display text-[24px] font-bold leading-tight text-ink"
             >
               {title}
             </motion.h2>
@@ -100,11 +101,11 @@ export function ColumnButton({
       aria-label={label}
       title={label}
       className={cn(
-        "flex h-[30px] items-center justify-center gap-1.5 rounded-lg border border-line-strong",
+        "flex h-8 items-center justify-center gap-1.5 rounded-lg border border-line-strong",
         "bg-canvas text-muted transition-colors duration-[140ms] hover:border-faint/40",
         "hover:text-ink active:bg-raised/60",
         "data-[state=open]:border-faint/40 data-[state=open]:bg-raised/60 data-[state=open]:text-ink",
-        wide ? "px-2.5 text-[12px]" : "w-[30px]",
+        wide ? "px-2.5 text-[13px]" : "w-8",
         className,
       )}
       {...rest}
@@ -155,12 +156,12 @@ export function MoreRows({ height, onNear }: { height: number; onNear: () => voi
   return <div ref={ref} aria-hidden="true" style={{ height }} />;
 }
 
-/** 分组标签，如「置顶」 */
+/** 分组标签，如「置顶」。是要读的小字，用 muted（faint 只给占位符、禁用态，docs/排版规范.md §6） */
 export function GroupLabel({ icon, text }: { icon?: ReactNode; text: string }) {
   return (
     <div className="flex items-center gap-1.5 px-3 pb-1.5 pt-2">
-      {icon && <span className="text-faint">{icon}</span>}
-      <span className="text-[12px] font-medium tracking-[0.04em] text-faint">{text}</span>
+      {icon && <span className="text-muted">{icon}</span>}
+      <span className="text-[12px] font-medium tracking-[0.04em] text-muted">{text}</span>
     </div>
   );
 }
