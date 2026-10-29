@@ -11,6 +11,7 @@ import { popoverCard, tween } from "@/lib/motion";
 import { LoaderCircle, Trash2, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
+import { DialogLead, usePaletteBack } from "./PaletteBack";
 import { SearchInput } from "./SearchInput";
 
 /* ============================================================
@@ -77,6 +78,7 @@ export function TrashDialog() {
   const open = useApp((s) => s.trashOpen);
   const setOpen = useApp((s) => s.setTrashOpen);
   const close = () => setOpen(false);
+  const back = usePaletteBack("trash", open, close);
   // 每打开一次重新取：关上的淡出还没播完又打开时，AnimatePresence 用的还是那张卡片，列表不会自己再取
   const [opens, setOpens] = useState(0);
 
@@ -86,12 +88,13 @@ export function TrashDialog() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.isComposing) {
         e.preventDefault();
-        setOpen(false);
+        if (back) back();
+        else setOpen(false);
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, setOpen]);
+  }, [open, setOpen, back]);
 
   return (
     <AnimatePresence>
@@ -131,7 +134,7 @@ export function TrashDialog() {
                 className="flex shrink-0 items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Trash2 size={16} strokeWidth={2} className="shrink-0 text-faint" />
+                <DialogLead icon={Trash2} back={back} />
                 <p className="min-w-0 flex-1 truncate text-[14px] text-ink">
                   <span className="font-medium">回收站</span>
                   <span className="text-muted"> · 删掉的笔记留 30 天</span>

@@ -7,7 +7,7 @@
 // 默认 4 倍 CPU 降速 + 2x 屏：用户的桌面端（WebView2）比本机的 Chrome 慢好几倍，不降速量不出差别。
 // 量生产构建：开发构建（pnpm dev / tauri dev）慢 2.5–3.5 倍，而且 React 是开发模式。
 // 选项：--cpu 4  --notes 400（仓库里有多少篇笔记）  --port 9333（Chrome 调试端口）
-//       --only startup,switch,typing,arrows,scroll,palette,nav,memory
+//       --only startup,switch,typing,arrows,scroll,palette,nav,split,memory
 //       --only collab：协作实验台的长文里，访客每秒打 20 个字时主持人打字（默认不跑，单独量）
 //
 // 按键的延迟是页面里量的「keydown（面板里打字是 input）→ 下一帧画完」（rAF 里再 setTimeout 0）：Event Timing 的按键条目
@@ -25,7 +25,7 @@ const option = (name, fallback) => {
 const BASE = args.find((arg) => /^https?:/.test(arg)) ?? "http://localhost:1432";
 const CPU = Number(option("cpu", 4));
 const NOTES = Number(option("notes", 400));
-const ONLY = option("only", "startup,switch,typing,arrows,scroll,palette,nav,memory").split(",");
+const ONLY = option("only", "startup,switch,typing,arrows,scroll,palette,nav,split,memory").split(",");
 
 /** 每个页面一开始就装上：Event Timing、长动画帧、按键 → 下一帧、首次挂载的时刻 */
 const PROBES = `
@@ -358,6 +358,32 @@ try {
         inp: clickInp(events),
         longestFrame: Math.round(Math.max(0, ...frames)),
       });
+    }
+  }
+
+  if (ONLY.includes("split")) {
+    // 分屏（docs/标签页与分屏.md §15.6）：长文上 Ctrl+\ 向右拆分出同一篇、Ctrl+W 关掉那一栏，各三次。
+    // 溶解是合成器上淡的，卡的是按键以后那一帧：看按键的 Event Timing 和最长的那一帧
+    await openSession(STRESS_ID);
+    await reload();
+    await idle(1000);
+    out.split = { open: [], close: [] };
+    for (let i = 0; i < 3; i++) {
+      for (const [kind, keyName, code, keyCode] of [
+        ["open", "\\", "Backslash", 220],
+        ["close", "w", "KeyW", 87],
+      ]) {
+        await resetProbes();
+        await key(keyName, code, keyCode, { modifiers: 2 });
+        await idle(700);
+        const { events, frames } = await probes();
+        out.split[kind].push({
+          inp: Math.round(
+            Math.max(0, ...events.filter((e) => e.name === "keydown").map((e) => e.duration)),
+          ),
+          longestFrame: Math.round(Math.max(0, ...frames)),
+        });
+      }
     }
   }
 

@@ -4,6 +4,10 @@ import { type ISODate, today } from "@/lib/date";
 import { isTauri } from "@/lib/tauri";
 import { transitionTheme } from "@/lib/themeTransition";
 import { create } from "zustand";
+import * as panes from "./panes";
+import type { NotePane, PaneLayout, StoredLayout } from "./panes";
+
+export type { NotePane, NoteTab } from "./panes";
 
 export type ThemePref = "system" | "light" | "dark";
 /** 笔记列表的排序。「手动」只有逻辑目录有：按树上摆的顺序 */
@@ -16,6 +20,24 @@ export type NoteSort = "manual" | "updated" | "created" | "title";
 export interface FocusRequest {
   docKey: string;
   at: "title" | "body";
+}
+
+/** 命令面板能打开、能从那里「返回」命令面板的对话框（components/PaletteBack.tsx） */
+export type PaletteDialog =
+  | "find"
+  | "history"
+  | "trash"
+  | "sync"
+  | "update"
+  | "collab"
+  | "team"
+  | "relays";
+
+/** 从命令面板打开了哪个对话框，回去的时候面板里还是刚才打的字、高亮停在刚才选的那一项 */
+export interface PaletteBack {
+  dialog: PaletteDialog;
+  query: string;
+  itemId: string;
 }
 
 interface AppState {
@@ -44,12 +66,67 @@ interface AppState {
   calendarScope: "day" | "week" | "month" | "year";
   goalHorizon: GoalHorizon;
 
-  selectNote: (id: string) => void;
+  /**
+   * 在正在写的窗格的当前标签里打开这一篇；这个窗格别的标签里开着就切过去。
+   * popout：开在这个弹出窗口里（从那里的正文打开的，见 navigate.ts 的 openDocument）
+   */
+  selectNote: (id: string, popout?: string | null) => void;
   selectArchive: (id: string) => void;
+
+  /* ---- 笔记的窗格和标签（docs/标签页与分屏.md，规矩在 app/panes.ts）----
+     不变式：正在写的那个窗格（activePane）的当前标签就是 selectedNoteId。
+     列表高亮、命令面板里的「这一篇」、团队视图照旧只看 selectedNoteId */
+  /** 从左到右，至少一个，每个至少一个标签 */
+  notePanes: NotePane[];
+  activePane: string;
+  /** 开在新标签里（默认正在写的窗格，paneId 也可以是弹出窗口的）；那个窗格里已经开着就切过去 */
+  openNoteTab: (noteId: string, paneId?: string) => void;
+  /** 切到这个标签（它所在的窗格也成了正在写的） */
+  switchTab: (tabId: string) => void;
+  focusPane: (paneId: string) => void;
+  /** 关掉；窗格里只剩它时关掉这个窗格，整个窗口只剩它时不关 */
+  closeTab: (tabId: string) => void;
+  closeOtherTabs: (tabId: string) => void;
+  closeTabsToRight: (tabId: string) => void;
+  /** 挪到某个窗格的第 index 个（同一个窗格里就是排顺序） */
+  moveTab: (tabId: string, paneId: string, index: number) => void;
+  /** 在 paneId 左边 / 右边拆出一栏放这个标签；copy：同一篇再开一个（向右拆分），否则是挪过去 */
+  splitTab: (tabId: string, paneId: string, side: "left" | "right", copy: boolean) => void;
+  /** 拖完分割条：每个窗格占的比例 */
+  resizePanes: (sizes: number[]) => void;
+  /** 当前标签往回 / 往前走一步（alive：那一篇还在不在）；popout：那个弹出窗口里的 */
+  walkTab: (step: -1 | 1, alive: (noteId: string) => boolean, popout?: string) => void;
+  /** 重新打开最近关掉的那个（放进正在写的窗格原来的位置）；不在了的跳过 */
+  reopenTab: (alive: (noteId: string) => boolean) => void;
+  /**
+   * 笔记列表变了：指着已经不在的笔记的标签关掉（别处删掉、归档了）。alive 里没有的都算不在，
+   * 所以要等列表取回来以后才调
+   */
+  pruneTabs: (alive: ReadonlySet<string>) => void;
+  /** 笔记的 id 整个换了（开关日程、转成逻辑目录以后按路径认回来）：标签跟着换，认不回来的关掉 */
+  remapTabs: (map: (noteId: string) => string | undefined) => void;
+
+  /* ---- 弹出窗口（docs/标签页与分屏.md §16）：一个窗口一个窗格，不进 notePanes ----
+     上面那些按标签 id 的动作（切、关、排、往回走）认得出标签在哪个窗口里，各改各的。
+     弹出窗口里关掉最后一个标签就是关这个窗口 */
+  popouts: NotePane[];
+  /**
+   * 正在写的是哪个弹出窗口（它有焦点）；null 是主窗口。从正文里打开一篇（双链、反向链接）、
+   * Ctrl+Shift+T 作用在它上面。列表栏在主窗口里，点它之前主窗口先拿到焦点，所以列表照旧开在主窗口
+   */
+  activePopout: string | null;
+  setActivePopout: (paneId: string | null) => void;
+  /** 拆成弹出窗口：fromTab 从主窗口那一排里拿走，pane 是装着它的新窗格（app/popout.ts 先开好窗口） */
+  addPopout: (pane: NotePane, fromTab: string) => void;
+  /** 弹出窗口关了：back 时标签回到主窗口（关窗口），不然就丢掉（里面的标签都关掉了） */
+  removePopout: (paneId: string, back: boolean) => void;
+  /** 弹出窗口里的一个标签挪回主窗口（挪的是最后一个就关掉这个窗口） */
+  tabToMain: (tabId: string) => void;
+
   /**
    * 跳到另一篇之后要滚到的位置：`[[标题#小节]]` 的小节，或反向链接里那一行
    * （正文的行号，从 1 开始），全局搜索的结果还带着那一处命中（选中它）。那一篇的编辑器挂上、
-   * 目录算出来之后由 DocumentView 消费并清掉；docKey 保证不会滚错篇。
+   * 目录算出来之后由正在写的那个窗格的 DocumentView 消费并清掉；docKey 保证不会滚错篇。
    */
   pendingAnchor: ({ docKey: string } & DocumentAnchor) | null;
   setPendingAnchor: (anchor: AppState["pendingAnchor"]) => void;
@@ -101,6 +178,13 @@ interface AppState {
   setReduceMotion: (v: boolean) => void;
   paletteOpen: boolean;
   setPaletteOpen: (v: boolean) => void;
+  /** 刚从命令面板打开的对话框；那个对话框关掉就清（PaletteBack.tsx） */
+  paletteBack: PaletteBack | null;
+  setPaletteBack: (v: PaletteBack | null) => void;
+  /** 命令面板这次打开要恢复成什么样（从对话框返回的）；面板打开时取走 */
+  paletteRestore: PaletteBack | null;
+  /** 从对话框回到命令面板：对话框自己关，这里只管把面板按原样打开 */
+  backToPalette: () => void;
   /** 全局搜索（components/FindDialog.tsx，Ctrl+Shift+F）。和命令面板一次只开一个 */
   findOpen: boolean;
   /** 打开时搜什么（命令面板里打了字再选「在所有笔记里搜索」）；null = 接着上次的 */
@@ -210,6 +294,10 @@ interface Session {
   noteId: string;
   archiveId: string;
   noteFolder: string;
+  /** 窗格和标签（app/panes.ts 的 StoredLayout）。只有一个标签时不记 */
+  layout?: StoredLayout;
+  /** P12.1 记的：一个窗格里的标签（笔记 id）。读得懂，不再写 */
+  tabs?: string[];
 }
 
 function loadSession(): Session {
@@ -223,13 +311,46 @@ function loadSession(): Session {
     if (typeof p.noteId === "string") session.noteId = p.noteId;
     if (typeof p.archiveId === "string") session.archiveId = p.archiveId;
     if (typeof p.noteFolder === "string") session.noteFolder = p.noteFolder;
+    if (Array.isArray(p.tabs)) {
+      const ids = (p.tabs as unknown[]).filter(
+        (id): id is string => typeof id === "string" && !!id,
+      );
+      session.tabs = [...new Set(ids)];
+    }
+    if (p.layout && typeof p.layout === "object") session.layout = p.layout;
   } catch {
     /* 隐私模式 / 数据损坏：从笔记区开始 */
   }
   return session;
 }
 
+/** 记下的样子 → 窗格。P12.1 记的是一排标签，当成一个窗格 */
+function layoutOf(session: Session): PaneLayout {
+  const stored =
+    session.layout ??
+    (session.tabs?.length
+      ? { panes: [{ tabs: session.tabs, active: 0, size: 1 }], pane: 0 }
+      : null);
+  return panes.restoreLayout(stored, session.noteId);
+}
+
+/** 关掉的标签（这次运行里），Ctrl+Shift+T 从后往前开回来 */
+const CLOSED_LIMIT = 20;
+let closedTabs: panes.Closed[] = [];
+
+/** 新的布局放进 store：selectedNoteId 跟着正在写的窗格（不变式） */
+const laid = (layout: PaneLayout) => ({
+  notePanes: layout.panes,
+  activePane: layout.activePane,
+  selectedNoteId: panes.selectedOf(layout),
+});
+const layoutOfState = (state: Pick<AppState, "notePanes" | "activePane">): PaneLayout => ({
+  panes: state.notePanes,
+  activePane: state.activePane,
+});
+
 const initialSession = loadSession();
+const initialLayout = layoutOf(initialSession);
 
 function loadExpanded(): Set<string> {
   try {
@@ -257,144 +378,306 @@ const inside = (path: string, folder: string) => path === folder || path.startsW
 const folderDir = (from: string, to: string): 1 | -1 | 0 =>
   to === from ? 0 : within(to, from) ? 1 : within(from, to) ? -1 : 0;
 
-export const useApp = create<AppState>((set, get) => ({
-  workspace: initialSession.workspace,
-  navDirection: 1,
-  setWorkspace: (w) => {
-    const from = NAV_ORDER.indexOf(get().workspace);
-    const to = NAV_ORDER.indexOf(w);
-    if (from === to) return;
-    // 离开笔记区就退出专注模式：其它区没有这个入口，留着的话侧栏会一直是收起的，
-    // 用户在日历页找不到任何东西可以点回来。
-    set({ workspace: w, navDirection: to > from ? 1 : -1, zen: false });
-  },
-  fitLayout: (journal, archive) => {
-    const workspace = get().workspace;
-    if (
-      (!journal && JOURNAL_WORKSPACES.includes(workspace)) ||
-      (!archive && workspace === "archive")
-    )
-      set({ workspace: "notes" });
-  },
-
-  // 上次看的那一篇；不在了（删了、换了仓库）由列表栏退到第一篇
-  selectedNoteId: initialSession.noteId,
-  selectedArchiveId: initialSession.archiveId,
-  // 打开日历就是今天，不用每次手动定位
-  selectedDate: today(),
-  todayDate: today(),
-  setTodayDate: (d) => set({ todayDate: d }),
-  calendarScope: "day",
-  goalHorizon: "week",
-
-  selectNote: (id) => set({ selectedNoteId: id }),
-  selectArchive: (id) => set({ selectedArchiveId: id }),
-  pendingAnchor: null,
-  setPendingAnchor: (pendingAnchor) => set({ pendingAnchor }),
-  selectDate: (d) => set({ selectedDate: d }),
-  setCalendarScope: (s) => set({ calendarScope: s }),
-  setGoalHorizon: (h) => set({ goalHorizon: h }),
-
-  noteFolder: initialSession.noteFolder,
-  noteFolderDir: 0,
-  setNoteFolder: (folder) =>
-    set({ noteFolder: folder, noteFolderDir: folderDir(get().noteFolder, folder) }),
-  openNoteFolder: (folder) => {
-    // 侧栏收起着的话展开：点路径就是想在树上看到它
-    if (get().panelCollapsed) savePrefs({ panelCollapsed: false });
-    set((state) => ({
-      noteFolder: folder,
-      noteFolderDir: folderDir(state.noteFolder, folder),
-      noteQuery: "",
-      zen: false,
-      panelCollapsed: false,
-      noteRevealTick: state.noteRevealTick + 1,
-    }));
-  },
-  noteRevealTick: 0,
-  expandedFolders: loadExpanded(),
-  setFolderExpanded: (paths, open) => {
-    const expanded = new Set(get().expandedFolders);
-    for (const path of paths) {
-      if (open) expanded.add(path);
-      else expanded.delete(path);
+export const useApp = create<AppState>((set, get) => {
+  /**
+   * 改一下窗格（app/panes.ts 的纯函数）；没变就不 set。popout：改的是这个弹出窗口（当成只有一栏的布局），
+   * 关空了就去掉它（窗口跟着关，components/Popouts.tsx）
+   */
+  const apply = (change: (layout: PaneLayout) => PaneLayout, popout?: string | null) => {
+    if (popout) {
+      const pane = get().popouts.find((other) => other.id === popout);
+      if (!pane) return;
+      const before = panes.asLayout(pane);
+      const after = change(before);
+      if (after !== before) setPopout(pane.id, panes.popoutPane(pane, after));
+      return;
     }
-    saveExpanded(expanded);
-    set({ expandedFolders: expanded });
-  },
-  followFolderRename: (from, to) => {
-    const expanded = new Set([...get().expandedFolders].map((path) => renamed(path, from, to)));
-    saveExpanded(expanded);
-    const current = get().noteFolder;
-    const next = renamed(current, from, to);
-    set({ expandedFolders: expanded, noteFolder: next, noteFolderDir: folderDir(current, next) });
-  },
-  forgetFolder: (folder) => {
-    const expanded = new Set([...get().expandedFolders].filter((path) => !inside(path, folder)));
-    saveExpanded(expanded);
-    const current = get().noteFolder;
-    // 正待在被删的文件夹（或它底下）里：退到它的上一层
-    const parent = folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "";
-    const next = inside(current, folder) ? parent : current;
-    set({ expandedFolders: expanded, noteFolder: next, noteFolderDir: folderDir(current, next) });
-  },
-  noteSort: initialPrefs.noteSort,
-  setNoteSort: (noteSort) => {
-    savePrefs({ noteSort });
-    set({ noteSort });
-  },
-  noteExcerpts: initialPrefs.noteExcerpts,
-  setNoteExcerpts: (noteExcerpts) => {
-    savePrefs({ noteExcerpts });
-    set({ noteExcerpts });
-  },
-  focusRequest: null,
-  setFocusRequest: (focusRequest) => set({ focusRequest }),
+    const before = layoutOfState(get());
+    const after = change(before);
+    if (after !== before) set(laid(after));
+  };
+  /** 换掉一个弹出窗口的窗格；null 是关掉它 */
+  const setPopout = (paneId: string, pane: NotePane | null) =>
+    set((state) => ({
+      popouts: pane
+        ? state.popouts.map((other) => (other.id === paneId ? pane : other))
+        : state.popouts.filter((other) => other.id !== paneId),
+      activePopout: !pane && state.activePopout === paneId ? null : state.activePopout,
+    }));
+  /** 标签在哪个弹出窗口里；在主窗口里是 null */
+  const popoutOf = (tabId: string) =>
+    get().popouts.find((pane) => pane.tabs.some((tab) => tab.id === tabId))?.id ?? null;
+  const isPopout = (paneId?: string | null): paneId is string =>
+    !!paneId && get().popouts.some((pane) => pane.id === paneId);
+  /** 关掉的记下来给 Ctrl+Shift+T */
+  const remember = (closed: panes.Closed[]) => {
+    closedTabs = [...closedTabs, ...closed].slice(-CLOSED_LIMIT);
+  };
+  /** 关标签 */
+  const close = (
+    change: (layout: PaneLayout) => { layout: PaneLayout; closed: panes.Closed[] },
+    popout?: string | null,
+  ) =>
+    apply((layout) => {
+      const { layout: after, closed } = change(layout);
+      remember(closed);
+      return after;
+    }, popout);
 
-  noteQuery: "",
-  archiveQuery: "",
-  setNoteQuery: (q) => set({ noteQuery: q }),
-  setArchiveQuery: (q) => set({ archiveQuery: q }),
+  return {
+    workspace: initialSession.workspace,
+    navDirection: 1,
+    setWorkspace: (w) => {
+      const from = NAV_ORDER.indexOf(get().workspace);
+      const to = NAV_ORDER.indexOf(w);
+      if (from === to) return;
+      // 离开笔记区就退出专注模式：其它区没有这个入口，留着的话侧栏会一直是收起的，
+      // 用户在日历页找不到任何东西可以点回来。
+      set({ workspace: w, navDirection: to > from ? 1 : -1, zen: false });
+    },
+    fitLayout: (journal, archive) => {
+      const workspace = get().workspace;
+      if (
+        (!journal && JOURNAL_WORKSPACES.includes(workspace)) ||
+        (!archive && workspace === "archive")
+      )
+        set({ workspace: "notes" });
+    },
 
-  theme: initialPrefs.theme,
-  setTheme: (t) => {
-    const animated = applyTheme(t, true);
-    savePrefs({ theme: t });
-    set({ theme: t });
-    return animated;
-  },
-  reduceMotion: initialPrefs.reduceMotion,
-  setReduceMotion: (v) => {
-    document.documentElement.setAttribute("data-reduce-motion", String(v));
-    savePrefs({ reduceMotion: v });
-    set({ reduceMotion: v });
-  },
-  paletteOpen: false,
-  setPaletteOpen: (v) => set(v ? { paletteOpen: true, findOpen: false } : { paletteOpen: false }),
-  findOpen: false,
-  findSeed: null,
-  setFindOpen: (open, seed) =>
-    set(
-      open ? { findOpen: true, findSeed: seed ?? null, paletteOpen: false } : { findOpen: false },
-    ),
-  syncOpen: false,
-  setSyncOpen: (v) => set({ syncOpen: v }),
-  updateDialog: null,
-  setUpdateDialog: (v) => set({ updateDialog: v }),
-  trashOpen: false,
-  setTrashOpen: (v) => set({ trashOpen: v }),
-  historyFor: null,
-  setHistoryFor: (target) => set({ historyFor: target }),
-  panelCollapsed: initialPrefs.panelCollapsed,
-  setPanelCollapsed: (panelCollapsed) => {
-    savePrefs({ panelCollapsed });
-    // 专注模式下侧栏推在屏幕外面：在命令面板里收起 / 展开它，就是想看见它
-    set({ panelCollapsed, zen: false });
-  },
+    // 上次看的那一篇；不在了（删了、换了仓库）由列表栏退到第一篇
+    selectedNoteId: initialSession.noteId,
+    selectedArchiveId: initialSession.archiveId,
+    // 打开日历就是今天，不用每次手动定位
+    selectedDate: today(),
+    todayDate: today(),
+    setTodayDate: (d) => set({ todayDate: d }),
+    calendarScope: "day",
+    goalHorizon: "week",
 
-  zen: false,
-  setZen: (v) => set({ zen: v }),
-}));
+    selectNote: (id, popout) =>
+      apply((layout) => panes.navigate(layout, id), isPopout(popout) ? popout : null),
+    selectArchive: (id) => set({ selectedArchiveId: id }),
+
+    notePanes: initialLayout.panes,
+    activePane: initialLayout.activePane,
+    openNoteTab: (noteId, paneId) =>
+      apply((layout) => panes.openTab(layout, noteId, paneId), isPopout(paneId) ? paneId : null),
+    switchTab: (tabId) => apply((layout) => panes.switchTab(layout, tabId), popoutOf(tabId)),
+    focusPane: (paneId) => apply((layout) => panes.focusPane(layout, paneId)),
+    closeTab: (tabId) => {
+      const popout = get().popouts.find((pane) => pane.tabs.some((tab) => tab.id === tabId));
+      if (!popout) {
+        close((layout) => panes.closeTab(layout, tabId));
+        return;
+      }
+      // 弹出窗口里关掉最后一个标签：关这个窗口
+      const { pane, closed } = panes.closeInPopout(popout, tabId);
+      remember(closed);
+      setPopout(popout.id, pane);
+    },
+    closeOtherTabs: (tabId) => close((layout) => panes.closeOthers(layout, tabId), popoutOf(tabId)),
+    closeTabsToRight: (tabId) =>
+      close((layout) => panes.closeRight(layout, tabId), popoutOf(tabId)),
+    moveTab: (tabId, paneId, index) => {
+      const popout = popoutOf(tabId);
+      // 跨窗口拖不了（指针出了窗口），只有弹出窗口里自己排顺序
+      if (popout || isPopout(paneId)) {
+        if (popout === paneId)
+          apply((layout) => panes.moveTab(layout, tabId, paneId, index), popout);
+        return;
+      }
+      apply((layout) => panes.moveTab(layout, tabId, paneId, index));
+    },
+    splitTab: (tabId, paneId, side, copy) => {
+      if (popoutOf(tabId) || isPopout(paneId)) return;
+      apply((layout) => panes.split(layout, tabId, paneId, side, copy));
+    },
+    resizePanes: (sizes) => apply((layout) => panes.resize(layout, sizes)),
+    walkTab: (step, alive, popout) =>
+      apply((layout) => panes.walkHistory(layout, step, alive), isPopout(popout) ? popout : null),
+    reopenTab: (alive) => {
+      // 开回正在写的那个窗口里：弹出窗口里按的 Ctrl+Shift+T 开在弹出窗口里
+      const popout = get().activePopout;
+      while (closedTabs.length) {
+        const last = closedTabs[closedTabs.length - 1]!;
+        closedTabs = closedTabs.slice(0, -1);
+        if (!alive(last.noteId)) continue;
+        apply((layout) => {
+          const pane = panes.focusedPane(layout);
+          if (pane.tabs.some((tab) => tab.noteId === last.noteId)) {
+            return panes.openTab(layout, last.noteId);
+          }
+          // 放回原来的位置（标签少了就放最后）
+          const tab = panes.newTab(last.noteId);
+          const tabs = [...pane.tabs];
+          tabs.splice(Math.min(last.index, tabs.length), 0, tab);
+          return {
+            panes: layout.panes.map((other) =>
+              other === pane ? { ...pane, tabs, activeTab: tab.id } : other,
+            ),
+            activePane: pane.id,
+          };
+        }, popout);
+        return;
+      }
+    },
+    pruneTabs: (alive) => {
+      apply((layout) => panes.prune(layout, alive));
+      for (const pane of get().popouts) apply((layout) => panes.prune(layout, alive), pane.id);
+    },
+    remapTabs: (map) => {
+      apply((layout) => panes.remap(layout, map));
+      for (const pane of get().popouts) apply((layout) => panes.remap(layout, map), pane.id);
+    },
+
+    popouts: [],
+    activePopout: null,
+    setActivePopout: (paneId) => {
+      if (get().activePopout !== paneId) set({ activePopout: paneId });
+    },
+    addPopout: (pane, fromTab) =>
+      set((state) => ({
+        ...laid(panes.takeOut(layoutOfState(state), fromTab)),
+        popouts: [...state.popouts, pane],
+        activePopout: pane.id,
+      })),
+    removePopout: (paneId, back) =>
+      set((state) => {
+        const pane = state.popouts.find((other) => other.id === paneId);
+        if (!pane) return {};
+        return {
+          ...(back ? laid(panes.bringBack(layoutOfState(state), pane.tabs)) : {}),
+          popouts: state.popouts.filter((other) => other !== pane),
+          activePopout: state.activePopout === paneId ? null : state.activePopout,
+        };
+      }),
+    tabToMain: (tabId) => {
+      const popout = get().popouts.find((pane) => pane.tabs.some((tab) => tab.id === tabId));
+      const tab = popout?.tabs.find((other) => other.id === tabId);
+      if (!popout || !tab) return;
+      // 回到主窗口正在写的那个窗格，切过去（这一篇那里已经开着就切到那个）
+      const back = panes.bringBack(layoutOfState(get()), [tab]);
+      const there = panes.focusedPane(back).tabs.find((other) => other.noteId === tab.noteId);
+      set(laid(there ? panes.switchTab(back, there.id) : back));
+      setPopout(popout.id, panes.closeInPopout(popout, tabId).pane);
+    },
+    pendingAnchor: null,
+    setPendingAnchor: (pendingAnchor) => set({ pendingAnchor }),
+    selectDate: (d) => set({ selectedDate: d }),
+    setCalendarScope: (s) => set({ calendarScope: s }),
+    setGoalHorizon: (h) => set({ goalHorizon: h }),
+
+    noteFolder: initialSession.noteFolder,
+    noteFolderDir: 0,
+    setNoteFolder: (folder) =>
+      set({ noteFolder: folder, noteFolderDir: folderDir(get().noteFolder, folder) }),
+    openNoteFolder: (folder) => {
+      // 侧栏收起着的话展开：点路径就是想在树上看到它
+      if (get().panelCollapsed) savePrefs({ panelCollapsed: false });
+      set((state) => ({
+        noteFolder: folder,
+        noteFolderDir: folderDir(state.noteFolder, folder),
+        noteQuery: "",
+        zen: false,
+        panelCollapsed: false,
+        noteRevealTick: state.noteRevealTick + 1,
+      }));
+    },
+    noteRevealTick: 0,
+    expandedFolders: loadExpanded(),
+    setFolderExpanded: (paths, open) => {
+      const expanded = new Set(get().expandedFolders);
+      for (const path of paths) {
+        if (open) expanded.add(path);
+        else expanded.delete(path);
+      }
+      saveExpanded(expanded);
+      set({ expandedFolders: expanded });
+    },
+    followFolderRename: (from, to) => {
+      const expanded = new Set([...get().expandedFolders].map((path) => renamed(path, from, to)));
+      saveExpanded(expanded);
+      const current = get().noteFolder;
+      const next = renamed(current, from, to);
+      set({ expandedFolders: expanded, noteFolder: next, noteFolderDir: folderDir(current, next) });
+    },
+    forgetFolder: (folder) => {
+      const expanded = new Set([...get().expandedFolders].filter((path) => !inside(path, folder)));
+      saveExpanded(expanded);
+      const current = get().noteFolder;
+      // 正待在被删的文件夹（或它底下）里：退到它的上一层
+      const parent = folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "";
+      const next = inside(current, folder) ? parent : current;
+      set({ expandedFolders: expanded, noteFolder: next, noteFolderDir: folderDir(current, next) });
+    },
+    noteSort: initialPrefs.noteSort,
+    setNoteSort: (noteSort) => {
+      savePrefs({ noteSort });
+      set({ noteSort });
+    },
+    noteExcerpts: initialPrefs.noteExcerpts,
+    setNoteExcerpts: (noteExcerpts) => {
+      savePrefs({ noteExcerpts });
+      set({ noteExcerpts });
+    },
+    focusRequest: null,
+    setFocusRequest: (focusRequest) => set({ focusRequest }),
+
+    noteQuery: "",
+    archiveQuery: "",
+    setNoteQuery: (q) => set({ noteQuery: q }),
+    setArchiveQuery: (q) => set({ archiveQuery: q }),
+
+    theme: initialPrefs.theme,
+    setTheme: (t) => {
+      const animated = applyTheme(t, true);
+      savePrefs({ theme: t });
+      set({ theme: t });
+      return animated;
+    },
+    reduceMotion: initialPrefs.reduceMotion,
+    setReduceMotion: (v) => {
+      document.documentElement.setAttribute("data-reduce-motion", String(v));
+      savePrefs({ reduceMotion: v });
+      set({ reduceMotion: v });
+    },
+    paletteOpen: false,
+    setPaletteOpen: (v) => set(v ? { paletteOpen: true, findOpen: false } : { paletteOpen: false }),
+    paletteBack: null,
+    setPaletteBack: (paletteBack) => set({ paletteBack }),
+    paletteRestore: null,
+    backToPalette: () =>
+      set((s) => ({
+        paletteOpen: true,
+        findOpen: false,
+        paletteRestore: s.paletteBack,
+        paletteBack: null,
+      })),
+    findOpen: false,
+    findSeed: null,
+    setFindOpen: (open, seed) =>
+      set(
+        open ? { findOpen: true, findSeed: seed ?? null, paletteOpen: false } : { findOpen: false },
+      ),
+    syncOpen: false,
+    setSyncOpen: (v) => set({ syncOpen: v }),
+    updateDialog: null,
+    setUpdateDialog: (v) => set({ updateDialog: v }),
+    trashOpen: false,
+    setTrashOpen: (v) => set({ trashOpen: v }),
+    historyFor: null,
+    setHistoryFor: (target) => set({ historyFor: target }),
+    panelCollapsed: initialPrefs.panelCollapsed,
+    setPanelCollapsed: (panelCollapsed) => {
+      savePrefs({ panelCollapsed });
+      // 专注模式下侧栏推在屏幕外面：在命令面板里收起 / 展开它，就是想看见它
+      set({ panelCollapsed, zen: false });
+    },
+
+    zen: false,
+    setZen: (v) => set({ zen: v }),
+  };
+});
 
 /* ============================================================
    主题：始终在 <html> 上落一个明确的 data-theme。
@@ -428,9 +711,9 @@ export function restoreVaultSession(root: string, legacy: boolean) {
   const session = loadSession();
   useApp.setState({
     workspace: session.workspace,
-    selectedNoteId: session.noteId,
     selectedArchiveId: session.archiveId,
     noteFolder: session.noteFolder,
+    ...laid(layoutOf(session)),
     expandedFolders: loadExpanded(),
   });
 }
@@ -441,7 +724,7 @@ export function initPreferences() {
   applyTheme(theme);
   document.documentElement.setAttribute("data-reduce-motion", String(reduceMotion));
 
-  // 换了区、换了篇、换了文件夹就记一下（只是几个字符串，不用节流）。
+  // 换了区、换了篇、换了文件夹、开关了标签就记一下（只是几个字符串，不用节流）。
   // 桌面端在知道是哪个仓库之前不记：记下的会是还没换成这个仓库记录的初始值
   let last = "";
   useApp.subscribe((state) => {
@@ -451,6 +734,16 @@ export function initPreferences() {
       noteId: state.selectedNoteId,
       archiveId: state.selectedArchiveId,
       noteFolder: state.noteFolder,
+      ...(() => {
+        // 弹出窗口不记：下次打开时它们的标签在主窗口里（和关掉弹出窗口一样）
+        const layout = panes.storeLayout(
+          panes.bringBack(
+            layoutOfState(state),
+            state.popouts.flatMap((pane) => pane.tabs),
+          ),
+        );
+        return layout ? { layout } : {};
+      })(),
     };
     const json = JSON.stringify(session);
     if (json === last) return;

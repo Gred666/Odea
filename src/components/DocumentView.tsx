@@ -11,10 +11,13 @@ import type { EditorOutlineHandle } from "@/editor/MarkdownEditor";
 import type { WikiCandidate } from "@/editor/suggest";
 import type { TemplateContext } from "@/editor/templates";
 import { cn } from "@/lib/cn";
+import { useLingering } from "@/lib/lingering";
+import { hasLongRun } from "@/lib/longRun";
 import { buildOutline, renderMarkdown } from "@/lib/markdown";
 import { spring, tween } from "@/lib/motion";
+import { usePaneWindow } from "@/lib/paneWindow";
 import { MOD_KEY } from "@/lib/platform";
-import { windowKind } from "@/lib/tauri";
+import { win, windowKind } from "@/lib/tauri";
 import {
   AlertTriangle,
   Archive,
@@ -86,6 +89,11 @@ export function DocumentView({
   onSaveDocument,
   onSaveTitle,
   editorEnabled = true,
+  titleStrip = true,
+  focused = true,
+  first = true,
+  last = true,
+  outline: outlineShown = true,
 }: {
   doc: DocumentModel;
   onToggleTask: (id: string) => void;
@@ -94,21 +102,36 @@ export function DocumentView({
   onSaveDocument?: (target: DocumentSaveTarget, markdown: string) => Promise<void>;
   onSaveTitle?: (target: DocumentSaveTarget, title: string) => Promise<void>;
   editorEnabled?: boolean;
+  /** 滚下去以后最上面那条里出不出「路径 / 标题」。笔记的标签栏显示着时不出（当前标签就是标题） */
+  titleStrip?: boolean;
+  /*
+   * 分屏时（docs/标签页与分屏.md §12）每个窗格一个 DocumentView。
+   * focused：正在写的那个窗格 —— 跳过来要滚到的小节、新建后光标去哪只由它接（两个窗格开着同一篇时
+   * 不会两边都抢）。first：最左边那一栏，画布往左 chrome 底下多铺、状态栏最左端有侧栏开关。
+   * last：最右边那一栏，专注模式的按钮在它右上角。outline：窗格太窄时不出目录树
+   */
+  focused?: boolean;
+  first?: boolean;
+  last?: boolean;
+  outline?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   /** 正文区上一次滚到的 scrollTop（滚动事件里记，见下面切换文档时拨回顶部） */
   const scrolledRef = useRef(0);
   const [editorOutline, setEditorOutline] = useState<EditorOutlineHandle | null>(null);
-  const workspace = useApp((s) => s.workspace);
-  const zen = useApp((s) => s.zen);
+  // 弹出窗口里（docs/标签页与分屏.md §16）只有笔记：没有专注模式、侧栏开关，主窗口在哪一区也不管
+  const popout = usePaneWindow().popout !== null;
+  const mainWorkspace = useApp((s) => s.workspace);
+  const workspace = popout ? "notes" : mainWorkspace;
+  const zen = useApp((s) => s.zen) && !popout;
   const setZen = useApp((s) => s.setZen);
   // 只有笔记区给这个入口：其它区要么是两栏、要么本来就没有可铺满的正文。访客窗口没有侧栏可收
-  const zenAvailable = workspace === "notes" && windowKind !== "guest";
+  const zenAvailable = workspace === "notes" && windowKind !== "guest" && last && !popout;
   // 状态栏最左端的侧栏开关：只有有那一栏的几页（文件、日历、归档）才有。专注模式下那一栏推在屏幕外，也不给
   const panelCollapsed = useApp((s) => s.panelCollapsed);
   const setPanelCollapsed = useApp((s) => s.setPanelCollapsed);
   const panelToggle =
-    hasListColumn(workspace) && windowKind !== "guest" && !zen
+    hasListColumn(workspace) && windowKind !== "guest" && !zen && first && !popout
       ? { collapsed: panelCollapsed, onToggle: () => setPanelCollapsed(!panelCollapsed) }
       : undefined;
   // 编辑器里的实时正文。doc.bodyMd 要等一次保存往返才更新，
@@ -124,12 +147,12 @@ export function DocumentView({
     setLiveMarkdown(markdown);
   }, []);
 
-  // Mod + 点击 [[双链]]：按标题找到那篇笔记就跳过去（归档里的也算）。
+  // Mod + 点击 [[双链]]：按标题找到那篇笔记就跳过去（归档里的也算），再按着 Shift 开在新标签里。
   // `[[标题#小节]]` 再记一个待滚动的锚点，等那篇的编辑器挂上后滚过去。
   // 还没有这篇（编辑器里画成虚线）：就地新建一篇这个标题的，放在当前这篇所在的文件夹，
   // 打开它、光标在正文开头；底部提示条可以撤销
   const noteIdRef = useRef<string | null>(null);
-  const handleWikiLink = useCallback((title: string, heading?: string) => {
+  const handleWikiLink = useCallback((title: string, heading?: string, newTab = false) => {
     const wanted = title.trim().toLowerCase();
     if (!wanted) return;
     const { notes, archived } = useData.getState();
@@ -137,7 +160,7 @@ export function DocumentView({
       notes.find((note) => note.title.trim().toLowerCase() === wanted) ??
       archived.find((note) => note.title.trim().toLowerCase() === wanted);
     if (hit) {
-      openDocument({ kind: "note", id: hit.id }, heading ? { heading } : undefined);
+      openDocument({ kind: "note", id: hit.id }, heading ? { heading } : undefined, newTab);
       return;
     }
     const here = notes.find((note) => note.id === noteIdRef.current);
@@ -147,7 +170,7 @@ export function DocumentView({
       .then((id) => {
         if (!id) return;
         useApp.getState().setFocusRequest({ docKey: `note-${id}`, at: "body" });
-        openDocument({ kind: "note", id });
+        openDocument({ kind: "note", id }, undefined, newTab);
       });
   }, []);
 
@@ -177,7 +200,7 @@ export function DocumentView({
   const pendingAnchor = useApp((s) => s.pendingAnchor);
   const setPendingAnchor = useApp((s) => s.setPendingAnchor);
   useEffect(() => {
-    if (!pendingAnchor || pendingAnchor.docKey !== doc.key || !editorOutline) return;
+    if (!focused || !pendingAnchor || pendingAnchor.docKey !== doc.key || !editorOutline) return;
     if (pendingAnchor.line !== undefined) {
       if (editorOutline.scrollToLine(pendingAnchor.line, pendingAnchor.match))
         setPendingAnchor(null);
@@ -187,7 +210,7 @@ export function DocumentView({
     const item = outline.find((entry) => entry.text.trim().toLowerCase() === wanted);
     if (!item) return;
     if (editorOutline.scrollTo(item.id)) setPendingAnchor(null);
-  }, [pendingAnchor, doc.key, editorOutline, outline, setPendingAnchor]);
+  }, [focused, pendingAnchor, doc.key, editorOutline, outline, setPendingAnchor]);
 
   const saving = useData((state) => (doc.editor ? state.savingDocs.has(saveKey(doc)) : false));
   // 做客的这一篇：主持人还没存下的字本机留着一份，还是都存下了（collab/keep.ts）
@@ -247,7 +270,13 @@ export function DocumentView({
   }, [target]);
   const handleReveal = target ? () => void useData.getState().revealDocument(target) : undefined;
   // 历史版本：同步用的 git 仓库里每次改过这篇的提交（没开同步时对话框里说明、给开启的入口）
-  const handleHistory = target ? () => useApp.getState().setHistoryFor(target) : undefined;
+  // 历史版本的对话框在主窗口里：从弹出窗口里点的，把主窗口提到前面
+  const handleHistory = target
+    ? () => {
+        useApp.getState().setHistoryFor(target);
+        if (popout) void win.focus();
+      }
+    : undefined;
 
   // 附件：粘贴 / 拖进来的文件存进仓库的「附件」，正文里的相对路径以这篇所在的文件夹为基准
   const vaultRoot = useData((s) => s.vaultRoot);
@@ -282,9 +311,9 @@ export function DocumentView({
   // 正文开头的要等这一篇的编辑器挂上
   const focusRequest = useApp((s) => s.focusRequest);
   useEffect(() => {
-    if (focusRequest?.docKey !== doc.key || focusRequest.at !== "body" || !editorOutline) return;
-    if (editorOutline.focusStart()) useApp.getState().setFocusRequest(null);
-  }, [focusRequest, doc.key, editorOutline]);
+    if (!focused || focusRequest?.docKey !== doc.key || focusRequest.at !== "body") return;
+    if (editorOutline?.focusStart()) useApp.getState().setFocusRequest(null);
+  }, [focused, focusRequest, doc.key, editorOutline]);
 
   // 标题和正文之间用键盘来回：标题里回车 / ↓ 进正文开头，正文第一行按 ↑ 回标题末尾
   const titleFieldRef = useRef<HTMLTextAreaElement>(null);
@@ -339,7 +368,8 @@ export function DocumentView({
             // @container：正文区多宽（容器查询量的是内容盒，多铺到 chrome 底下的那截内边距不算），
             // 窄的时候左右留白、大标题、分段控件的字跟着收（窗口窄、列表栏开着的时候）
             className="@container scroll-none h-full overflow-y-auto bg-canvas"
-            style={{ marginLeft: -RAIL_WIDTH, paddingLeft: RAIL_WIDTH }}
+            // 分屏时只有最左边那一栏往左铺：别的栏左边是另一个窗格
+            style={first ? { marginLeft: -RAIL_WIDTH, paddingLeft: RAIL_WIDTH } : undefined}
           >
             <CenteredColumn className="min-h-full flex-col pb-16 pt-[52px]">
               {/* 换文档（也包括今日TODO ↔ /GOAL 这种同一个版面的两页）时整块溶解：旧的一份快照
@@ -459,7 +489,9 @@ export function DocumentView({
                           placeholder={doc.title === NEW_NOTE_TITLE}
                           // 刚新建的这一篇：光标直接落在标题里
                           autoFocus={
-                            focusRequest?.docKey === doc.key && focusRequest.at === "title"
+                            focused &&
+                            focusRequest?.docKey === doc.key &&
+                            focusRequest.at === "title"
                           }
                           onEnterBody={enterBody}
                           onSave={(title) =>
@@ -469,8 +501,7 @@ export function DocumentView({
                       ) : (
                         <h1
                           key={doc.key}
-                          className="selectable break-words font-display text-[30px] font-bold leading-[1.25]
-                               text-ink @min-[480px]:text-[38px]"
+                          className={cn("selectable", TITLE_TYPE, titleBreak(doc.title))}
                         >
                           {doc.title}
                         </h1>
@@ -545,7 +576,7 @@ export function DocumentView({
           </div>
           <OverlayScrollbar targetRef={scrollRef} />
           {/* 大标题滚出去以后，窗口最上面那条里的「路径 / 标题」 */}
-          <TitleStrip doc={doc} scrollRef={scrollRef} />
+          <TitleStrip doc={doc} scrollRef={scrollRef} enabled={titleStrip} />
           {/* 正文滚到状态栏跟前淡掉，不是被一刀切齐：状态栏不画分隔线（窄栏右边那一栏底下的
               「仓库名」有一条，高度对不上，两条线一高一低）。压在换篇的快照（z-5）上面，快照也一样淡 */}
           <div
@@ -555,14 +586,16 @@ export function DocumentView({
           />
         </div>
 
-        <Outline
-          items={outline}
-          scrollRef={scrollRef}
-          resetKey={doc.key}
-          memoryKey={saveKey(doc)}
-          editorHandle={editorOutline}
-          zen={zen}
-        />
+        {outlineShown && (
+          <Outline
+            items={outline}
+            scrollRef={scrollRef}
+            resetKey={doc.key}
+            memoryKey={saveKey(doc)}
+            editorHandle={editorOutline}
+            zen={zen}
+          />
+        )}
       </div>
 
       {/* ---------- 底部状态栏：贴着窗口底边，不跟着正文滚 ---------- */}
@@ -570,6 +603,7 @@ export function DocumentView({
         docKey={doc.key}
         parts={doc.empty ? [] : doc.statusParts}
         panelToggle={panelToggle}
+        extend={first}
         onDelete={doc.deletable ? onDelete : undefined}
         onReveal={handleReveal}
         onHistory={handleHistory}
@@ -608,9 +642,12 @@ const STRIP_HEIGHT = 38;
 function TitleStrip({
   doc,
   scrollRef,
+  enabled,
 }: {
   doc: DocumentModel;
   scrollRef: React.RefObject<HTMLDivElement | null>;
+  /** 笔记的标签栏显示着：不出（显示着的淡掉，和标签栏的淡入交叠） */
+  enabled: boolean;
 }) {
   // 显不显示，以及这是哪一篇的结论（换篇的那一次渲染里还是上一篇的，新那篇的要等下面的 observer 回来）
   const [state, setState] = useState({ key: doc.key, shown: false });
@@ -638,7 +675,7 @@ function TitleStrip({
   }, [scrollRef, doc.key, doc.empty]);
 
   // 字跟着「显示着、而且是这一篇的结论」走：淡出的时候、新那篇的结论还没回来的时候，留着刚才那一篇的
-  const shown = state.shown;
+  const shown = enabled && state.shown;
   const last = useRef(doc);
   if (shown && state.key === doc.key) last.current = doc;
   const info = last.current;
@@ -711,8 +748,10 @@ function TitleStrip({
  * 4 倍降速 370ms，动画开头卡一下。现在只有这一层重渲染，children 是上层给的同一份，React 直接复用。
  */
 function CenteredColumn({ className, children }: { className: string; children: React.ReactNode }) {
-  const zen = useApp((s) => s.zen);
-  const panelCollapsed = useApp((s) => s.panelCollapsed);
+  // 弹出窗口里不跟着主窗口的专注模式、列表栏滑
+  const popout = usePaneWindow().popout !== null;
+  const zen = useApp((s) => s.zen) && !popout;
+  const panelCollapsed = useApp((s) => s.panelCollapsed) && !popout;
   // 这一次滑动是谁引起的，就跟谁的节奏走：专注模式和列表栏收起 / 展开的曲线不一样
   const last = useRef({ zen, panelCollapsed, by: "zen" as "zen" | "panel" });
   if (last.current.zen !== zen) last.current = { zen, panelCollapsed, by: "zen" };
@@ -866,6 +905,26 @@ function useFitHeight(ref: React.RefObject<HTMLTextAreaElement | null>, value: s
  * 标题本身仍然是一行文字 —— 回车是「写完了」，接着进正文开头；粘贴进来的换行直接去掉。
  * ↓ 也进正文：标题只有一行、或者光标已经在末尾时（折了好几行的话先在标题里往下走）。
  */
+/**
+ * 文档标题的字（标题输入框和只读标题共用）。
+ * 行高 1.35 不是 1.25：浏览器按字体的字框画选区底色，Segoe UI 的字框高 1.33em，行高比它矮的话
+ * 折成两行的标题，下一行的底色往上盖进上一行，半透明叠出一道深色（2026-10-28 用户截图「是不是重叠了」）。
+ * 底色不能改成不透明的：下一行的底色画在上一行的字后面，会把 g、y 的下半截盖掉。
+ * 上下各收 0.05em，单行标题占的高度和原来一样，下面的分隔线、正文不挪
+ */
+const TITLE_TYPE =
+  "-my-[0.05em] font-display text-[30px] font-bold leading-[1.35] text-ink @min-[480px]:text-[38px]";
+
+/**
+ * 标题怎么折行。里面有很长、没有断点的西文串（「欢迎使用 Odea1111……」）时整个标题 break-all：
+ * 不然浏览器先在串前面折行、整串挪到下一行，第一行只剩「欢迎使用」（2026-10-29 用户截图）。
+ * 正文是只给那一串加（editor/longRuns.ts），标题输入框没法给一段字单独加样式，只能整个标题一起；
+ * 只读标题跟着一样，同一个标题两处折得一样
+ */
+function titleBreak(title: string): string {
+  return hasLongRun(title) ? "break-all" : "break-words";
+}
+
 export function EditableDocumentTitle({
   title,
   placeholder,
@@ -962,26 +1021,14 @@ export function EditableDocumentTitle({
       }}
       className={cn(
         "block w-full min-w-0 resize-none overflow-hidden border-0 bg-transparent p-0",
-        "font-display text-[30px] font-bold leading-[1.25] text-ink outline-none @min-[480px]:text-[38px]",
+        TITLE_TYPE,
+        titleBreak(value),
+        "outline-none",
         "transition-opacity duration-[160ms] [field-sizing:content] placeholder:text-faint",
         saving && "opacity-65",
       )}
     />
   );
-}
-
-/** on 持续超过 delay 才变成 true；一变回 false 立刻跟着变 */
-function useLingering(on: boolean, delay: number): boolean {
-  const [shown, setShown] = useState(false);
-  useEffect(() => {
-    if (!on) {
-      setShown(false);
-      return;
-    }
-    const timer = setTimeout(() => setShown(true), delay);
-    return () => clearTimeout(timer);
-  }, [on, delay]);
-  return shown;
 }
 
 /** 状态栏分段之间的点 */
@@ -1019,6 +1066,7 @@ function StatusBar({
   docKey,
   parts,
   panelToggle,
+  extend,
   onDelete,
   onReveal,
   onHistory,
@@ -1030,6 +1078,8 @@ function StatusBar({
   parts: string[];
   /** 收起 / 展开窄栏右边那一栏；这一页没有那一栏就不给 */
   panelToggle?: { collapsed: boolean; onToggle: () => void };
+  /** 往左 chrome 底下多铺（最左边那一栏） */
+  extend: boolean;
   onDelete?: () => void;
   /** 在文件夹中显示这篇文档的文件（每篇都是仓库里的一个 .md） */
   onReveal?: () => void;
@@ -1048,7 +1098,10 @@ function StatusBar({
     <footer
       // 40 高：和左边列表栏底下的仓库切换器同一条中线（VaultSwitcher）
       className="relative z-10 flex h-10 shrink-0 items-center gap-1 bg-canvas pr-2"
-      style={{ marginLeft: -RAIL_WIDTH, paddingLeft: RAIL_WIDTH + (panelToggle ? 6 : 16) }}
+      style={{
+        marginLeft: extend ? -RAIL_WIDTH : 0,
+        paddingLeft: (extend ? RAIL_WIDTH : 0) + (panelToggle ? 6 : 16),
+      }}
     >
       {panelToggle && (
         <button

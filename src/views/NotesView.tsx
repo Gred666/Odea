@@ -1,4 +1,4 @@
-import { selectNeighbor } from "@/app/navigate";
+import { LIST_ROWS, selectNeighbor } from "@/app/navigate";
 import { type NoteSort, useApp } from "@/app/store";
 import { EmptyState } from "@/components/EmptyArt";
 import {
@@ -60,6 +60,7 @@ import {
   ListFilter,
   ListOrdered,
   type LucideIcon,
+  PanelTop,
   Pencil,
   Pin,
   PinOff,
@@ -67,15 +68,17 @@ import {
   TextQuote,
   Trash2,
 } from "lucide-react";
-import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { AnimatePresence, PresenceContext, motion, useIsPresent, usePresence } from "motion/react";
 import {
   Fragment,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   createContext,
   memo,
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -189,6 +192,7 @@ const entryMotion = {
 export function NotesList({ notes }: { notes: NoteSummary[] }) {
   const selectedId = useApp((s) => s.selectedNoteId);
   const selectNote = useApp((s) => s.selectNote);
+  const openNoteTab = useApp((s) => s.openNoteTab);
   const query = useApp((s) => s.noteQuery);
   const setQuery = useApp((s) => s.setNoteQuery);
   const folder = useApp((s) => s.noteFolder);
@@ -249,9 +253,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
   useEffect(() => {
     if (notes.length === 0 || notes.some((n) => n.id === selectedId)) return;
     const alive = new Set(notes.map((note) => note.id));
-    const firstVisible = [
-      ...document.querySelectorAll<HTMLElement>("[data-list-scroller] [data-note-row]"),
-    ]
+    const firstVisible = [...document.querySelectorAll<HTMLElement>(LIST_ROWS)]
       .map((row) => row.dataset.noteRow ?? "")
       .find((id) => alive.has(id));
     selectNote(firstVisible ?? notes[0]!.id);
@@ -602,7 +604,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
       const paths = all ? folders.filter((f) => within(f, path)) : [path];
       setFolderExpanded(paths, open);
     },
-    select: selectNote,
+    select: (id, newTab) => (newTab ? openNoteTab(id) : selectNote(id)),
     newNote: (path) => void handleCreate(path),
     dropNote,
     dropFolder: (path, target) => void dropFolder(path, target),
@@ -635,7 +637,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
     return {
       open: (path) => now().open(path),
       toggle: (path, all) => now().toggle(path, all),
-      select: (id) => now().select(id),
+      select: (id, newTab) => now().select(id, newTab),
       newNote: (path) => now().newNote(path),
       dropNote: (id, target) => now().dropNote(id, target),
       dropFolder: (path, target) => now().dropFolder(path, target),
@@ -726,21 +728,24 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
     groups.push({
       key: "pinned",
       label: <GroupLabel icon={<Pin size={12} strokeWidth={2} />} text="置顶" />,
-      body: flat
-        ? view.pinned.map((n, i) => (
-            <NoteCard
-              key={n.id}
-              note={n}
-              index={i}
-              selected={n.id === selectedId}
-              folder={folder}
-              shapeTick={shapeTick}
-              boxed
-            />
-          ))
-        : view.pinned.map((n) => (
-            <TreeNoteRow key={n.id} note={n} depth={0} where={hintFolder(n, folder)} />
-          )),
+      body: flat ? (
+        view.pinned.map((n, i) => (
+          <NoteCard
+            key={n.id}
+            note={n}
+            index={i}
+            selected={n.id === selectedId}
+            folder={folder}
+            shapeTick={shapeTick}
+            boxed
+          />
+        ))
+      ) : (
+        <NoteRows
+          notes={view.pinned}
+          row={(n) => <TreeNoteRow note={n} depth={0} where={hintFolder(n, folder)} />}
+        />
+      ),
     });
   }
   if (flat) {
@@ -1082,11 +1087,31 @@ function nearestVisible(path: string, base: string, expanded: Set<string>): stri
 
 /* ---------------- 树：文件夹行、展开出来的子树、标题行 ---------------- */
 
+/** Ctrl / ⌘ + 点击一篇：开在新标签里（docs/标签页与分屏.md §4.1） */
+const wantsNewTab = (event: ReactMouseEvent) => event.ctrlKey || event.metaKey;
+
+/**
+ * 中键点一篇：开在新标签里，和浏览器一样。按下那一下就拦掉，不然 Windows 上进「自动滚动」
+ */
+function middleClick(open: () => void) {
+  return {
+    onMouseDown: (event: ReactMouseEvent) => {
+      if (event.button === 1) event.preventDefault();
+    },
+    onAuxClick: (event: ReactMouseEvent) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      open();
+    },
+  };
+}
+
 /** 树上的行要调的操作。身份不变（见 NotesList），memo 的行拿着它不会跟着列表重渲染 */
 interface TreeActions {
   open: (path: string) => void;
   toggle: (path: string, all: boolean) => void;
-  select: (id: string) => void;
+  /** 打开这一篇：当前标签里，newTab 时开在新标签里（docs/标签页与分屏.md §4.1） */
+  select: (id: string, newTab?: boolean) => void;
   /** 文件夹「…」里的「新建笔记」：建在那个文件夹里 */
   newNote: (path: string) => void;
   /** 拖着的笔记 / 文件夹松手了 */
@@ -1202,15 +1227,13 @@ function FolderContents({
         {newInside && <FolderNameInput key="new" depth={depth} initial="新建文件夹" fresh />}
       </AnimatePresence>
       <FolderBranch parent={path} depth={depth} />
-      {notes.slice(0, shown).map((note) => (
-        <TreeNoteRow
-          key={note.id}
-          note={note}
-          depth={depth}
-          reorderIn={reorderIn}
-          filtered={smart}
-        />
-      ))}
+      <NoteRows
+        notes={notes}
+        shown={shown}
+        row={(note) => (
+          <TreeNoteRow note={note} depth={depth} reorderIn={reorderIn} filtered={smart} />
+        )}
+      />
       {batch && notes.length > shown && (
         <MoreRows
           height={(notes.length - shown) * (excerpts ? EXCERPT_ROW_HEIGHT : ROW_HEIGHT)}
@@ -1272,6 +1295,129 @@ function TreeSlot({ slide, children }: { slide: boolean; children: ReactNode }) 
     >
       {children}
     </motion.div>
+  );
+}
+
+/**
+ * 树上的一串笔记行（一个文件夹里的、置顶那一组）。新来的一篇（新建、挪进来、撤销删除）按高度展开，
+ * 走掉的（删除、挪走、归档）按高度收起，下面的行跟着滑。以前是一帧之内冒出来 / 没了，
+ * 下面整列一下跳 34px（2026-10-28 用户反馈「新建笔记和删除笔记动画不够丝滑」）。
+ *
+ * 「新来的」按整个文件夹算，不按画出来的那几行：往下滚分批画出来的本来就在，不展开。
+ * 一次来来去去好几篇（同步拉下来一批、换了仓库的摆法）不动：一起展开收起反而乱
+ */
+function NoteRows({
+  notes,
+  shown = notes.length,
+  row,
+}: {
+  notes: NoteSummary[];
+  /** 分批画：只画前面这么多（FolderContents 的 batch） */
+  shown?: number;
+  row: (note: NoteSummary) => ReactNode;
+}) {
+  const known = useRef<Set<string> | null>(null);
+  const before = known.current;
+  useEffect(() => {
+    known.current = new Set(notes.map((note) => note.id));
+  });
+  const added = before ? notes.filter((note) => !before.has(note.id)) : [];
+  const removed = before ? before.size - (notes.length - added.length) : 0;
+  const slide = added.length + removed <= 3;
+  return (
+    // presenceAffectsLayout 关掉：开着的话每次重渲染每一格的 context 都是新的，几百行一起跟着重渲染
+    <AnimatePresence initial={false} custom={slide} presenceAffectsLayout={false}>
+      {notes.slice(0, shown).map((note) => (
+        <NoteSlot key={note.id} appear={slide && added.includes(note)}>
+          {row(note)}
+        </NoteSlot>
+      ))}
+    </AnimatePresence>
+  );
+}
+
+/** 一格笔记行展开、收起：同文件夹那一格（entryMotion 的 tween.base），起步就走、收尾短 */
+const SLOT_MS = 220;
+const SLOT_EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
+
+/**
+ * 一篇笔记那一格。不用 Motion 组件：几百行每行一个就是几百个投影节点，
+ * 选中高亮滑一下都要全部过一遍（ListColumn 的 ROW_BATCH）。这里只在进出的那一格上
+ * 跑一个 WAAPI 的高度动画：字不动、不变透明、不进合成层（CLAUDE.md「动效」规矩 1、7）
+ */
+function NoteSlot({ appear, children }: { appear: boolean; children: ReactNode }) {
+  const [present, safeToRemove] = usePresence();
+  const slide = useContext(PresenceContext)?.custom !== false;
+  const ref = useRef<HTMLDivElement>(null);
+  const closing = useRef<Animation | null>(null);
+
+  // 挂上那一帧、画出来之前就从 0 高开始，不先整行闪一下
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 只在挂上时看一次
+  useLayoutEffect(() => {
+    if (appear) slideSlot(ref.current, "open");
+  }, []);
+
+  useEffect(() => {
+    if (present) {
+      // 收到一半又回来了（马上撤销了删除）：回到原样
+      closing.current?.cancel();
+      closing.current = null;
+      return;
+    }
+    const animation = slide ? slideSlot(ref.current, "close") : null;
+    if (!animation) {
+      safeToRemove?.();
+      return;
+    }
+    closing.current = animation;
+    animation.finished.then(
+      () => safeToRemove?.(),
+      () => {},
+    );
+  }, [present, safeToRemove, slide]);
+
+  return (
+    // 正在收起的这一格已经不算列表里的一行（app/navigate 的 selectNeighbor 跳过它）：
+    // 删了一篇马上再删下一篇，选中不能落到刚删掉的那篇上
+    <div ref={ref} data-leaving={present ? undefined : ""}>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * 按高度展开 / 收起一格。收起从眼下的高度开始（展开到一半就删了的话不先跳满）；
+ * 这一格上还在跑的先停掉（开发模式 StrictMode 挂载时 effect 跑两遍：第二遍量到的是第一遍
+ * 动画里的 0 高，再叠一个 0 → 0 的上去，整段都看不见、结束时一下冒出来）。
+ * 动的时候才裁掉多出来的那截：平时不裁，拖动时的落点线画在行外 1px
+ */
+function slideSlot(node: HTMLElement | null, way: "open" | "close"): Animation | null {
+  if (!node || typeof node.animate !== "function" || motionReduced()) return null;
+  const now = node.offsetHeight;
+  for (const running of node.getAnimations()) running.cancel();
+  const full = node.offsetHeight;
+  node.style.overflow = "clip";
+  const animation = node.animate(
+    way === "open"
+      ? [{ height: "0px" }, { height: `${full}px` }]
+      : [{ height: `${now}px` }, { height: "0px" }],
+    // 收起的停在 0 高，等 React 拿掉它；不停住的话拿掉之前会整行闪回来一帧
+    { duration: SLOT_MS, easing: SLOT_EASE, fill: way === "close" ? "forwards" : "none" },
+  );
+  // 停掉的那个的 cancel 事件晚一拍才到：这时候新的还在动，别把裁切去掉
+  const release = () => {
+    if (!node.getAnimations().length) node.style.overflow = "";
+  };
+  if (way === "open") animation.addEventListener("finish", release);
+  animation.addEventListener("cancel", release);
+  return animation;
+}
+
+/** 应用里关了动效，或者系统要求减少动效 */
+function motionReduced(): boolean {
+  return (
+    document.documentElement.dataset.reduceMotion === "true" ||
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
 }
 
@@ -1647,9 +1793,10 @@ const TreeNoteRow = memo(function TreeNoteRow({
           onSpringOpen: tree.springOpen,
         })
       }
-      onClick={() => {
-        if (!consumeDragClick()) tree.select(note.id);
+      onClick={(event) => {
+        if (!consumeDragClick()) tree.select(note.id, wantsNewTab(event));
       }}
+      {...middleClick(() => tree.select(note.id, true))}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
@@ -1743,6 +1890,12 @@ function useNoteMenu(note: NoteSummary): MenuAction[] {
   const where = folderOf(note);
   return [
     {
+      id: "tab",
+      label: "在新标签页打开",
+      icon: PanelTop,
+      onSelect: () => tree.select(note.id, true),
+    },
+    {
       id: "pin",
       label: note.isPinned ? "取消置顶" : "置顶",
       icon: note.isPinned ? PinOff : Pin,
@@ -1828,7 +1981,8 @@ const TreeShortcutRow = memo(function TreeShortcutRow({
       role="button"
       tabIndex={0}
       data-shortcut-row={shortcut.node}
-      onClick={() => tree.select(note.id)}
+      onClick={(event) => tree.select(note.id, wantsNewTab(event))}
+      {...middleClick(() => tree.select(note.id, true))}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
@@ -2191,9 +2345,10 @@ const NoteCard = memo(function NoteCard({
           onSpringOpen: tree.springOpen,
         })
       }
-      onClick={() => {
-        if (!consumeDragClick()) tree.select(note.id);
+      onClick={(event) => {
+        if (!consumeDragClick()) tree.select(note.id, wantsNewTab(event));
       }}
+      {...middleClick(() => tree.select(note.id, true))}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();

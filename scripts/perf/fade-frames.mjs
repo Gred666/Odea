@@ -60,6 +60,59 @@ const SCENES = {
     capture: 3000,
     settle: 600,
   },
+  /**
+   * 笔记的标签栏（components/NoteTabs.tsx）：开出第二个标签时整条淡进来。截的是标签那一层的左边一截
+   */
+  tabs: {
+    setup: "new Promise((r) => setTimeout(r, 300))",
+    target: ".odea-doc-strip:has([role=tablist])",
+    trigger: `(async () => {
+      const { useApp } = await import('/src/app/store.ts');
+      const { useData } = await import('/src/data/store.ts');
+      const other = useData.getState().notes.find((n) => n.id !== useApp.getState().selectedNoteId);
+      useApp.getState().openNoteTab(other.id);
+    })()`,
+    pad: { top: 0, right: -400, bottom: 0, left: 0 },
+    capture: 3000,
+    settle: 600,
+  },
+  /**
+   * 向右拆分（components/DocumentPanes.tsx）：整排拍一张快照盖在上面退，还在的那一栏在底下变窄、
+   * 新的一栏挂上来。截的是整个正文区
+   */
+  split: {
+    setup: "new Promise((r) => setTimeout(r, 300))",
+    target: "[data-swap-host]:has([data-pane])",
+    trigger: `(async () => {
+      const { useApp } = await import('/src/app/store.ts');
+      const { notePanes, activePane } = useApp.getState();
+      const pane = notePanes.find((p) => p.id === activePane);
+      useApp.getState().splitTab(pane.activeTab, pane.id, "right", true);
+    })()`,
+    pad: { top: 0, right: 0, bottom: 0, left: 0 },
+    capture: 3000,
+    settle: 800,
+  },
+  /** 关掉右边那一栏：左边那一栏在快照底下变宽 */
+  unsplit: {
+    setup: `(async () => {
+      const { useApp } = await import('/src/app/store.ts');
+      const { notePanes, activePane } = useApp.getState();
+      const pane = notePanes.find((p) => p.id === activePane);
+      useApp.getState().splitTab(pane.activeTab, pane.id, "right", true);
+      await new Promise((r) => setTimeout(r, 1500));
+    })()`,
+    target: "[data-swap-host]:has([data-pane])",
+    trigger: `(async () => {
+      const { useApp } = await import('/src/app/store.ts');
+      const { notePanes } = useApp.getState();
+      // 窗格里只有这一个标签：关掉它就是关掉这一栏
+      useApp.getState().closeTab(notePanes[1].activeTab);
+    })()`,
+    pad: { top: 0, right: 0, bottom: 0, left: 0 },
+    capture: 3000,
+    settle: 800,
+  },
   /** 文件列表里置顶的那一行：悬停时图钉让位给「…」（views/NotesView.tsx 的 TreeNoteRow） */
   pinned: {
     setup: "new Promise((r) => setTimeout(r, 300))",

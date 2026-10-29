@@ -1,5 +1,6 @@
 import { cn } from "@/lib/cn";
 import { layoutIds, popoverCard, spring } from "@/lib/motion";
+import { usePaneWindow } from "@/lib/paneWindow";
 import { shortcut } from "@/lib/platform";
 import { CornerDownLeft, Search } from "lucide-react";
 import { motion, useIsPresent } from "motion/react";
@@ -161,8 +162,8 @@ export interface Placement {
 /** 网格最少留两行多一点，再矮就没法用了 */
 const MIN_GRID = 120;
 
-export function viewportSize(): { width: number; height: number } {
-  return { width: window.innerWidth, height: window.innerHeight };
+export function viewportSize(view: Window = window): { width: number; height: number } {
+  return { width: view.innerWidth, height: view.innerHeight };
 }
 
 export function samePlacement(a: Placement, b: Placement): boolean {
@@ -266,6 +267,8 @@ export function EmojiPicker({
   /** refocus：是否把焦点还给编辑器（Esc 要还；点到别处去了就不抢） */
   onClose: (refocus: boolean) => void;
 }) {
+  // 弹出窗口里的编辑器（docs/标签页与分屏.md §16）：按它所在的那个窗口摆、听
+  const { doc, win: view } = usePaneWindow();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [recent] = useState(loadRecent);
@@ -276,7 +279,7 @@ export function EmojiPicker({
       width: PANEL_WIDTH,
       height: PANEL_HEIGHT,
       grid: GRID_HEIGHT,
-      viewport: viewportSize(),
+      viewport: viewportSize(view),
     }),
   );
   const panelRef = useRef<HTMLDivElement>(null);
@@ -316,10 +319,10 @@ export function EmojiPicker({
       width: panel.offsetWidth,
       height: content.offsetHeight,
       grid: gridRef.current?.offsetHeight ?? 0,
-      viewport: viewportSize(),
+      viewport: viewportSize(view),
     });
     setPlace((current) => (samePlacement(current, measured) ? current : measured));
-  }, [anchor]);
+  }, [anchor, view]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -340,17 +343,17 @@ export function EmojiPicker({
     };
     const onBlur = () => onClose(false);
     const onResize = () => onClose(false);
-    document.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("blur", onBlur);
-    window.addEventListener("resize", onResize);
+    doc.addEventListener("pointerdown", onPointerDown, true);
+    view.addEventListener("scroll", onScroll, true);
+    view.addEventListener("blur", onBlur);
+    view.addEventListener("resize", onResize);
     return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("blur", onBlur);
-      window.removeEventListener("resize", onResize);
+      doc.removeEventListener("pointerdown", onPointerDown, true);
+      view.removeEventListener("scroll", onScroll, true);
+      view.removeEventListener("blur", onBlur);
+      view.removeEventListener("resize", onResize);
     };
-  }, [onClose, present]);
+  }, [onClose, present, doc, view]);
 
   const pick = (emoji: AnimatedEmoji | undefined) => {
     if (!emoji) return;
@@ -405,7 +408,7 @@ export function EmojiPicker({
       exit="gone"
       onKeyDown={onKeyDown}
       style={{
-        ...pinnedEdge(anchor, place),
+        ...pinnedEdge(anchor, place, viewportSize(view), view.devicePixelRatio || 1),
         // 退场中的那几帧已经在收了，不能再接点击 —— 否则点在它原来的位置会插进一个表情
         pointerEvents: present ? undefined : "none",
       }}

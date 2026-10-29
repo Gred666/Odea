@@ -119,7 +119,7 @@ fn build_vault_window<R: Runtime>(
     placement: Option<boot::WindowPlacement>,
 ) -> tauri::Result<()> {
     let url = if quiet { "index.html?quiet" } else { "index.html" };
-    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
         .title("Odea")
         .inner_size(1440.0, 900.0)
         .min_inner_size(940.0, 620.0)
@@ -127,8 +127,15 @@ fn build_vault_window<R: Runtime>(
         .center()
         .decorations(false)
         .visible(false)
-        .background_color(BACKGROUND)
-        .build()?;
+        .background_color(BACKGROUND);
+    // 把标签拖成独立窗口（docs/标签页与分屏.md §16）：页面 window.open 的空白页由 popout 接住
+    #[cfg(feature = "desktop-runtime")]
+    let builder = builder.on_new_window({
+        let app = app.clone();
+        let owner = label.to_string();
+        move |url, features| crate::popout::create(&app, &owner, &url, features, BACKGROUND)
+    });
+    let window = builder.build()?;
     place_hidden(&window, placement);
     Ok(())
 }

@@ -1,3 +1,4 @@
+import { winOf } from "@/lib/paneWindow";
 import { isTauri } from "@/lib/tauri";
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
@@ -115,11 +116,15 @@ export const modKeyCursor = ViewPlugin.fromClass(
     private readonly onKey = (event: KeyboardEvent) => this.sync(event.ctrlKey || event.metaKey);
     private readonly onClear = () => this.sync(false);
 
+    /** 编辑器所在的那个窗口（弹出窗口里的编辑器，docs/标签页与分屏.md §16） */
+    private readonly host: Window;
+
     constructor(private readonly view: EditorView) {
-      window.addEventListener("keydown", this.onKey);
-      window.addEventListener("keyup", this.onKey);
-      window.addEventListener("blur", this.onClear);
-      document.addEventListener("visibilitychange", this.onClear);
+      this.host = winOf(view.dom);
+      this.host.addEventListener("keydown", this.onKey);
+      this.host.addEventListener("keyup", this.onKey);
+      this.host.addEventListener("blur", this.onClear);
+      this.host.document.addEventListener("visibilitychange", this.onClear);
     }
 
     private sync(held: boolean) {
@@ -129,10 +134,10 @@ export const modKeyCursor = ViewPlugin.fromClass(
     }
 
     destroy() {
-      window.removeEventListener("keydown", this.onKey);
-      window.removeEventListener("keyup", this.onKey);
-      window.removeEventListener("blur", this.onClear);
-      document.removeEventListener("visibilitychange", this.onClear);
+      this.host.removeEventListener("keydown", this.onKey);
+      this.host.removeEventListener("keyup", this.onKey);
+      this.host.removeEventListener("blur", this.onClear);
+      this.host.document.removeEventListener("visibilitychange", this.onClear);
     }
   },
 );

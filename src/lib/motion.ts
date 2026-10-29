@@ -103,7 +103,13 @@ const unfoldEase = [0.32, 0.72, 0, 1] as const;
 /** 用 initial="hidden" animate="shown" exit="gone"；custom 传第一帧露出来多高（贴着光标的那一栏） */
 export const popoverCard: Variants = {
   hidden: (peek: number) => ({ height: peek }),
-  shown: { height: "auto", transition: { duration: 0.28, ease: unfoldEase } },
+  // opacity 要写回 1：收起（gone）淡到一半又打开的（连按两下 Ctrl+K、从对话框返回命令面板），
+  // 用的还是那一张卡片，不写的话就停在半透明。平时本来就是 1，duration 0 不起动画
+  shown: {
+    height: "auto",
+    opacity: 1,
+    transition: { duration: 0.28, ease: unfoldEase, opacity: { duration: 0 } },
+  },
   gone: {
     height: 0,
     opacity: [1, 1, 0],

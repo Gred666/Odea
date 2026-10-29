@@ -122,6 +122,49 @@ describe("switchLayout", () => {
     expect(useData.getState().error).toBeNull();
   });
 
+  it("finds the open tabs again by their paths (docs/标签页与分屏.md §6)", async () => {
+    useData.setState({
+      layout: OPENED,
+      notes: [
+        summary("old-a", "Daily/2026-10-27.md"),
+        summary("old-b", "读书/摘抄.md"),
+        summary("old-c", "读书/书单.md"),
+      ],
+      archived: [],
+      bodies: { "old-b": "摘抄的正文", "old-c": "书单" },
+      dayDocs: [],
+      goals: {},
+    });
+    const tab = (id: string, noteId: string) => ({ id, noteId, back: [], forward: [] });
+    useApp.setState({
+      workspace: "notes",
+      notePanes: [
+        {
+          id: "p1",
+          tabs: [tab("t1", "old-a"), tab("t2", "old-b"), tab("t3", "old-c")],
+          activeTab: "t3",
+          size: 1,
+        },
+      ],
+      activePane: "p1",
+      selectedNoteId: "old-c",
+    });
+    const journalOn = { ...OPENED, journal: true, daysDir: "Daily", hiddenDirs: ["Daily"] };
+    api.vaultSetJournal.mockResolvedValue(info(journalOn));
+    api.noteList.mockImplementation(async (archived: boolean) =>
+      archived ? [] : [summary("new-b", "读书/摘抄.md"), summary("new-c", "读书/书单.md")],
+    );
+    api.noteGet.mockResolvedValue({ ...summary("new-c", "读书/书单.md"), contentMd: "书单" });
+
+    await useData.getState().setJournal(true);
+
+    // 日记不再是笔记：它的标签关掉；另外两个换成新 id，当前的还是「书单」
+    const [pane] = useApp.getState().notePanes;
+    expect(pane!.tabs.map((tab) => tab.noteId)).toEqual(["new-b", "new-c"]);
+    expect(pane!.activeTab).toBe("t3");
+    expect(useApp.getState().selectedNoteId).toBe("new-c");
+  });
+
   it("leaves the journal pages and drops their caches when the journal is turned off", async () => {
     useData.setState({
       layout: ODEA_LAYOUT,

@@ -12,6 +12,7 @@ import { History, LoaderCircle, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DiffView } from "./DiffView";
+import { DialogLead, usePaletteBack } from "./PaletteBack";
 import { Segmented } from "./Segmented";
 
 /* ============================================================
@@ -83,6 +84,7 @@ export function HistoryDialog() {
   const requested = useApp((s) => s.historyFor);
   const setTarget = useApp((s) => s.setHistoryFor);
   const close = () => setTarget(null);
+  const back = usePaletteBack("history", !!requested, close);
   const [opening, setOpening] = useState<Opening | null>(null);
 
   useEffect(() => {
@@ -112,12 +114,13 @@ export function HistoryDialog() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.isComposing) {
         e.preventDefault();
-        setTarget(null);
+        if (back) back();
+        else setTarget(null);
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [requested, setTarget]);
+  }, [requested, setTarget, back]);
 
   const shown = requested && opening && keyOf(opening.target) === keyOf(requested) ? opening : null;
   const target = shown?.target;
@@ -161,7 +164,7 @@ export function HistoryDialog() {
                 className="flex shrink-0 items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <History size={16} strokeWidth={2} className="shrink-0 text-faint" />
+                <DialogLead icon={History} back={back} />
                 <p className="min-w-0 flex-1 truncate text-[14px] text-ink">
                   <span className="font-medium">历史版本</span>
                   {title && <span className="text-muted"> · {title}</span>}

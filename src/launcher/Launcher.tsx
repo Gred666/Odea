@@ -2,6 +2,7 @@ import { ActionMenu } from "@/components/RowMenu";
 import { WinButton } from "@/components/TitleBar";
 import { DOT, LOGO_VIEWBOX_ATTR, STROKES, STROKE_WIDTH } from "@/components/logoGeometry";
 import { cn } from "@/lib/cn";
+import { useLingering } from "@/lib/lingering";
 import { tween } from "@/lib/motion";
 import { isTauri, win } from "@/lib/tauri";
 import { FolderOpen, FolderTree, MoreVertical, X } from "lucide-react";
@@ -28,6 +29,12 @@ export function Launcher() {
   const [vaults, setVaults] = useState<VaultEntry[] | null>(null);
   const [panel, setPanel] = useState<Panel>("home");
   const [busy, setBusy] = useState(false);
+  // 连点挡在这里（同一帧里的第二下读到的 busy 还是 false）
+  const running = useRef(false);
+  // 按钮变灰、「正在…」过一会儿还没完才露出来：点了已经开着的仓库，Rust 那边几十毫秒就把启动器
+  // 藏起来了，立刻变灰的话关掉之前右边整排按钮先闪一下半透明（2026-10-28 用户说「关闭的时候会掉帧」，
+  // 实测点下去到藏起来之间按钮半透明画了 20ms，60Hz 的屏上一两帧）
+  const pending = useLingering(busy, 200);
   const [error, setError] = useState<string | null>(null);
   // 点团队仓库的链接（odea://vault/）打开的：直接到「从同步仓库拉一份」、停在那个仓库
   const [vaultLink, setVaultLink] = useState<VaultLink | null>(null);
@@ -62,7 +69,8 @@ export function Launcher() {
 
   /** 跑一个会打开窗口的操作：期间按钮都不能点，出错了就地说 */
   const run = async (action: () => Promise<unknown>) => {
-    if (busy) return;
+    if (running.current) return;
+    running.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -71,6 +79,7 @@ export function Launcher() {
       setError(e instanceof Error ? e.message : String(e));
       refresh();
     } finally {
+      running.current = false;
       setBusy(false);
     }
   };
@@ -94,7 +103,7 @@ export function Launcher() {
             <VaultRow
               key={vault.path}
               vault={vault}
-              disabled={busy}
+              disabled={pending}
               onOpen={() => void run(() => api.open(vault.path))}
               onReveal={() => void api.reveal(vault.path).catch(() => {})}
               onForget={() =>
@@ -131,14 +140,14 @@ export function Launcher() {
                     detail="建一个新文件夹，里面放好使用指南。"
                     button="新建"
                     primary
-                    disabled={busy}
+                    disabled={pending}
                     onClick={() => go("create")}
                   />
                   <ActionRow
                     title="打开文件夹"
                     detail="已有的文件夹，比如 Obsidian 的库。"
                     button="打开"
-                    disabled={busy}
+                    disabled={pending}
                     onClick={() =>
                       void run(async () => {
                         await api.openFolder();
@@ -149,14 +158,14 @@ export function Launcher() {
                     title="从同步仓库拉一份"
                     detail="换了电脑：把同步过的笔记拉到这台上。"
                     button="拉取"
-                    disabled={busy}
+                    disabled={pending}
                     onClick={() => go("clone")}
                   />
                   <ActionRow
                     title="加入协同编辑"
                     detail="粘贴别人发来的邀请链接，不用先开仓库。"
                     button="加入"
-                    disabled={busy}
+                    disabled={pending}
                     onClick={() => go("join")}
                   />
                 </div>
@@ -164,7 +173,7 @@ export function Launcher() {
               {panel === "create" && (
                 <CreatePanel
                   first={vaults?.length === 0}
-                  busy={busy}
+                  busy={pending}
                   onBack={() => go("home")}
                   onCreate={(parent, name, logical) =>
                     void run(() => api.create(parent, name, logical))
@@ -175,7 +184,7 @@ export function Launcher() {
                 <ClonePanel
                   key={vaultLink?.fullName ?? ""}
                   target={vaultLink}
-                  busy={busy}
+                  busy={pending}
                   onBack={() => go("home")}
                   onClone={(provider, url, parent, name) =>
                     void run(() => api.clone(provider, url, parent, name))
@@ -184,7 +193,7 @@ export function Launcher() {
               )}
               {panel === "join" && (
                 <JoinPanel
-                  busy={busy}
+                  busy={pending}
                   onBack={() => go("home")}
                   onJoin={(link) => void run(() => api.join(link))}
                 />

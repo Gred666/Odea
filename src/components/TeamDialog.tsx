@@ -8,6 +8,7 @@ import { Check, Copy, LoaderCircle, Users, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { BannerButton } from "./ConflictBanner";
+import { DialogLead, usePaletteBack } from "./PaletteBack";
 
 /* ============================================================
    团队成员（docs/协同编辑.md §22.3）：仓库菜单 / 命令面板「邀请成员… / 团队成员…」。
@@ -23,6 +24,7 @@ export function TeamDialog() {
   const open = useTeam((s) => s.open);
   const close = useTeam((s) => s.close);
   const team = useTeam((s) => s.info?.team ?? false);
+  const back = usePaletteBack("team", open, close);
 
   useEffect(() => {
     if (!open) return;
@@ -30,12 +32,12 @@ export function TeamDialog() {
       if (event.key === "Escape" && !event.isComposing) {
         event.preventDefault();
         event.stopPropagation();
-        close();
+        (back ?? close)();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, close]);
+  }, [open, close, back]);
 
   return (
     <AnimatePresence>
@@ -75,7 +77,7 @@ export function TeamDialog() {
                 className="flex items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Users size={16} strokeWidth={2} className="shrink-0 text-faint" />
+                <DialogLead icon={Users} back={back} />
                 <p className="flex-1 text-[14px] font-medium text-ink">
                   {team ? "团队成员" : "邀请成员"}
                 </p>

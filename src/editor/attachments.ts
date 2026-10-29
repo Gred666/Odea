@@ -1,4 +1,5 @@
 import type { Attachment } from "@/data/types";
+import { winOf } from "@/lib/paneWindow";
 import { isTauri } from "@/lib/tauri";
 import { syntaxTree } from "@codemirror/language";
 import { type EditorState, type Extension, StateEffect, StateField } from "@codemirror/state";
@@ -197,9 +198,17 @@ export function watchDesktopFileDrops(
   let disposed = false;
   let unlisten: (() => void) | null = null;
 
+  // 编辑器所在的那个窗口：弹出窗口（docs/标签页与分屏.md §16）的拖放事件发给的是它自己的 webview，
+  // 坐标按它的像素比算
+  const host = winOf(view.dom) as Window & {
+    __TAURI_INTERNALS__?: { metadata?: { currentWebview?: { label?: string } } };
+  };
+  const popoutLabel =
+    host === window ? null : host.__TAURI_INTERNALS__?.metadata?.currentWebview?.label;
+
   const posAt = (position: { x: number; y: number }) => {
     // 事件给的是物理像素
-    const scale = window.devicePixelRatio || 1;
+    const scale = host.devicePixelRatio || 1;
     const x = position.x / scale;
     const y = position.y / scale;
     const box = view.contentDOM.getBoundingClientRect();
@@ -207,8 +216,10 @@ export function watchDesktopFileDrops(
     return view.posAtCoords({ x, y }) ?? null;
   };
 
-  void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) =>
-    getCurrentWebview()
+  void import("@tauri-apps/api/webview").then(async ({ Webview, getCurrentWebview }) => {
+    const webview = popoutLabel ? await Webview.getByLabel(popoutLabel) : getCurrentWebview();
+    if (!webview || disposed) return;
+    return webview
       .onDragDropEvent((event) => {
         const payload = event.payload;
         if (!view.dom.isConnected || !hooks()?.paths) return;
@@ -230,8 +241,8 @@ export function watchDesktopFileDrops(
       .then((stop) => {
         if (disposed) stop();
         else unlisten = stop;
-      }),
-  );
+      });
+  });
 
   return () => {
     disposed = true;

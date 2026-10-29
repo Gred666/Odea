@@ -1,5 +1,6 @@
 import { isTauri as detectTauri, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { type WebviewWindow, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { PopoutOp } from "./bindings";
 
 /* ============================================================
    Tauri 运行时的薄封装。
@@ -36,10 +37,10 @@ export const windowKind: "launcher" | "guest" | "vault" = search.has("launcher")
 /** 启动以后才开的仓库窗口：开场只在冷启动的第一批窗口里播 */
 export const quietWindow = search.has("quiet");
 
-async function call<T>(cmd: string, fallback: T): Promise<T> {
+async function call<T>(cmd: string, fallback: T, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri) return fallback;
   try {
-    return await tauriInvoke<T>(cmd);
+    return await tauriInvoke<T>(cmd, args);
   } catch (e) {
     console.error(`[tauri] ${cmd} failed`, e);
     return fallback;
@@ -51,12 +52,23 @@ export function signalReady(): Promise<void> {
   return call("ready", undefined);
 }
 
+/** 标题栏上的窗口按钮和拖动区（TitleBar）：主窗口是 win，弹出窗口是 popoutControls */
+export interface WindowControls {
+  minimize: () => Promise<void>;
+  toggleMaximize: () => Promise<boolean>;
+  close: () => Promise<void> | void;
+  isMaximized: () => Promise<boolean>;
+  startDragging: () => Promise<void>;
+}
+
 export const win = {
   minimize: () => call("win_minimize", undefined),
   toggleMaximize: () => call<boolean>("win_toggle_maximize", false),
   close: () => call("win_close", undefined),
   forceClose: () => call("win_force_close", undefined),
   isMaximized: () => call<boolean>("win_is_maximized", false),
+  /** 提到前面（从弹出窗口里开了主窗口的对话框） */
+  focus: () => call("win_focus", undefined),
   startDragging: async () => {
     if (!isTauri) return;
     try {
@@ -68,3 +80,40 @@ export const win = {
     }
   },
 };
+
+/* ---------------- 弹出窗口（docs/标签页与分屏.md §16） ----------------
+   弹出窗口里的东西是主窗口的页面画的，命令也从主窗口发：要指名是哪个弹出窗口（Tauri 的窗口标签）。
+   Rust 那边只认开它的那个仓库窗口（popout.rs） */
+
+export const popoutOp = (label: string, op: PopoutOp) =>
+  call<boolean>("popout_window", false, { label, op });
+
+export const popoutTitle = (label: string, title: string) =>
+  call("popout_set_title", undefined, { label, title });
+
+/** 用户关弹出窗口（Alt+F4、任务栏）：Rust 拦下来发给开它的仓库窗口，载荷是弹出窗口的标签 */
+export async function onPopoutCloseRequested(
+  handler: (label: string) => void,
+): Promise<() => void> {
+  if (!isTauri) return () => {};
+  return thisWindow().listen<string>("popout-close", (event) => handler(event.payload));
+}
+
+/** 弹出窗口的标题栏按钮。label 是拿到以后才有的（window.open 之后十几毫秒），用的时候再取 */
+export function popoutControls(label: () => string | null, close: () => void): WindowControls {
+  const op = async (name: PopoutOp) => {
+    const target = label();
+    return target ? popoutOp(target, name) : false;
+  };
+  return {
+    minimize: async () => {
+      await op("minimize");
+    },
+    toggleMaximize: () => op("toggleMaximize"),
+    close,
+    isMaximized: () => op("isMaximized"),
+    startDragging: async () => {
+      await op("startDragging");
+    },
+  };
+}

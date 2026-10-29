@@ -48,6 +48,25 @@ async winStartDragging() : Promise<boolean> {
     return await TAURI_INVOKE("win_start_dragging");
 },
 /**
+ * 把这个窗口提到前面：从弹出窗口里点了要在主窗口里开的对话框（历史版本），主窗口可能压在后面
+ * （docs/标签页与分屏.md §16）
+ */
+async winFocus() : Promise<void> {
+    await TAURI_INVOKE("win_focus");
+},
+/**
+ * 弹出窗口的窗口操作。调用方是开它的仓库窗口（前端都跑在它的页面里），别的窗口指不动它
+ */
+async popoutWindow(label: string, op: PopoutOp) : Promise<boolean> {
+    return await TAURI_INVOKE("popout_window", { label, op });
+},
+/**
+ * 弹出窗口的标题（任务栏、Alt+Tab 里看到的）：跟着当前那一篇
+ */
+async popoutSetTitle(label: string, title: string) : Promise<void> {
+    await TAURI_INVOKE("popout_set_title", { label, title });
+},
+/**
  * 一个列表（笔记 / 归档）的全部笔记，不带正文：打开哪篇再 note_get 哪篇
  */
 async noteList(archived: boolean) : Promise<Result<NoteSummary[], AppError>> {
@@ -2369,6 +2388,23 @@ idInFile: boolean }
  * 权限：能改，或者只读（主持人随时能改）
  */
 export type Permission = "edit" | "read"
+export type PopoutOp = 
+/**
+ * 前端画好第一帧：显示出来、拿到焦点
+ */
+"show" | "focus" | "minimize" | 
+/**
+ * 返回之后是不是最大化
+ */
+"toggleMaximize" | "isMaximized" | 
+/**
+ * 在弹出窗口的拖动区里按下：拖窗口
+ */
+"startDragging" | 
+/**
+ * 真的关（前端存完、标签放回去以后）
+ */
+"close"
 export type Portmap = { state: "checking" } | 
 /**
  * 路由器给了一个公网端口

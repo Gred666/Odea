@@ -3217,10 +3217,11 @@ body.odea-dragging .odea-row-actions {
 .odea-editor .cm-odea-math-block {
   padding: 0.5em 0;
 }
-/* 不出滚动条（见 editor/math.ts 文件头）：溢出的积分号、上下限直接画在上下留白里；
-   太宽的公式由 fitToWidth 缩字号。缩到下限还放不下（is-overflowing）才允许横向
-   拖动 —— 靠触控板 / Shift+滚轮，滑块本身仍然不画；这时改成左对齐，
-   居中的内容从左边溢出去是滑不回来的。 */
+/* 平时不出滚动条（见 editor/math.ts 文件头）：溢出的积分号、上下限直接画在上下留白里。
+   太宽的公式由 fitToWidth 缩一点或者折行（is-wrapped）；折不开、缩不下的（is-overflowing）
+   才横向滑动，底下画一根和宽表格一样的细滑块；这时改成左对齐，居中的内容从左边溢出去是
+   滑不回来的。以前滑块也藏着、只能靠触控板 / Shift+滚轮拖，右边被截掉一截却看不出来还有
+   （2026-10-28 用户截图：泰勒展开式「现在都没显示全」）。 */
 .odea-editor .cm-odea-math.is-block {
   /* 宽度不能跟着内容走：KaTeX 的块级公式是不折行的，不隔断的话一条超长公式的
      最小宽度会一路传上去，把整列正文撑得和公式一样宽。以前是 overflow-x: auto
@@ -3231,13 +3232,68 @@ body.odea-dragging .odea-row-actions {
 .odea-editor .cm-odea-math.is-block.is-overflowing {
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none;
+  /* 盒子成了滚动容器、上下也裁：上下限、积分号要在盒子里留出地方，滑块也别贴着公式 */
+  padding: 0.3em 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
 }
-.odea-editor .cm-odea-math.is-block.is-overflowing::-webkit-scrollbar {
+/* 块级公式的每一行（手写的 \\ 分开的，editor/math.ts 的 prepareBreaks 包的）。
+   不折行时和 KaTeX 原来一样：一行一块、居中 */
+.odea-editor .cm-odea-math .cm-odea-math-row {
+  display: block;
+}
+.odea-editor .cm-odea-math .cm-odea-math-glue {
+  white-space: nowrap;
+}
+/* 编号挪进了最后一行（为了它的 top 落在最后一行上）：KaTeX 把它贴到右边的那条规则写的是
+   .katex-html 的直接子元素，这里补上。right 量的还是 .katex-html（行不是定位元素） */
+.odea-editor .cm-odea-math .cm-odea-math-row > .katex-tag {
+  position: absolute;
+  right: 0;
+}
+/* 折行（is-wrapped，见 editor/math.ts 文件头）：KaTeX 已经在顶层的 = + − 后面切好了段
+   （.katex-base），放开 nowrap 段和段之间就能断；括号里的几段粘在 .cm-odea-math-glue 里不拆。
+   每一行第一行顶格、续行缩进 2em（和 math.ts 的 HANG_EM 一致）；右边给编号留地方 */
+.odea-editor .cm-odea-math.is-wrapped .katex-display > .katex > .katex-html {
+  text-align: left;
+  padding-right: var(--odea-math-tag, 0);
+}
+.odea-editor .cm-odea-math.is-wrapped .cm-odea-math-row {
+  white-space: normal;
+  padding-left: 2em;
+  text-indent: -2em;
+}
+/* text-indent 会继承：KaTeX 里面一层层 inline-block，各自的第一行都会跟着缩进 */
+.odea-editor .cm-odea-math.is-wrapped .cm-odea-math-row * {
+  text-indent: 0;
+}
+/* 折开的行之间留点空，分数、上下限不贴着下一行 */
+.odea-editor .cm-odea-math.is-wrapped .cm-odea-math-row > .katex-base,
+.odea-editor .cm-odea-math.is-wrapped .cm-odea-math-glue > .katex-base {
+  margin-block: 0.15em;
+}
+/* 折行时编号跟在最后一行里，和那一行共用基线（绝对定位的话，它里面那个和整条公式一样高的
+   strut 让它按整条公式对齐，最后一行矮的时候掉到基线下面）。推到右边靠 justify 拉长它前面
+   那个空格（只有这一个能拉：KaTeX 的各段是 inline-block，里面的字不参与）；负的右外边距
+   让它落进 .katex-html 右边给它留的那块（--odea-math-tag），最后一行排满了也放得下 */
+.odea-editor .cm-odea-math.is-wrapped .cm-odea-math-row:has(> .katex-tag) {
+  text-align-last: justify;
+}
+.odea-editor .cm-odea-math.is-wrapped .cm-odea-math-row > .katex-tag {
+  position: static;
+  margin-right: calc(-1 * var(--odea-math-tag, 0px));
+}
+.odea-editor .cm-odea-math:is(.is-wrapped, .is-overflowing) .katex-tag > .katex-strut {
   display: none;
 }
 .odea-editor .cm-odea-math.is-overflowing .katex-display > .katex {
   text-align: left;
+}
+/* 横向滑动时编号跟在公式后面：贴着右边的话，滑过去的公式从它底下穿过 */
+.odea-editor .cm-odea-math.is-overflowing .katex-html .katex-tag {
+  position: static;
+  margin-left: 1em;
+  margin-right: 0;
 }
 .odea-editor .cm-odea-math .katex {
   font-size: 1.05em;
@@ -3718,4 +3774,11 @@ body.odea-dragging .odea-row-actions {
 .odea-editor .cm-searchMatch-selected {
   background: color-mix(in srgb, var(--color-accent) 45%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 70%, transparent);
+}
+
+/* 拖分割条（components/DocumentPanes.tsx 的 Sash）时：指针一路都是左右箭头，正文里的字不被选上 */
+html[data-resizing],
+html[data-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }

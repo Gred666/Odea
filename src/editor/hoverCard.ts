@@ -1,3 +1,4 @@
+import { winOf } from "@/lib/paneWindow";
 import { type EditorView, ViewPlugin } from "@codemirror/view";
 
 /* ============================================================
@@ -38,8 +39,9 @@ class HoverCard {
     // 点击、打字、滚动时卡片都该让开
     view.contentDOM.addEventListener("mousedown", this.hideNow, true);
     view.contentDOM.addEventListener("keydown", this.hideNow, true);
-    window.addEventListener("scroll", this.hideNow, true);
-    window.addEventListener("blur", this.hideNow);
+    // 编辑器所在的那个窗口（弹出窗口里的编辑器，docs/标签页与分屏.md §16）
+    winOf(view.dom).addEventListener("scroll", this.hideNow, true);
+    winOf(view.dom).addEventListener("blur", this.hideNow);
   }
 
   update() {
@@ -53,8 +55,8 @@ class HoverCard {
     this.view.contentDOM.removeEventListener("mouseout", this.onOut);
     this.view.contentDOM.removeEventListener("mousedown", this.hideNow, true);
     this.view.contentDOM.removeEventListener("keydown", this.hideNow, true);
-    window.removeEventListener("scroll", this.hideNow, true);
-    window.removeEventListener("blur", this.hideNow);
+    winOf(this.view.dom).removeEventListener("scroll", this.hideNow, true);
+    winOf(this.view.dom).removeEventListener("blur", this.hideNow);
   }
 
   private onOver = (event: MouseEvent) => {
@@ -97,13 +99,14 @@ class HoverCard {
     if (!body && !label && !hint) return;
 
     this.card?.remove();
-    const card = document.createElement("div");
+    const doc = this.view.dom.ownerDocument;
+    const card = doc.createElement("div");
     card.className = "odea-hovercard";
     card.setAttribute("role", "tooltip");
     if (label) card.append(part("odea-hovercard-label", label));
     if (body) card.append(part("odea-hovercard-body", body));
     if (hint) card.append(part("odea-hovercard-hint", hint));
-    document.body.append(card);
+    doc.body.append(card);
     this.card = card;
     place(card, target);
   }
@@ -140,6 +143,7 @@ function part(className: string, text: string): HTMLElement {
 
 /** 贴着目标上方居中；上方放不下放下方；左右不出窗口。 */
 function place(card: HTMLElement, target: HTMLElement) {
+  const view = card.ownerDocument.defaultView ?? window;
   // 目标折行时（长缩写落在行尾）取第一段，卡片对着鼠标最可能在的那一截
   const rect = target.getClientRects()[0] ?? target.getBoundingClientRect();
   const { width, height } = card.getBoundingClientRect();
@@ -148,10 +152,10 @@ function place(card: HTMLElement, target: HTMLElement) {
   const center = rect.left + rect.width / 2;
   const left = Math.min(
     Math.max(EDGE, center - width / 2),
-    Math.max(EDGE, window.innerWidth - EDGE - width),
+    Math.max(EDGE, view.innerWidth - EDGE - width),
   );
   // 对齐到物理像素：落在半个像素上，边框和字会被抗锯齿成两行，发虚
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = view.devicePixelRatio || 1;
   card.style.top = `${Math.round(top * dpr) / dpr}px`;
   card.style.left = `${Math.round(left * dpr) / dpr}px`;
 }

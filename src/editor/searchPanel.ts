@@ -1,4 +1,5 @@
 import type { MatchAnchor } from "@/data/types";
+import { winOf } from "@/lib/paneWindow";
 import { isTauri } from "@/lib/tauri";
 import {
   SearchQuery,
@@ -495,7 +496,7 @@ class SearchPanel implements Panel {
     this.marks?.show();
     this.view.requestMeasure(this.marksRequest);
     // 文档区宽度会变：拖窗口、进出专注模式、目录栏出现消失，都要跟着重新贴边
-    window.addEventListener("resize", this.onResize);
+    winOf(this.view.dom).addEventListener("resize", this.onResize);
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(this.onResize);
       this.resizeObserver.observe(this.frame());
@@ -570,7 +571,7 @@ class SearchPanel implements Panel {
     this.marks?.dispose();
     this.replaceMotion?.cancel();
     if (this.recount) clearTimeout(this.recount);
-    window.removeEventListener("resize", this.onResize);
+    winOf(this.view.dom).removeEventListener("resize", this.onResize);
     this.resizeObserver?.disconnect();
     const win = this.view.dom.ownerDocument.defaultView;
     for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) {

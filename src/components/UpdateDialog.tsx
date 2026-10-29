@@ -11,6 +11,7 @@ import { CircleFadingArrowUp, LoaderCircle, ScrollText, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { version as APP_VERSION } from "../../package.json";
+import { DialogLead, usePaletteBack } from "./PaletteBack";
 
 /* ============================================================
    新版本卡片（技术方案 §14.4）。两种：
@@ -74,13 +75,16 @@ export function UpdateDialog() {
     // 看过了：之后从命令面板打开的是这一版自己的那一节
     if (mode === "notes") clearUpgrade();
   };
+  const palette = usePaletteBack("update", open, close);
+  // 正在装：哪儿也不去（同 close）
+  const back = installing ? null : palette;
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.isComposing) {
         e.preventDefault();
-        close();
+        (back ?? close)();
       }
     };
     window.addEventListener("keydown", onKey, true);
@@ -138,10 +142,10 @@ export function UpdateDialog() {
                 className="flex items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Icon
-                  size={16}
-                  strokeWidth={2}
-                  className={notes ? "shrink-0 text-faint" : "shrink-0 text-accent"}
+                <DialogLead
+                  icon={Icon}
+                  back={back}
+                  className={notes ? "text-faint" : "text-accent"}
                 />
                 <p className="flex-1 text-[14px] font-medium text-ink">{title}</p>
                 <button

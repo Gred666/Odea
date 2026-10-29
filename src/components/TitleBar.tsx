@@ -1,5 +1,6 @@
 import { tween } from "@/lib/motion";
-import { isTauri, win } from "@/lib/tauri";
+import { usePaneWindow } from "@/lib/paneWindow";
+import { type WindowControls, isTauri, win } from "@/lib/tauri";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
@@ -12,11 +13,14 @@ import { useEffect, useState } from "react";
 
    按钮看上去还是那几个小圆角块，但能点的范围铺满整条标题栏的高度、
    一直到窗口右边缘：鼠标甩到右上角就是「关闭」，不用瞄准。
+
+   弹出窗口（docs/标签页与分屏.md §16）也用它：controls 换成那个窗口的，窗口大小变了听的是那个窗口
    ============================================================ */
 
-export function TitleBar() {
+export function TitleBar({ controls = win }: { controls?: WindowControls }) {
   const [maximized, setMaximized] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const host = usePaneWindow().win;
 
   // 最大化 / 还原不只来自这里的按钮：Win+↑、拖到屏幕顶上吸附、双击以外的系统操作
   // 都会改窗口大小。窗口一变就重新问一次，图标别和实际状态对不上
@@ -25,15 +29,15 @@ export function TitleBar() {
     let frame = 0;
     const sync = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => void win.isMaximized().then(setMaximized));
+      frame = requestAnimationFrame(() => void controls.isMaximized().then(setMaximized));
     };
     sync();
-    window.addEventListener("resize", sync);
+    host.addEventListener("resize", sync);
     return () => {
       cancelAnimationFrame(frame);
-      window.removeEventListener("resize", sync);
+      host.removeEventListener("resize", sync);
     };
-  }, []);
+  }, [controls, host]);
 
   // 浏览器里调试时不渲染，免得占掉 38px 影响布局判断
   if (!isTauri) return null;
@@ -45,8 +49,8 @@ export function TitleBar() {
       onMouseLeave={() => setHovered(false)}
       onMouseDown={(event) => {
         if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
-        if (event.detail === 2) void win.toggleMaximize().then(setMaximized);
-        else void win.startDragging();
+        if (event.detail === 2) void controls.toggleMaximize().then(setMaximized);
+        else void controls.startDragging();
       }}
     >
       <motion.div
@@ -54,13 +58,13 @@ export function TitleBar() {
         animate={{ opacity: hovered ? 1 : 0.28 }}
         transition={tween.base}
       >
-        <WinButton label="最小化" onClick={() => void win.minimize()}>
+        <WinButton label="最小化" onClick={() => void controls.minimize()}>
           <rect x="3.5" y="7.5" width="9" height="1" rx="0.5" />
         </WinButton>
 
         <WinButton
           label={maximized ? "还原" : "最大化"}
-          onClick={() => void win.toggleMaximize().then(setMaximized)}
+          onClick={() => void controls.toggleMaximize().then(setMaximized)}
         >
           {maximized ? (
             <>
@@ -77,7 +81,7 @@ export function TitleBar() {
           )}
         </WinButton>
 
-        <WinButton label="关闭" danger corner onClick={() => void win.close()}>
+        <WinButton label="关闭" danger corner onClick={() => void controls.close()}>
           <path d="M4 4l8 8M12 4l-8 8" strokeWidth="1.3" strokeLinecap="round" fill="none" />
         </WinButton>
       </motion.div>

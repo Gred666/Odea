@@ -16,6 +16,11 @@ static LOW: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 /// 窗口事件里调：最小化了就 Low，还原了就 Normal
 pub fn follow_window<R: Runtime>(window: &Window<R>) {
+    // 弹出窗口里的东西是开它的仓库窗口的页面画的（同一个渲染进程）：两边都不设，
+    // 不然仓库窗口最小化了，人还在弹出窗口里写，那边被扔掉瓦片、换出内存
+    if crate::popout::is_popout(window.label()) || crate::popout::has_popouts(window.label()) {
+        return;
+    }
     let minimized = window.is_minimized().unwrap_or(false);
     let changed = {
         let Ok(mut low) = LOW.lock() else { return };

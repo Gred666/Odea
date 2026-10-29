@@ -1,4 +1,5 @@
 import { snapToDevicePixels } from "@/lib/devicePixels";
+import { winOf } from "@/lib/paneWindow";
 import { type EditorView, WidgetType } from "@codemirror/view";
 import {
   type AnimatedEmoji,
@@ -324,21 +325,25 @@ export function copyButton(view: EditorView, text: () => string, what: string): 
  * 退回老式的 execCommand；两条路都不通就安静地放弃，别在控制台甩未处理的拒绝。
  */
 async function copyText(text: string, view: EditorView): Promise<boolean> {
+  // 编辑器所在的那个窗口：弹出窗口里（docs/标签页与分屏.md §16）主窗口的文档没有焦点，
+  // 用主窗口的剪贴板会被拒
+  const host = winOf(view.dom);
   try {
-    await navigator.clipboard.writeText(text);
+    await host.navigator.clipboard.writeText(text);
     return true;
   } catch {
     /* 走下面的退路 */
   }
   try {
-    const area = document.createElement("textarea");
+    const doc = host.document;
+    const area = doc.createElement("textarea");
     area.value = text;
     area.setAttribute("readonly", "");
     area.style.position = "fixed";
     area.style.opacity = "0";
-    document.body.append(area);
+    doc.body.append(area);
     area.select();
-    const copied = document.execCommand("copy");
+    const copied = doc.execCommand("copy");
     area.remove();
     // 临时文本域抢走了焦点，还回编辑器
     view.focus();

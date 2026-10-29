@@ -30,7 +30,10 @@ interface Snapshot {
  * 抢焦点、抢保存；而且编辑器不能挂在带 transform 的祖先里（技术方案 §11.5）。
  * 旧的那一份反正要销毁，拿 DOM 克隆一份死的就够了 —— 可见的只有视口附近画出来的那一截，克隆很便宜。
  *
- * 快照必须在 React 改 DOM 之前拍，所以是 class 组件的 getSnapshotBeforeUpdate。
+ * 快照必须在 React 改 DOM 之前拍，所以是 class 组件的 getSnapshotBeforeUpdate。拍完当场就盖上去
+ * （和底下现在的样子一模一样，看不出来），React 再在它底下改：新内容挂上时子组件在 layout effect 里
+ * 量尺寸（对齐像素、滚进视野），排版连快照一起算一次；以前改完才盖，同一帧里要再排一遍
+ * （拆出一栏时 4 倍降速下多出几十毫秒，docs/标签页与分屏.md §15.6）。
  */
 export class SwapFade extends Component<{
   swapKey: string;
@@ -41,15 +44,16 @@ export class SwapFade extends Component<{
   /** 还在退的快照，底下的在前 */
   private ghosts: HTMLElement[] = [];
 
-  override getSnapshotBeforeUpdate(prev: { swapKey: string }): Snapshot | null {
+  override getSnapshotBeforeUpdate(prev: { swapKey: string }): HTMLElement | null {
     if (prev.swapKey === this.props.swapKey) return null;
     const node = this.ref.current;
     if (!node || typeof node.animate !== "function" || motionReduced()) return null;
-    return capture(node);
+    const snapshot = capture(node);
+    return snapshot ? this.cover(snapshot) : null;
   }
 
-  override componentDidUpdate(_prev: unknown, _state: unknown, snapshot: Snapshot | null) {
-    if (snapshot) this.play(snapshot);
+  override componentDidUpdate(_prev: unknown, _state: unknown, layer: HTMLElement | null) {
+    if (layer) this.fade(layer);
   }
 
   override componentWillUnmount() {
@@ -57,10 +61,11 @@ export class SwapFade extends Component<{
     this.ghosts = [];
   }
 
-  private play(snapshot: Snapshot) {
+  /** 快照盖上去（还不透明） */
+  private cover(snapshot: Snapshot): HTMLElement | null {
     const node = this.ref.current;
     const host = node?.closest<HTMLElement>(`[${SWAP_HOST}]`);
-    if (!node || !host) return;
+    if (!node || !host) return null;
 
     const layer = document.createElement("div");
     layer.className = "odea-swap-ghost";
@@ -84,7 +89,11 @@ export class SwapFade extends Component<{
     if (above?.parentNode === host) host.insertBefore(layer, above);
     else host.append(layer);
     this.ghosts.unshift(layer);
+    return layer;
+  }
 
+  /** 新内容挂好了：快照退掉 */
+  private fade(layer: HTMLElement) {
     const out = layer.animate([{ opacity: 1 }, { opacity: 0 }], {
       duration: OUT_MS,
       easing: EASE,

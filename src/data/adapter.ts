@@ -42,8 +42,19 @@ import {
    ============================================================ */
 
 export function useCurrentDocument(): DocumentModel {
-  const doc = useVaultDocument();
-  // 团队仓库（docs/协同编辑.md §22.4）：别人也开着这一篇、在一份会话里，编辑器绑上它；别人主持的不存盘
+  return useWithTeam(useVaultDocument());
+}
+
+/**
+ * 笔记区一个窗格里显示的那一篇（docs/标签页与分屏.md）：和 useCurrentDocument 的笔记那一支一样，
+ * 只是看的是这个窗格自己的当前标签。正在写的那个窗格直接用 useCurrentDocument（做客时它换成共享的那一篇）
+ */
+export function usePaneDocument(noteId: string, active: boolean): DocumentModel {
+  return useWithTeam(useNoteDocument(noteId, active));
+}
+
+/** 团队仓库（docs/协同编辑.md §22.4）：别人也开着这一篇、在一份会话里，编辑器绑上它；别人主持的不存盘 */
+function useWithTeam(doc: DocumentModel): DocumentModel {
   const teamId = teamDocId(doc);
   const team = useTeam((s) => (teamId ? s.sessions[teamId] : undefined));
   if (!team) return doc;
@@ -68,32 +79,21 @@ function useVaultDocument(): DocumentModel {
   const bodies = useData((s) => s.bodies);
   const goals = useData((s) => s.goals);
   const dayDocs = useData((s) => s.dayDocs);
-  // 后台还在把文件读进索引（第一次打开一个大文件夹）：一篇都没有不等于「还没有笔记」
-  const indexing = useData((s) => s.indexing !== null);
   // 保存失败、还没落盘的正文优先于库里的版本：切走再切回来，用户写的东西还在
   const drafts = useData((s) => s.drafts);
   const draftOr = (target: DocumentSaveTarget, stored: string) =>
     drafts[saveKeyOf(target)]?.contentMd ?? stored;
 
-  // 协作（docs/协同编辑.md）：做客时正文区换成共享的那一篇；主持的那几篇笔记带上各自的会话
-  // （一篇只在一个会话里，§25）
-  const hostedDocs = useCollab((s) => s.hostedDocs);
+  // 协作（docs/协同编辑.md）：做客时正文区换成共享的那一篇
   const showShared = useCollab((s) => s.showShared);
   const collabSession = useCollab((s) => s.session);
   const sessionKey = useCollab((s) => s.sessionKey);
   const shared = useCollab((s) =>
     s.shownSession === null ? undefined : s.sessions[s.shownSession],
   );
-  const hostedCollab = (noteId: string) => {
-    const session = hostedDocs[noteId];
-    return session ? { session, readOnly: false } : undefined;
-  };
-
-  // 两个列表各自显示哪一篇：选中的不在了就是第一篇；正文还没取回来就先接着显示上一篇
-  const shownNote = useShownNote(
-    notes.find((n) => n.id === selectedNoteId) ?? notes[0],
-    workspace === "notes",
-  );
+  // 笔记区正在写的那个窗格里的那一篇
+  const noteDoc = useNoteDocument(selectedNoteId, workspace === "notes");
+  // 归档列表显示哪一篇：选中的不在了就是第一篇；正文还没取回来就先接着显示上一篇
   const shownArchived = useShownNote(
     archived.find((n) => n.id === selectedArchiveId) ?? archived[0],
     workspace === "archive",
@@ -116,44 +116,8 @@ function useVaultDocument(): DocumentModel {
   }
   switch (workspace) {
     /* ---------------- 笔记 ---------------- */
-    case "notes": {
-      const note = shownNote;
-      if (!note) {
-        return emptyDoc(
-          indexing
-            ? {
-                art: "notes",
-                title: "正在读取笔记文件夹…",
-                hint: "第一次打开这个文件夹要把笔记都读一遍，读完就会出现在左边的列表里。",
-              }
-            : {
-                art: "notes",
-                title: "还没有笔记",
-                hint: "想到什么就记下来，标题可以晚点再起。",
-                action: "createNote",
-              },
-        );
-      }
-
-      const body = bodies[note.id];
-      return {
-        key: `note-${note.id}`,
-        title: note.title,
-        conflict: conflictOf(note, notes, archived),
-        relPath: note.relPath,
-        idInFile: note.idInFile,
-        folder: folderOf(note),
-        bodyMd: draftOr({ kind: "note", id: note.id }, body ?? ""),
-        statusParts: body === undefined ? ["载入中…"] : noteStatus(note, "上次更新"),
-        deletable: true,
-        collab: hostedCollab(note.id),
-        // 正文取回来之前不给编辑器：空着挂上的话，一输入就把原来的正文整篇覆盖了
-        editor:
-          body === undefined
-            ? undefined
-            : { target: { kind: "note", id: note.id }, titleEditable: true },
-      };
-    }
+    case "notes":
+      return noteDoc;
 
     /* ---------------- 今日 TODO：就是今天这一天 ---------------- */
     case "today": {
@@ -233,6 +197,63 @@ function useVaultDocument(): DocumentModel {
     case "extensions":
       return { key: "empty-扩展", title: "扩展", bodyMd: "", statusParts: [] };
   }
+}
+
+/**
+ * 笔记区里的一篇（正在写的窗格、别的窗格都是它）：noteId 不在了就是列表第一篇；
+ * 正文还没取回来就先接着显示上一篇。active：这一区正显示着，才去取正文
+ */
+function useNoteDocument(noteId: string, active: boolean): DocumentModel {
+  const notes = useData((s) => s.notes);
+  const archived = useData((s) => s.archived);
+  const bodies = useData((s) => s.bodies);
+  // 后台还在把文件读进索引（第一次打开一个大文件夹）：一篇都没有不等于「还没有笔记」
+  const indexing = useData((s) => s.indexing !== null);
+  const drafts = useData((s) => s.drafts);
+  const draftOr = (target: DocumentSaveTarget, stored: string) =>
+    drafts[saveKeyOf(target)]?.contentMd ?? stored;
+  // 主持的那几篇笔记带上各自的会话（一篇只在一个会话里，docs/协同编辑.md §25）
+  const hostedDocs = useCollab((s) => s.hostedDocs);
+  const hostedCollab = (id: string) => {
+    const session = hostedDocs[id];
+    return session ? { session, readOnly: false } : undefined;
+  };
+  const note = useShownNote(notes.find((n) => n.id === noteId) ?? notes[0], active);
+  if (!note) {
+    return emptyDoc(
+      indexing
+        ? {
+            art: "notes",
+            title: "正在读取笔记文件夹…",
+            hint: "第一次打开这个文件夹要把笔记都读一遍，读完就会出现在左边的列表里。",
+          }
+        : {
+            art: "notes",
+            title: "还没有笔记",
+            hint: "想到什么就记下来，标题可以晚点再起。",
+            action: "createNote",
+          },
+    );
+  }
+
+  const body = bodies[note.id];
+  return {
+    key: `note-${note.id}`,
+    title: note.title,
+    conflict: conflictOf(note, notes, archived),
+    relPath: note.relPath,
+    idInFile: note.idInFile,
+    folder: folderOf(note),
+    bodyMd: draftOr({ kind: "note", id: note.id }, body ?? ""),
+    statusParts: body === undefined ? ["载入中…"] : noteStatus(note, "上次更新"),
+    deletable: true,
+    collab: hostedCollab(note.id),
+    // 正文取回来之前不给编辑器：空着挂上的话，一输入就把原来的正文整篇覆盖了
+    editor:
+      body === undefined
+        ? undefined
+        : { target: { kind: "note", id: note.id }, titleEditable: true },
+  };
 }
 
 /* ---------------- 笔记的正文按需取 ---------------- */

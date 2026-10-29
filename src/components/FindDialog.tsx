@@ -21,6 +21,7 @@ import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AutoHeight, KeyHint } from "./CommandPalette";
+import { DialogLead, usePaletteBack } from "./PaletteBack";
 
 /** 输入框那一栏的高度（和下面的 h-[52px] 一致）：面板展开的第一帧露出它 */
 const INPUT_BAR_HEIGHT = 52;
@@ -57,6 +58,7 @@ export function FindDialog() {
   const open = useApp((s) => s.findOpen);
   const seed = useApp((s) => s.findSeed);
   const setOpen = useApp((s) => s.setFindOpen);
+  const back = usePaletteBack("find", open, () => setOpen(false));
   const notes = useData((s) => s.notes);
   const archived = useData((s) => s.archived);
 
@@ -90,13 +92,14 @@ export function FindDialog() {
         }
       } else if (e.key === "Escape" && useApp.getState().findOpen && !e.isComposing) {
         e.preventDefault();
-        setOpen(false);
+        if (back) back();
+        else setOpen(false);
       }
     };
     // 捕获阶段：理由同命令面板（编辑器在 contentDOM 上监听按键）
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [setOpen]);
+  }, [setOpen, back]);
 
   useEffect(() => {
     if (!open) return;
@@ -233,7 +236,7 @@ export function FindDialog() {
               }}
             >
               <div className="flex h-[52px] items-center gap-3 border-b border-line px-4">
-                <TextSearch size={16} strokeWidth={2} className="shrink-0 text-faint" />
+                <DialogLead icon={TextSearch} back={back} />
                 <input
                   ref={inputRef}
                   role="combobox"

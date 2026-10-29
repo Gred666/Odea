@@ -380,9 +380,11 @@ function withBody(
   body: string,
 ): Record<string, string> {
   touchBody(id);
-  const { selectedNoteId, selectedArchiveId } = useApp.getState();
+  const { selectedNoteId, selectedArchiveId, notePanes } = useApp.getState();
+  // 开着的标签那几篇也留着（docs/标签页与分屏.md §6.3）：切过去不用再取一次
+  const open = new Set(notePanes.flatMap((pane) => pane.tabs.map((tab) => tab.noteId)));
   const keep = (other: string) =>
-    other === id || other === selectedNoteId || other === selectedArchiveId;
+    other === id || other === selectedNoteId || other === selectedArchiveId || open.has(other);
   const evicted = new Set<string>();
   for (const other of bodyOrder) {
     if (bodyOrder.length - evicted.size <= BODY_CACHE) break;
@@ -590,6 +592,8 @@ async function switchLayout(change: (api: Backend) => Promise<VaultInfo>) {
   const { selectedNoteId, selectedArchiveId } = useApp.getState();
   const notePath = before.notes.find((note) => note.id === selectedNoteId)?.relPath;
   const archivePath = before.archived.find((note) => note.id === selectedArchiveId)?.relPath;
+  // 开着的标签也按路径认回来
+  const pathOf = new Map(before.notes.map((note) => [note.id, note.relPath]));
 
   const info = await change(api);
   if (before.team || Object.keys(useCollab.getState().hostedDocs).length > 0) {
@@ -652,7 +656,14 @@ async function switchLayout(change: (api: Backend) => Promise<VaultInfo>) {
       ...(journalChanged ? { dayDocs: [], goals: {}, tasks: {}, journal: [] } : {}),
     };
   });
-  useApp.setState({ selectedNoteId: noteId, selectedArchiveId: archiveId });
+  const byPath = new Map(notes.map((note) => [note.relPath, note.id]));
+  useApp.setState({ selectedArchiveId: archiveId });
+  useApp.getState().remapTabs((id) => {
+    const path = pathOf.get(id);
+    return path === undefined ? undefined : byPath.get(path);
+  });
+  // 当前那篇认不回来时照旧停在原来的 id 上（列表栏会选上看得见的第一篇）
+  if (!useApp.getState().selectedNoteId) useApp.getState().selectNote(noteId);
   scheduleSmart();
 }
 

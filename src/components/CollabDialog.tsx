@@ -47,6 +47,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { BannerButton } from "./ConflictBanner";
+import { DialogLead, usePaletteBack } from "./PaletteBack";
 
 /* ============================================================
    协作的界面（docs/协同编辑.md §8、§25）：
@@ -75,6 +76,7 @@ const DOWNLOAD = "https://github.com/Gred666/Odea/releases/latest";
 export function CollabDialog() {
   const open = useCollab((s) => s.dialogOpen);
   const close = useCollab((s) => s.closeDialog);
+  const back = usePaletteBack("collab", open, close);
   const focused = useCollab((s) => (s.focus === null ? undefined : s.sessions[s.focus]));
   const any = useCollab((s) => s.order.length > 0);
   const notice = useCollab((s) => s.notice);
@@ -85,12 +87,12 @@ export function CollabDialog() {
       // 上面叠着中继的对话框（「配中继…」打开的）：Esc 先关它
       if (event.key === "Escape" && !event.isComposing && !useRelays.getState().open) {
         event.preventDefault();
-        close();
+        (back ?? close)();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, close]);
+  }, [open, close, back]);
 
   const heading = !focused
     ? "加入协作"
@@ -137,7 +139,7 @@ export function CollabDialog() {
                 className="flex items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Users size={16} strokeWidth={2} className="shrink-0 text-faint" />
+                <DialogLead icon={Users} back={back} />
                 <p className="flex-1 text-[14px] font-medium text-ink">{heading}</p>
                 <button
                   type="button"

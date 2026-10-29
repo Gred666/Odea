@@ -2,6 +2,7 @@ import { collab as collabBinding } from "@/collab/binding";
 import type { CollabSession } from "@/collab/session";
 import type { Attachment, MatchAnchor, OutlineItem } from "@/data/types";
 import { registerEditorCommands } from "@/lib/editorCommands";
+import { usePaneWindow } from "@/lib/paneWindow";
 import { MOD_KEY } from "@/lib/platform";
 import { rememberSpot, spotOf } from "@/lib/viewMemory";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -106,6 +107,7 @@ import { registerEditorFlush } from "./saveBus";
 import { createSearchPanel, matchOnLine, queryOfAnchor, scrollToMatch } from "./searchPanel";
 import { selectionLayer } from "./selectionLayer";
 import { smoothCaret } from "./smoothCaret";
+import { isPinnedState } from "./statePins";
 import {
   type SlashItem,
   type SuggestKind,
@@ -164,6 +166,20 @@ import {
 /** 外部内容回填产生的事务，不该被当成用户输入去触发保存。 */
 const externalSync = Annotation.define<boolean>();
 
+/* ---------------- 同一篇开在两个窗格（docs/标签页与分屏.md §14）----------------
+   分屏时同一篇可以开在两个窗格里，各是一个编辑器（各自的光标、滚动、撤销历史）。
+   在一边打的字原样转给另一边（CodeMirror 的 split 例子那样转事务），另一边当成「别人改的」：
+   不进它的撤销历史、不由它存盘（打字的那一边存），也不算它和磁盘对上了 —— 对上没对上
+   还是看存盘回来的那一版（syncedMarkdownRef），不然存盘回来一版旧的会把转过来的新字盖掉。
+   后挂上的那个用先挂着的那个现在的正文建，不用 store 里的（那一版可能还差着没存的几个字）。
+   协作中的不转：协作的绑定一个编辑器一份，正文以会话为准（窗格那边也只让一个窗格编辑它） */
+const mirrorSync = Annotation.define<boolean>();
+const liveEditors = new Map<string, Set<EditorView>>();
+
+function twinsOf(key: string, view: EditorView): EditorView[] {
+  return [...(liveEditors.get(key) ?? [])].filter((other) => other !== view);
+}
+
 /* ---------------- 按文档缓存编辑器状态 ----------------
    建一个编辑器最贵的是 EditorState.create：同步解析全文的语法树（ensureSyntaxTree）
    再算一遍块级装饰。66KB 的「语法全览」生产包里要 110ms，切换笔记就卡这一下。
@@ -184,6 +200,18 @@ const wikiTitlesSlot = new Compartment();
 const collabSlot = new Compartment();
 /** 只读（协作时主持人给的权限是「只读」）：能选、能复制，不能改 */
 const readOnlySlot = new Compartment();
+/**
+ * 撤销历史。同一篇在另一个窗格里再开一个编辑器（向右拆分）时沿用那边的状态 —— 解析好的语法树、
+ * 装饰都不用重来，长文省下二三十毫秒（docs/标签页与分屏.md §15.6）—— 历史要换成空的：
+ * 两边各撤各的（§14）
+ */
+const historySlot = new Compartment();
+
+/** 同一个状态，撤销历史换成空的（先拿掉再装回来：同一次里换，历史的字段会原样留着） */
+function withFreshHistory(state: EditorState): EditorState {
+  const bare = state.update({ effects: historySlot.reconfigure([]) }).state;
+  return bare.update({ effects: historySlot.reconfigure(history()) }).state;
+}
 
 /**
  * 所有笔记的标题（trim + 小写，和 lib/wikilinks 的 sameTitle 同一个口径）。
@@ -201,12 +229,19 @@ const NO_TITLES: ReadonlySet<string> = new Set();
 const NOTE_PLACEHOLDER = "写点什么…　输入 / 插入标题、待办、表格，[[ 链接到别的笔记";
 /** 最近切走的这么多篇留着。大文档一篇的状态有几 MB，不能无限留 */
 const STATE_CACHE_LIMIT = 12;
+/** 开着的标签那几篇另算（editor/statePins.ts），连它们在内总数到这么多再按最久没用的挤 */
+const STATE_CACHE_HARD_LIMIT = 24;
 const stateCache = new Map<string, EditorState>();
 
 function rememberState(key: string, state: EditorState) {
   stateCache.delete(key);
   stateCache.set(key, state);
-  while (stateCache.size > STATE_CACHE_LIMIT) {
+  // Map 按放进去的先后排，最久没用的在前面
+  const loose = [...stateCache.keys()].filter((other) => !isPinnedState(other));
+  for (const oldest of loose.slice(0, Math.max(0, loose.length - STATE_CACHE_LIMIT))) {
+    stateCache.delete(oldest);
+  }
+  while (stateCache.size > STATE_CACHE_HARD_LIMIT) {
     const oldest = stateCache.keys().next().value;
     if (oldest === undefined) break;
     stateCache.delete(oldest);
@@ -276,7 +311,8 @@ export function MarkdownEditor({
   /** 正文变化时回调，供目录树跟着当前输入实时更新。 */
   onDocumentChange?: (markdown: string) => void;
   /** Mod + 点击 `[[双链]]` 时回调：目标标题，以及 `[[标题#小节]]` 里的小节（没有就是 undefined）。 */
-  onWikiLink?: (title: string, heading?: string) => void;
+  /** Mod + 点击双链；再按着 Shift 是要开在新标签里（docs/标签页与分屏.md §4.1） */
+  onWikiLink?: (title: string, heading?: string, newTab?: boolean) => void;
   /**
    * 是否撑出一块最小高度（360px）并在末尾留 72px 空白。
    * 编辑器是页面最后一块内容时要这样，短文档也有地方可以点进去继续写；
@@ -333,6 +369,7 @@ export function MarkdownEditor({
   /** 只读：能选、能复制，不能改（协作时被给了「只读」） */
   readOnly?: boolean;
 }) {
+  const paneDoc = usePaneWindow().doc;
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saverRef = useRef<DebouncedSaver | null>(null);
@@ -722,7 +759,7 @@ export function MarkdownEditor({
       readOnlySlot.of(EditorState.readOnly.of(readOnlyRef.current)),
       wikiTitlesSlot.of(knownWikiTitles.of(knownTitlesRef.current)),
       attachmentHandlers(() => attachRef.current),
-      linkClickHandler((title, heading) => onWikiLinkRef.current?.(title, heading)),
+      linkClickHandler((title, heading, newTab) => onWikiLinkRef.current?.(title, heading, newTab)),
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) {
           if (update.focusChanged && !update.view.hasFocus) saver.flushQuietly();
@@ -730,10 +767,21 @@ export function MarkdownEditor({
         }
         const markdown = update.state.doc.toString();
         notifyDocumentChange(markdown);
+        // 另一个窗格里打的字转过来的：那边存盘，这边不存
+        if (update.transactions.some((transaction) => transaction.annotation(mirrorSync))) return;
         // 外部回填不是用户输入，不能反过来触发一次保存。
         if (update.transactions.some((transaction) => transaction.annotation(externalSync))) {
           syncedMarkdownRef.current = markdown;
           return;
+        }
+        // 同一篇开在别的窗格里：这边打的字转过去
+        if (key && !collabRef.current) {
+          for (const twin of twinsOf(key, update.view)) {
+            twin.dispatch({
+              changes: update.changes,
+              annotations: [mirrorSync.of(true), Transaction.addToHistory.of(false)],
+            });
+          }
         }
         saver.schedule(markdown);
         if (update.focusChanged && !update.view.hasFocus) saver.flushQuietly();
@@ -774,15 +822,23 @@ export function MarkdownEditor({
     ];
 
     const shared = collabRef.current;
-    const initialDoc = shared ? shared.toString() : initialMarkdownRef.current;
+    // 同一篇已经在别的窗格里开着：用它现在的正文（两边从同一份开始，转过来的改动才对得上位置）
+    const twin = key && !shared ? [...(liveEditors.get(key) ?? [])][0] : undefined;
+    const initialDoc = shared
+      ? shared.toString()
+      : twin
+        ? twin.state.doc.toString()
+        : initialMarkdownRef.current;
     const cached = key && !shared ? takeState(key, initialDoc) : null;
+    // 没有缓存、另一个窗格里开着这一篇：从它现在的状态接着用（历史清空）
+    const reused = cached ?? (twin ? withFreshHistory(twin.state) : null);
     // 上次在这篇看到哪、光标在哪（切回来、重新打开应用都回到那里）
     const spot = key ? spotOf(key) : undefined;
     const docLength = initialDoc.length;
     const restoredHead = spot ? Math.min(spot.head, docLength) : 0;
-    const state = cached
+    const state = reused
       ? // 解析好的语法树、装饰、撤销历史原样沿用
-        cached.update({
+        reused.update({
           effects: [session.reconfigure(sessionExtensions), ...revealIdle()],
           selection: EditorSelection.cursor(restoredHead),
         }).state
@@ -793,7 +849,7 @@ export function MarkdownEditor({
             // 围栏代码按语言名懒加载对应的解析器，配合 codeHighlight 上色
             markdownSupport(languages),
             codeHighlight,
-            history(),
+            historySlot.of(history()),
             search({ top: true, createPanel: createSearchPanel, scrollToMatch }),
             searchPhrases,
             keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
@@ -819,12 +875,20 @@ export function MarkdownEditor({
     // 约 50ms），游离时几乎不花时间
     const view = new EditorView({ state });
     host.appendChild(view.dom);
+    // 挂在弹出窗口里（docs/标签页与分屏.md §16）：游离时建的编辑器认的是主窗口的文档，
+    // 焦点、选区、窗口事件、样式都要换成它实际在的那个，不然光标画不出来、打的字落在别处
+    if (host.ownerDocument !== document) view.setRoot(host.ownerDocument);
     viewRef.current = view;
     live.view = view;
+    if (key) {
+      const views = liveEditors.get(key) ?? new Set<EditorView>();
+      views.add(view);
+      liveEditors.set(key, views);
+    }
     // 切走时开着查找面板：回来时不该还开着（和以前每次新建编辑器一样）
     if (searchPanelOpen(view.state)) closeSearchPanel(view);
-    // 上次收起的标题（缓存的状态里本来就带着）。在滚回上次的位置之前：那个位置是按收着的样子记的
-    if (!cached) {
+    // 上次收起的标题（缓存的、另一个窗格的状态里本来就带着）。在滚回上次的位置之前：那个位置是按收着的样子记的
+    if (!reused) {
       const folds = restoreFolds(view.state, spot?.folds);
       if (folds.length) view.dispatch({ effects: folds });
     }
@@ -888,8 +952,12 @@ export function MarkdownEditor({
       listeners.clear();
       onOutlineHandle(null);
       delete host.dataset.editorReady;
-      // 协作中的不缓存：切走期间别人还在改，回来时以会话的正文为准
-      if (key && !collabRef.current) rememberState(key, view.state);
+      const views = key ? liveEditors.get(key) : undefined;
+      views?.delete(view);
+      if (key && views && !views.size) liveEditors.delete(key);
+      // 协作中的不缓存：切走期间别人还在改，回来时以会话的正文为准。
+      // 别的窗格里还开着同一篇：也不缓存，那边卸载时缓存它的（那份是最新的）
+      if (key && !collabRef.current && !views?.size) rememberState(key, view.state);
       view.destroy();
       forgetDetachedEmoji();
     };
@@ -1108,7 +1176,8 @@ export function MarkdownEditor({
             )}
           </AnimatePresence>
         </>,
-        document.body,
+        // 弹出窗口里的编辑器（docs/标签页与分屏.md §16）：补全、表情、模板挂在那个窗口的 body 上
+        paneDoc.body,
       )}
     </>
   );
@@ -1319,7 +1388,9 @@ function createOutlineHandle(
    链接点击：Mod + 左键打开外链 / 跳转双链。普通点击照常放光标。
    ============================================================ */
 
-function linkClickHandler(onWikiLink: (title: string, heading?: string) => void): Extension {
+function linkClickHandler(
+  onWikiLink: (title: string, heading: string | undefined, newTab: boolean) => void,
+): Extension {
   return EditorView.domEventHandlers({
     mousedown(event, view) {
       if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false;
@@ -1333,7 +1404,7 @@ function linkClickHandler(onWikiLink: (title: string, heading?: string) => void)
         if (!raw) return false;
         event.preventDefault();
         const { title, heading } = splitWikiTarget(raw);
-        onWikiLink(title, heading);
+        onWikiLink(title, heading, event.shiftKey);
         return true;
       }
       // `<a href>` 的地址挂在装饰的 data-href 上，语法树里没有

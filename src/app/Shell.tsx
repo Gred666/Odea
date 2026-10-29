@@ -1,14 +1,15 @@
 import { ZEN_TRANSITION } from "@/app/navMotion";
-import { selectNeighbor } from "@/app/navigate";
 import { LIST_WIDTH, chromeWidth, hasListColumn, startTodayTicker, useApp } from "@/app/store";
 import { CollabDialog, CollabRequests, CollabResume } from "@/components/CollabDialog";
 import { CommandPalette } from "@/components/CommandPalette";
-import { DocumentView } from "@/components/DocumentView";
+import { DocumentPanes } from "@/components/DocumentPanes";
 import { ErrorToast, LayoutChangeToast, NoticeToast } from "@/components/ErrorToast";
 import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
 import { journalSwitchNext } from "@/components/JournalSwitcher";
+import { useTabKeys } from "@/components/NoteTabs";
+import { Popouts } from "@/components/Popouts";
 import { RelayDialog } from "@/components/RelayDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SyncDialog } from "@/components/SyncDialog";
@@ -21,7 +22,8 @@ import { UpdateDialog } from "@/components/UpdateDialog";
 import { VaultSwitcher } from "@/components/VaultSwitcher";
 import { labelToHorizon, labelToScope, useCurrentDocument } from "@/data/adapter";
 import { backend } from "@/data/backend";
-import { useData } from "@/data/store";
+import { saveKeyOf, useData } from "@/data/store";
+import { pinEditorStates } from "@/editor/statePins";
 import { cn } from "@/lib/cn";
 import { periodStartOf } from "@/lib/date";
 import { tween } from "@/lib/motion";
@@ -62,7 +64,6 @@ export function Shell() {
   const marks = useData((s) => s.marks);
   const toggleTask = useData((s) => s.toggleTask);
   const restoreNote = useData((s) => s.restoreNote);
-  const deleteNote = useData((s) => s.deleteNote);
   const loadDay = useData((s) => s.loadDay);
   const loadGoal = useData((s) => s.loadGoal);
   const forgetCarriedDays = useData((s) => s.forgetCarriedDays);
@@ -77,25 +78,47 @@ export function Shell() {
   const showList = hasListColumn(workspace) && !panelCollapsed;
   // 专注模式要把整条 chrome 推出去有多远
   const zenShift = zen ? -chromeWidth(showList) : 0;
-  // 主内容的版面（见下面主内容那段注释）：版面一样的两页之间不重挂，只换文档
+  // 主内容的版面（见下面主内容那段注释）：版面一样的两页之间不重挂，只换文档。
+  // 笔记分屏不算换版面：拆出一栏、关掉一栏由 DocumentPanes 自己溶解，还在的窗格不重挂
+  // （docs/标签页与分屏.md §15.6；以前在这里换一屏，每个编辑器都重建，卡几百毫秒）
   const frame =
     workspace === "extensions" ? "extensions" : hasListColumn(workspace) ? "listed" : "full";
 
   // 零点翻页
   useEffect(() => startTodayTicker(), []);
 
+  // 笔记的窗格和标签（docs/标签页与分屏.md）：标签栏在每个窗格里（DocumentPanes），这里管快捷键、对账、缓存
+  const initialized = useData((s) => s.initialized);
+  const indexing = useData((s) => s.indexing !== null);
+  useTabKeys();
+  // 别处删掉、归档了的笔记，指着它的标签关掉。列表取回来以前、后台还在读索引时列表不全，不动
+  useEffect(() => {
+    if (!initialized || indexing) return;
+    useApp.getState().pruneTabs(new Set(notes.map((note) => note.id)));
+  }, [initialized, indexing, notes]);
+  // 开着的标签那几篇的编辑器状态不挤出缓存
+  const openNotes = useApp((s) =>
+    s.notePanes.flatMap((pane) => pane.tabs.map((tab) => tab.noteId)).join("\n"),
+  );
+  useEffect(() => {
+    pinEditorStates(openNotes.split("\n").map((id) => saveKeyOf({ kind: "note", id })));
+  }, [openNotes]);
+
   // 团队仓库（docs/协同编辑.md §22.4）：起团队端点；编辑器里换了哪一篇告诉它（别人也开着就进同一个会话）
   const team = useData((s) => s.team);
   useEffect(() => {
     if (team) void initTeam();
   }, [team]);
+  // 正在弹出窗口里写的时候报那边的（components/Popouts.tsx），回到主窗口再报这边的
   const teamDoc = teamDocId(doc);
   const teamTarget = useRef(docTarget);
   teamTarget.current = docTarget;
+  const popoutActive = useApp((s) => s.activePopout !== null);
   useEffect(() => {
+    if (popoutActive) return;
     const target = teamTarget.current;
     setTeamView(teamDoc && target ? { doc: teamDoc, target } : null);
-  }, [teamDoc]);
+  }, [teamDoc, popoutActive]);
 
   // 今天这一篇一进应用就取：今日TODO 页渲染的就是它，而下面那个 effect 只管
   // 日历和 /GOAL，不给今日TODO 单独取。
@@ -291,18 +314,11 @@ export function Shell() {
               {workspace === "extensions" ? (
                 <ExtensionsView />
               ) : (
-                <DocumentView
+                // 一排窗格（笔记分屏时几栏，别的区一栏）；每栏的标签栏、删除都在里面
+                <DocumentPanes
                   doc={doc}
                   onToggleTask={toggleTask}
                   onSegmentChange={handleSegment}
-                  onDelete={() => {
-                    // 笔记和归档里的都能删（归档那篇的 key 是 archive-…，id 从目标上取）。
-                    // 选中先挪到列表里的下一篇，再删
-                    const target = doc.editor?.target;
-                    if (target?.kind !== "note") return;
-                    selectNeighbor(target.id);
-                    void deleteNote(target.id);
-                  }}
                   onSaveDocument={saveDocument}
                   onSaveTitle={saveTitle}
                 />
@@ -333,6 +349,8 @@ export function Shell() {
         <HistoryDialog />
         <TrashDialog />
         <UpdateDialog />
+        {/* 弹出窗口（docs/标签页与分屏.md §16）：每个 portal 进它自己的窗口，这里不占地方 */}
+        <Popouts onToggleTask={toggleTask} onSaveDocument={saveDocument} onSaveTitle={saveTitle} />
         {/* 开场：冷启动时盖在最上面，写一个「O」再把它送回侧栏（components/Intro.tsx） */}
         <Intro />
       </div>

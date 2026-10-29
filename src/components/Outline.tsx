@@ -5,8 +5,8 @@ import { cn } from "@/lib/cn";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { rememberSpot, spotOf } from "@/lib/viewMemory";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
-import { AnimatePresence, type Transition, motion } from "motion/react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, LayoutGroup, type Transition, motion } from "motion/react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { SwapFade } from "./SwapFade";
 import { type OutlineNode, foldableUnder, outlineTree, visibleId } from "./outlineTree";
@@ -121,9 +121,13 @@ export function Outline({
         实测没摘掉：退场的文字目录仍然是 static，那 180px 要等淡出结束才还给
         编辑区，编辑区变成在 0ms 和 212ms 各变宽一次 —— 等于在动画中间又插了
         一次重排。而且退场动画本身也没跑完，两个 aside 会一直卡在 DOM 里。
-     现在两边都不卸载、都不占位，纯 CSS 过渡，没有任何 presence 状态机可失效。 */
+     现在两边都不卸载、都不占位，纯 CSS 过渡，没有任何 presence 状态机可失效。
+
+     LayoutGroup：指示条的 layoutId 按这一份目录分开。分屏时两个窗格各有一份目录（docs/标签页与分屏.md §12），
+     同一个 layoutId 的话 Motion 当成同一个指示条，在两份目录之间飞来飞去 */
+  const group = useId();
   return (
-    <>
+    <LayoutGroup id={group}>
       {!zen && <div className="hidden w-[180px] shrink-0 xl:block" aria-hidden="true" />}
       <RailOutline
         items={items}
@@ -134,7 +138,7 @@ export function Outline({
         memoryKey={memoryKey}
       />
       <ZenOutline items={items} activeId={activeId} onJump={scrollTo} hidden={!zen} />
-    </>
+    </LayoutGroup>
   );
 }
 
@@ -280,7 +284,8 @@ function RailOutline({
       else next.delete(key);
     }
     // 焦点在要收进去的那几条上：挪回这一条，不然焦点留在看不见的地方
-    const focused = document.activeElement;
+    // 弹出窗口里的目录树（docs/标签页与分屏.md §16）：看它自己那个窗口的焦点
+    const focused = (navRef.current?.ownerDocument ?? document).activeElement;
     if (
       open &&
       focused instanceof HTMLElement &&

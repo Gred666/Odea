@@ -17,6 +17,7 @@ import { describeSync, formatBytes, formatSyncedAt } from "@/lib/syncText";
 import { ChevronLeft, Cloud, Copy, Github, Globe, LoaderCircle, Lock, Plus, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { DialogLead, usePaletteBack } from "./PaletteBack";
 
 /* ============================================================
    同步对话框（技术方案 §5.9.7、§5.9.9）。导航栏的同步那一行、命令面板「同步…」打开它。
@@ -42,6 +43,7 @@ const GITEE_TOKEN_PAGE = "https://gitee.com/profile/personal_access_tokens/new";
 export function SyncDialog() {
   const open = useApp((s) => s.syncOpen);
   const setOpen = useApp((s) => s.setSyncOpen);
+  const back = usePaletteBack("sync", open, () => setOpen(false));
 
   // 关掉对话框时，正在等浏览器确认的 GitHub 登录也停掉（没有在等的话什么都不做）
   useEffect(() => {
@@ -53,12 +55,13 @@ export function SyncDialog() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.isComposing) {
         e.preventDefault();
-        setOpen(false);
+        if (back) back();
+        else setOpen(false);
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, setOpen]);
+  }, [open, setOpen, back]);
 
   return (
     <AnimatePresence>
@@ -98,7 +101,7 @@ export function SyncDialog() {
                 className="flex items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Cloud size={16} strokeWidth={2} className="shrink-0 text-faint" />
+                <DialogLead icon={Cloud} back={back} />
                 <p className="flex-1 text-[14px] font-medium text-ink">同步</p>
                 <button
                   type="button"

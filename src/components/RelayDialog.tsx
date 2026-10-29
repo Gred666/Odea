@@ -9,6 +9,7 @@ import { Check, Copy, LoaderCircle, Server, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { BannerButton } from "./ConflictBanner";
+import { DialogLead, usePaletteBack } from "./PaletteBack";
 
 /* ============================================================
    协作中继（docs/协同编辑.md §6.4）：命令面板「协作中继…」、点开中继码、连不上时的「配中继…」。
@@ -26,6 +27,7 @@ const GUIDE =
 export function RelayDialog() {
   const open = useRelays((s) => s.open);
   const close = useRelays((s) => s.close);
+  const back = usePaletteBack("relays", open, close);
 
   useEffect(() => {
     if (open) void refreshTeamRelays();
@@ -37,12 +39,12 @@ export function RelayDialog() {
       if (event.key === "Escape" && !event.isComposing) {
         event.preventDefault();
         event.stopPropagation();
-        close();
+        (back ?? close)();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, close]);
+  }, [open, close, back]);
 
   return (
     <AnimatePresence>
@@ -82,7 +84,7 @@ export function RelayDialog() {
                 className="flex items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <Server size={16} strokeWidth={2} className="shrink-0 text-faint" />
+                <DialogLead icon={Server} back={back} />
                 <p className="flex-1 text-[14px] font-medium text-ink">协作中继</p>
                 <button
                   type="button"

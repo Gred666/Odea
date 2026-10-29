@@ -2,6 +2,7 @@ import { cn } from "@/lib/cn";
 import { animatedEmojiText } from "@/lib/emojiText";
 import { renderMarkdown } from "@/lib/markdown";
 import { layoutIds, popoverCard, spring, tween } from "@/lib/motion";
+import { usePaneWindow } from "@/lib/paneWindow";
 import { ArrowDown, ArrowUp, CornerDownLeft, LayoutTemplate } from "lucide-react";
 import { motion, useIsPresent } from "motion/react";
 import {
@@ -77,10 +78,12 @@ export function TemplatePicker({
   onPick: (template: DocTemplate, mode: TemplateMode) => void;
   onClose: () => void;
 }) {
+  // 弹出窗口里的编辑器（docs/标签页与分屏.md §16）：按它所在的那个窗口摆、听
+  const { doc, win: view } = usePaneWindow();
   const [active, setActive] = useState(0);
   // 第一帧就摆在最终位置：入场方向只在挂载时取一次（同表情选择器）
   const [place, setPlace] = useState<Placement>(() => {
-    const viewport = viewportSize();
+    const viewport = viewportSize(view);
     return placePicker(anchor, {
       width: Math.min(PANEL_WIDTH, viewport.width - 16),
       height: PANEL_HEIGHT,
@@ -114,11 +117,11 @@ export function TemplatePicker({
       width: panel.offsetWidth,
       height: content.offsetHeight,
       grid: bodyRef.current?.offsetHeight ?? 0,
-      viewport: viewportSize(),
+      viewport: viewportSize(view),
       nudge: NUDGE,
     });
     setPlace((current) => (samePlacement(current, measured) ? current : measured));
-  }, [anchor]);
+  }, [anchor, view]);
 
   // 点到外面、滚动、缩放、窗口失焦：锚点已经不对了，收起。
   // 滚动只看滚轮 / 触摸 —— 编辑器为了让刚打的字露出来自己也会滚一下，那不算。
@@ -130,19 +133,19 @@ export function TemplatePicker({
     const onOutside = (event: Event) => {
       if (!inside(event.target)) onClose();
     };
-    document.addEventListener("pointerdown", onOutside, true);
-    window.addEventListener("wheel", onOutside, { capture: true, passive: true });
-    window.addEventListener("touchmove", onOutside, { capture: true, passive: true });
-    window.addEventListener("resize", onClose);
-    window.addEventListener("blur", onClose);
+    doc.addEventListener("pointerdown", onOutside, true);
+    view.addEventListener("wheel", onOutside, { capture: true, passive: true });
+    view.addEventListener("touchmove", onOutside, { capture: true, passive: true });
+    view.addEventListener("resize", onClose);
+    view.addEventListener("blur", onClose);
     return () => {
-      document.removeEventListener("pointerdown", onOutside, true);
-      window.removeEventListener("wheel", onOutside, true);
-      window.removeEventListener("touchmove", onOutside, true);
-      window.removeEventListener("resize", onClose);
-      window.removeEventListener("blur", onClose);
+      doc.removeEventListener("pointerdown", onOutside, true);
+      view.removeEventListener("wheel", onOutside, true);
+      view.removeEventListener("touchmove", onOutside, true);
+      view.removeEventListener("resize", onClose);
+      view.removeEventListener("blur", onClose);
     };
-  }, [onClose, present]);
+  }, [onClose, present, doc, view]);
 
   return (
     // 从触发词那条边展开，里面的字不缩放、不变透明（同表情选择器，lib/motion.ts 的 popoverCard）
@@ -158,7 +161,10 @@ export function TemplatePicker({
       exit="gone"
       // 点在面板上不能让正文失焦：失焦会收起选择器，键盘也就接不上了
       onMouseDown={(event) => event.preventDefault()}
-      style={{ ...pinnedEdge(anchor, place), pointerEvents: present ? undefined : "none" }}
+      style={{
+        ...pinnedEdge(anchor, place, viewportSize(view), view.devicePixelRatio || 1),
+        pointerEvents: present ? undefined : "none",
+      }}
       className={cn(
         "odea-template-picker fixed z-50 flex w-[540px] max-w-[calc(100vw-16px)] flex-col overflow-clip",
         "rounded-xl bg-canvas shadow-float ring-1 ring-line-strong",

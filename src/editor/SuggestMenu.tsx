@@ -1,6 +1,7 @@
 import { cn } from "@/lib/cn";
 import { layoutIds, popoverCard, spring } from "@/lib/motion";
 import type { Range } from "@/lib/paletteSearch";
+import { usePaneWindow } from "@/lib/paneWindow";
 import { ArrowDown, ArrowUp, CornerDownLeft, type LucideIcon } from "lucide-react";
 import { motion, useIsPresent } from "motion/react";
 import {
@@ -74,6 +75,8 @@ export function SuggestMenu({
   onPick: (index: number) => void;
   onClose: () => void;
 }) {
+  // 弹出窗口里的编辑器（docs/标签页与分屏.md §16）：按它所在的那个窗口摆、听
+  const { doc, win: view } = usePaneWindow();
   const [active, setActive] = useState(0);
   // 筛选词变了，高亮回到第一项
   const rowsKey = rows.map((row) => row.id).join("\n");
@@ -86,7 +89,7 @@ export function SuggestMenu({
       width: PANEL_WIDTH,
       height: HEADER_HEIGHT + LIST_MAX + FOOTER_HEIGHT,
       grid: LIST_MAX,
-      viewport: viewportSize(),
+      viewport: viewportSize(view),
       nudge: NUDGE,
     }),
   );
@@ -98,11 +101,11 @@ export function SuggestMenu({
       width: PANEL_WIDTH,
       height: HEADER_HEIGHT + LIST_MAX + FOOTER_HEIGHT,
       grid: LIST_MAX,
-      viewport: viewportSize(),
+      viewport: viewportSize(view),
       nudge: NUDGE,
     });
     setPlace((current) => (samePlacement(current, measured) ? current : measured));
-  }, [anchor]);
+  }, [anchor, view]);
 
   useImperativeHandle(handleRef, () => ({
     move: (step) =>
@@ -130,17 +133,17 @@ export function SuggestMenu({
     const onOutside = (event: Event) => {
       if (!inside(event.target)) onClose();
     };
-    document.addEventListener("pointerdown", onOutside, true);
-    window.addEventListener("wheel", onOutside, { capture: true, passive: true });
-    window.addEventListener("resize", onClose);
-    window.addEventListener("blur", onClose);
+    doc.addEventListener("pointerdown", onOutside, true);
+    view.addEventListener("wheel", onOutside, { capture: true, passive: true });
+    view.addEventListener("resize", onClose);
+    view.addEventListener("blur", onClose);
     return () => {
-      document.removeEventListener("pointerdown", onOutside, true);
-      window.removeEventListener("wheel", onOutside, true);
-      window.removeEventListener("resize", onClose);
-      window.removeEventListener("blur", onClose);
+      doc.removeEventListener("pointerdown", onOutside, true);
+      view.removeEventListener("wheel", onOutside, true);
+      view.removeEventListener("resize", onClose);
+      view.removeEventListener("blur", onClose);
     };
-  }, [onClose, present]);
+  }, [onClose, present, doc, view]);
 
   return (
     <motion.div
@@ -154,7 +157,10 @@ export function SuggestMenu({
       exit="gone"
       // 点在面板上不能让正文失焦：失焦会收起菜单，键盘也就接不上了
       onMouseDown={(event) => event.preventDefault()}
-      style={{ ...pinnedEdge(anchor, place), pointerEvents: present ? undefined : "none" }}
+      style={{
+        ...pinnedEdge(anchor, place, viewportSize(view), view.devicePixelRatio || 1),
+        pointerEvents: present ? undefined : "none",
+      }}
       className={cn(
         "odea-suggest-menu fixed z-50 flex flex-col overflow-clip rounded-xl bg-canvas shadow-float ring-1 ring-line-strong",
         place.above && "justify-end",

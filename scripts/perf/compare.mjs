@@ -52,6 +52,13 @@ for (let i = 0; i < Math.max(before.nav?.length ?? 0, after.nav?.length ?? 0); i
   const label = before.nav?.[i]?.label ?? after.nav?.[i]?.label;
   row(`切到「${label}」INP / 最长一帧`, (r) => `${r.nav[i].inp} / ${r.nav[i].longestFrame}`);
 }
+for (const [kind, name] of [
+  ["open", "拆出一栏"],
+  ["close", "关掉一栏"],
+]) {
+  row(`${name} 按键 INP 中位数`, (r) => median(r.split[kind].map((run) => run.inp)));
+  row(`${name} 最长一帧中位数`, (r) => median(r.split[kind].map((run) => run.longestFrame)));
+}
 row("列表里画出来的行", (r) => r.listRows);
 row("切完笔记还活着的编辑器（应为 1）", (r) => r.editorViews);
 row("JS 堆 MB", (r) => r.memory.heapMB);

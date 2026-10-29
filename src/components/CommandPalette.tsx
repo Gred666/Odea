@@ -1,5 +1,5 @@
 import { openDocument } from "@/app/navigate";
-import { hasListColumn, useApp } from "@/app/store";
+import { type PaletteDialog, hasListColumn, useApp } from "@/app/store";
 import { useRelays } from "@/collab/relayStore";
 import { overlapOf, sessionName, useCollab } from "@/collab/store";
 import { releaseOf } from "@/content/changelog";
@@ -97,6 +97,8 @@ interface Item {
   ranges?: Range[];
   /** 正文命中：标题下面一行，命中的字标出来 */
   snippet?: { text: string; range: Range };
+  /** 打开的是哪个对话框：那边标题栏左边有「返回」，回到这里（PaletteBack.tsx） */
+  dialog?: PaletteDialog;
   run: () => void;
 }
 
@@ -193,6 +195,8 @@ export function CommandPalette({
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  /** 从对话框返回的：高亮要回到的那一项（结果按这串字算出来以后再找） */
+  const restoring = useRef<{ query: string; itemId: string } | null>(null);
 
   /* ---- 全局快捷键 ---- */
   useEffect(() => {
@@ -216,7 +220,11 @@ export function CommandPalette({
     if (open) {
       // 日记和目标不常驻内存：每次打开取一份最新的（一次往返，几百篇也只是几百段文字）
       void useData.getState().loadJournal();
-      setQuery("");
+      // 从对话框「返回」回来的：接着刚才打的字（PaletteBack.tsx）
+      const restore = useApp.getState().paletteRestore;
+      if (restore) useApp.setState({ paletteRestore: null });
+      restoring.current = restore && { query: restore.query, itemId: restore.itemId };
+      setQuery(restore?.query ?? "");
       setCursor(0);
       // 等入场动画的第一帧过去再聚焦，避免 iOS/WebKit 上的滚动跳动
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -265,6 +273,7 @@ export function CommandPalette({
         keywords:
           "find search grep vscode 全局搜索 全文搜索 搜索全部 查找全部 在文件中查找 正文 每一处 正则 regex 大小写 全词",
         // 不带面板里打的字：打的多半是这条命令的名字（「全局搜索」）。要搜打的字用列表最后那一项
+        dialog: "find",
         run: () => setFindOpen(true),
       },
       ...(docTarget
@@ -301,6 +310,7 @@ export function CommandPalette({
               label: "历史版本…",
               hint: "这一篇以前的样子，可以恢复",
               keywords: "history version 历史 版本 恢复 回退 撤回 以前 旧版 git",
+              dialog: "history",
               run: () => setHistoryFor(docTarget),
             } satisfies Item,
           ]
@@ -391,6 +401,7 @@ export function CommandPalette({
         label: "回收站…",
         hint: "删掉的笔记留 30 天，在这里找回来",
         keywords: "trash recycle bin 回收站 删除 恢复 找回 误删 undo",
+        dialog: "trash",
         run: () => setTrashOpen(true),
       },
       logical
@@ -462,6 +473,7 @@ export function CommandPalette({
             label: "这篇的协作…",
             hint: "这一篇已经在一次协作里：谁在、邀请链接",
             keywords: "collab invite share 协作 协同 一起编辑 多人 邀请 分享 共享 链接 成员",
+            dialog: "collab",
             run: () => useCollab.getState().openSession(inside),
           });
         } else if (noteId !== null) {
@@ -521,6 +533,7 @@ export function CommandPalette({
             label: "加入协作…",
             hint: "粘贴别人发来的链接",
             keywords: "collab join 协作 协同 加入 一起编辑 多人 链接 odea",
+            dialog: "collab",
             run: () => useCollab.getState().openDialog(""),
           },
           {
@@ -530,6 +543,7 @@ export function CommandPalette({
             label: "附近的协作…",
             hint: "同一个网络里正在分享的人",
             keywords: "collab nearby lan 协作 协同 附近 局域网 同一个网络 wifi 加入",
+            dialog: "collab",
             run: () => useCollab.getState().openDialog(""),
           },
         );
@@ -546,6 +560,7 @@ export function CommandPalette({
                   ? "做客中"
                   : "主持中",
             keywords: "collab 协作 协同 成员 邀请 链接 权限",
+            dialog: "collab",
             run: () => useCollab.getState().openDialog(),
           });
         }
@@ -574,6 +589,7 @@ export function CommandPalette({
         hint: team ? "谁能读写这个仓库、邀请、移出" : "别人也能读写这个仓库，经同步合在一起",
         keywords:
           "team member invite collaborator 团队 成员 邀请 协作者 仓库 github 一起 共享 移出",
+        dialog: "team",
         run: () => useTeam.getState().openDialog(),
       } satisfies Item,
       // 自己配的中继（docs/协同编辑.md §6.4）：不在同一个网络的人靠它连上。不做设置页（技术方案 §16）
@@ -584,6 +600,7 @@ export function CommandPalette({
         label: "协作中继…",
         hint: "不在同一个网络时靠它连上",
         keywords: "collab relay 中继 协作 协同 服务器 互联网 外网 打洞 转发 令牌 iroh",
+        dialog: "relays",
         run: () => useRelays.getState().openRelays(),
       } satisfies Item,
       // 同步（技术方案 §5.9.9）：没开时是开启的入口，开了是状态 + 立即同步
@@ -594,6 +611,7 @@ export function CommandPalette({
         label: syncState === "off" ? "开启同步…" : "同步状态…",
         hint: syncState === "off" ? "GitHub / Gitee 私有仓库" : undefined,
         keywords: "sync 同步 github gitee git 备份 云端 多设备 断开 登录 代理",
+        dialog: "sync",
         run: () => setSyncOpen(true),
       },
       ...(syncState === "off"
@@ -637,6 +655,7 @@ export function CommandPalette({
             label: `更新到 ${update.version}…`,
             hint: update.manual ? "到下载页下载" : "已经下好了，重启就是新版",
             keywords: "update upgrade version 更新 升级 新版 版本 重启",
+            dialog: "update",
             run: () => setUpdateDialog("update"),
           } satisfies Item)
         : ({
@@ -664,6 +683,7 @@ export function CommandPalette({
               label: "这一版的更新说明",
               hint: APP_VERSION,
               keywords: "changelog release notes what's new 更新 说明 新功能 版本 日志",
+              dialog: "update",
               run: () => setUpdateDialog("notes"),
             } satisfies Item,
           ]
@@ -819,6 +839,7 @@ export function CommandPalette({
       icon: TextSearch,
       label: `在所有笔记里搜索「${q}」`,
       hint: FIND_SHORTCUT,
+      dialog: "find",
       run: () => setFindOpen(true, q),
     });
     return ordered;
@@ -827,6 +848,17 @@ export function CommandPalette({
   // biome-ignore lint/correctness/useExhaustiveDependencies: 输入变化时复位高亮
   useEffect(() => setCursor(0), [query]);
 
+  // 从对话框返回：高亮回到刚才选的那一项。排在上面那条后面，同一轮里后写的算数；
+  // 正文命中晚几毫秒才到，那一项这一批里还没有的话等下一批
+  useEffect(() => {
+    const want = restoring.current;
+    if (!open || !want || want.query !== query) return;
+    const index = results.findIndex((item) => item.id === want.itemId);
+    if (index < 0) return;
+    restoring.current = null;
+    setCursor(index);
+  }, [open, query, results]);
+
   // 键盘移动时把高亮项滚进视野
   useEffect(() => {
     listRef.current?.querySelector(`[data-idx="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
@@ -834,6 +866,10 @@ export function CommandPalette({
 
   const execute = (item: Item | undefined) => {
     if (!item) return;
+    // 打开的是对话框：记下来，那边标题栏左边就有「返回」（PaletteBack.tsx）
+    useApp
+      .getState()
+      .setPaletteBack(item.dialog ? { dialog: item.dialog, query, itemId: item.id } : null);
     item.run();
     setOpen(false);
   };
@@ -920,7 +956,10 @@ export function CommandPalette({
                   aria-controls="palette-results"
                   aria-activedescendant={results[cursor] ? `palette-option-${cursor}` : undefined}
                   value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  onChange={(e) => {
+                    restoring.current = null;
+                    setQuery(e.target.value);
+                  }}
                   placeholder="搜索笔记、命令…"
                   aria-label="搜索笔记、命令"
                   spellCheck={false}

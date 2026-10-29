@@ -16,6 +16,8 @@ mod keep;
 #[cfg(feature = "desktop-runtime")]
 mod memory;
 mod old_name;
+#[cfg(feature = "desktop-runtime")]
+mod popout;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod state;
 mod sync;
@@ -172,6 +174,16 @@ fn win_start_dragging(window: WebviewWindow) -> bool {
     window.start_dragging().is_ok()
 }
 
+/// 把这个窗口提到前面：从弹出窗口里点了要在主窗口里开的对话框（历史版本），主窗口可能压在后面
+/// （docs/标签页与分屏.md §16）
+#[cfg(feature = "desktop-runtime")]
+#[tauri::command]
+#[specta::specta]
+fn win_focus(window: WebviewWindow) {
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+}
+
 /// 协作的 odea:// 链接（docs/协同编辑.md §8.1）。冷启动带进来的先存着，前端起来以后取
 /// （collab_pending_link）；应用开着时点的直接发 CollabLink。Windows 的安装包注册了 scheme；
 /// 开发构建在这里现注册（正式版不注册：会把关联改成当前这个 exe，跑一次 debug 版就抢走了
@@ -222,6 +234,9 @@ fn command_builder() -> Builder<tauri::Wry> {
         win_force_close,
         win_is_maximized,
         win_start_dragging,
+        win_focus,
+        popout::popout_window,
+        popout::popout_set_title,
         commands::note_list,
         commands::note_get,
         commands::note_save,
@@ -629,7 +644,7 @@ pub fn run() {
             use tauri_plugin_window_state::StateFlags;
             tauri_plugin_window_state::Builder::default()
                 .with_denylist(&[workspace::LAUNCHER])
-                .with_filter(|label| !boot::is_vault_label(label))
+                .with_filter(|label| !boot::is_vault_label(label) && !popout::is_popout(label))
                 .with_state_flags(StateFlags::SIZE | StateFlags::POSITION)
                 .build()
         })
@@ -663,12 +678,16 @@ pub fn run() {
                 if window.label() == workspace::LAUNCHER {
                     api.prevent_close();
                     workspace::close_launcher(window.app_handle());
+                } else if popout::is_popout(window.label()) {
+                    // 弹出窗口：交给开它的仓库窗口去存、把标签放回去
+                    popout::on_close_requested(window, api);
                 } else {
                     workspace::remember_placement(window);
                 }
             }
             if let tauri::WindowEvent::Destroyed = event {
                 memory::forget_window(window.label());
+                popout::on_destroyed(window.app_handle(), window.label());
                 workspace::on_destroyed(window.app_handle(), window.label());
             }
         })

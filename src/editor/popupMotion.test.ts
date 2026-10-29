@@ -35,8 +35,13 @@ function cubicBezier([x1, y1, x2, y2]: [number, number, number, number], x: numb
 
 describe("盖在正文上的浮层", () => {
   it("never fades or scales the card in: it is opaque and full size from the first frame", () => {
-    for (const target of [resolve(popoverCard.hidden, 42), resolve(popoverCard.shown)]) {
-      expect(target).not.toHaveProperty("opacity");
+    const hidden = resolve(popoverCard.hidden, 42);
+    const shown = resolve(popoverCard.shown);
+    expect(hidden).not.toHaveProperty("opacity");
+    // 收起淡到一半又打开的（连按两下 Ctrl+K、从对话框返回命令面板）：一下子回到不透明，不是淡回来
+    expect(shown.opacity).toBe(1);
+    expect((shown.transition as { opacity: { duration: number } }).opacity.duration).toBe(0);
+    for (const target of [hidden, shown]) {
       for (const key of TRANSFORMS) expect(target).not.toHaveProperty(key);
     }
   });
@@ -69,7 +74,8 @@ describe("盖在正文上的浮层", () => {
       const panel = source.slice(start, source.indexOf("</motion.div>", start));
       expect(panel).toContain("variants={popoverCard}");
       expect(panel).toMatch(/custom=\{place\.above \? FOOTER_HEIGHT : (SEARCH|HEADER)_HEIGHT\}/);
-      expect(panel).toContain("...pinnedEdge(anchor, place)");
+      // 按编辑器所在的那个窗口量（弹出窗口里的编辑器，docs/标签页与分屏.md §16）
+      expect(panel).toContain("...pinnedEdge(anchor, place, viewportSize(view)");
       // 往上开时内容贴着下边排，展开时露出来的是贴着光标的那一头
       expect(panel).toContain('place.above && "justify-end"');
       // hidden 还是滚动容器：展开途中 scrollIntoView 会把内容卷上去
