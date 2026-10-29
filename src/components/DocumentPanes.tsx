@@ -207,7 +207,7 @@ const PaneBody = memo(function PaneBody({
         onDelete={handleDelete}
         onSaveDocument={onSaveDocument}
         onSaveTitle={onSaveTitle}
-        titleStrip={!tabsShown}
+        tabBar={tabsShown}
         focused={focused && !popoutActive}
         first={index === 0}
         last={index === count - 1}

@@ -144,7 +144,9 @@ winreg = "0.55"
 # 窗口图标从 exe 里嵌的多尺寸图标资源加载（lib.rs 的 use_app_icon_resource）。
 # 和 tauri / tao 用的是同一个版本，依赖树里本来就有
 # 协作的分享前自检读防火墙规则（collab/firewall.rs）：INetFwPolicy2、枚举规则用的 IEnumVARIANT
+# 启动器退场时自己淡出：关掉系统的关窗动画、分层窗口的整窗透明度（workspace.rs 的 fade_out）
 windows = { version = "0.61", features = [
+  "Win32_Graphics_Dwm",
   "Win32_System_LibraryLoader",
   "Win32_UI_WindowsAndMessaging",
   "Win32_Foundation",

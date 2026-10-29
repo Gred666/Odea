@@ -347,7 +347,7 @@ body {
   font-size: 17px;
   line-height: 1.7;
   letter-spacing: 0.012em;
-  text-align: justify;
+  text-align: start;
   text-autospace: normal;
 }
 .prose-doc > * + * {
@@ -448,9 +448,8 @@ body {
   border-radius: var(--radius-xs);
   color: var(--color-ink);
 }
-/* 代码逐字准确：不两端对齐、不自动加中西间距 */
+/* 代码逐字准确：不自动加中西间距 */
 .prose-doc :is(code, pre, kbd) {
-  text-align: start;
   text-autospace: no-autospace;
 }
 .prose-doc pre {
@@ -888,25 +887,22 @@ body.odea-dragging .odea-row-actions {
   padding: 0 0 72px;
   /* 系统光标藏掉，由 editor/smoothCaret.ts 画（见下面「光标」） */
   caret-color: transparent;
-  /* 正文两端对齐（段落最后一行照样左对齐），汉字和西文、数字之间自动留约 1/8 字宽
-     （已经手打了空格的地方不会再加）。依据见 docs/排版规范.md §2 */
-  text-align: justify;
+  /* 左对齐，不两端对齐：两端对齐时每打一个字（输入法的每个拼音字母也算），这一行剩下的空隙
+     重新分到每个字间，光标前面已经写好的字跟着左右挪 2–12px —— 用户说的「多行时在第一行插字，
+     前面的字会抖」（2026-10-29）。汉字和西文、数字之间自动留约 1/8 字宽（已经手打了空格的地方
+     不会再加）。依据见 docs/排版规范.md §2 */
+  text-align: start;
   text-autospace: normal;
 }
 /* 很长、中间没有断点的西文串（网址、哈希、一直按着的 kkkk）在串里任意处断行：不然浏览器把整串
-   挪到下一行，两端对齐会把前一行剩下的几个字撑满整行（editor/longRuns.ts）。
-   输入法组字时光标那一行也是：拼音是一串西文，整串挪到下一行的话这一行被撑开、上屏又缩回去，
-   一个词抖一下（同一个文件，只在光标前面的折行都不在西文跟前时才加） */
+   挪到下一行，前一行后半截空出一大块（editor/longRuns.ts）。
+   输入法组字时光标那一行也是：拼音是一串西文，打到行尾整串挪到下一行、上屏又回来，
+   一个词跳一下（同一个文件，只在光标前面的折行都不在西文跟前时才加） */
 .odea-editor .cm-odea-long-run,
 .odea-editor .cm-line.cm-odea-composing {
   word-break: break-all;
 }
-/* 不跟着两端对齐、不自动加间距的：标题（一般就一行，折行时左齐更像标题）、
-   代码（要逐字准确）、替身（表格、目录、图表……各管各的对齐） */
-.odea-editor :is(.cm-odea-h1, .cm-odea-h2, .cm-odea-h3, .cm-odea-h4, .cm-odea-h5, .cm-odea-h6),
-.odea-editor .cm-content :where([contenteditable="false"]) {
-  text-align: start;
-}
+/* 不自动加中西间距的：代码（要逐字准确） */
 .odea-editor
   :is(
     .cm-odea-code,
@@ -917,7 +913,6 @@ body.odea-dragging .odea-row-actions {
     .cm-odea-html,
     .cm-odea-html-block
   ) {
-  text-align: start;
   text-autospace: no-autospace;
 }
 
@@ -2290,13 +2285,46 @@ body.odea-dragging .odea-row-actions {
    点进的格子露出源码：白底 + 一圈主色内描边，系统光标用主色（正文的光标是自己画的，
    .cm-content 把 caret-color 设成了透明，这里要还回来）。 */
 .odea-editor .cm-odea-table-widget :is(td, th).is-editing {
+  position: relative;
+  /* 格子是方的：全局 :focus-visible 给的 6px 圆角（编辑中的格子是 contenteditable，一聚焦就命中）
+     让四个角缺一块、露出表头的灰底 */
+  border-radius: 0;
   background: var(--color-canvas);
-  box-shadow: inset 0 0 0 1.5px var(--color-accent);
   color: var(--color-ink);
   caret-color: var(--color-accent);
   outline: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* 描边用 border 画在盖满格子的一层上，不用 inset box-shadow：border 的粗细浏览器取整到物理像素，
+   box-shadow 不取整。以前 1.5px 的阴影在 1 倍屏上是一排实色 + 一排半透明，1.25 倍、1.5 倍也各有
+   半截淡的 —— 用户说的「边框没显示完颜色，一般是边缘」（2026-10-29，真实缩放比的无头 Chrome
+   逐像素看过：1 / 1.25 / 1.5 / 1.75 倍都是整排实色） */
+.odea-editor .cm-odea-table-widget :is(td, th).is-editing::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--color-accent);
+  pointer-events: none;
+}
+/* 四个角上的格子：外框是 10px 圆角、overflow: hidden，方的描边到角上被裁掉一截 —— 角缺一块、
+   2px 的边贴着圆弧剩 1px（用户 2026-10-29 第二次截图里的「名称」，左上角那一格）。描边跟着外框的
+   内圆角走（10px − 1px 边框）。CSV / TSV 上面是标签栏，表头不贴着上面两个角 */
+.odea-editor
+  .cm-odea-table-frame.is-markdown
+  thead
+  tr:first-child
+  > :first-child.is-editing::after {
+  border-top-left-radius: 9px;
+}
+.odea-editor .cm-odea-table-frame.is-markdown thead tr:first-child > :last-child.is-editing::after {
+  border-top-right-radius: 9px;
+}
+.odea-editor .cm-odea-table-widget tbody tr:last-child > :first-child.is-editing::after {
+  border-bottom-left-radius: 9px;
+}
+.odea-editor .cm-odea-table-widget tbody tr:last-child > :last-child.is-editing::after {
+  border-bottom-right-radius: 9px;
 }
 .odea-editor .cm-odea-table-widget th.is-editing {
   font-size: 15px;
@@ -2609,12 +2637,14 @@ body.odea-dragging .odea-row-actions {
   visibility: hidden;
 }
 
-/* 源码开着、正在拖大小：隔一圈底色的主色描边，告诉人改的是这一张。和焦点框一样
-   直接出现，不做过渡：box-shadow 不做动画（docs/技术方案.md §10.1 第 2 条），淡 opacity
-   又会让这一圈在淡完时挪半个像素（CLAUDE.md「动效：先对齐再动」） */
+/* 源码开着、正在拖大小：隔开 2px 的一圈主色描边，告诉人改的是这一张。和焦点框一样
+   直接出现，不做过渡：描边不做动画（docs/技术方案.md §10.1 第 2 条），淡 opacity
+   又会让这一圈在淡完时挪半个像素（CLAUDE.md「动效：先对齐再动」）。
+   用 outline 不用 box-shadow 的扩展：outline 的粗细、偏移浏览器取整到物理像素，box-shadow 不取整，
+   1.25 倍屏上 2px 是 2.5 个物理像素，外圈一排实色一排半透明（同表格编辑中的格子） */
 .odea-editor .cm-odea-image-frame:is(.is-open, .is-resizing) .cm-odea-image {
-  box-shadow: 0 0 0 2px var(--color-canvas), 0 0 0 4px
-    color-mix(in srgb, var(--color-accent) 45%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  outline-offset: 2px;
 }
 .odea-editor .cm-odea-image-frame.is-resizing {
   cursor: nwse-resize;

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindowBuilder};
@@ -300,10 +301,13 @@ pub fn show_launcher<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
 
 pub fn focus<R: Runtime>(app: &AppHandle<R>, label: &str) {
     if label == LAUNCHER {
-        // 刚关上、还没销毁的启动器又被叫回来：不销毁了
+        // 刚关上、还没销毁的启动器又被叫回来：不销毁了，淡到一半的复原
         LAUNCHER_RETIRING.store(0, Ordering::SeqCst);
     }
     if let Some(window) = app.get_webview_window(label) {
+        if label == LAUNCHER {
+            restore_opacity(&window);
+        }
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -391,29 +395,150 @@ pub fn on_ready<R: Runtime>(app: &AppHandle<R>, label: &str) {
         .map(|mut waiting| waiting.take_if(|waiting| waiting == label).is_some())
         .unwrap_or(false);
     if waited {
-        close_launcher(app);
+        close_launcher_behind(app);
     }
     deliver_jump(app, label);
 }
 
-/// 正在退场的那一次启动器（0 = 没在退场）：藏起来了、等着销毁。又被叫回来（focus）就作废
+/// 正在退场的那一次启动器（0 = 没在退场）：等着藏、藏起来了等着销毁。又被叫回来（focus）就作废
 static LAUNCHER_RETIRING: AtomicU64 = AtomicU64::new(0);
 static LAUNCHER_TICKET: AtomicU64 = AtomicU64::new(0);
 
-/// 关启动器：先藏起来，等系统的关窗淡出播完再销毁（关闭按钮、Alt+F4 也走这里，见 lib.rs）。
-/// 以前直接 destroy：WebView 先被拆掉，系统拿来播淡出的是一块只剩底色的窗口；拆 WebView 还要在
-/// 主线程上卡一下，这时候新开的仓库窗口正在画第一屏 —— 就是关掉启动器那一下的「掉帧」
+/// 新窗口刚显示：系统正在给它播出现的淡入（Windows 11 上量到约 75ms），启动器等这么久再藏
+const LAUNCHER_COVERED: Duration = Duration::from_millis(250);
+
+/// 关启动器：先淡出、藏起来，过一会儿再销毁（关闭按钮、Alt+F4 走这里，见 lib.rs）。淡出是自己做的，
+/// 不用系统的关窗动画（fade_out 说了为什么）。
+/// 不直接 destroy：WebView 先被拆掉，淡出的是一块只剩底色的窗口；拆 WebView 还要在主线程上卡一下，
+/// 这时候新开的仓库窗口可能正在画第一屏
 pub fn close_launcher<R: Runtime>(app: &AppHandle<R>) {
+    retire_launcher(app, Duration::ZERO);
+}
+
+/// 从启动器打开的窗口显示出来了（新开的画好了第一帧、已经开着的提到了前面）：它在上面淡入的时候
+/// 启动器不动、垫在底下，等它整个盖上了再藏。
+///
+/// 以前是同时：新窗口淡入、启动器在它底下淡出，两个各淡各的（CLAUDE.md 规矩 8 的窗口版）——
+/// 中间一段两个都只剩一半，后面的桌面透出来，启动器那一块先亮、再暗、再亮；新窗口淡入的头几帧
+/// 也一顿一顿的（2026-10-29 逐帧抓屏：每帧亮度涨 10、14、6、0、18，后面才匀成 8、9）
+fn close_launcher_behind<R: Runtime>(app: &AppHandle<R>) {
+    retire_launcher(app, LAUNCHER_COVERED);
+}
+
+/// 等 `wait`（0 就是马上）、淡出、藏起来，再过 400ms 销毁。中途又被叫回来（focus 把号码清掉）就停下。
+/// 淡出要一帧一帧地等合成器（DwmFlush 会阻塞），单开一个线程
+fn retire_launcher<R: Runtime>(app: &AppHandle<R>, wait: Duration) {
     let Some(window) = app.get_webview_window(LAUNCHER) else { return };
     let ticket = LAUNCHER_TICKET.fetch_add(1, Ordering::SeqCst) + 1;
     LAUNCHER_RETIRING.store(ticket, Ordering::SeqCst);
-    let _ = window.hide();
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let retiring = move || LAUNCHER_RETIRING.load(Ordering::SeqCst) == ticket;
+    std::thread::spawn(move || {
+        std::thread::sleep(wait);
+        if !retiring() || !fade_out(&window, &retiring) {
+            return;
+        }
+        let _ = window.hide();
+        std::thread::sleep(Duration::from_millis(400));
         if LAUNCHER_RETIRING.compare_exchange(ticket, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             let _ = window.destroy();
         }
     });
+}
+
+/// 启动器退场的淡出有多长（和系统的关窗动画差不多）
+const LAUNCHER_FADE: Duration = Duration::from_millis(150);
+
+/// 启动器退场：整窗只淡透明度，不缩放；淡完由调用方藏起来。返回 false = 中途被叫回来了（已经复原）。
+///
+/// 以前交给系统的关窗动画，那是「缩到约 0.95 + 淡出」：缩放把整窗当位图拉，字发虚；缩放到最后一段
+/// 猛地加速，一帧收 11px 然后停住、只剩淡 —— 用户说的「关启动器那个小窗口时掉了几帧」
+/// （2026-10-29 逐帧抓屏，180Hz 下三次都是：每帧收 2–3px，到 772 一帧跳到 761，之后不动；
+/// 普通的 Win32 窗口也是这个套路，只是那一跳分在三帧里）。CLAUDE.md 规矩 1：消失只淡 opacity。
+///
+/// 做法：关掉这个窗口的系统过渡（DWMWA_TRANSITIONS_FORCEDISABLED），改成分层窗口，按合成器的
+/// 节奏（DwmFlush 每次等到下一次合成，60Hz、180Hz 都是一帧一步）把整窗透明度从 255 降到 0。
+/// 分层窗口的透明度对 WebView2 画的内容一样有效（实测 50% 时正好是一半）；淡的时候点击穿过去
+fn fade_out<R: Runtime>(window: &tauri::WebviewWindow<R>, retiring: &impl Fn() -> bool) -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::COLORREF;
+        use windows::Win32::Graphics::Dwm::DwmFlush;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongW, SetLayeredWindowAttributes, SetWindowLongW, GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED,
+            WS_EX_TRANSPARENT,
+        };
+        let Ok(hwnd) = window.hwnd() else { return true };
+        set_transitions(hwnd, false);
+        unsafe {
+            let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+            SetWindowLongW(hwnd, GWL_EXSTYLE, style | (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0) as i32);
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
+        }
+        let start = std::time::Instant::now();
+        loop {
+            if !retiring() {
+                restore_opacity(window);
+                return false;
+            }
+            let t = (start.elapsed().as_secs_f64() / LAUNCHER_FADE.as_secs_f64()).min(1.0);
+            // ease-out cubic：一点下去就开始淡，收尾短
+            let alpha = 255.0 * (1.0 - t).powi(3);
+            unsafe {
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha.round() as u8, LWA_ALPHA);
+            }
+            if t >= 1.0 {
+                return true;
+            }
+            if unsafe { DwmFlush() }.is_err() {
+                std::thread::sleep(Duration::from_millis(4));
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, retiring);
+        true
+    }
+}
+
+/// 淡到一半、或者淡完藏起来了又被叫回来：整窗不透明、不再是分层窗口、系统过渡还回去
+fn restore_opacity<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::COLORREF;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongW, SetLayeredWindowAttributes, SetWindowLongW, GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED,
+            WS_EX_TRANSPARENT,
+        };
+        let Ok(hwnd) = window.hwnd() else { return };
+        // 藏起来的时候 tao 按它记的样式重设过扩展样式，那时已经不是分层窗口了
+        unsafe {
+            let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+            if style & WS_EX_LAYERED.0 as i32 != 0 {
+                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
+                SetWindowLongW(hwnd, GWL_EXSTYLE, style & !((WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0) as i32));
+            }
+        }
+        set_transitions(hwnd, true);
+    }
+    #[cfg(not(windows))]
+    let _ = window;
+}
+
+/// 这个窗口显示、隐藏时要不要系统的过渡动画
+#[cfg(windows)]
+fn set_transitions(hwnd: windows::Win32::Foundation::HWND, on: bool) {
+    use windows::core::BOOL;
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
+    let disabled = BOOL::from(!on);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            (&raw const disabled).cast(),
+            std::mem::size_of::<BOOL>() as u32,
+        );
+    }
 }
 
 /// 点开了一个 odea:// 链接（协作邀请、回连、中继码）：交给最近用过的仓库窗口。一个都没开着就先打开
@@ -605,7 +730,7 @@ async fn open_from_launcher<R: Runtime>(app: AppHandle<R>, root: PathBuf, seed: 
     let how = Open { seed, remember: true, quiet: true, logical: seed && logical };
     let (label, existing) = blocking(move || open_vault(&handle, &root, how)).await?;
     if existing {
-        close_launcher(&app);
+        close_launcher_behind(&app);
     } else if let Ok(mut waiting) = app.state::<AppState>().launcher_waits_for.lock() {
         *waiting = Some(label);
     }
@@ -787,7 +912,7 @@ pub async fn launcher_join<R: Runtime>(app: AppHandle<R>, state: State<'_, AppSt
     let handle = app.clone();
     blocking(move || show_guest(&handle, Some(link))).await?;
     if existing {
-        close_launcher(&app);
+        close_launcher_behind(&app);
     } else if let Ok(mut waiting) = state.launcher_waits_for.lock() {
         *waiting = Some(GUEST.to_string());
     }

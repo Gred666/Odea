@@ -11,6 +11,7 @@ import type { EditorOutlineHandle } from "@/editor/MarkdownEditor";
 import type { WikiCandidate } from "@/editor/suggest";
 import type { TemplateContext } from "@/editor/templates";
 import { cn } from "@/lib/cn";
+import { snapToDevicePixels } from "@/lib/devicePixels";
 import { useLingering } from "@/lib/lingering";
 import { hasLongRun } from "@/lib/longRun";
 import { buildOutline, renderMarkdown } from "@/lib/markdown";
@@ -89,7 +90,7 @@ export function DocumentView({
   onSaveDocument,
   onSaveTitle,
   editorEnabled = true,
-  titleStrip = true,
+  tabBar = false,
   focused = true,
   first = true,
   last = true,
@@ -102,8 +103,8 @@ export function DocumentView({
   onSaveDocument?: (target: DocumentSaveTarget, markdown: string) => Promise<void>;
   onSaveTitle?: (target: DocumentSaveTarget, title: string) => Promise<void>;
   editorEnabled?: boolean;
-  /** 滚下去以后最上面那条里出不出「路径 / 标题」。笔记的标签栏显示着时不出（当前标签就是标题） */
-  titleStrip?: boolean;
+  /** 笔记的标签栏显示着：滚下去以后「路径 / 标题」出在它底下一行，不在最上面那条里（那里是标签） */
+  tabBar?: boolean;
   /*
    * 分屏时（docs/标签页与分屏.md §12）每个窗格一个 DocumentView。
    * focused：正在写的那个窗格 —— 跳过来要滚到的小节、新建后光标去哪只由它接（两个窗格开着同一篇时
@@ -575,8 +576,10 @@ export function DocumentView({
             </CenteredColumn>
           </div>
           <OverlayScrollbar targetRef={scrollRef} />
-          {/* 大标题滚出去以后，窗口最上面那条里的「路径 / 标题」 */}
-          <TitleStrip doc={doc} scrollRef={scrollRef} enabled={titleStrip} />
+          {/* 大标题滚出去以后的「路径 / 标题」：窗口最上面那条里；标签栏显示着时在它底下一行。
+              标签栏出来、收起的那一下两处交叠着淡，看着是这一行往下让了一格 */}
+          <TitleStrip doc={doc} scrollRef={scrollRef} enabled={!tabBar} />
+          <TitleStrip doc={doc} scrollRef={scrollRef} enabled={tabBar} underTabs />
           {/* 正文滚到状态栏跟前淡掉，不是被一刀切齐：状态栏不画分隔线（窄栏右边那一栏底下的
               「仓库名」有一条，高度对不上，两条线一高一低）。压在换篇的快照（z-5）上面，快照也一样淡 */}
           <div
@@ -622,12 +625,19 @@ export function DocumentView({
 
 /** 窗口最上面那条的高：无边框窗口的拖动区（TitleBar 也是这么高） */
 const STRIP_HEIGHT = 38;
+/** 标签栏显示着时，「路径 / 标题」那一行在它底下，这么高（字那一行 20，上下各留 3） */
+const UNDER_TABS = 26;
 
 /**
  * 大标题滚出去以后，窗口最上面那条（无边框窗口的拖动区）里淡进来一行「路径 / 标题」
  * （docs/仓库与启动器.md §20）。像苹果的大标题收进导航栏：在顶上时路径、标题都在正文里，跟着滚，
  * 顶上一点不多占；往下滚到大标题整个钻进这一条底下，这一行淡进来，读到一半也知道在哪一篇、哪个文件夹。
  * 点标题滑回顶上，点路径的一段在列表栏里打开那个文件夹。
+ *
+ * 笔记的标签栏显示着（开着第二个标签、分屏、弹出窗口）时，最上面那条是标签，这一行改在它底下
+ * （underTabs，docs/标签页与分屏.md §18）：同样等大标题整个钻进「标签栏 + 这一行」底下才淡进来，
+ * 在顶上时还是一点不多占。两处各是一份，标签栏出来、收起时一个淡出一个淡入，像是往下让了一格
+ * （只淡不挪，CLAUDE.md 规矩 1）。
  *
  * 为什么是到点淡入、不是滚多少淡多少（CSS 滚动时间线）：换篇时正文先拨回顶上、编辑器挂上后再滚回
  * 上次看到的地方，跟着滚动走的话这一行会消失一帧再冒出来。现在看的是「大标题在不在这一条底下」
@@ -636,19 +646,28 @@ const STRIP_HEIGHT = 38;
  *
  * 两层：底色（铺满这一栏，下沿 16px 渐隐，盖住滚上来的正文）在标题栏（z-40）底下，窗口按钮照样在它上面
  * —— 它比 chrome（z-30）高，所以不能像正文画布那样往左多铺一截，不然盖到窄栏的 Logo 上；字那一层在标题栏上面（z-41），整层不接指针，只有路径的几段和标题接 ——
- * 空着的地方照样拖窗口、双击最大化。只淡 opacity（CLAUDE.md 规矩 1），一直待在自己的图层上（规矩 3）。
- * 给鼠标用的复本：读屏器、Tab 键走正文里那一行（aria-hidden、tabIndex -1）
+ * 空着的地方照样拖窗口、双击最大化。标签栏底下那一行不在拖动区里，两层都和标签栏的底色一样是 z-29：
+ * 比左边的 chrome（z-30）低，列表栏收起时滑走的那一截不被它盖住。
+ * 只淡 opacity（CLAUDE.md 规矩 1），一直待在自己的图层上，开始淡之前对齐整物理像素（规矩 3：
+ * 分屏时窗格的左缘常落在小数像素上）。给鼠标用的复本：读屏器、Tab 键走正文里那一行（aria-hidden、tabIndex -1）
  */
 function TitleStrip({
   doc,
   scrollRef,
   enabled,
+  underTabs = false,
 }: {
   doc: DocumentModel;
   scrollRef: React.RefObject<HTMLDivElement | null>;
-  /** 笔记的标签栏显示着：不出（显示着的淡掉，和标签栏的淡入交叠） */
+  /** 这一处该不该出：最上面那条在标签栏显示着时不出，标签栏底下那一行反过来 */
   enabled: boolean;
+  /** 标签栏底下那一行 */
+  underTabs?: boolean;
 }) {
+  const top = underTabs ? STRIP_HEIGHT : 0;
+  const height = underTabs ? UNDER_TABS : STRIP_HEIGHT;
+  // 大标题整个钻进这么高的一段底下才出（标签栏底下那一行：标签栏连同这一行）
+  const covered = top + height;
   // 显不显示，以及这是哪一篇的结论（换篇的那一次渲染里还是上一篇的，新那篇的要等下面的 observer 回来）
   const [state, setState] = useState({ key: doc.key, shown: false });
   // 大标题（连同上面那一行）整个钻进这一条底下了没有。换篇、从空白页换成有内容的，重新找标题
@@ -668,17 +687,25 @@ function TitleStrip({
         const above = entry.boundingClientRect.bottom <= (entry.rootBounds?.top ?? 0);
         setState({ key, shown: !entry.isIntersecting && above });
       },
-      { root: scroller, rootMargin: `-${STRIP_HEIGHT}px 0px 0px 0px` },
+      { root: scroller, rootMargin: `-${covered}px 0px 0px 0px` },
     );
     observer.observe(header);
     return () => observer.disconnect();
-  }, [scrollRef, doc.key, doc.empty]);
+  }, [scrollRef, doc.key, doc.empty, covered]);
 
   // 字跟着「显示着、而且是这一篇的结论」走：淡出的时候、新那篇的结论还没回来的时候，留着刚才那一篇的
   const shown = enabled && state.shown;
   const last = useRef(doc);
   if (shown && state.key === doc.key) last.current = doc;
   const info = last.current;
+
+  // 开始淡之前对齐整物理像素（层里画出来才不糊，淡完不闪）
+  const textRef = useRef<HTMLDivElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: shown 变了就是要开始淡了
+  useLayoutEffect(() => {
+    if (textRef.current) snapToDevicePixels(textRef.current);
+  }, [shown]);
+
   if (info.empty) return null;
   const where =
     info.folder !== undefined ? (
@@ -692,20 +719,29 @@ function TitleStrip({
       <div
         aria-hidden="true"
         data-shown={shown || undefined}
-        className="odea-doc-strip pointer-events-none absolute inset-x-0 top-0 z-[39]"
+        className={cn(
+          "odea-doc-strip pointer-events-none absolute inset-x-0",
+          underTabs ? "z-[29]" : "z-[39]",
+        )}
         style={{
-          height: STRIP_HEIGHT + 16,
-          background: `linear-gradient(to bottom, var(--color-canvas) ${STRIP_HEIGHT}px, transparent)`,
+          top,
+          height: height + 16,
+          background: `linear-gradient(to bottom, var(--color-canvas) ${height}px, transparent)`,
         }}
       />
       <div
+        ref={textRef}
         aria-hidden="true"
         data-shown={shown || undefined}
-        className="odea-doc-strip @container pointer-events-none absolute inset-x-0 top-0 z-[41]"
-        style={{ height: STRIP_HEIGHT }}
+        data-title-strip={underTabs ? "tabs" : "top"}
+        className={cn(
+          "odea-doc-strip @container pointer-events-none absolute inset-x-0",
+          underTabs ? "z-[29]" : "z-[41]",
+        )}
+        style={{ top, height }}
       >
         <CenteredColumn className="h-full items-center">
-          {/* 右边让出窗口按钮的位置（正文区贴着窗口右边缘的时候） */}
+          {/* 右边让出窗口按钮的位置（正文区贴着窗口右边缘的时候；标签栏底下那一行是专注模式的按钮） */}
           <div className="relative h-full min-w-0 max-w-[calc(100%-80px)]" data-swap-host>
             <SwapFade
               swapKey={info.key}

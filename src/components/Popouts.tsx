@@ -205,7 +205,7 @@ const PopoutBody = memo(function PopoutBody({
           onDelete={handleDelete}
           onSaveDocument={onSaveDocument}
           onSaveTitle={onSaveTitle}
-          titleStrip={false}
+          tabBar={initialized}
           focused={active}
           first={false}
           last

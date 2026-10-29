@@ -54,9 +54,31 @@ const SCENES = {
    */
   strip: {
     markdown: "正文一行。\n\n".repeat(80),
-    target: ".odea-doc-strip + .odea-doc-strip",
+    target: "[data-title-strip=top]",
     trigger: "document.querySelector('[data-doc-scroller]').scrollTop = 400",
     pad: { top: 0, right: 0, bottom: 0, left: 0 },
+    capture: 3000,
+    settle: 600,
+  },
+  /**
+   * 开着两个标签时，「路径 / 标题」在标签栏底下那一行（同一个 TitleStrip，underTabs）：
+   * 往下滚到大标题钻进「标签栏 + 这一行」底下以后淡进来。截的是字那一层（26px 高）连同下面 16px 的渐隐
+   */
+  tabstrip: {
+    setup: `(async () => {
+      const { useApp } = await import('/src/app/store.ts');
+      const { useData } = await import('/src/data/store.ts');
+      const other = useData.getState().notes.find((n) => n.id !== useApp.getState().selectedNoteId);
+      useApp.getState().openNoteTab(other.id);
+      await new Promise((r) => setTimeout(r, 800));
+      const { EditorView } = await import('/node_modules/.vite/deps/@codemirror_view.js');
+      const view = EditorView.findFromDOM(document.querySelector('.cm-editor'));
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: ${JSON.stringify("正文一行。\n\n".repeat(80))} } });
+      document.querySelector('[data-doc-scroller]').scrollTop = 0;
+    })()`,
+    target: "[data-title-strip=tabs]",
+    trigger: "document.querySelector('[data-doc-scroller]').scrollTop = 400",
+    pad: { top: 0, right: 0, bottom: 16, left: 0 },
     capture: 3000,
     settle: 600,
   },

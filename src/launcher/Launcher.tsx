@@ -414,7 +414,8 @@ function CreatePanel({
       <p className="mt-4 text-[13px] text-muted" id="launcher-layout">
         文件夹
       </p>
-      {/* 选中只换底色和描边，直接换上（描边是 box-shadow，不做过渡，CLAUDE.md 规矩 2） */}
+      {/* 选中只换底色和描边，直接换上（描边不做过渡，CLAUDE.md 规矩 2）。描边是 border 不是 ring：
+          ring 是 box-shadow，粗细不取整到物理像素，1.5 倍屏上 1px 是一排实色 + 一排半透明的主色 */}
       <div
         role="radiogroup"
         aria-labelledby="launcher-layout"
@@ -431,10 +432,10 @@ function CreatePanel({
               disabled={busy}
               onClick={() => setLogical(option.logical)}
               className={cn(
-                "rounded-lg px-3 py-2 text-left ring-1 transition-colors duration-[120ms]",
+                "rounded-lg border px-[11px] py-[7px] text-left transition-[background-color] duration-[120ms]",
                 checked
-                  ? "bg-accent/[0.07] ring-accent"
-                  : "bg-canvas ring-line-strong hover:bg-raised",
+                  ? "border-accent bg-accent/[0.07]"
+                  : "border-line-strong bg-canvas hover:bg-raised",
               )}
             >
               <span className="block text-[13px] font-medium text-ink">{option.title}</span>
