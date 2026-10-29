@@ -40,6 +40,9 @@ export function Outline({
 }) {
   const [activeId, setActiveId] = useState<string | null>(items[0]?.id ?? null);
   const ratios = useRef(new Map<string, number>());
+  // 指示条按这一份目录分组用的（见下面 LayoutGroup）。要放在 items 为空的提前 return 之前：
+  // 放在后面的话，有标题 ↔ 没标题一切换 hook 数目就变了，React 抛错、整个窗口白屏
+  const group = useId();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 换文档 / 换首个锚点时才重置
   useEffect(() => {
@@ -125,7 +128,6 @@ export function Outline({
 
      LayoutGroup：指示条的 layoutId 按这一份目录分开。分屏时两个窗格各有一份目录（docs/标签页与分屏.md §12），
      同一个 layoutId 的话 Motion 当成同一个指示条，在两份目录之间飞来飞去 */
-  const group = useId();
   return (
     <LayoutGroup id={group}>
       {!zen && <div className="hidden w-[180px] shrink-0 xl:block" aria-hidden="true" />}

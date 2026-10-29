@@ -72,7 +72,11 @@ export function NoteTabs({
   const tabs = pane.tabs;
   const active = pane.activeTab;
   const panelCollapsed = useApp((s) => s.panelCollapsed);
-  const reduce = useApp((s) => s.reduceMotion) || usePrefersReducedMotion();
+  // 两个 hook 分开取再合：写成 `a || usePrefersReducedMotion()` 的话，打开「减少动效」时后一个就短路不调了，
+  // hook 数目变了 React 直接抛错、整个窗口白屏
+  const appReduce = useApp((s) => s.reduceMotion);
+  const systemReduce = usePrefersReducedMotion();
+  const reduce = appReduce || systemReduce;
   // 收起的那一段里字留着收起之前的样子（关到只剩一个时，淡出的还是那两个标签）
   const last = useRef({ tabs, active });
   if (shown) last.current = { tabs, active };

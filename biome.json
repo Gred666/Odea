@@ -24,7 +24,8 @@
         "useSemanticElements": "off"
       },
       "correctness": {
-        "useExhaustiveDependencies": "warn"
+        "useExhaustiveDependencies": "warn",
+        "useHookAtTopLevel": "error"
       },
       "style": {
         "noNonNullAssertion": "off"

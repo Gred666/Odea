@@ -170,3 +170,19 @@ describe("目录树收起", () => {
     expect(visible()).toHaveLength(items.length);
   });
 });
+
+describe("有标题 ↔ 没标题", () => {
+  // 同一个窗格里换到一篇没标题的（Ctrl+点开新标签、切标签），或者删掉最后一个标题：
+  // 以前 useId 写在 items 为空的提前 return 后面，hook 数目一变 React 抛错、整个窗口白屏
+  it("survives the outline emptying and filling again in place", () => {
+    render();
+    act(() =>
+      root.render(
+        <Outline items={[]} scrollRef={scrollRef} resetKey="note-2" memoryKey="note:2" />,
+      ),
+    );
+    expect(container.querySelector("[data-outline-item]")).toBeNull();
+    render("note-1", "note:1");
+    expect(visible()).toHaveLength(items.length);
+  });
+});
