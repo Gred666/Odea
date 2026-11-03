@@ -135,6 +135,31 @@ const SCENES = {
     capture: 3000,
     settle: 800,
   },
+  /**
+   * 表格的行抓手（editor/tableWidget.ts）：鼠标在哪一行，表格左边外面淡入一个抓手。
+   * 抓手的位置是悬停时才摆的：先悬停一次摆好（截图范围按它量），移走等它淡出，再正式悬停
+   */
+  table: {
+    setup: `(async () => {
+      const { EditorView } = await import('/node_modules/.vite/deps/@codemirror_view.js');
+      const view = EditorView.findFromDOM(document.querySelector('.cm-editor'));
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: ${JSON.stringify(
+        "正文一行。\n\n| 名字 | 数量 |\n|---|---|\n| 苹果 | 3 |\n| 梨 | 12 |\n\n后面一行。\n",
+      )} } });
+      document.querySelector('[data-doc-scroller]').scrollTop = 0;
+      await new Promise((r) => setTimeout(r, 600));
+      const cell = document.querySelectorAll('.cm-odea-table-widget tbody td')[2];
+      const box = cell.getBoundingClientRect();
+      const block = cell.closest('.cm-odea-table-block');
+      block.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse',
+        clientX: box.x + box.width / 2, clientY: box.y + box.height / 2 }));
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50)));
+      block.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }));
+      await new Promise((r) => setTimeout(r, 1500));
+    })()`,
+    target: ".cm-odea-table-grip.is-row",
+    hover: ".cm-odea-table-widget tbody tr:nth-child(2) td",
+  },
   /** 文件列表里置顶的那一行：悬停时图钉让位给「…」（views/NotesView.tsx 的 TreeNoteRow） */
   pinned: {
     setup: "new Promise((r) => setTimeout(r, 300))",

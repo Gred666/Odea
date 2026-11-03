@@ -123,7 +123,8 @@ export type SlashAction =
       /** 块级的（表格、分隔线…）：上一行有字的话先空一行，免得被吃进上一段 */
       block?: boolean;
     }
-  | { type: "emoji" | "wiki" | "template" };
+  /** 表格：插一张渲染好的空表，光标放进第一格（不是一段源码） */
+  | { type: "emoji" | "wiki" | "template" | "table" };
 
 export interface SlashItem {
   id: string;
@@ -220,7 +221,7 @@ export const SLASH_ITEMS: SlashItem[] = [
     icon: Table,
     hint: isMac ? `${MOD_KEY}+Alt+T` : `${MOD_KEY}+T`,
     keywords: "table biaoge bg 表",
-    action: selected("| 标题 | 标题 |\n| --- | --- |\n| 内容 | 内容 |", "标题", true),
+    action: { type: "table" },
   },
   {
     id: "code",

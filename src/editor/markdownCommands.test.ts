@@ -6,7 +6,6 @@ import {
   commandTarget,
   insertFencedBlock,
   insertLink,
-  insertTable,
   setHeading,
   toggleLinePrefix,
   wrapMarkdown,
@@ -60,22 +59,14 @@ describe("Typora-compatible Markdown commands", () => {
     expect(run(bullet, "一\n\n三")).toBe("- 一\n\n- 三");
   });
 
-  it("inserts links, images, code fences and tables", () => {
+  it("inserts links, images and code fences", () => {
     expect(run(insertLink(), "官网")).toBe("[官网](url)");
     expect(run(insertLink(true), "封面")).toBe("![封面](url)");
     expect(run(insertFencedBlock(), "const x = 1")).toBe("```\nconst x = 1\n```");
-    expect(run(insertTable(), "")).toContain("| --- | --- |");
   });
 
   it("keeps a code fence on its own lines when inserted mid-line", () => {
     expect(run(insertFencedBlock(), "前面文字", 2, 2)).toBe("前面\n```\n代码\n```\n文字");
-  });
-
-  it("selects only the first table header cell", () => {
-    const target = commandTarget("", { anchor: 0 });
-    insertTable()(target as unknown as EditorView);
-    const { from, to } = target.state.selection.main;
-    expect(target.state.sliceDoc(from, to)).toBe("标题");
   });
 
   it("keeps repeated link shortcuts idempotent", () => {

@@ -88,23 +88,22 @@ describe("表格格子", () => {
   const source = "| 名字 | 状态 |\n|---|---|\n| 甲 | ok |\n\n后";
   const cellAt = (parent: HTMLElement, row: number, col: number) =>
     parent.querySelector<HTMLTableCellElement>(`[data-row="${row}"][data-col="${col}"]`)!;
-  const offsetIn = (cell: HTMLElement) => {
-    const range = document.getSelection()!.getRangeAt(0);
-    const before = document.createRange();
-    before.selectNodeContents(cell);
-    before.setEnd(range.startContainer, range.startOffset);
-    return before.toString().length;
-  };
-  const place = (cell: HTMLElement, offset: number) => {
-    const range = document.createRange();
-    range.setStart(cell.firstChild!, offset);
-    range.collapse(true);
-    document.getSelection()!.removeAllRanges();
-    document.getSelection()!.addRange(range);
-  };
+  /** 格子里的子编辑器（editor/cellEditor.ts） */
+  const fieldOf = (cell: HTMLElement) =>
+    EditorView.findFromDOM(cell.querySelector<HTMLElement>(".cm-editor")!)!;
+  const textOf = (cell: HTMLElement) => fieldOf(cell).state.doc.toString();
+  const offsetIn = (cell: HTMLElement) => fieldOf(cell).state.selection.main.head;
+  const place = (cell: HTMLElement, offset: number) =>
+    fieldOf(cell).dispatch({ selection: { anchor: offset } });
+  /** 焦点在这一格里（子编辑器的可编辑区） */
+  const focusedIn = (cell: HTMLElement) => cell.contains(document.activeElement);
   const typeIn = (cell: HTMLElement, text: string) => {
-    cell.textContent = text;
-    cell.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    const field = fieldOf(cell);
+    field.dispatch({
+      changes: { from: 0, to: field.state.doc.length, insert: text },
+      selection: { anchor: text.length },
+      userEvent: "input.type",
+    });
   };
 
   it("格子里正在编辑时别人改了同一张表：不丢焦点，光标按改动挪", async () => {
@@ -124,17 +123,17 @@ describe("表格格子", () => {
     await scheduler.advance(20);
     expect(a.view.state.doc.line(3).text).toBe("| 甲乙丙 | 完成 |");
     expect(cell.classList.contains("is-editing")).toBe(true);
-    expect(document.activeElement).toBe(cell);
-    expect(cell.textContent).toBe("甲乙丙");
+    expect(focusedIn(cell)).toBe(true);
+    expect(textOf(cell)).toBe("甲乙丙");
     expect(offsetIn(cell)).toBe(1);
 
     // 访客在这一格的最前面加了字：光标跟着往后挪一格，还在「甲」后面
     const at = b.view.state.doc.toString().indexOf("甲乙丙");
     b.view.dispatch({ changes: { from: at, insert: "零" }, userEvent: "input.type" });
     await scheduler.advance(20);
-    expect(cell.textContent).toBe("零甲乙丙");
+    expect(textOf(cell)).toBe("零甲乙丙");
     expect(offsetIn(cell)).toBe(2);
-    expect(document.activeElement).toBe(cell);
+    expect(focusedIn(cell)).toBe(true);
   });
 
   it("格子里打一个字只发这一个字：别人同时在这格里打的字不会被整格覆盖", async () => {
@@ -162,7 +161,7 @@ describe("表格格子", () => {
     const b = mount(guest);
     const cell = cellAt(a.parent, 2, 0);
     cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
-    expect(cell.textContent).toBe("乙");
+    expect(textOf(cell)).toBe("乙");
     place(cell, 1);
 
     // 访客在「甲」上面插了一行：正在编辑的「乙」挪到第 3 行，还是同一个格子、还在编辑
@@ -171,9 +170,9 @@ describe("表格格子", () => {
     await scheduler.advance(20);
     expect(a.view.state.doc.line(5).text).toBe("| 乙 | 待定 |");
     expect(cellAt(a.parent, 3, 0)).toBe(cell);
-    expect(cell.textContent).toBe("乙");
+    expect(textOf(cell)).toBe("乙");
     expect(cell.classList.contains("is-editing")).toBe(true);
-    expect(document.activeElement).toBe(cell);
+    expect(focusedIn(cell)).toBe(true);
     expect(offsetIn(cell)).toBe(1);
     expect(cellAt(a.parent, 1, 0).textContent).toBe("丙");
     expect(cellAt(a.parent, 2, 0).textContent).toBe("甲");
@@ -188,8 +187,8 @@ describe("表格格子", () => {
     b.view.dispatch({ changes: { from: line.from, to: line.to + 1 }, userEvent: "delete" });
     await scheduler.advance(20);
     expect(cellAt(a.parent, 2, 0)).toBe(cell);
-    expect(cell.textContent).toBe("乙二");
-    expect(document.activeElement).toBe(cell);
+    expect(textOf(cell)).toBe("乙二");
+    expect(focusedIn(cell)).toBe(true);
     expect(cellAt(a.parent, 1, 0).textContent).toBe("甲");
   });
 
@@ -199,7 +198,7 @@ describe("表格格子", () => {
     const b = mount(guest);
     const cell = cellAt(a.parent, 1, 1);
     cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
-    expect(cell.textContent).toBe("ok");
+    expect(textOf(cell)).toBe("ok");
     // 访客把表改成三列：最前面加了一列「序号」
     const doc = b.view.state.doc;
     b.view.dispatch({
@@ -213,9 +212,52 @@ describe("表格格子", () => {
     await scheduler.advance(20);
     expect(a.view.state.doc.line(3).text).toBe("| 1 | 甲 | ok |");
     expect(cellAt(a.parent, 1, 2)).toBe(cell);
-    expect(cell.textContent).toBe("ok");
-    expect(document.activeElement).toBe(cell);
+    expect(textOf(cell)).toBe("ok");
+    expect(focusedIn(cell)).toBe(true);
     expect(cellAt(a.parent, 1, 0).textContent).toBe("1");
+  });
+
+  // 格子里的子编辑器（editor/cellEditor.ts）组字时不写回正文：拼音不发给别人；
+  // 别人这时改了同一格也先不跟（免得打断输入法），组完字两边的改动合到一起
+  it("格子里组字：拼音不进正文；别人同时改了这一格，组完字两边的字都在", async () => {
+    const { scheduler, host, guest } = room(source);
+    const a = mount(host);
+    const b = mount(guest);
+    const cell = cellAt(a.parent, 1, 0);
+    cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    const field = fieldOf(cell);
+    field.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    expect(field.compositionStarted).toBe(true);
+    // 输入法往「甲」后面写拼音
+    field.dispatch({
+      changes: { from: 1, insert: "ni" },
+      selection: { anchor: 3 },
+      userEvent: "input.type.compose",
+    });
+    await scheduler.advance(20);
+    expect(a.view.state.doc.line(3).text).toBe("| 甲 | ok |");
+    expect(b.view.state.doc.line(3).text).toBe("| 甲 | ok |");
+
+    // 访客这时在这一格最前面打了字：正文里有了，格子里先不动
+    const at = b.view.state.doc.toString().indexOf("甲");
+    b.view.dispatch({ changes: { from: at, insert: "零" }, userEvent: "input.type" });
+    await scheduler.advance(20);
+    expect(a.view.state.doc.line(3).text).toBe("| 零甲 | ok |");
+    expect(textOf(cell)).toBe("甲ni");
+
+    // 上屏，组字结束：两边的字都在，光标还在刚打的字后面
+    field.dispatch({
+      changes: { from: 1, to: 3, insert: "你" },
+      selection: { anchor: 2 },
+      userEvent: "input.type.compose",
+    });
+    field.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await scheduler.advance(20);
+    expect(a.view.state.doc.line(3).text).toBe("| 零甲你 | ok |");
+    expect(b.view.state.doc.line(3).text).toBe("| 零甲你 | ok |");
+    expect(textOf(cell)).toBe("零甲你");
+    expect(offsetIn(cell)).toBe(3);
   });
 });
 

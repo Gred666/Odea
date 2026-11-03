@@ -12,7 +12,10 @@ P10.4 团队仓库（git 管持久、会话管实时，共享仓库退役、文�
 `标签页与分屏.md`（P12：只有笔记有标签，标签栏在最上面那条拖动区里；P12.1 标签页、P12.2 分屏（只左右分、最多三栏、同一篇开两处互相转发）做完了，§11、§15 是实现记录；
 P12.3 弹出窗口（`window.open` 的子窗口和主窗口同一个 JS 环境，窗格 portal 进去）§16 设计、§17 实现记录；
 §18 标签栏显示着时「路径 / 标题」出在它底下一行 ——
-窗格里的东西别写死全局 `document` / `window`，用 `usePaneWindow` / `docOf` / `winOf`）。
+窗格里的东西别写死全局 `document` / `window`，用 `usePaneWindow` / `docOf` / `winOf`）、
+`表格.md`（P13：表格编辑重做、合并单元格写成 GFM 里的 `<` / `^`；P13.1–P13.4 做完了，§11、§12 是实现记录：
+格子里是一个子 CodeMirror（`cellEditor.ts`，组字期间不写回、组完和别人的改动合到一起），HTML 表格也能改（`htmlTable.ts`）；
+格子里的组字用 `scripts/perf/table-ime.mjs` 在真 Chrome 里验）。
 改动之前先看相关的那几节，那里的规矩都是实测踩出来的。
 
 - 回复、注释、文档一律用中文
@@ -74,7 +77,7 @@ node scripts/perf/fade-frames.mjs http://localhost:1420/ image
 修之后一路收敛，117ms 起和终帧完全一致。要查别的控件，在脚本的 `SCENES` 里加一个场景，
 第二个参数换成它的名字（标题的层级提示和收起箭头是 `heading`，右侧目录树的收起箭头是 `outline`，
 协作时别人的名字标签是 `remote`，开在协作实验台 `/?lab=collab` 里；文件列表里文件夹那一行是 `folder`，
-置顶那一行是 `pinned`）。
+置顶那一行是 `pinned`；表格的行抓手是 `table`）。
 
 验证的坑（2026-10-29）：
 

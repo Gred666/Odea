@@ -1,3 +1,5 @@
+import type { HtmlTableLayout } from "./htmlTable";
+
 export type TableAlignment = "left" | "center" | "right" | null;
 
 /** 一段源码在表格源码里的起止（相对传给解析函数的那段源码的开头） */
@@ -26,6 +28,8 @@ export interface MarkdownTableModel {
   rows: string[][];
   alignments: TableAlignment[];
   layout?: TableLayout;
+  /** HTML 表格的标签、属性、行组（htmlTable.ts），写回时要 */
+  html?: HtmlTableLayout;
 }
 
 interface RawLine {
@@ -33,13 +37,21 @@ interface RawLine {
   from: number;
 }
 
-/** 按行切开，记下每行的起点；两头的空行去掉（和以前的 trim() 一样） */
+/**
+ * 续行前面的缩进和引用符号：引用里的表格每一行都以 `> ` 开头（第一行的在表格源码前面，
+ * 不在这里）。表格行本身不可能以 `>` 开头 —— 那样就是另起一个引用，不在表格里了
+ */
+const LINE_PREFIX_RE = /^[ \t]*(?:>[ \t]?)*[ \t]*/;
+
+/** 按行切开，记下每行（去掉缩进、引用符号之后）的起点；两头的空行去掉（和以前的 trim() 一样） */
 function sourceLines(source: string): RawLine[] {
   const lines: RawLine[] = [];
   let from = 0;
-  for (const text of source.split("\n")) {
-    lines.push({ text: text.endsWith("\r") ? text.slice(0, -1) : text, from });
-    from += text.length + 1;
+  for (const raw of source.split("\n")) {
+    const text = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    const prefix = LINE_PREFIX_RE.exec(text)![0].length;
+    lines.push({ text: text.slice(prefix), from: from + prefix });
+    from += raw.length + 1;
   }
   while (lines.length && !lines[0]!.text.trim()) lines.shift();
   while (lines.length && !lines[lines.length - 1]!.text.trim()) lines.pop();
@@ -99,7 +111,8 @@ export function numericColumns(table: MarkdownTableModel): boolean[] {
     let numbers = 0;
     for (const row of table.rows) {
       const value = row[index]?.trim() ?? "";
-      if (!value) continue;
+      // 空格子、合并记号（被并掉的格子）不算
+      if (!value || value === "<" || value === "^") continue;
       if (!NUMERIC_CELL_RE.test(value)) return false;
       numbers += 1;
     }
@@ -253,6 +266,8 @@ export function parseDelimitedTable(
  */
 export function gfmCellSource(text: string): string {
   const flat = text.replace(/\r?\n/g, "<br>").trim();
+  // 整格只有 `<`、`^` 是合并记号（tableGrid.ts）：真要写这个字，转义成 `\<`、`\^`
+  if (flat === "<" || flat === "^") return `\\${flat}`;
   let out = "";
   for (let i = 0; i < flat.length; i += 1) {
     const char = flat[i]!;
@@ -270,14 +285,14 @@ export function csvCellSource(value: string, delimiter: "," | "\t"): string {
   return needsQuotes ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
-/** 表格源码的三种写法：GFM 表格、```csv、```tsv */
-export type TableFormat = "markdown" | "csv" | "tsv";
+/** 表格源码的四种写法：GFM 表格、```csv、```tsv、HTML 的 <table>（htmlTable.ts） */
+export type TableFormat = "markdown" | "csv" | "tsv" | "html";
 
 export const delimiterOf = (format: "csv" | "tsv"): "," | "\t" => (format === "csv" ? "," : "\t");
 
 /** 一行空格子：GFM 是 `|   |   |`，CSV 是 `,,`（一列的 CSV 写成 `""`，空行会被跳过） */
 export function emptyRowSource(columns: number, format: TableFormat): string {
-  if (format === "markdown") return `|${"   |".repeat(columns)}`;
+  if (format === "markdown" || format === "html") return `|${"   |".repeat(columns)}`;
   return columns > 1 ? delimiterOf(format).repeat(columns - 1) : '""';
 }
 

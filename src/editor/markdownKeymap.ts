@@ -8,12 +8,12 @@ import {
   indentListItem,
   insertFencedBlock,
   insertLink,
-  insertTable,
   listItemHome,
   setHeading,
   toggleLinePrefix,
   wrapMarkdown,
 } from "./markdownCommands";
+import { insertEmptyTable } from "./tableWidget";
 
 /**
  * 与 Typora 对齐的编辑快捷键；文件/窗口命令由应用壳层负责。
@@ -58,7 +58,8 @@ export const markdownKeymap: readonly KeyBinding[] = [
   indentWithTab,
   { key: "Home", run: listItemHome(false), shift: listItemHome(true) },
   { mac: "Mod-ArrowLeft", run: listItemHome(false), shift: listItemHome(true) },
-  { key: "Mod-t", mac: "Alt-Mod-t", run: insertTable() },
+  // 插一张渲染好的空表，光标在第一格（tableWidget.ts）
+  { key: "Mod-t", mac: "Alt-Mod-t", run: (view) => insertEmptyTable(view) },
   // 收起 / 展开光标所在的这一节（headingFold.ts）。Shift-Mod-[ / ] 已经是列表（和 Typora 一样），
   // 所以没用 CodeMirror 自带的 foldKeymap
   { key: "Mod-Alt-[", run: foldSectionAtCursor },

@@ -250,7 +250,15 @@ describe("Typora DOM decorations", () => {
     ]);
     expect(table!.querySelectorAll("tbody tr")).toHaveLength(1);
 
-    table!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    // 点到表格的缝、外框不再整张退回源码（docs/表格.md §2）；源码从右键菜单进
+    table!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    expect(parent.querySelector(".cm-odea-table-widget")).not.toBeNull();
+    table!
+      .querySelector("td")!
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    [...document.querySelectorAll<HTMLButtonElement>(".cm-odea-table-menu button")]
+      .find((button) => button.textContent === "编辑源码")!
+      .click();
     expect(parent.querySelector(".cm-odea-table-widget")).toBeNull();
     expect(parent.querySelector(".cm-content")?.textContent).toContain("| 左 | 右 |");
   });

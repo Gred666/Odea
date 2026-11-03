@@ -2174,11 +2174,29 @@ body.odea-dragging .odea-row-actions {
 }
 /* 块级 widget 的间距一律用外层容器的 padding，绝不能用 margin ——
    CodeMirror 用 getBoundingClientRect()（边框盒）测量 widget 高度，
-   margin 不在边框盒里，会让高度图比真实布局短，进而导致点击定位到错误的行。 */
+   margin 不在边框盒里，会让高度图比真实布局短，进而导致点击定位到错误的行。
+   抓手、「+」、合并胶囊、选区的隐藏输入框都绝对定位浮在它上面，不占高度 */
 .odea-editor .cm-odea-table-block {
+  position: relative;
   /* 和表格同一个字号：上下留白 0.9em 按它算（13.5px）。表格比正文小 2px，见 docs/排版规范.md §5 */
   font-size: 15px;
   padding: 0.9em 0;
+}
+/* 行抓手在表格左边外面、「+」在右边外面：鼠标从表格移过去的路上不能先「离开」表格
+   （离开就收起，抓手永远够不着）。左右各伸出一截看不见的感应区，算在表格里 */
+.odea-editor .cm-odea-table-block::before,
+.odea-editor .cm-odea-table-block::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+}
+.odea-editor .cm-odea-table-block::before {
+  right: 100%;
+}
+.odea-editor .cm-odea-table-block::after {
+  left: 100%;
 }
 /* 表格的样子：一张圆角卡片，里面只有细细的横向分隔、极淡的竖向分隔；
    表头是一条浅底上的小号灰字，不和内容抢；数字列右对齐、等宽数字。
@@ -2186,6 +2204,7 @@ body.odea-dragging .odea-row-actions {
 .odea-editor .cm-odea-table-frame {
   --table-rule: color-mix(in srgb, var(--color-line-strong) 70%, var(--color-canvas));
   --table-head: color-mix(in srgb, var(--color-panel) 55%, var(--color-rail));
+  --table-selected: color-mix(in srgb, var(--color-accent) 9%, var(--color-canvas));
   overflow: hidden;
   border: 1px solid var(--color-line-strong);
   border-radius: 10px;
@@ -2205,6 +2224,10 @@ body.odea-dragging .odea-row-actions {
   scrollbar-width: thin;
   scrollbar-color: var(--color-line-strong) transparent;
 }
+/* 右边还有内容：卡片右边缘一截渐隐，滑到头就没有（docs/表格.md §10.4）。随滚动直接换，不做过渡 */
+.odea-editor .cm-odea-table-frame.is-overflowing:not(.at-end) .cm-odea-table-scroll {
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
 .odea-editor .cm-odea-table-widget {
   width: 100%;
   margin: 0;
@@ -2213,16 +2236,19 @@ body.odea-dragging .odea-row-actions {
   font-size: 15px;
   line-height: 1.6;
 }
-.odea-editor .cm-odea-table-widget th,
-.odea-editor .cm-odea-table-widget td {
+/* 合并的格子（rowspan / colspan）不一定是一行的第一个、最后一个：分隔线、首列加重
+   按 tableWidget.ts 标的类（is-col0、at-bottom）画，不按 :first-child、:last-child */
+.odea-editor .cm-odea-table-widget :is(th, td) {
+  position: relative;
   min-width: 72px;
   border-bottom: 1px solid var(--table-rule);
   padding: 9px 14px;
   color: var(--color-body);
   vertical-align: top;
+  cursor: text;
   transition: background-color var(--duration-fast) var(--ease-out-quint);
 }
-.odea-editor .cm-odea-table-widget :is(th, td) + :is(th, td) {
+.odea-editor .cm-odea-table-widget :is(th, td):not(.is-col0) {
   border-left: 1px solid color-mix(in srgb, var(--table-rule) 65%, transparent);
 }
 .odea-editor .cm-odea-table-widget th {
@@ -2236,11 +2262,11 @@ body.odea-dragging .odea-row-actions {
   letter-spacing: 0.03em;
   line-height: 1.5;
 }
-.odea-editor .cm-odea-table-widget tbody tr:last-child td {
+.odea-editor .cm-odea-table-widget td.at-bottom {
   border-bottom: 0;
 }
 /* 第一列多半是「这一行是什么」：字色重一档 */
-.odea-editor .cm-odea-table-widget td:first-child {
+.odea-editor .cm-odea-table-widget td.is-col0 {
   color: var(--color-ink);
 }
 .odea-editor .cm-odea-table-widget tbody tr:hover td {
@@ -2252,6 +2278,20 @@ body.odea-dragging .odea-row-actions {
 }
 .odea-editor .cm-odea-table-widget .cm-odea-code {
   padding: 0 4px;
+}
+/* 表格比卡片宽：第一列钉住，往右滑也知道每一行是什么；滑开以后右边一道分隔线。
+   只在真的比卡片宽时钉（不宽的表不多出图层）。钉住的格子要有不透明的底 */
+.odea-editor .cm-odea-table-frame.is-overflowing .cm-odea-table-widget .is-col0 {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--color-canvas);
+}
+.odea-editor .cm-odea-table-frame.is-overflowing .cm-odea-table-widget th.is-col0 {
+  background: var(--table-head);
+}
+.odea-editor .cm-odea-table-frame.is-scrolled .cm-odea-table-widget .is-col0 {
+  box-shadow: inset -1px 0 0 var(--color-line-strong);
 }
 /* CSV / TSV 顶上的标签栏：和代码块封口一个做法 —— 格式名、行列数、复制 */
 .odea-editor .cm-odea-table-bar {
@@ -2265,6 +2305,7 @@ body.odea-dragging .odea-row-actions {
   font-family: var(--font-sans);
   font-size: 12px;
   line-height: 1;
+  cursor: default;
 }
 .odea-editor .cm-odea-table-format {
   color: var(--color-muted);
@@ -2281,151 +2322,401 @@ body.odea-dragging .odea-row-actions {
 .odea-editor .cm-odea-table-bar:hover .cm-odea-code-copy {
   opacity: 1;
 }
-/* ---------- 表格里直接编辑（editor/tableWidget.ts）----------
-   点进的格子露出源码：白底 + 一圈主色内描边，系统光标用主色（正文的光标是自己画的，
-   .cm-content 把 caret-color 设成了透明，这里要还回来）。 */
+/* 有标签栏时表头不再另铺一层底色，两条灰带叠在一起太重 */
+.odea-editor .cm-odea-table-frame:is(.is-csv, .is-tsv) .cm-odea-table-widget th {
+  background: transparent;
+}
+.odea-editor
+  .cm-odea-table-frame.is-overflowing:is(.is-csv, .is-tsv)
+  .cm-odea-table-widget
+  th.is-col0 {
+  background: var(--color-canvas);
+}
+/* HTML 表格的 <caption>：表格上面一行小字（改它回源码） */
+.odea-editor .cm-odea-table-caption {
+  border-bottom: 1px solid var(--color-line-strong);
+  padding: 7px 14px;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.odea-editor .cm-odea-table-caption[hidden] {
+  display: none;
+}
+
+/* ---------- 表格里直接编辑、选格子（editor/tableWidget.ts，docs/表格.md §6）----------
+   进了表格（.is-active）列宽锁住，行悬停高亮停掉，免得和编辑中的格子、选区抢眼。
+   编辑态不换字号、字重（以前表头一编辑从 13px / 600 换成 15px / 500，整张表往下跳 3px）。 */
+.odea-editor .cm-odea-table-block.is-active .cm-odea-table-widget tbody tr:hover td {
+  background: transparent;
+}
+/* 点进的格子换成子编辑器、露出光标碰到的源码：白底 + 一圈主色描边。光标是子编辑器自己画的
+   （和正文一样，见下面 .cm-odea-cell-editor） */
 .odea-editor .cm-odea-table-widget :is(td, th).is-editing {
-  position: relative;
-  /* 格子是方的：全局 :focus-visible 给的 6px 圆角（编辑中的格子是 contenteditable，一聚焦就命中）
-     让四个角缺一块、露出表头的灰底 */
+  /* 格子是方的：别让全局 :focus-visible 的 6px 圆角落到格子上，四个角缺一块、露出表头的灰底 */
   border-radius: 0;
   background: var(--color-canvas);
   color: var(--color-ink);
-  caret-color: var(--color-accent);
   outline: none;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* 选中的格子铺一层浅主色，选区外圈 2px 主色框：每一格只画自己贴着选区边的那几条边（sel-t / -r / -b / -l），
+   拼起来是一个框。编辑中的格子四条边都画 */
+.odea-editor .cm-odea-table-block.is-active .cm-odea-table-widget :is(td, th).is-selected {
+  background: var(--table-selected);
+}
+.odea-editor .cm-odea-table-widget :is(td, th):is(.is-editing, .is-selected)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 0 solid var(--color-accent);
+  pointer-events: none;
 }
 /* 描边用 border 画在盖满格子的一层上，不用 inset box-shadow：border 的粗细浏览器取整到物理像素，
    box-shadow 不取整。以前 1.5px 的阴影在 1 倍屏上是一排实色 + 一排半透明，1.25 倍、1.5 倍也各有
    半截淡的 —— 用户说的「边框没显示完颜色，一般是边缘」（2026-10-29，真实缩放比的无头 Chrome
    逐像素看过：1 / 1.25 / 1.5 / 1.75 倍都是整排实色） */
 .odea-editor .cm-odea-table-widget :is(td, th).is-editing::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border: 2px solid var(--color-accent);
-  pointer-events: none;
+  border-width: 2px;
+}
+.odea-editor .cm-odea-table-widget :is(td, th).sel-t::after {
+  border-top-width: 2px;
+}
+.odea-editor .cm-odea-table-widget :is(td, th).sel-r::after {
+  border-right-width: 2px;
+}
+.odea-editor .cm-odea-table-widget :is(td, th).sel-b::after {
+  border-bottom-width: 2px;
+}
+.odea-editor .cm-odea-table-widget :is(td, th).sel-l::after {
+  border-left-width: 2px;
 }
 /* 四个角上的格子：外框是 10px 圆角、overflow: hidden，方的描边到角上被裁掉一截 —— 角缺一块、
    2px 的边贴着圆弧剩 1px（用户 2026-10-29 第二次截图里的「名称」，左上角那一格）。描边跟着外框的
-   内圆角走（10px − 1px 边框）。CSV / TSV 上面是标签栏，表头不贴着上面两个角 */
-.odea-editor
-  .cm-odea-table-frame.is-markdown
-  thead
-  tr:first-child
-  > :first-child.is-editing::after {
+   内圆角走（10px − 1px 边框）。哪一格占着角由 tableWidget.ts 标（合并块也算）；CSV / TSV 上面是
+   标签栏，表头不贴着上面两个角 */
+.odea-editor .cm-odea-table-frame:is(.is-markdown, .is-html:not(.has-caption)) .at-tl::after {
   border-top-left-radius: 9px;
 }
-.odea-editor .cm-odea-table-frame.is-markdown thead tr:first-child > :last-child.is-editing::after {
+.odea-editor .cm-odea-table-frame:is(.is-markdown, .is-html:not(.has-caption)) .at-tr::after {
   border-top-right-radius: 9px;
 }
-.odea-editor .cm-odea-table-widget tbody tr:last-child > :first-child.is-editing::after {
+.odea-editor .cm-odea-table-widget .at-bl::after {
   border-bottom-left-radius: 9px;
 }
-.odea-editor .cm-odea-table-widget tbody tr:last-child > :last-child.is-editing::after {
+.odea-editor .cm-odea-table-widget .at-br::after {
   border-bottom-right-radius: 9px;
 }
-.odea-editor .cm-odea-table-widget th.is-editing {
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: 0;
+/* 格子里的子编辑器（editor/cellEditor.ts）：和格子里画出来的字一个样子 —— 字号、字重、行高、对齐
+   跟着格子（表头 13px / 600）。正文 .cm-editor / .cm-content 的字号、行高、最小高度、底部留白是给正文的，
+   这里清掉。光标、选区和正文一样是自己画的（smoothCaret、selectionLayer）：原生选区也藏掉 ——
+   上面「自己获得焦点的可编辑块用原生选区」那一条会命中它，两层叠在一起 */
+.odea-editor .cm-odea-table-widget .cm-odea-cell-editor {
+  min-height: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
 }
-/* 编辑时整张表的行悬停高亮先停掉，免得和正在编辑的格子抢眼 */
-.odea-editor .cm-odea-table-block.is-editing .cm-odea-table-widget tbody tr:hover td {
+.odea-editor .cm-odea-table-widget .cm-odea-cell-editor .cm-scroller {
+  line-height: inherit;
+}
+.odea-editor .cm-odea-table-widget .cm-odea-cell-editor .cm-content {
+  min-height: 0;
+  padding: 0;
+  text-align: inherit;
+}
+.odea-editor .cm-odea-table-widget .cm-odea-cell-editor .cm-content::selection,
+.odea-editor .cm-odea-table-widget .cm-odea-cell-editor .cm-content ::selection {
   background: transparent;
 }
-.odea-editor .cm-odea-table-block.is-editing .cm-odea-table-widget tbody tr:hover td.is-editing {
-  background: var(--color-canvas);
+/* 拖着选格子：别顺手选中一片字 */
+.odea-editor .cm-odea-table-block.is-selecting .cm-odea-table-widget,
+.odea-editor .cm-odea-table-block.is-dragging .cm-odea-table-widget {
+  user-select: none;
+}
+/* 拖着抓手换位置：被拖的那几行 / 列变淡，落点画一条主色线（.cm-odea-table-line）；行本身不跟着鼠标走 */
+.odea-editor .cm-odea-table-widget :is(td, th).is-dragged {
+  opacity: 0.45;
+}
+.odea-editor .cm-odea-table-block.is-dragging,
+.odea-editor .cm-odea-table-block.is-dragging * {
+  cursor: grabbing !important;
+}
+.odea-editor .cm-odea-table-block.is-drop-blocked,
+.odea-editor .cm-odea-table-block.is-drop-blocked * {
+  cursor: not-allowed !important;
 }
 
-/* 编辑时浮在表格右上角的小工具栏：行｜列｜对齐｜源码，每组之间一道细竖线。
-   绝对定位，不占高度（CodeMirror 量替身高度不受影响）；压在上一行的下沿上，和 Typora 一样。
-   换格子时表格一直是 is-editing，入场动画只在第一次点进表格时放一次 */
-.odea-editor .cm-odea-table-block {
-  position: relative;
-}
-.odea-editor .cm-odea-table-tools {
+/* 浮在表格上的小控件：行 / 列抓手、下边和右边的「+」、两行（列）之间的「+」、合并胶囊。
+   CLAUDE.md「动效：先对齐再动」：只淡 opacity；一直待在自己的图层上（will-change），
+   每次淡之前 tableWidget.ts 对齐到整物理像素。整张表各只有一个，跟着鼠标换位置 */
+.odea-editor
+  :is(
+    .cm-odea-table-grip,
+    .cm-odea-table-add,
+    .cm-odea-table-insert,
+    .cm-odea-table-line,
+    .cm-odea-table-pill
+  ) {
   position: absolute;
-  z-index: 5;
-  top: calc(0.9em - 36px);
-  right: 0;
-  display: none;
-  align-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-out-quint), background-color
+    var(--duration-fast) var(--ease-out-quint), color var(--duration-fast) var(--ease-out-quint);
+  will-change: opacity;
+}
+.odea-editor
+  :is(
+    .cm-odea-table-grip,
+    .cm-odea-table-add,
+    .cm-odea-table-insert,
+    .cm-odea-table-pill
+  ).is-shown {
+  opacity: 1;
+  pointer-events: auto;
+}
+.odea-editor .cm-odea-table-line.is-shown {
+  opacity: 1;
+}
+.odea-editor .cm-odea-table-grip {
+  z-index: 6;
+  display: grid;
+  place-items: center;
   border: 1px solid var(--color-line-strong);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--color-canvas);
-  padding: 2px;
-  box-shadow: var(--shadow-float);
-  font-family: var(--font-sans);
-  cursor: default;
+  padding: 0;
+  color: var(--color-faint);
+  cursor: grab;
 }
-.odea-editor .cm-odea-table-block.is-editing .cm-odea-table-tools {
-  display: flex;
-  animation: odea-search-in var(--duration-fast) var(--ease-out-quint) both;
+.odea-editor .cm-odea-table-grip.is-row {
+  width: 16px;
+  height: 22px;
 }
-.odea-editor .cm-odea-table-tools-group {
-  display: flex;
-  gap: 1px;
+.odea-editor .cm-odea-table-grip.is-col {
+  width: 22px;
+  height: 16px;
 }
-.odea-editor .cm-odea-table-tools-group + .cm-odea-table-tools-group {
-  margin-left: 3px;
-  border-left: 1px solid var(--color-line-strong);
-  padding-left: 3px;
+.odea-editor .cm-odea-table-grip svg {
+  width: 14px;
+  height: 14px;
 }
-.odea-editor .cm-odea-table-tools button {
-  display: inline-grid;
-  width: 26px;
-  height: 26px;
+.odea-editor .cm-odea-table-grip:hover {
+  background: var(--color-raised);
+  color: var(--color-ink);
+}
+/* 下边、右边的「+」：一条细带，悬停时铺一层浅灰 */
+.odea-editor .cm-odea-table-add {
+  z-index: 4;
+  display: grid;
   place-items: center;
   border: 0;
   border-radius: 6px;
   background: transparent;
   padding: 0;
-  color: var(--color-muted);
+  color: var(--color-faint);
   cursor: pointer;
-  transition: background-color var(--duration-fast) var(--ease-out-quint), color
-    var(--duration-fast) var(--ease-out-quint), transform var(--duration-instant)
-    var(--ease-out-quint);
 }
-.odea-editor .cm-odea-table-tools button svg {
-  width: 15px;
-  height: 15px;
+.odea-editor .cm-odea-table-add.is-row {
+  height: 16px;
 }
-.odea-editor .cm-odea-table-tools button:hover:not(:disabled) {
+.odea-editor .cm-odea-table-add.is-col {
+  width: 16px;
+}
+.odea-editor .cm-odea-table-add svg {
+  width: 13px;
+  height: 13px;
+}
+.odea-editor .cm-odea-table-add:hover {
+  background: var(--color-rail);
+  color: var(--color-body);
+}
+/* 两行（列）之间的「+」：主色小圆点，和它指着的那条分界线一起出 */
+.odea-editor .cm-odea-table-insert {
+  z-index: 7;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-accent);
+  padding: 0;
+  color: #fff;
+  cursor: pointer;
+}
+.odea-editor .cm-odea-table-insert svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.6;
+}
+.odea-editor .cm-odea-table-line {
+  z-index: 5;
+  border-radius: 1px;
+  background: var(--color-accent);
+}
+/* 选了两格以上：选区右上角一个「合并单元格」，选的是合并块：「拆分单元格」 */
+.odea-editor .cm-odea-table-pill {
+  z-index: 7;
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 999px;
+  background: var(--color-canvas);
+  padding: 0 10px 0 8px;
+  box-shadow: var(--shadow-float);
+  color: var(--color-accent);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.odea-editor .cm-odea-table-pill svg {
+  width: 14px;
+  height: 14px;
+}
+.odea-editor .cm-odea-table-pill:hover {
+  background: var(--color-accent-wash);
+}
+/* 选格子时接键盘、剪贴板、输入法的输入框：平时看不见，盖在「打字即改」那一格上；
+   组字一开始就长成正在编辑的格子的样子（docs/表格.md §10.5）。内边距按 2px 描边扣掉 */
+.odea-editor .cm-odea-table-sink {
+  position: absolute;
+  z-index: 3;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 9px 14px;
+  overflow: hidden;
+  resize: none;
+  color: transparent;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  caret-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+  outline: none;
+}
+.odea-editor .cm-odea-table-sink.is-composing {
+  border: 2px solid var(--color-accent);
+  background: var(--color-canvas);
+  padding: 7px 12px;
+  color: var(--color-ink);
+  caret-color: var(--color-accent);
+  opacity: 1;
+}
+.odea-editor .cm-odea-table-sink.is-header.is-composing {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.5;
+}
+
+/* 表格的菜单（editor/tableMenu.ts）：照着 ActionMenu —— 32 高的项、13px 字、14px 图标。
+   挂在 body 上，不在 .odea-editor 里 */
+.cm-odea-table-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 184px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--color-canvas);
+  padding: 4px;
+  box-shadow: var(--shadow-float), 0 0 0 1px var(--color-line-strong);
+  font-family: var(--font-sans);
+  outline: none;
+}
+.cm-odea-table-menu-item,
+.cm-odea-table-menu-segment {
+  border: 0;
+  background: transparent;
+  outline: none;
+  cursor: default;
+  transition: background-color 110ms, color 110ms;
+}
+.cm-odea-table-menu-item {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--color-body);
+  font-size: 13px;
+  text-align: left;
+}
+.cm-odea-table-menu svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.cm-odea-table-menu-text {
+  flex: 1;
+}
+.cm-odea-table-menu-hint {
+  margin-left: 16px;
+  color: var(--color-faint);
+  font-size: 12px;
+}
+.cm-odea-table-menu-item.is-highlighted {
   background: var(--color-raised);
   color: var(--color-ink);
 }
-.odea-editor .cm-odea-table-tools button:active:not(:disabled) {
-  transform: scale(0.92);
-}
-.odea-editor .cm-odea-table-tools button:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.odea-editor
-  .cm-odea-table-tools
-  button:is([data-action="row-delete"], [data-action="col-delete"]):hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+.cm-odea-table-menu-item.is-danger {
   color: var(--color-danger);
 }
-/* 当前列的对齐方式亮着 */
-.odea-editor .cm-odea-table-tools button.is-on {
+.cm-odea-table-menu-item.is-danger.is-highlighted {
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+.cm-odea-table-menu-item[aria-disabled="true"] {
+  opacity: 0.4;
+}
+.cm-odea-table-menu-item[aria-disabled="true"].is-highlighted {
+  background: transparent;
+}
+.cm-odea-table-menu-separator {
+  height: 1px;
+  margin: 4px;
+  background: var(--color-line);
+}
+/* 对齐：一行三个图标按钮，当前的亮着 */
+.cm-odea-table-menu-segments {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 30px;
+}
+.cm-odea-table-menu-label {
+  flex: 1;
+  color: var(--color-body);
+  font-size: 13px;
+}
+.cm-odea-table-menu-segment {
+  display: grid;
+  width: 28px;
+  height: 26px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--color-muted);
+}
+.cm-odea-table-menu-segment.is-highlighted {
+  background: var(--color-raised);
+  color: var(--color-ink);
+}
+.cm-odea-table-menu-segment.is-on {
   background: var(--color-accent-wash);
   color: var(--color-accent);
-}
-.odea-editor .cm-odea-table-tools button.is-on:hover {
-  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
-  color: var(--color-accent);
-}
-/* 格子里的链接、代码在编辑态以外照常显示；非编辑态的格子是 I 形指针（点进去就能改） */
-.odea-editor .cm-odea-table-widget :is(td, th) {
-  cursor: text;
-}
-
-/* 有标签栏时表头不再另铺一层底色，两条灰带叠在一起太重 */
-.odea-editor .cm-odea-table-frame:not(.is-markdown) .cm-odea-table-widget th {
-  background: transparent;
 }
 
 /* ---------- 列表 / 任务 ---------- */

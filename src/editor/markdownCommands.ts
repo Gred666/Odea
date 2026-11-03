@@ -154,12 +154,6 @@ export function insertFencedBlock(): Command {
   };
 }
 
-const TABLE_TEMPLATE = "| 标题 | 标题 |\n| --- | --- |\n| 内容 | 内容 |";
-
-export function insertTable(): Command {
-  return insertTemplate(TABLE_TEMPLATE, TABLE_TEMPLATE.indexOf("标题"), "标题".length);
-}
-
 export function insertLink(image = false): Command {
   return (view) => {
     const { from, to } = view.state.selection.main;
@@ -248,17 +242,6 @@ export function stripMarkdownFormatting(source: string): string {
       .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1")
       .replace(/(?<!_)_([^_\n]+)_(?!_)/g, "$1")
   );
-}
-
-function insertTemplate(text: string, selectionOffset: number, selectionLength: number): Command {
-  return (view) => {
-    const { from, to } = view.state.selection.main;
-    view.dispatch({
-      changes: { from, to, insert: text },
-      selection: { anchor: from + selectionOffset, head: from + selectionOffset + selectionLength },
-    });
-    return true;
-  };
 }
 
 function transformSelectedLines(view: CommandTarget, transform: (line: string) => string): boolean {

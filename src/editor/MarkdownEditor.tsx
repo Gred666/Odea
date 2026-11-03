@@ -11,7 +11,7 @@ import { languages } from "@codemirror/language-data";
 import { closeSearchPanel, search, searchPanelOpen, setSearchQuery } from "@codemirror/search";
 import {
   Annotation,
-  type ChangeSet,
+  ChangeSet,
   Compartment,
   EditorSelection,
   EditorState,
@@ -47,6 +47,7 @@ import {
 } from "./animatedEmoji";
 import { type AttachHooks, attachmentHandlers, watchDesktopFileDrops } from "./attachments";
 import { type CalloutHead, parseCalloutHead } from "./callout";
+import { cellEditorExtensions } from "./cellEditor";
 import { codeHighlight } from "./codeHighlight";
 import { type DebouncedSaver, createDebouncedSaver } from "./debouncedSave";
 import { DiagramWidget } from "./diagram";
@@ -79,6 +80,7 @@ import {
   safeHref,
   safeImageSource,
 } from "./html";
+import { parseHtmlTable } from "./htmlTable";
 import { inlinePlainText } from "./inlineDom";
 import {
   linkTargetAt,
@@ -119,7 +121,8 @@ import {
   wikiIcon,
   wikiItems,
 } from "./suggest";
-import { TableWidget } from "./tableWidget";
+import { tablePasteHandler } from "./tableClipboard";
+import { TableWidget, insertEmptyTable } from "./tableWidget";
 import {
   type DocTemplate,
   type TemplateContext,
@@ -758,6 +761,8 @@ export function MarkdownEditor({
       collabSlot.of(collabRef.current ? collabBinding(collabRef.current) : []),
       readOnlySlot.of(EditorState.readOnly.of(readOnlyRef.current)),
       wikiTitlesSlot.of(knownWikiTitles.of(knownTitlesRef.current)),
+      // 整个剪贴板就是一张表（Excel、网页、从表格里复制的一片）：变成 Markdown 表格
+      tablePasteHandler,
       attachmentHandlers(() => attachRef.current),
       linkClickHandler((title, heading, newTab) => onWikiLinkRef.current?.(title, heading, newTab)),
       EditorView.updateListener.of((update) => {
@@ -1117,7 +1122,11 @@ export function MarkdownEditor({
       const trigger = suggestTrigger(view.state);
       if (!trigger || trigger.kind !== open.kind || trigger.from !== open.from) return;
       if (entry.kind === "wiki") insertWikiLink(view, trigger, entry.item);
-      else if (entry.item.action.type === "emoji") {
+      else if (entry.item.action.type === "table") {
+        // 光标进了表格的第一格，别再把焦点拉回正文
+        insertEmptyTable(view, trigger);
+        return;
+      } else if (entry.item.action.type === "emoji") {
         view.dispatch({ changes: { from: trigger.from, to: trigger.to }, userEvent: "delete" });
         openEmojiPicker(view);
       } else insertSlashItem(view, trigger, entry.item);
@@ -1479,6 +1488,8 @@ const FENCE_LINE_RE = /^\s{0,3}(?:`{3,}|~{3,})/;
 const CLOSING_FENCE_RE = /^\s{0,3}(?:`{3,}|~{3,})\s*$/;
 const SETEXT_UNDERLINE_RE = /^\s{0,3}(?:=+|-+)\s*$/;
 const TOC_RE = /^\s*\[\[?toc\]?\]\s*$/i;
+/** HTML 块开头是一张表：交给 parseHtmlTable 看是不是能编辑的简单表格 */
+const HTML_TABLE_RE = /^\s*<table[\s>]/i;
 const FOOTNOTE_RE = /^\[\^([^\]\s]+)\]$/;
 /** 行首的脚注定义：`[^id]:` 加后面的空白 */
 const FOOTNOTE_DEF_RE = /^\[\^([^\]\s]+)\]:[ \t]*/;
@@ -1798,7 +1809,16 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       if (name === "HTMLBlock") {
         if (!touches(node.from, node.to)) {
           const source = state.sliceDoc(node.from, node.to);
-          foldRange(node.from, node.to, new HtmlBlockWidget(source));
+          // 整块就是一张简单的 <table>：和 GFM 表格一样能点进格子改，写回还是 HTML（htmlTable.ts）
+          const table = HTML_TABLE_RE.test(source)
+            ? parsedTable(`html\u0000${source}`, () => parseHtmlTable(source))
+            : null;
+          const indent = node.from - state.doc.lineAt(node.from).from;
+          foldRange(
+            node.from,
+            node.to,
+            table ? new TableWidget(table, "html", source, indent) : new HtmlBlockWidget(source),
+          );
         }
         return false;
       }
@@ -2952,47 +2972,59 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
   return { decorations: toDecorationSet(ranges), atomic: toDecorationSet(atomicRanges) };
 }
 
-const typoraInlineDecorations = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
-    atomic: DecorationSet;
+/**
+ * 行内装饰层。fresh：刚挂上时替身算不算新出现（正文照常播入场动画；表格格子里的子编辑器不播 ——
+ * 点进格子时格子里的公式、表情是原来就在的，再淡入一次就是「闪一下」）
+ */
+const inlineDecorationsPlugin = (fresh: boolean) =>
+  ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+      atomic: DecorationSet;
 
-    constructor(view: EditorView) {
-      // 刚挂上：替身全都算新出现，照常播入场动画
-      const built = buildInlineDecorations(view, null);
-      this.decorations = built.decorations;
-      this.atomic = built.atomic;
-    }
-
-    update(update: ViewUpdate) {
-      // 视口滚动同样要重算 —— 行内装饰只覆盖看得见的那一段；
-      // 快速滚到还没解析的地方时，后台解析赶上来（语法树换了）也要重算一次。
-      if (
-        update.docChanged ||
-        update.viewportChanged ||
-        revealRanges(update.startState) !== revealRanges(update.state) ||
-        syntaxTree(update.startState) !== syntaxTree(update.state) ||
-        update.startState.field(headingFolds, false) !== update.state.field(headingFolds, false) ||
-        update.startState.facet(imageBaseDir) !== update.state.facet(imageBaseDir) ||
-        update.startState.facet(knownWikiTitles) !== update.state.facet(knownWikiTitles)
-      ) {
-        // 只动了光标 / 视口时 changes 是空的：这时重建出来的替身不再重放入场动画
-        const built = buildInlineDecorations(update.view, update.changes);
+      constructor(view: EditorView) {
+        const built = buildInlineDecorations(
+          view,
+          fresh ? null : ChangeSet.empty(view.state.doc.length),
+        );
         this.decorations = built.decorations;
         this.atomic = built.atomic;
       }
-    }
-  },
-  {
-    decorations: (value) => value.decorations,
-    provide: (plugin) =>
-      EditorView.atomicRanges.of((view) => view.plugin(plugin)?.atomic ?? Decoration.none),
-  },
-);
+
+      update(update: ViewUpdate) {
+        // 视口滚动同样要重算 —— 行内装饰只覆盖看得见的那一段；
+        // 快速滚到还没解析的地方时，后台解析赶上来（语法树换了）也要重算一次。
+        if (
+          update.docChanged ||
+          update.viewportChanged ||
+          revealRanges(update.startState) !== revealRanges(update.state) ||
+          syntaxTree(update.startState) !== syntaxTree(update.state) ||
+          update.startState.field(headingFolds, false) !==
+            update.state.field(headingFolds, false) ||
+          update.startState.facet(imageBaseDir) !== update.state.facet(imageBaseDir) ||
+          update.startState.facet(knownWikiTitles) !== update.state.facet(knownWikiTitles)
+        ) {
+          // 只动了光标 / 视口时 changes 是空的：这时重建出来的替身不再重放入场动画
+          const built = buildInlineDecorations(update.view, update.changes);
+          this.decorations = built.decorations;
+          this.atomic = built.atomic;
+        }
+      }
+    },
+    {
+      decorations: (value) => value.decorations,
+      provide: (plugin) =>
+        EditorView.atomicRanges.of((view) => view.plugin(plugin)?.atomic ?? Decoration.none),
+    },
+  );
+
+const typoraInlineDecorations = inlineDecorationsPlugin(true);
+const cellInlineDecorations = inlineDecorationsPlugin(false);
 
 /**
  * 编辑器要的完整装饰扩展：块级 StateField + 行内 ViewPlugin，外加两层共用的「算数的选区」
- * （reveal.ts）和标题收起的状态（headingFold.ts）。
+ * （reveal.ts）和标题收起的状态（headingFold.ts）。表格格子里的子编辑器（cellEditor.ts）
+ * 从这里拿行内装饰层，双链认得哪些标题、图片的相对路径跟着正文走
  */
 export const typoraDecorations: Extension = [
   revealField,
@@ -3000,6 +3032,12 @@ export const typoraDecorations: Extension = [
   typoraBlockDecorations,
   typoraInlineDecorations,
   longRuns,
+  cellEditorExtensions.of((main) => [
+    revealField,
+    cellInlineDecorations,
+    knownWikiTitles.of(main.facet(knownWikiTitles)),
+    imageBaseDir.of(main.facet(imageBaseDir)),
+  ]),
 ];
 
 /**
