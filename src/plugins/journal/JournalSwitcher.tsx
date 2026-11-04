@@ -1,10 +1,12 @@
 import { useApp } from "@/app/store";
 import { backend } from "@/data/backend";
 import { messageOf, useData } from "@/data/store";
-import type { JournalPage, JournalVault } from "@/data/types";
+import type { PluginVault } from "@/data/types";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, NotebookPen, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useJournal } from "./store";
+import { JOURNAL, type JournalPage, PAGES } from "./types";
 
 /* ============================================================
    日程切换器（docs/协同编辑.md §22.6）：今日TODO、目标、日历那一行日期后面。
@@ -13,9 +15,8 @@ import { useCallback, useEffect, useState } from "react";
    点另一个，那个仓库的窗口提到前面（没开着就打开）、摆在这个窗口的位置和大小上、停在同一页同一天 ——
    一个窗口一个仓库（仓库与启动器.md §4），看着像同一个窗口里换了内容。
    命令面板「切换日程…」、Ctrl+Alt+J 轮着切到下一个（journalSwitchNext）。
+   跳窗口是核心的通用命令（vaultGoto：哪个仓库、哪一页、带什么参数），这里定跳到哪一页、哪一天
    ============================================================ */
-
-const PAGES: JournalPage[] = ["today", "goal", "calendar"];
 
 /** 现在停在日程的哪一页（不在日程里是 null） */
 export function journalPageOf(workspace: string): JournalPage | null {
@@ -23,11 +24,12 @@ export function journalPageOf(workspace: string): JournalPage | null {
 }
 
 /** 跳到 vault 的日程：同一页、同一天 */
-async function switchTo(vault: JournalVault) {
-  const { workspace, selectedDate, todayDate } = useApp.getState();
+async function switchTo(vault: PluginVault) {
+  const { workspace } = useApp.getState();
+  const { selectedDate, todayDate } = useJournal.getState();
   const page = journalPageOf(workspace) ?? "today";
   try {
-    await (await backend()).journalSwitch(
+    await (await backend()).vaultGoto(
       vault.path,
       page,
       page === "calendar" ? selectedDate : todayDate,
@@ -39,7 +41,7 @@ async function switchTo(vault: JournalVault) {
 
 /** 轮到下一个开着日程的仓库（命令面板、Ctrl+Alt+J）。只有这一个就说一声 */
 export async function journalSwitchNext(): Promise<void> {
-  const vaults = await (await backend()).journalVaults();
+  const vaults = await (await backend()).pluginVaults(JOURNAL);
   const at = vaults.findIndex((vault) => vault.current);
   const next = vaults[(at + 1) % Math.max(vaults.length, 1)];
   if (!next || next.current || vaults.length < 2) {
@@ -52,10 +54,10 @@ export async function journalSwitchNext(): Promise<void> {
 }
 
 export function JournalSwitcher() {
-  const [vaults, setVaults] = useState<JournalVault[]>([]);
+  const [vaults, setVaults] = useState<PluginVault[]>([]);
   const refresh = useCallback(() => {
     void backend()
-      .then((api) => api.journalVaults())
+      .then((api) => api.pluginVaults(JOURNAL))
       .then(setVaults)
       .catch(() => setVaults([]));
   }, []);

@@ -1,6 +1,6 @@
 import { backend } from "./backend";
 import { useData } from "./store";
-import type { Attachment, DocumentSaveTarget } from "./types";
+import type { Attachment, DocumentRef } from "./types";
 
 /* ============================================================
    附件：粘贴 / 拖进编辑器的文件存进仓库的「附件」文件夹（Rust 的 Vault::attach），
@@ -10,10 +10,7 @@ import type { Attachment, DocumentSaveTarget } from "./types";
    ============================================================ */
 
 /** 剪贴板 / 浏览器拖放拿到的文件（内容在内存里） */
-export async function attachFiles(
-  target: DocumentSaveTarget,
-  files: File[],
-): Promise<Attachment[]> {
+export async function attachFiles(target: DocumentRef, files: File[]): Promise<Attachment[]> {
   const api = await backend();
   const out: Attachment[] = [];
   for (const file of files) {
@@ -28,10 +25,7 @@ export async function attachFiles(
 }
 
 /** 桌面端从系统拖进窗口的文件（只有路径） */
-export async function attachPaths(
-  target: DocumentSaveTarget,
-  paths: string[],
-): Promise<Attachment[]> {
+export async function attachPaths(target: DocumentRef, paths: string[]): Promise<Attachment[]> {
   const api = await backend();
   const out: Attachment[] = [];
   for (const path of paths) {

@@ -7,6 +7,7 @@ import { ErrorToast, NoticeToast } from "@/components/ErrorToast";
 import { RelayDialog } from "@/components/RelayDialog";
 import { TitleBar } from "@/components/TitleBar";
 import { useCurrentDocument } from "@/data/adapter";
+import { isShared } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { MotionConfig } from "motion/react";
 import { useShallow } from "zustand/react/shallow";
@@ -26,7 +27,7 @@ import { useShallow } from "zustand/react/shallow";
 export function GuestShell() {
   const reduceMotion = useApp((s) => s.reduceMotion);
   const doc = useCurrentDocument();
-  const shared = doc.editor?.target.kind === "shared";
+  const shared = isShared(doc.editor?.target);
   // 进去了的几个做客的会话
   const guests = useCollab(
     useShallow((s) =>
@@ -61,7 +62,7 @@ export function GuestShell() {
         <div className="relative min-w-0 flex-1">
           {shared ? (
             // 共享的那一篇不经这里存（会话自己同步、主持人那边落盘）：给个空的，编辑器才挂得上
-            <DocumentView doc={doc} onToggleTask={noop} onSaveDocument={done} onSaveTitle={done} />
+            <DocumentView doc={doc} onSaveDocument={done} onSaveTitle={done} />
           ) : (
             <Waiting />
           )}
@@ -125,7 +126,6 @@ function GuestSection({ id, fill }: { id: number; fill: boolean }) {
   );
 }
 
-const noop = () => {};
 const done = () => Promise.resolve();
 
 /** 还没进去：正在加入，或者对话框被关了（再点一下打开）；进了文件夹、还没开哪一篇 */

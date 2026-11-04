@@ -1,11 +1,11 @@
 import { openDocument } from "@/app/navigate";
 import { conflictOriginalContent } from "@/data/conflicts";
 import { useData } from "@/data/store";
-import type { DocumentModel } from "@/data/types";
+import { type DocumentModel, NOTE } from "@/data/types";
 import { cn } from "@/lib/cn";
-import { today } from "@/lib/date";
 import { diffLines, diffStats } from "@/lib/lineDiff";
 import { tween } from "@/lib/motion";
+import { documentType } from "@/plugins/registry";
 import { ChevronRight, Copy } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
@@ -19,8 +19,8 @@ import { DiffView } from "./DiffView";
    给四个动作：看两版差在哪、打开原文、用这一版替换原文、删掉这份副本。
    删掉的副本进回收站，撤销提示条照常能撤。
 
-   原文也可以是某一天 / 某个周期的目标（两台设备都改了今日TODO，同步里最常见的冲突）：
-   它们是按需取的，横幅挂上时没取过就去取一次，取回来之前「查看差异」说正在读。
+   原文也可以是插件的一篇（某一天、某个周期的目标：两台设备都改了今日TODO，同步里最常见的冲突）：
+   它们在插件的缓存里、按需取，横幅挂上时取一次，取回来之前「查看差异」说正在读。
    ============================================================ */
 
 export function ConflictBanner({
@@ -31,25 +31,37 @@ export function ConflictBanner({
   const target = conflict.original;
   // 副本就是正在看的这篇，正文一定在；原文是笔记的话打开副本时一起取了（data/adapter.ts）
   const copy = useData((s) => s.bodies[conflict.copyId]);
-  const original = useData((s) => conflictOriginalContent(target, s));
   const resolveConflict = useData((s) => s.resolveConflict);
-  const loadDay = useData((s) => s.loadDay);
-  const loadGoal = useData((s) => s.loadGoal);
   const loadBody = useData((s) => s.loadBody);
 
-  // 原文还没取过（某一天 / 目标是按需取的；笔记的正文也可能被挤掉了）：取一次
-  // （target 每次渲染都是新对象，按里面的值认）
-  const loaded = original !== undefined;
-  const dayId = target.kind === "day" ? target.id : null;
-  const goalHorizon = target.kind === "goal" ? target.horizon : null;
-  const goalStart = target.kind === "goal" ? target.periodStart : null;
-  const noteId = target.kind === "note" ? target.id : null;
+  // 原文是笔记：正文在 store 的 bodies 里（也可能被挤掉了，取一次）
+  const noteId = target.type === NOTE ? target.key : null;
+  const noteOriginal = useData((s) => (noteId ? conflictOriginalContent(target, s) : undefined));
   useEffect(() => {
-    if (loaded) return;
-    if (dayId) void loadDay(dayId, dayId === today());
-    else if (goalHorizon && goalStart) void loadGoal(goalHorizon, goalStart);
-    else if (noteId) void loadBody(noteId);
-  }, [loaded, dayId, goalHorizon, goalStart, noteId, loadDay, loadGoal, loadBody]);
+    if (noteId && noteOriginal === undefined) void loadBody(noteId);
+  }, [noteId, noteOriginal, loadBody]);
+
+  // 原文是插件的一篇：在插件的缓存里，按需取（target 每次渲染都是新对象，按里面的值认）。
+  // 插件的文档存了（typedTick）再读一次
+  const typed = noteId ? null : `${target.type}\n${target.key}`;
+  const typedTick = useData((s) => s.typedTick);
+  const [typedOriginal, setTypedOriginal] = useState<string | undefined>(undefined);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: typedTick 只是重读的信号
+  useEffect(() => {
+    if (!typed) return;
+    const [kind = "", key = ""] = typed.split("\n");
+    const type = documentType(kind);
+    if (!type) return;
+    let alive = true;
+    setTypedOriginal(type.body(key));
+    void type.load(key).then(() => {
+      if (alive) setTypedOriginal(type.body(key));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [typed, typedTick]);
+  const original = noteId ? noteOriginal : typedOriginal;
   const [showDiff, setShowDiff] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -135,7 +147,7 @@ export function ConflictBanner({
                 exit={{ opacity: 0 }}
                 transition={tween.fast}
               >
-                {loaded ? (
+                {original !== undefined ? (
                   <DiffView
                     lines={diff}
                     removedLabel="只在原文里"

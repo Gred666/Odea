@@ -3,11 +3,12 @@ import { errorText } from "@/collab/net";
 import { FIREWALL_FIX } from "@/collab/reach";
 import type { CollabSession } from "@/collab/session";
 import { conflictOriginalTitle } from "@/data/conflicts";
-import { useData } from "@/data/store";
-import { type DocumentModel, type DocumentSaveTarget, goalKey } from "@/data/types";
+import { saveKeyOf, useData } from "@/data/store";
+import { type DocumentModel, type DocumentRef, NOTE, isShared } from "@/data/types";
 import { flushAllEditors, registerBeforeClose } from "@/editor/saveBus";
 import { type Firewall, type TeamPeer, type TeamRelay, commands } from "@/lib/bindings";
 import { isTauri } from "@/lib/tauri";
+import { documentType } from "@/plugins/registry";
 import { create } from "zustand";
 import type { TeamController, TeamDocSession, TeamIO, TeamView } from "./controller";
 import { type TeamNet, tauriTeamNet } from "./net";
@@ -104,11 +105,11 @@ let viewing: { key: string; doc: string } | null = null;
  * 这一篇在团队里的 id（docs/协同编辑.md §22.4）。笔记是属性块里的 id（`note-<id>`）：改名、挪位置都不变，
  * 每台设备上都一样（随 git 走）。属性块里没写 id 的（别的工具建的、扔进来的）退回相对路径 ——
  * 索引给它的 id 只在本机，换台设备就对不上；git 同步的仓库里两边路径一样。
- * 某一天、目标按日期。做客的那篇没有
+ * 插件的文档照插件说的（某一天 `day-2026-11-03`、目标 `goal-week-2026-11-02`，和老版本一字不差）。做客的那篇没有
  */
 export function teamDocId(doc: DocumentModel): string | null {
   const target = doc.editor?.target;
-  if (!target || target.kind === "shared") return null;
+  if (!target || isShared(target)) return null;
   const key = keyOf(target);
   if (viewing?.key === key) return viewing.doc;
   const id = teamIdOf(target, doc.relPath, doc.idInFile ?? false);
@@ -117,18 +118,16 @@ export function teamDocId(doc: DocumentModel): string | null {
 }
 
 function teamIdOf(
-  target: DocumentSaveTarget,
+  target: DocumentRef,
   relPath: string | undefined,
   idInFile: boolean,
 ): string | null {
   const id =
-    target.kind === "note"
+    target.type === NOTE
       ? idInFile
-        ? `note-${target.id}`
+        ? `note-${target.key}`
         : (relPath ?? null)
-      : target.kind === "day"
-        ? `day-${target.id}`
-        : `goal-${target.horizon}-${target.periodStart}`;
+      : (documentType(target.type)?.teamId(target.key) ?? null);
   return id && utf8.encode(id).length <= MAX_DOC_ID ? id : null;
 }
 
@@ -137,7 +136,7 @@ function teamIdOf(
  * 不是团队仓库、算不出 id、借不到是 null（协作照旧自己建一份）
  */
 export async function holdTeamDoc(
-  target: DocumentSaveTarget,
+  target: DocumentRef,
   note: { relPath: string; idInFile: boolean } | undefined,
 ): Promise<{ session: CollabSession; release: () => void } | null> {
   // 编辑器里正开着这一篇：用开着时定下的那个 id（和团队那边的会话对得上）
@@ -160,25 +159,18 @@ export async function holdTeamDoc(
   };
 }
 
-/** 数据层里这一篇现在的正文 */
-async function bodyOf(target: DocumentSaveTarget): Promise<string | undefined> {
-  const data = useData.getState();
-  if (target.kind === "note") return data.loadBody(target.id);
-  if (target.kind === "day") return data.dayDocs.find((day) => day.date === target.id)?.noteMd;
-  return data.goals[goalKey(target.horizon, target.periodStart)]?.contentMd;
+/** 数据层里这一篇现在的正文（插件的文档在插件的缓存里） */
+async function bodyOf(target: DocumentRef): Promise<string | undefined> {
+  if (target.type === NOTE) return useData.getState().loadBody(target.key);
+  return documentType(target.type)?.body(target.key);
 }
 
-function bodyNow(target: DocumentSaveTarget): string | undefined {
-  const data = useData.getState();
-  if (target.kind === "note") return data.bodies[target.id];
-  if (target.kind === "day") return data.dayDocs.find((day) => day.date === target.id)?.noteMd;
-  return data.goals[goalKey(target.horizon, target.periodStart)]?.contentMd;
+function bodyNow(target: DocumentRef): string | undefined {
+  if (target.type === NOTE) return useData.getState().bodies[target.key];
+  return documentType(target.type)?.body(target.key);
 }
 
-const keyOf = (target: DocumentSaveTarget) =>
-  target.kind === "goal"
-    ? `goal:${goalKey(target.horizon, target.periodStart)}`
-    : `${target.kind}:${target.id}`;
+const keyOf = saveKeyOf;
 
 const io: TeamIO = {
   flush: flushAllEditors,

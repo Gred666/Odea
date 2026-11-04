@@ -4,7 +4,7 @@ import { ListColumn, MoreRows, ROW_BATCH, useRowBatch } from "@/components/ListC
 import { SearchInput } from "@/components/SearchInput";
 import { useData } from "@/data/store";
 import { useTextSearch } from "@/data/textSearch";
-import type { NoteSummary } from "@/data/types";
+import { NOTE, type NoteSummary } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { formatSmartCN, toISODate } from "@/lib/date";
 import { animatedEmojiText } from "@/lib/emojiText";
@@ -53,7 +53,7 @@ export function ArchiveList({
   const filtered = useMemo(() => {
     if (!q || !searched) return items;
     const inBody = new Set(
-      searched.result.notes.map((hit) => (hit.target.kind === "note" ? hit.target.id : "")),
+      searched.result.notes.map((hit) => (hit.target.type === NOTE ? hit.target.key : "")),
     );
     return items.filter(
       (n) =>

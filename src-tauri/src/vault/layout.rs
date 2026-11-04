@@ -5,29 +5,28 @@ Odea 建的仓库（新建的、老用户的）：
 
     笔记/秋季项目复盘.md          笔记（笔记/ 下任意深度，以及仓库里其它不认识的位置）
     归档/第一版信息架构草稿.md      归档的笔记
-    日记/2026/2026-09-26.md       某一天（今日TODO 就是今天这一篇）
-    目标/2026/2026-W39.md          周目标；2026-09.md 月目标；2026.md 年目标
+    日记/2026/2026-09-26.md       日程插件的某一天（plugins/journal）
+    目标/2026/2026-W39.md          日程插件的周目标；2026-09.md 月目标；2026.md 年目标
     附件/                          图片等，正文里用相对路径引用
     .odea/                         应用自己的东西（回收站、行为日志、仓库标记）
 
-日记、目标是「日程」这组功能的（docs/仓库与启动器.md §6），归档单独一个开关（只写笔记的人也要
-归档旧资料）。开关和文件夹名记在仓库标记 `.odea/vault.json` 里（Layout）。两样都没开的仓库里
-什么都是笔记；没开日程的仓库文件树的根是整个仓库。
+核心只认笔记。某一天、目标这些是插件声明的文档类型（plugins/mod.rs 的 DocType），插件开着才认；
+归档单独一个开关（只写笔记的人也要归档旧资料）。开关和文件夹名记在仓库标记 `.odea/vault.json` 里
+（Layout）。什么都没开的仓库里什么都是笔记；没开日程这类插件的仓库，文件树的根是整个仓库。
 
 路径在程序里一律是正斜杠分隔的相对路径字符串，落到磁盘时再按组件拼。
 ============================================================ */
 
 use std::path::Path;
+use std::sync::Arc;
 
-use chrono::{Datelike, NaiveDate, Weekday};
 use serde_json::Value;
 
 use crate::error::{AppError, Result};
+use crate::plugins::{self, DocType, Plugin};
 
 pub const NOTES_DIR: &str = "笔记";
 pub const ARCHIVE_DIR: &str = "归档";
-pub const DAYS_DIR: &str = "日记";
-pub const GOALS_DIR: &str = "目标";
 /// 粘贴 / 拖进来的图片，正文里用相对路径引用（见 Vault::attach）
 pub const ATTACHMENTS_DIR: &str = "附件";
 /// 应用自己的文件夹。改名前叫 .ontheway，打开仓库时搬过来（old_name::move_vault_dir）
@@ -39,48 +38,78 @@ pub const VAULT_MARKER: &str = ".odea/vault.json";
 /// 新笔记 / 空标题的占位，和前端 NEW_NOTE_TITLE 一致
 pub const UNTITLED: &str = "无标题笔记";
 
+/// 归档开关在仓库标记 plugins 里的键。P14.1 归档还在核心里，开关照插件的规矩记（docs/插件与跨端.md §6.3）
+pub const ARCHIVE_SWITCH: &str = "odea.archive";
+
 /// 一个 .md 文件按它的位置是哪种文档
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Slot {
     Note { archived: bool },
-    Day(String),
-    Goal { horizon: &'static str, period_start: String },
+    /// 插件声明的一种（DocType）：类型 id 和 key
+    Typed { kind: &'static str, key: String },
 }
 
 /* ---------------- 这个仓库怎么摆（.odea/vault.json） ----------------
    {
      "kind": "logical",
+     "plugins": { "odea.journal": { "enabled": true }, "odea.archive": { "enabled": true } },
      "features": { "journal": true, "archive": true },
      "folders": { "notes": "笔记", "days": "日记", "goals": "目标", "archive": "归档" }
    }
-   - 没有 features 的（P11.2 以前写的标记、老用户的仓库）：日程开着、文件树的根是「笔记」，和以前一样
-   - features 里没写 archive 的（0.4.2 以前写的）：归档跟着日程，和以前一样
-   - 新建的、空文件夹：上面这一份。打开一个已经有笔记的文件夹：`journal: false`，不往别人的文件夹里建
-     日记、目标（boot::prepare）
-   - 日程关着时文件树的根一律是整个仓库：日记、目标这时候都只是普通文件夹；归档关着时「归档」也是
-   - 日程开着、没写日记文件夹的：Obsidian 的日记设置（.obsidian/daily-notes.json）是 YYYY-MM-DD
-     的话用它的文件夹，平放（Obsidian 就是这么建的），原来的日记直接进今日TODO 和日历
+   - plugins（P14.1 起）记开着哪些插件。features 是老版本（0.7.0 及以前）认的那一份：新版本两边一起写
+     （marker_with_switch），读的时候以 plugins 为准。有老开关的那几个两边对不上，说明是老版本后来改了
+     features（团队里有人还没升级），听 features 的
+   - 两样都没有的（P11.2 以前写的标记、老用户的仓库）：照 Odea 的摆法，日程、归档开着、文件树的根是「笔记」
+   - features 里没写 archive 的（0.4.2 以前写的）：归档跟着那时唯一的开关 features.journal
+   - 新建的、空文件夹：上面这一份。打开一个已经有笔记的文件夹：都关着，不往别人的文件夹里建日记、目标
+     （boot::prepare）
+   - 日程这类插件（roots_tree_at_notes）都关着时文件树的根一律是整个仓库：日记、目标这时候都只是普通文件夹；
+     归档关着时「归档」也是
+   - 插件自己的文件夹（folders.days、folders.goals）、别的工具的设置（Obsidian 的日记）由插件读（plugins/journal）
    - `kind: "logical"`（或者有 .odea/tree）是逻辑目录（docs/仓库与启动器.md §7）：树是清单里摆的那一棵，
      和文件在哪无关；新建的笔记平放在 notes（新建的逻辑目录是仓库根）。启动器「新建」建的就是它 */
 
-/// 一个仓库的文件摆法。打开仓库时读一次（Vault::bare），开关日程时换一份（Vault::set_journal）
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 一个仓库的文件摆法。打开仓库时读一次（Vault::bare），开关插件时换一份（Vault::set_plugin）
+#[derive(Clone)]
 pub struct Layout {
     /// 逻辑目录：文件树按 .odea/tree 摆（vault/tree.rs），不按文件夹
     pub logical: bool,
-    /// 开没开日程（今日TODO、目标、日历）
-    pub journal: bool,
     /// 开没开归档：「归档」文件夹里的是归档的笔记，不在树上
     pub archiving: bool,
     /// 文件树的根：「笔记」，或者整个仓库（空串）
     pub notes: String,
-    pub days: String,
-    /// 新的某一天按年分文件夹（日记/2026/2026-10-20.md）；Obsidian 的日记是平放的
-    pub days_by_year: bool,
-    pub goals: String,
     pub archive: String,
     /// 粘贴、拖进来的文件放哪（attachment_dir）
     pub attachments: AttachDir,
+    /// 开着的插件（内置的那几个里，这个仓库开了哪些）
+    pub plugins: Vec<&'static str>,
+    /// 开着的插件声明的文档类型：classify 按它们的路径规则认文件
+    pub types: Vec<Arc<dyn DocType>>,
+}
+
+impl PartialEq for Layout {
+    fn eq(&self, other: &Self) -> bool {
+        self.logical == other.logical
+            && self.attachments == other.attachments
+            && self.plugins == other.plugins
+            && self.fingerprint() == other.fingerprint()
+    }
+}
+
+impl Eq for Layout {}
+
+impl std::fmt::Debug for Layout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Layout")
+            .field("logical", &self.logical)
+            .field("archiving", &self.archiving)
+            .field("notes", &self.notes)
+            .field("archive", &self.archive)
+            .field("attachments", &self.attachments)
+            .field("plugins", &self.plugins)
+            .field("types", &self.types.iter().map(|ty| ty.fingerprint()).collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 /// 附件放在哪。Odea 自己的仓库是固定的「附件」；Obsidian 的库照它的「新附件的默认位置」
@@ -100,18 +129,18 @@ impl Default for Layout {
 }
 
 impl Layout {
-    /// Odea 自己建的仓库：日程开着，根是「笔记」
+    /// Odea 自己建的仓库：老仓库里算开着的插件（日程）都开着，归档开着，根是「笔记」
     pub fn odea() -> Self {
+        let on: Vec<&'static dyn Plugin> =
+            plugins::builtin().into_iter().filter(|plugin| plugin.on_in_legacy_vaults()).collect();
         Self {
             logical: false,
-            journal: true,
             archiving: true,
             notes: NOTES_DIR.into(),
-            days: DAYS_DIR.into(),
-            days_by_year: true,
-            goals: GOALS_DIR.into(),
             archive: ARCHIVE_DIR.into(),
             attachments: AttachDir::Fixed(ATTACHMENTS_DIR.into()),
+            plugins: on.iter().map(|plugin| plugin.id()).collect(),
+            types: on.iter().flat_map(|plugin| plugin.doc_types(None, None)).collect(),
         }
     }
 
@@ -119,7 +148,7 @@ impl Layout {
     pub fn load(root: &Path) -> Self {
         let marker = read_json(&root.join(APP_DIR).join("vault.json"));
         let mut layout = match &marker {
-            Some(marker) => Self::from_marker(marker, || obsidian_days(root)),
+            Some(marker) => Self::from_marker(marker, Some(root)),
             None => Self::odea(),
         };
         // 附件：标记里写了的照写的，没写的看 Obsidian 的设置，都没有是「附件」
@@ -141,38 +170,45 @@ impl Layout {
         layout
     }
 
-    fn from_marker(marker: &Value, obsidian: impl FnOnce() -> Option<String>) -> Self {
-        let Some(features) = marker.get("features") else {
+    /// 按标记摆。root 给插件看别的工具的设置（Obsidian 的日记），None 就不看
+    pub fn from_marker(marker: &Value, root: Option<&Path>) -> Self {
+        if marker.get("features").is_none() && marker.get("plugins").is_none() {
             return Self::odea();
-        };
-        let journal = features.get("journal").and_then(Value::as_bool).unwrap_or(false);
-        let archiving = features.get("archive").and_then(Value::as_bool).unwrap_or(journal);
-        let folder = |key: &str| {
-            marker
-                .get("folders")
-                .and_then(|folders| folders.get(key))
-                .and_then(Value::as_str)
-                .and_then(clean_dir)
-        };
-        let (days, days_by_year) = match folder("days") {
-            Some(days) => (days, true),
-            None => match obsidian() {
-                Some(days) => (days, false),
-                None => (DAYS_DIR.into(), true),
-            },
-        };
+        }
+        let on: Vec<&'static dyn Plugin> =
+            plugins::builtin().into_iter().filter(|plugin| plugin_on(marker, *plugin)).collect();
+        // 0.4.2 以前只有一个开关（features.journal），没写 archive 的归档跟着它
+        let only_switch = marker
+            .get("features")
+            .and_then(|features| features.get("journal"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         Self {
             logical: false,
-            journal,
-            archiving,
-            // 日程关着时日记、目标、归档都是普通文件夹，整个仓库都在树上
-            notes: if journal { folder("notes").unwrap_or_default() } else { String::new() },
-            days,
-            days_by_year,
-            goals: folder("goals").filter(|dir| !dir.is_empty()).unwrap_or_else(|| GOALS_DIR.into()),
-            archive: folder("archive").filter(|dir| !dir.is_empty()).unwrap_or_else(|| ARCHIVE_DIR.into()),
+            archiving: switch_on(marker, ARCHIVE_SWITCH, Some("archive"), only_switch),
+            // 日程这类插件都关着时日记、目标、归档都是普通文件夹，整个仓库都在树上
+            notes: if on.iter().any(|plugin| plugin.roots_tree_at_notes()) {
+                marker_folder(marker, "notes").unwrap_or_default()
+            } else {
+                String::new()
+            },
+            archive: marker_folder(marker, "archive")
+                .filter(|dir| !dir.is_empty())
+                .unwrap_or_else(|| ARCHIVE_DIR.into()),
             attachments: AttachDir::Fixed(ATTACHMENTS_DIR.into()),
+            plugins: on.iter().map(|plugin| plugin.id()).collect(),
+            types: on.iter().flat_map(|plugin| plugin.doc_types(root, Some(marker))).collect(),
         }
+    }
+
+    /// 这个插件开着没有
+    pub fn has_plugin(&self, id: &str) -> bool {
+        self.plugins.contains(&id)
+    }
+
+    /// 开着的插件声明的这一种文档
+    pub fn doc_type(&self, kind: &str) -> Option<&Arc<dyn DocType>> {
+        self.types.iter().find(|ty| ty.id() == kind)
     }
 
     /// 给这篇文档（仓库里的相对路径）粘贴、拖进来的文件放在哪个文件夹（仓库里的相对路径，空串是根）
@@ -196,64 +232,36 @@ impl Layout {
 
     /// 摆法变了，索引里每篇是什么文档就得重新认（Vault::bare 拿它和索引里记的比）
     pub fn fingerprint(&self) -> String {
-        format!(
-            "{}|{}|{}|{}|{}|{}|{}",
-            self.journal, self.notes, self.days, self.days_by_year, self.goals, self.archive, self.archiving
-        )
+        let types: Vec<String> = self.types.iter().map(|ty| ty.fingerprint()).collect();
+        format!("{}|{}|{}|{}", self.notes, self.archive, self.archiving, types.join(";"))
     }
 
-    /// 文件树上不出现的文件夹：日程开着时的日记、目标，归档开着时的归档（从窄栏进）。根是「笔记」的
-    /// 仓库里它们本来就在树外面，这里也照样列出来，不碍事
+    /// 文件树上不出现的文件夹：开着的插件放文档的文件夹（日记、目标），归档开着时的归档（从窄栏进）。
+    /// 根是「笔记」的仓库里它们本来就在树外面，这里也照样列出来，不碍事
     pub fn hidden_dirs(&self) -> Vec<&str> {
-        let journal = [self.days.as_str(), self.goals.as_str()].into_iter().filter(|_| self.journal);
-        let archive = [self.archive.as_str()].into_iter().filter(|_| self.archiving);
-        journal.chain(archive).filter(|dir| !dir.is_empty()).collect()
+        let mut dirs: Vec<&str> = self.types.iter().map(|ty| ty.dir()).collect();
+        if self.archiving {
+            dirs.push(self.archive.as_str());
+        }
+        let mut seen = Vec::new();
+        for dir in dirs {
+            if !dir.is_empty() && !seen.contains(&dir) {
+                seen.push(dir);
+            }
+        }
+        seen
     }
 
     pub fn classify(&self, rel: &str) -> Slot {
-        let dir = dir_of(rel);
-        if self.archiving && within(dir, &self.archive) {
+        if self.archiving && within(dir_of(rel), &self.archive) {
             return Slot::Note { archived: true };
         }
-        if !self.journal {
-            return Slot::Note { archived: false };
-        }
-        let stem = stem_of(rel);
-        // 日记文件夹是仓库根（Obsidian 的默认）时只认根上的
-        let in_days = if self.days.is_empty() { dir.is_empty() } else { within(dir, &self.days) };
-        if in_days && parse_date(stem).is_some() {
-            return Slot::Day(stem.to_string());
-        }
-        if within(dir, &self.goals) {
-            if let Some((horizon, period_start)) = goal_from_stem(stem) {
-                return Slot::Goal { horizon, period_start };
+        for ty in &self.types {
+            if let Some(key) = ty.key_of(rel) {
+                return Slot::Typed { kind: ty.id(), key };
             }
         }
         Slot::Note { archived: false }
-    }
-
-    pub fn day_path(&self, date: &str) -> Result<String> {
-        let parsed = parse_date(date)
-            .ok_or_else(|| AppError::Invalid(format!("日期应为 YYYY-MM-DD，收到: {date}")))?;
-        Ok(if self.days_by_year {
-            join(&join(&self.days, &parsed.year().to_string()), &format!("{date}.md"))
-        } else {
-            join(&self.days, &format!("{date}.md"))
-        })
-    }
-
-    /// 周目标按 ISO 周命名（2026-W39），放在 ISO 周所属年份的文件夹里
-    pub fn goal_path(&self, horizon: &str, period_start: &str) -> Result<String> {
-        let date = validate_period_start(horizon, period_start)?;
-        let goals = &self.goals;
-        Ok(match horizon {
-            "week" => {
-                let week = date.iso_week();
-                format!("{goals}/{}/{}-W{:02}.md", week.year(), week.year(), week.week())
-            }
-            "month" => format!("{goals}/{}/{}-{:02}.md", date.year(), date.year(), date.month()),
-            _ => format!("{goals}/{}/{}.md", date.year(), date.year()),
-        })
     }
 
     /// 文件树上的文件夹（相对树根的路径，`工作/周报`；空串是树根）→ 仓库里的目录。
@@ -271,7 +279,7 @@ impl Layout {
         Ok(join(&self.notes, folder))
     }
 
-    /// 反过来：仓库里的目录 → 树上的文件夹。不在树根底下、或者在日程那几个文件夹里的返回 None
+    /// 反过来：仓库里的目录 → 树上的文件夹。不在树根底下、或者在插件、归档那几个文件夹里的返回 None
     pub fn folder_of_dir<'a>(&self, dir: &'a str) -> Option<&'a str> {
         if self.hidden_dirs().iter().any(|hidden| within(dir, hidden)) {
             return None;
@@ -285,15 +293,6 @@ impl Layout {
         dir.strip_prefix(self.notes.as_str())?.strip_prefix('/')
     }
 
-    /// 日程关着时，日记、目标这些操作不做（不往别人的文件夹里建日记）
-    pub fn require_journal(&self) -> Result<()> {
-        if self.journal {
-            Ok(())
-        } else {
-            Err(AppError::Invalid("这个仓库没开日程（命令面板「启用日程」）".into()))
-        }
-    }
-
     /// 归档关着时不往「归档」里挪（打开的是别人的文件夹，那里的「归档」可能只是个普通文件夹）
     pub fn require_archive(&self) -> Result<()> {
         if self.archiving {
@@ -302,15 +301,54 @@ impl Layout {
             Err(AppError::Invalid("这个仓库没开归档（命令面板「启用归档」）".into()))
         }
     }
+
+    /// 这个开关（插件 id，或者 ARCHIVE_SWITCH）现在开着没有
+    fn switch(&self, id: &str) -> bool {
+        if id == ARCHIVE_SWITCH {
+            self.archiving
+        } else {
+            self.has_plugin(id)
+        }
+    }
+}
+
+/// 一个开关开着没有（docs/插件与跨端.md §6.3）。plugins 里写的为准；有老开关（legacy：features 里的键）的，
+/// 两边不一致说明是老版本后来改过 features —— 新版本总是两边一起写 —— 这时听 features 的。都没写的是 unset
+fn switch_on(marker: &Value, id: &str, legacy: Option<&str>, unset: bool) -> bool {
+    let own = marker
+        .get("plugins")
+        .and_then(|plugins| plugins.get(id))
+        .and_then(|entry| entry.get("enabled"))
+        .and_then(Value::as_bool);
+    let old = legacy.and_then(|key| marker.get("features")?.get(key)?.as_bool());
+    match (own, old) {
+        (Some(own), Some(old)) if own != old => old,
+        (Some(own), _) => own,
+        (None, Some(old)) => old,
+        (None, None) => unset,
+    }
+}
+
+fn plugin_on(marker: &Value, plugin: &dyn Plugin) -> bool {
+    switch_on(marker, plugin.id(), plugin.legacy_feature(), false)
+}
+
+/// 标记里写的一个文件夹（folders 里的键），按 clean_dir 的规矩清理过；没写、写得不对的是 None
+pub fn marker_folder(marker: &Value, key: &str) -> Option<String> {
+    marker
+        .get("folders")
+        .and_then(|folders| folders.get(key))
+        .and_then(Value::as_str)
+        .and_then(clean_dir)
 }
 
 /// dir 是 base 本身或者在它底下
-fn within(dir: &str, base: &str) -> bool {
+pub fn within(dir: &str, base: &str) -> bool {
     dir == base || dir.strip_prefix(base).is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// 配置里写的文件夹：正斜杠、去掉两头的斜杠；有 `..`、以点开头的段不收
-fn clean_dir(raw: &str) -> Option<String> {
+pub fn clean_dir(raw: &str) -> Option<String> {
     let dir = raw.replace('\\', "/");
     let dir = dir.trim().trim_matches('/');
     let ok = dir.is_empty()
@@ -318,32 +356,8 @@ fn clean_dir(raw: &str) -> Option<String> {
     ok.then(|| dir.to_string())
 }
 
-fn read_json(path: &Path) -> Option<Value> {
+pub fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
-}
-
-/// Obsidian 的日记放在哪：开着日记核心插件、日期格式是 YYYY-MM-DD（不写就是这个）时用它的文件夹
-/// （不写是仓库根）。不是 Obsidian 的库、格式对不上（按年月分了子文件夹、写了星期几）返回 None
-fn obsidian_days(root: &Path) -> Option<String> {
-    let config = root.join(".obsidian");
-    if !config.is_dir() {
-        return None;
-    }
-    // core-plugins.json：新版是 { "daily-notes": true, … }，旧版是开着的插件名列表；没有这个文件是默认（开着）
-    let enabled = match read_json(&config.join("core-plugins.json")) {
-        Some(Value::Object(plugins)) => plugins.get("daily-notes").and_then(Value::as_bool).unwrap_or(false),
-        Some(Value::Array(plugins)) => plugins.iter().any(|plugin| plugin.as_str() == Some("daily-notes")),
-        _ => true,
-    };
-    if !enabled {
-        return None;
-    }
-    let settings = read_json(&config.join("daily-notes.json")).unwrap_or(Value::Null);
-    let format = settings.get("format").and_then(Value::as_str).unwrap_or("").trim();
-    if !format.is_empty() && format != "YYYY-MM-DD" {
-        return None;
-    }
-    clean_dir(settings.get("folder").and_then(Value::as_str).unwrap_or(""))
 }
 
 /// Obsidian 的「新附件的默认位置」（.obsidian/app.json 的 attachmentFolderPath）：
@@ -366,54 +380,73 @@ fn obsidian_attachments(root: &Path) -> Option<AttachDir> {
     clean_dir(&raw).map(AttachDir::Fixed)
 }
 
-/// 新仓库的标记（boot::prepare）。`fresh` = 空文件夹（新建的、换到的空文件夹）：Odea 的摆法、日程开着；
-/// 已经有笔记的文件夹不开日程，树就是它本来的样子。`logical`（启动器「新建」）：逻辑目录，
+/// 标记里有哪几个开关：内置的插件，和归档。(plugins 里的键, features 里的老键)
+fn switches() -> Vec<(&'static str, Option<&'static str>)> {
+    let mut all: Vec<(&'static str, Option<&'static str>)> = plugins::builtin()
+        .iter()
+        .map(|plugin| (plugin.id(), plugin.legacy_feature()))
+        .collect();
+    all.push((ARCHIVE_SWITCH, Some("archive")));
+    all
+}
+
+/// 写一个开关：plugins 里 enabled（这一项里别的键原样留着），有老开关的 features 里也写
+fn write_switch(marker: &mut Value, id: &str, legacy: Option<&str>, on: bool) {
+    let object = marker.as_object_mut().expect("标记总是对象");
+    let plugins = object.entry("plugins").or_insert_with(|| serde_json::json!({}));
+    if !plugins.is_object() {
+        *plugins = serde_json::json!({});
+    }
+    let entry = plugins
+        .as_object_mut()
+        .expect("上面保证了是对象")
+        .entry(id)
+        .or_insert_with(|| serde_json::json!({}));
+    if !entry.is_object() {
+        *entry = serde_json::json!({});
+    }
+    entry["enabled"] = Value::Bool(on);
+    if let Some(key) = legacy {
+        let features = object.entry("features").or_insert_with(|| serde_json::json!({}));
+        if !features.is_object() {
+            *features = serde_json::json!({});
+        }
+        features[key] = Value::Bool(on);
+    }
+}
+
+/// 新仓库的标记（boot::prepare）。`fresh` = 空文件夹（新建的、换到的空文件夹）：Odea 的摆法，日程、归档开着；
+/// 已经有笔记的文件夹都关着，树就是它本来的样子。`logical`（启动器「新建」）：逻辑目录，
 /// 笔记平放在仓库根上
 pub fn new_marker(fresh: bool, logical: bool, created_at: i64) -> Value {
     let mut marker = serde_json::json!({ "app": "Odea", "version": 1, "createdAt": created_at });
     if logical {
         marker["kind"] = "logical".into();
     }
-    marker["features"] = serde_json::json!({ "journal": fresh, "archive": fresh });
+    for (id, legacy) in switches() {
+        write_switch(&mut marker, id, legacy, fresh);
+    }
     if fresh {
-        marker["folders"] = serde_json::json!({
-            "notes": if logical { "" } else { NOTES_DIR }, "days": DAYS_DIR, "goals": GOALS_DIR, "archive": ARCHIVE_DIR,
-        });
+        let mut folders = serde_json::json!({ "notes": if logical { "" } else { NOTES_DIR }, "archive": ARCHIVE_DIR });
+        for plugin in plugins::builtin() {
+            for (key, dir) in plugin.new_folders() {
+                folders[*key] = (*dir).into();
+            }
+        }
+        marker["folders"] = folders;
     }
     marker
 }
 
-/// 本地目录转成逻辑目录：只加 `kind`，别的键原样留着。老标记（没有 features）是 Odea 的摆法，
-/// 和开关日程一样先补上 features，树根「笔记」照旧是新笔记平放的地方
-pub fn marker_logical(marker: Option<Value>, journal: bool) -> Value {
-    let mut marker = marker_with_journal(marker, journal);
-    marker["kind"] = "logical".into();
-    marker
-}
-
-/// 开 / 关日程：只改 features.journal，别的键（包括不认识的）原样留着。老标记（没有 features）
-/// 是 Odea 的摆法，补上 folders.notes，关了再开树根还是「笔记」
-pub fn marker_with_journal(marker: Option<Value>, journal: bool) -> Value {
-    marker_with_feature(marker, "journal", journal)
-}
-
-/// 开 / 关归档：只改 features.archive，别的照 marker_with_journal 的规矩
-pub fn marker_with_archive(marker: Option<Value>, archive: bool) -> Value {
-    marker_with_feature(marker, "archive", archive)
-}
-
-/// 改一个开关。另一个没写的先按现在的意思写上：老标记里归档是跟着日程的，只改其中一个时
-/// 另一个不能跟着变（关了日程，归档还开着）
-fn marker_with_feature(marker: Option<Value>, key: &str, on: bool) -> Value {
+/// 每个开关现在的样子都写实（plugins、features 两边一致），别的键（包括不认识的）原样留着。
+/// 老标记（两样都没有）是 Odea 的摆法：补上 folders.notes，关了日程再开，树根还是「笔记」
+fn marker_written(marker: Option<Value>) -> Value {
     let mut marker = match marker {
         Some(Value::Object(map)) => Value::Object(map),
         _ => serde_json::json!({ "app": "Odea", "version": 1 }),
     };
-    // 现在的日程开没开：没有 features 的老标记是 Odea 的摆法（开着），和 Layout::from_marker 一致
-    let journal_now = marker
-        .get("features")
-        .map_or(true, |features| features.get("journal").and_then(Value::as_bool).unwrap_or(false));
-    if marker.get("features").is_none() {
+    let current = Layout::from_marker(&marker, None);
+    if marker.get("features").is_none() && marker.get("plugins").is_none() {
         let folders = marker
             .as_object_mut()
             .expect("上面保证了是对象")
@@ -423,18 +456,25 @@ fn marker_with_feature(marker: Option<Value>, key: &str, on: bool) -> Value {
             folders.entry("notes").or_insert_with(|| NOTES_DIR.into());
         }
     }
-    let features = marker
-        .as_object_mut()
-        .expect("上面保证了是对象")
-        .entry("features")
-        .or_insert_with(|| serde_json::json!({}));
-    if !features.is_object() {
-        *features = serde_json::json!({});
+    for (id, legacy) in switches() {
+        write_switch(&mut marker, id, legacy, current.switch(id));
     }
-    let features = features.as_object_mut().expect("上面保证了是对象");
-    features.entry("journal").or_insert(Value::Bool(journal_now));
-    features.entry("archive").or_insert(Value::Bool(journal_now));
-    features.insert(key.to_string(), Value::Bool(on));
+    marker
+}
+
+/// 开 / 关一个插件或者归档（id 是插件的 id，或者 ARCHIVE_SWITCH）：plugins 和老版本认的 features
+/// 两边一起写，别的开关照现在的样子写实（老标记里归档跟着日程，只改其中一个时另一个不能跟着变）
+pub fn marker_with_switch(marker: Option<Value>, id: &str, on: bool) -> Value {
+    let mut marker = marker_written(marker);
+    let legacy = switches().into_iter().find(|(switch, _)| *switch == id).and_then(|(_, legacy)| legacy);
+    write_switch(&mut marker, id, legacy, on);
+    marker
+}
+
+/// 本地目录转成逻辑目录：只加 `kind`，开关照现在的样子写实，别的键原样留着
+pub fn marker_logical(marker: Option<Value>) -> Value {
+    let mut marker = marker_written(marker);
+    marker["kind"] = "logical".into();
     marker
 }
 
@@ -489,86 +529,6 @@ pub fn folder_name(raw: &str) -> Option<String> {
         .is_empty();
     // 开头的点去掉之后可能露出空格：目录名两头不留空白（folder_dir 不收）
     (!blank).then(|| file_stem_for_title(raw).trim().to_string())
-}
-
-fn parse_date(s: &str) -> Option<NaiveDate> {
-    (s.len() == 10)
-        .then(|| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
-        .flatten()
-}
-
-/// Odea 的老规矩下某一天放在哪（旧库搬家、测试用；仓库里用 Layout::day_path）
-pub fn day_path(date: &str) -> Result<String> {
-    Layout::odea().day_path(date)
-}
-
-/// period_start 必须真的是周期起点：周一 / 1 号 / 1 月 1 日
-pub fn validate_period_start(horizon: &str, period_start: &str) -> Result<NaiveDate> {
-    let date = parse_date(period_start).ok_or_else(|| {
-        AppError::Invalid(format!("日期格式应为 YYYY-MM-DD，收到: {period_start}"))
-    })?;
-    let ok = match horizon {
-        "week" => date.weekday() == Weekday::Mon,
-        "month" => date.day() == 1,
-        "year" => date.day() == 1 && date.month() == 1,
-        _ => return Err(AppError::Invalid(format!("未知的时间尺度: {horizon}"))),
-    };
-    if ok {
-        Ok(date)
-    } else {
-        Err(AppError::Invalid(format!(
-            "{period_start} 不是 {horizon} 周期的起点"
-        )))
-    }
-}
-
-/// Odea 的老规矩下某个周期的目标放在哪（旧库搬家、测试用；仓库里用 Layout::goal_path）
-pub fn goal_path(horizon: &str, period_start: &str) -> Result<String> {
-    Layout::odea().goal_path(horizon, period_start)
-}
-
-/// `2026-W39` / `2026-09` / `2026` → (尺度, 周期起点)
-pub fn goal_from_stem(stem: &str) -> Option<(&'static str, String)> {
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if stem.len() == 4 && digits(stem) {
-        let year: i32 = stem.parse().ok()?;
-        let date = NaiveDate::from_ymd_opt(year, 1, 1)?;
-        return Some(("year", date.format("%Y-%m-%d").to_string()));
-    }
-    let (year, rest) = stem.split_once('-')?;
-    if year.len() != 4 || !digits(year) {
-        return None;
-    }
-    let year: i32 = year.parse().ok()?;
-    if let Some(week) = rest.strip_prefix('W') {
-        if week.len() != 2 || !digits(week) {
-            return None;
-        }
-        let date = NaiveDate::from_isoywd_opt(year, week.parse().ok()?, Weekday::Mon)?;
-        return Some(("week", date.format("%Y-%m-%d").to_string()));
-    }
-    if rest.len() == 2 && digits(rest) {
-        let date = NaiveDate::from_ymd_opt(year, rest.parse().ok()?, 1)?;
-        return Some(("month", date.format("%Y-%m-%d").to_string()));
-    }
-    None
-}
-
-const CN_MONTH: [&str; 12] = [
-    "一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月",
-    "十二月",
-];
-
-/// 和前端 lib/date.ts 的 goalTitle 一样：「第 39 周目标」「九月目标」「2026 年目标」
-pub fn goal_title(horizon: &str, period_start: &str) -> String {
-    let Some(date) = parse_date(period_start) else {
-        return String::new();
-    };
-    match horizon {
-        "week" => format!("第 {} 周目标", date.iso_week().week()),
-        "month" => format!("{}目标", CN_MONTH[date.month0() as usize]),
-        _ => format!("{} 年目标", date.year()),
-    }
 }
 
 /// 文件名最多这么多个字符。中文一个字 3 字节，80 个字 240 字节，
@@ -742,6 +702,8 @@ pub fn attachment_stem(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::journal;
+    use serde_json::json;
 
     #[test]
     fn recognizes_conflict_copy_names() {
@@ -783,48 +745,27 @@ mod tests {
         assert_eq!(classify("笔记/工作/周报.md"), Slot::Note { archived: false });
         assert_eq!(classify("随手记.md"), Slot::Note { archived: false });
         assert_eq!(classify("归档/旧版路线图.md"), Slot::Note { archived: true });
+        // 开着的插件声明的文档按插件的路径规则认（plugins/journal 里有完整的规则）；
+        // 规则对不上的就是普通笔记，不会消失
         assert_eq!(
             classify("日记/2026/2026-09-26.md"),
-            Slot::Day("2026-09-26".into())
+            Slot::Typed { kind: journal::DAY, key: "2026-09-26".into() }
         );
-        // 日记文件夹里不是日期的文件就是普通笔记，不会消失
         assert_eq!(classify("日记/2026/杂记.md"), Slot::Note { archived: false });
-        assert_eq!(
-            classify("目标/2026/2026-W39.md"),
-            Slot::Goal {
-                horizon: "week",
-                period_start: "2026-09-21".into()
-            }
-        );
-        assert_eq!(
-            classify("目标/2026/2026-09.md"),
-            Slot::Goal {
-                horizon: "month",
-                period_start: "2026-09-01".into()
-            }
-        );
-        assert_eq!(
-            classify("目标/2026.md"),
-            Slot::Goal {
-                horizon: "year",
-                period_start: "2026-01-01".into()
-            }
-        );
-        assert_eq!(classify("目标/2026/2026-W60.md"), Slot::Note { archived: false });
     }
 
     fn layout_of(marker: Value) -> Layout {
-        Layout::from_marker(&marker, || None)
+        Layout::from_marker(&marker, None)
     }
 
     #[test]
     fn markers_decide_the_layout() {
         // P11.2 以前写的标记、新建的仓库：Odea 的摆法
-        assert_eq!(layout_of(serde_json::json!({ "app": "Odea" })), Layout::odea());
+        assert_eq!(layout_of(json!({ "app": "Odea" })), Layout::odea());
         assert_eq!(layout_of(new_marker(true, false, 0)), Layout::odea());
-        // 打开一个已经有笔记的文件夹：不开日程，树根是整个仓库
+        // 打开一个已经有笔记的文件夹：什么都不开，树根是整个仓库
         let plain = layout_of(new_marker(false, false, 0));
-        assert!(!plain.journal);
+        assert!(plain.plugins.is_empty() && plain.types.is_empty() && !plain.archiving);
         assert_eq!(plain.notes, "");
         assert_eq!(plain.classify("日记/2026/2026-10-20.md"), Slot::Note { archived: false });
         assert_eq!(plain.classify("归档/旧.md"), Slot::Note { archived: false });
@@ -833,95 +774,84 @@ mod tests {
         assert_eq!(plain.folder_dir("工作/周报").unwrap(), "工作/周报");
         assert_eq!(plain.folder_of_dir("工作"), Some("工作"));
         assert_eq!(plain.folder_of_dir(""), Some(""));
-        assert!(plain.require_journal().is_err());
         // 配置里乱写的文件夹不收
-        let odd = layout_of(serde_json::json!({
+        let odd = layout_of(json!({
             "features": { "journal": true },
-            "folders": { "notes": "../外面", "days": "/Daily/", "goals": ".hidden", "archive": "" },
+            "folders": { "notes": "../外面", "archive": "" },
         }));
         assert_eq!(odd.notes, "");
-        assert_eq!(odd.days, "Daily");
-        assert_eq!(odd.goals, GOALS_DIR);
         assert_eq!(odd.archive, ARCHIVE_DIR);
     }
 
     #[test]
     fn archive_has_its_own_switch() {
         // 0.4.2 以前的标记没写 archive：跟着日程
-        let old = layout_of(serde_json::json!({ "features": { "journal": false } }));
+        let old = layout_of(json!({ "features": { "journal": false } }));
         assert!(!old.archiving);
         // 只写笔记、归档旧资料：日程关着，归档开着
-        let marker = marker_with_archive(Some(serde_json::json!({ "features": { "journal": false } })), true);
-        assert_eq!(marker["features"], serde_json::json!({ "journal": false, "archive": true }));
+        let marker = marker_with_switch(Some(json!({ "features": { "journal": false } })), ARCHIVE_SWITCH, true);
+        assert_eq!(marker["features"], json!({ "journal": false, "archive": true }));
+        assert_eq!(marker["plugins"][journal::ID]["enabled"], false);
+        assert_eq!(marker["plugins"][ARCHIVE_SWITCH]["enabled"], true);
         let notes_only = layout_of(marker);
-        assert!(!notes_only.journal && notes_only.archiving);
+        assert!(notes_only.plugins.is_empty() && notes_only.archiving);
         assert_eq!(notes_only.classify("归档/旧.md"), Slot::Note { archived: true });
         assert_eq!(notes_only.classify("日记/2026/2026-10-20.md"), Slot::Note { archived: false });
         assert_eq!(notes_only.hidden_dirs(), vec!["归档"]);
         assert_eq!(notes_only.folder_of_dir("归档"), None);
         assert!(notes_only.require_archive().is_ok());
-        assert!(notes_only.require_journal().is_err());
         // 关日程不带走归档：老标记（没写 archive，归档跟着日程开着）关了日程，归档照旧开着
-        let off = marker_with_journal(Some(serde_json::json!({ "features": { "journal": true } })), false);
-        assert_eq!(off["features"], serde_json::json!({ "journal": false, "archive": true }));
-        let off = marker_with_journal(Some(serde_json::json!({ "app": "Odea" })), false);
-        assert_eq!(off["features"], serde_json::json!({ "journal": false, "archive": true }));
+        let off = marker_with_switch(Some(json!({ "features": { "journal": true } })), journal::ID, false);
+        assert_eq!(off["features"], json!({ "journal": false, "archive": true }));
+        let off = marker_with_switch(Some(json!({ "app": "Odea" })), journal::ID, false);
+        assert_eq!(off["features"], json!({ "journal": false, "archive": true }));
         assert!(layout_of(off).archiving);
         // 只开日程、不要归档
-        let journal_only = layout_of(serde_json::json!({ "features": { "journal": true, "archive": false } }));
+        let journal_only = layout_of(json!({ "features": { "journal": true, "archive": false } }));
         assert_eq!(journal_only.classify("归档/旧.md"), Slot::Note { archived: false });
         assert_eq!(journal_only.hidden_dirs(), vec!["日记", "目标"]);
         assert!(journal_only.require_archive().is_err());
     }
 
     #[test]
-    fn journal_on_a_whole_vault_hides_its_folders_from_the_tree() {
-        let tree = layout_of(serde_json::json!({ "features": { "journal": true } }));
+    fn plugins_are_read_first_but_old_versions_can_still_switch_them() {
+        // 新版本写的：plugins、features 两边一致
+        let on = marker_with_switch(Some(new_marker(false, false, 0)), journal::ID, true);
+        assert_eq!(on["plugins"][journal::ID]["enabled"], true);
+        assert_eq!(on["features"]["journal"], true);
+        assert!(layout_of(on.clone()).has_plugin(journal::ID));
+        // 团队里有人还在用 0.7.0、关了日程：它只认、只改 features，plugins 原样留着。
+        // 两边对不上就是老版本后来改的，听 features 的
+        let mut old = on.clone();
+        old["features"]["journal"] = false.into();
+        assert!(!layout_of(old.clone()).has_plugin(journal::ID));
+        // 新版本再写一次（这里改的是归档）：两边又一致了，日程还是关着
+        let again = marker_with_switch(Some(old), ARCHIVE_SWITCH, true);
+        assert_eq!(again["plugins"][journal::ID]["enabled"], false);
+        assert_eq!(again["features"]["journal"], false);
+        assert!(layout_of(again).archiving);
+        // 只有 plugins（以后的版本不写 features 了）也认；插件那一项里别的键原样留着
+        let mut future = json!({ "plugins": {} });
+        future["plugins"][journal::ID] = json!({ "enabled": true, "version": "^1.0" });
+        assert!(layout_of(future.clone()).has_plugin(journal::ID));
+        let off = marker_with_switch(Some(future), journal::ID, false);
+        assert_eq!(off["plugins"][journal::ID], json!({ "enabled": false, "version": "^1.0" }));
+        assert_eq!(off["features"]["journal"], false, "老版本也看得懂");
+    }
+
+    #[test]
+    fn plugins_on_a_whole_vault_hide_their_folders_from_the_tree() {
+        let tree = layout_of(json!({ "features": { "journal": true } }));
         assert_eq!(tree.notes, "");
         assert_eq!(tree.hidden_dirs(), vec!["日记", "目标", "归档"]);
         assert_eq!(tree.folder_of_dir("工作"), Some("工作"));
         assert_eq!(tree.folder_of_dir("日记/2026"), None);
         assert_eq!(tree.folder_of_dir("日记本"), Some("日记本"));
-        assert_eq!(tree.classify("日记/2026/2026-10-20.md"), Slot::Day("2026-10-20".into()));
+        assert_eq!(
+            tree.classify("日记/2026/2026-10-20.md"),
+            Slot::Typed { kind: journal::DAY, key: "2026-10-20".into() }
+        );
         assert_eq!(tree.classify("日记本/2026-10-20.md"), Slot::Note { archived: false });
-    }
-
-    #[test]
-    fn obsidian_daily_notes_are_days() {
-        let marker = serde_json::json!({ "features": { "journal": true } });
-        let tree = Layout::from_marker(&marker, || Some("Daily".into()));
-        assert_eq!(tree.days, "Daily");
-        assert!(!tree.days_by_year);
-        assert_eq!(tree.day_path("2026-10-20").unwrap(), "Daily/2026-10-20.md");
-        assert_eq!(tree.classify("Daily/2026-10-20.md"), Slot::Day("2026-10-20".into()));
-        // 日记在仓库根上（Obsidian 的默认）：只认根上的
-        let root = Layout::from_marker(&marker, || Some(String::new()));
-        assert_eq!(root.day_path("2026-10-20").unwrap(), "2026-10-20.md");
-        assert_eq!(root.classify("2026-10-20.md"), Slot::Day("2026-10-20".into()));
-        assert_eq!(root.classify("工作/2026-10-20.md"), Slot::Note { archived: false });
-        assert_eq!(root.hidden_dirs(), vec!["目标", "归档"]);
-        // 自己在标记里写了日记文件夹的，不看 Obsidian 的
-        let own = serde_json::json!({ "features": { "journal": true }, "folders": { "days": "日志" } });
-        let own = Layout::from_marker(&own, || Some("Daily".into()));
-        assert_eq!(own.day_path("2026-10-20").unwrap(), "日志/2026/2026-10-20.md");
-    }
-
-    #[test]
-    fn reads_obsidian_settings_from_disk() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        assert_eq!(obsidian_days(root), None, "不是 Obsidian 的库");
-        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
-        assert_eq!(obsidian_days(root).as_deref(), Some(""), "什么都没设：日记在仓库根上");
-        let write = |name: &str, text: &str| std::fs::write(root.join(".obsidian").join(name), text).unwrap();
-        write("daily-notes.json", r#"{ "folder": "Journal/Daily", "format": "YYYY-MM-DD" }"#);
-        assert_eq!(obsidian_days(root).as_deref(), Some("Journal/Daily"));
-        write("core-plugins.json", r#"{ "daily-notes": false }"#);
-        assert_eq!(obsidian_days(root), None, "日记插件关了");
-        write("core-plugins.json", r#"["file-explorer", "daily-notes"]"#);
-        assert_eq!(obsidian_days(root).as_deref(), Some("Journal/Daily"), "旧版的插件列表");
-        write("daily-notes.json", r#"{ "folder": "Daily", "format": "YYYY/MM/YYYY-MM-DD" }"#);
-        assert_eq!(obsidian_days(root), None, "按年月分了子文件夹的认不了");
     }
 
     #[test]
@@ -973,19 +903,19 @@ mod tests {
     }
 
     #[test]
-    fn toggling_journal_keeps_the_rest_of_the_marker() {
-        let legacy = serde_json::json!({ "app": "Odea", "version": 1, "别的": 1 });
-        let off = marker_with_journal(Some(legacy), false);
+    fn toggling_a_plugin_keeps_the_rest_of_the_marker() {
+        let legacy = json!({ "app": "Odea", "version": 1, "别的": 1 });
+        let off = marker_with_switch(Some(legacy), journal::ID, false);
         assert_eq!(off["别的"], 1);
         assert_eq!(off["features"]["journal"], false);
         // 老仓库关了日程：整个仓库在树上；再开回来，树根还是「笔记」
         assert_eq!(layout_of(off.clone()).notes, "");
-        let on = marker_with_journal(Some(off), true);
+        let on = marker_with_switch(Some(off), journal::ID, true);
         assert_eq!(layout_of(on), Layout::odea());
         // 打开的文件夹开了日程：树根还是整个仓库
-        let opened = marker_with_journal(Some(new_marker(false, false, 0)), true);
+        let opened = marker_with_switch(Some(new_marker(false, false, 0)), journal::ID, true);
         let tree = layout_of(opened);
-        assert!(tree.journal);
+        assert!(tree.has_plugin(journal::ID));
         assert_eq!(tree.notes, "");
     }
 
@@ -998,11 +928,11 @@ mod tests {
         // 启动器新建的：逻辑目录、日程开着、新笔记平放在仓库根上
         write(&new_marker(true, true, 0));
         let fresh = Layout::load(root);
-        assert!(fresh.logical && fresh.journal);
+        assert!(fresh.logical && fresh.has_plugin(journal::ID));
         assert_eq!(fresh.notes, "");
-        assert_eq!(fresh.days, DAYS_DIR);
+        assert_eq!(fresh.hidden_dirs(), vec!["日记", "目标", "归档"]);
         // 转过来的老仓库：照旧是 Odea 的摆法，只多了 kind
-        write(&marker_logical(Some(serde_json::json!({ "app": "Odea" })), true));
+        write(&marker_logical(Some(json!({ "app": "Odea" }))));
         let converted = Layout::load(root);
         assert!(converted.logical);
         assert_eq!(Layout { logical: false, ..converted }, Layout::odea());
@@ -1011,38 +941,6 @@ mod tests {
         assert!(!Layout::load(root).logical);
         std::fs::write(root.join(super::super::tree::TREE_FILE), "").unwrap();
         assert!(Layout::load(root).logical);
-    }
-
-    #[test]
-    fn goal_paths_round_trip_including_iso_week_years() {
-        for (horizon, start) in [
-            ("week", "2026-09-21"),
-            ("week", "2026-12-28"),
-            ("week", "2027-01-04"),
-            ("week", "2024-12-30"),
-            ("month", "2026-09-01"),
-            ("year", "2026-01-01"),
-        ] {
-            let path = goal_path(horizon, start).unwrap();
-            assert_eq!(
-                classify(&path),
-                Slot::Goal {
-                    horizon,
-                    period_start: start.into()
-                },
-                "{path}"
-            );
-        }
-        // 2024-12-30 是 2025 年第 1 周的周一
-        assert_eq!(goal_path("week", "2024-12-30").unwrap(), "目标/2025/2025-W01.md");
-        assert!(goal_path("week", "2026-09-22").is_err());
-    }
-
-    #[test]
-    fn goal_titles_match_the_frontend() {
-        assert_eq!(goal_title("week", "2026-09-21"), "第 39 周目标");
-        assert_eq!(goal_title("month", "2026-09-01"), "九月目标");
-        assert_eq!(goal_title("year", "2026-01-01"), "2026 年目标");
     }
 
     #[test]

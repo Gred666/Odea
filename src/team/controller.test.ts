@@ -1,5 +1,5 @@
 import type { CollabScheduler } from "@/collab/session";
-import type { DocumentSaveTarget } from "@/data/types";
+import { type DocumentRef, NOTE, noteRef } from "@/data/types";
 import { describe, expect, it, vi } from "vitest";
 import { TeamController, type TeamIO, type TeamSnapshot } from "./controller";
 import { type MockTeamHub, createMockTeamHub } from "./mockNet";
@@ -8,7 +8,7 @@ import { type MockTeamHub, createMockTeamHub } from "./mockNet";
    每台一个 controller、一块自己的「磁盘」。打字不经编辑器，直接改会话 */
 
 const DOC = "笔记/周会.md";
-const TARGET: DocumentSaveTarget = { kind: "note", id: "n1" };
+const TARGET: DocumentRef = noteRef("n1");
 const ORIGINAL = "# 周会\n\n- 张三：接口\n- 李四：界面\n\n## 下周\n- 发版";
 
 const scheduler: CollabScheduler = {
@@ -35,9 +35,9 @@ function device(hub: MockTeamHub, id: string, name: string, text = ORIGINAL): De
   } as Device;
   const io: TeamIO = {
     flush: async () => {},
-    load: async (target) => (target.kind === "note" ? out.disk.get(target.id) : undefined),
+    load: async (target) => (target.type === NOTE ? out.disk.get(target.key) : undefined),
     save: async (target, text) => {
-      if (target.kind === "note") out.disk.set(target.id, text);
+      if (target.type === NOTE) out.disk.set(target.key, text);
       out.saves += 1;
     },
     onExternal: (_target, listener) => {

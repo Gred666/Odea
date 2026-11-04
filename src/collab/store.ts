@@ -4,6 +4,7 @@ import { base64Of, fallbackName } from "@/data/attachments";
 import { backend } from "@/data/backend";
 import { folderOf } from "@/data/folders";
 import { useData } from "@/data/store";
+import { noteRef } from "@/data/types";
 import type { ImageResolver } from "@/editor/html";
 import { flushAllEditors } from "@/editor/saveBus";
 import type {
@@ -812,7 +813,7 @@ async function hostDoc(id: number, doc: string, resumeState?: Uint8Array): Promi
   const current = await ensureNet();
   const sender = senderOf(current, id);
   const note = useData.getState().notes.find((item) => item.id === doc);
-  const borrowed = await holdTeamDoc({ kind: "note", id: doc }, note);
+  const borrowed = await holdTeamDoc(noteRef(doc), note);
   if (borrowed) {
     heavyModules ??= await heavy();
     const again = runtime.docs.get(doc);
@@ -935,7 +936,7 @@ async function answerCreate(id: number, request: number, folder: string, title: 
     const data = useData.getState();
     const noteId = await data.createNote(place || undefined);
     if (!noteId) throw new Error("建不了新的笔记");
-    if (title.trim()) await data.saveTitle({ kind: "note", id: noteId }, title.trim());
+    if (title.trim()) await data.saveTitle(noteRef(noteId), title.trim());
     await current.answerCreate(id, request, noteId, null);
   } catch (error) {
     await current.answerCreate(id, request, null, errorText(error)).catch(() => {});
@@ -1726,7 +1727,7 @@ function watchHosted(
     // 要在 await 之前取：存盘的这一会儿里别人的字可能又到了
     const state = session.encodeState();
     try {
-      await useData.getState().saveDocument({ kind: "note", id: noteId }, shot.text);
+      await useData.getState().saveDocument(noteRef(noteId), shot.text);
       saved = shot;
       current.saveState(id, noteId, state);
     } catch {
@@ -1816,7 +1817,7 @@ async function storeCopy(
   const data = useData.getState();
   const noteId = await data.createNote("");
   if (!noteId) return null;
-  const target = { kind: "note", id: noteId } as const;
+  const target = noteRef(noteId);
   const api = await backend();
   const { markdown, missing } = await copyImages(body, fetched, {
     attachPath: (file) => api.vaultAttachPath(target, file),
@@ -1842,7 +1843,7 @@ async function receiveCopy(current: CollabNet): Promise<void> {
     return { url: image.data ? `data:;base64,${image.data}` : "", file: image.file };
   });
   if (!noteId) return;
-  openDocument({ kind: "note", id: noteId });
+  openDocument(noteRef(noteId));
   useData.setState({ notice: `「${copy.title}」存了一份到笔记` });
 }
 
@@ -1855,7 +1856,7 @@ export async function initCollab(): Promise<void> {
       state.workspace !== previous.workspace ||
       state.selectedNoteId !== previous.selectedNoteId ||
       state.selectedArchiveId !== previous.selectedArchiveId ||
-      state.selectedDate !== previous.selectedDate
+      state.pageTick !== previous.pageTick
     ) {
       useCollab.setState({ showShared: false });
     }

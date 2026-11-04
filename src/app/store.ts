@@ -1,8 +1,8 @@
 import { within } from "@/data/folders";
-import type { DocumentAnchor, DocumentSaveTarget, GoalHorizon, WorkspaceId } from "@/data/types";
-import { type ISODate, today } from "@/lib/date";
+import type { DocumentAnchor, DocumentRef, VaultLayout, WorkspaceId } from "@/data/types";
 import { isTauri } from "@/lib/tauri";
 import { transitionTheme } from "@/lib/themeTransition";
+import { navItemOf, pluginNavItems } from "@/plugins/registry";
 import { create } from "zustand";
 import * as panes from "./panes";
 import type { NotePane, PaneLayout, StoredLayout } from "./panes";
@@ -47,24 +47,19 @@ interface AppState {
   navDirection: 1 | -1;
   setWorkspace: (w: WorkspaceId) => void;
   /**
-   * 这个仓库开没开日程、归档（data/store 取到仓库信息时调）：没开的话，停在日程那几页、归档的回到文件
+   * 这个仓库的摆法定了（data/store 取到仓库信息时调）：停在没开的插件的页、没开的归档、认不出来的页的，回到文件
    */
-  fitLayout: (journal: boolean, archive: boolean) => void;
+  fitLayout: (layout: VaultLayout) => void;
+  /**
+   * 插件的页里换了要看的那一篇（日历点到另一天）：pageTick 加一。做客时共享的那一篇据此收起来（collab/store），
+   * 和换区、换篇一样
+   */
+  pageTick: number;
+  touchPage: () => void;
 
   /* ---- 各区的选中项 ---- */
   selectedNoteId: string;
   selectedArchiveId: string;
-  selectedDate: ISODate;
-  /**
-   * 「今天」。放进 store 而不是每次 today() 现算：应用开着跨过零点时，
-   * 今日TODO、日历上的今天标记都要跟着翻页，得有一个能触发重渲染的信号。
-   * 由 startTodayTicker() 在每个零点刷新。
-   */
-  todayDate: ISODate;
-  setTodayDate: (d: ISODate) => void;
-  /** 日历右侧的分段：日TODO / 周·月·年 GOAL */
-  calendarScope: "day" | "week" | "month" | "year";
-  goalHorizon: GoalHorizon;
 
   /**
    * 在正在写的窗格的当前标签里打开这一篇；这个窗格别的标签里开着就切过去。
@@ -130,9 +125,6 @@ interface AppState {
    */
   pendingAnchor: ({ docKey: string } & DocumentAnchor) | null;
   setPendingAnchor: (anchor: AppState["pendingAnchor"]) => void;
-  selectDate: (d: ISODate) => void;
-  setCalendarScope: (s: AppState["calendarScope"]) => void;
-  setGoalHorizon: (h: GoalHorizon) => void;
 
   /* ---- 笔记的文件夹 ---- */
   /** 列表栏现在在哪个文件夹（相对「笔记」，空串是「全部笔记」） */
@@ -200,11 +192,11 @@ interface AppState {
   trashOpen: boolean;
   setTrashOpen: (v: boolean) => void;
   /** 历史版本对话框开着的那一篇（技术方案 §5.9.11）；null = 关着 */
-  historyFor: DocumentSaveTarget | null;
-  setHistoryFor: (target: DocumentSaveTarget | null) => void;
+  historyFor: DocumentRef | null;
+  setHistoryFor: (target: DocumentRef | null) => void;
   /**
-   * 窄栏右边那一栏（文件树、日历的月历、归档列表）收起来，给正文让地方（像 VS Code 的侧栏），
-   * 记在本机。今日TODO、目标本来就没有这一栏
+   * 窄栏右边那一栏（文件树、归档列表、插件的列表栏：日历的月历）收起来，给正文让地方（像 VS Code 的侧栏），
+   * 记在本机。没有列表栏的页（今日TODO、目标）本来就没有这一栏
    */
   panelCollapsed: boolean;
   setPanelCollapsed: (v: boolean) => void;
@@ -214,11 +206,12 @@ interface AppState {
   setZen: (v: boolean) => void;
 }
 
-/** 导航顺序 —— 决定切换时主内容往哪个方向位移 */
-const NAV_ORDER: WorkspaceId[] = ["notes", "today", "goal", "calendar", "archive", "extensions"];
-
-/** 日程那几页（docs/仓库与启动器.md §6）：仓库开了日程才有。归档单独一个开关，不算在里面 */
-export const JOURNAL_WORKSPACES: WorkspaceId[] = ["today", "goal", "calendar"];
+/**
+ * 导航顺序 —— 决定切换时主内容往哪个方向位移：文件在最前，插件的那几项按它们的 order，归档、扩展页在最后
+ */
+export function navOrder(): WorkspaceId[] {
+  return ["notes", ...pluginNavItems().map((item) => item.id), "archive", "extensions"];
+}
 
 const LS_KEY = "odea.prefs";
 
@@ -304,8 +297,9 @@ function loadSession(): Session {
   const session: Session = { workspace: "notes", noteId: "", archiveId: "", noteFolder: "" };
   try {
     const p = JSON.parse(readStored(SESSION_KEY) ?? "{}");
-    // 扩展页还没有运行时，从导航里拿掉了：停在那儿的回到笔记
-    if (NAV_ORDER.includes(p.workspace) && p.workspace !== "extensions") {
+    // 扩展页还没有运行时，从导航里拿掉了：停在那儿的回到笔记。插件的页（今日TODO ……）这时还认不出来
+    // （插件在这之后才装上）：先照记的放着，取到仓库的摆法时 fitLayout 再核对
+    if (typeof p.workspace === "string" && p.workspace && p.workspace !== "extensions") {
       session.workspace = p.workspace;
     }
     if (typeof p.noteId === "string") session.noteId = p.noteId;
@@ -428,31 +422,31 @@ export const useApp = create<AppState>((set, get) => {
     workspace: initialSession.workspace,
     navDirection: 1,
     setWorkspace: (w) => {
-      const from = NAV_ORDER.indexOf(get().workspace);
-      const to = NAV_ORDER.indexOf(w);
-      if (from === to) return;
+      if (w === get().workspace) return;
+      const order = navOrder();
+      const from = order.indexOf(get().workspace);
+      const to = order.indexOf(w);
       // 离开笔记区就退出专注模式：其它区没有这个入口，留着的话侧栏会一直是收起的，
       // 用户在日历页找不到任何东西可以点回来。
       set({ workspace: w, navDirection: to > from ? 1 : -1, zen: false });
     },
-    fitLayout: (journal, archive) => {
+    fitLayout: (layout) => {
       const workspace = get().workspace;
-      if (
-        (!journal && JOURNAL_WORKSPACES.includes(workspace)) ||
-        (!archive && workspace === "archive")
-      )
-        set({ workspace: "notes" });
+      const item = navItemOf(workspace);
+      // 扩展页一直在（和以前一样，开关插件时停在那儿不动）；归档看开关；插件的页看插件开没开
+      const fits =
+        workspace === "notes" ||
+        workspace === "extensions" ||
+        (workspace === "archive" && layout.archive) ||
+        (!!item && layout.plugins.includes(item.plugin));
+      if (!fits) set({ workspace: "notes" });
     },
+    pageTick: 0,
+    touchPage: () => set((state) => ({ pageTick: state.pageTick + 1 })),
 
     // 上次看的那一篇；不在了（删了、换了仓库）由列表栏退到第一篇
     selectedNoteId: initialSession.noteId,
     selectedArchiveId: initialSession.archiveId,
-    // 打开日历就是今天，不用每次手动定位
-    selectedDate: today(),
-    todayDate: today(),
-    setTodayDate: (d) => set({ todayDate: d }),
-    calendarScope: "day",
-    goalHorizon: "week",
 
     selectNote: (id, popout) =>
       apply((layout) => panes.navigate(layout, id), isPopout(popout) ? popout : null),
@@ -563,9 +557,6 @@ export const useApp = create<AppState>((set, get) => {
     },
     pendingAnchor: null,
     setPendingAnchor: (pendingAnchor) => set({ pendingAnchor }),
-    selectDate: (d) => set({ selectedDate: d }),
-    setCalendarScope: (s) => set({ calendarScope: s }),
-    setGoalHorizon: (h) => set({ goalHorizon: h }),
 
     noteFolder: initialSession.noteFolder,
     noteFolderDir: 0,
@@ -761,9 +752,9 @@ export function initPreferences() {
   });
 }
 
-/** 当前工作区是否有中列表栏（今日TODO 和 GOAL 是两栏布局） */
+/** 当前工作区是否有中列表栏：文件、归档有；插件的页看它的导航项带不带列表栏（日历带，今日TODO 和 GOAL 是两栏布局） */
 export function hasListColumn(w: WorkspaceId): boolean {
-  return w === "notes" || w === "calendar" || w === "archive";
+  return w === "notes" || w === "archive" || !!navItemOf(w)?.List;
 }
 
 /** 中列表栏的宽度。进出场时它要从导航栏底下滑出来 / 滑回去，位移就是这么宽（见 Shell）。 */
@@ -783,42 +774,3 @@ export const RAIL_WIDTH = NAV_WIDTH + LIST_WIDTH;
 
 /** 现在左侧 chrome 有多宽：专注模式要把这一整条推出去 */
 export const chromeWidth = (listShown: boolean) => NAV_WIDTH + (listShown ? LIST_WIDTH : 0);
-
-/**
- * 零点翻页：把 todayDate 刷成新的一天，并把日历上还停在昨天的选择带过去。
- * 用 setTimeout 对准下一个零点，而不是每分钟轮询；睡眠唤醒后 setTimeout
- * 可能晚点，所以醒来（visibilitychange）时再对一次表。
- */
-export function startTodayTicker(): () => void {
-  let timer = 0;
-
-  const sync = () => {
-    const now = today();
-    const state = useApp.getState();
-    if (state.todayDate !== now) {
-      const followed = state.selectedDate === state.todayDate;
-      useApp.setState({ todayDate: now, ...(followed ? { selectedDate: now } : {}) });
-    }
-    schedule();
-  };
-
-  const schedule = () => {
-    window.clearTimeout(timer);
-    const next = new Date();
-    next.setHours(24, 0, 0, 500);
-    timer = window.setTimeout(sync, Math.max(1000, next.getTime() - Date.now()));
-  };
-
-  const onVisible = () => {
-    if (document.visibilityState === "visible") sync();
-  };
-  document.addEventListener("visibilitychange", onVisible);
-  schedule();
-
-  return () => {
-    window.clearTimeout(timer);
-    document.removeEventListener("visibilitychange", onVisible);
-  };
-}
-
-export { NAV_ORDER, today };

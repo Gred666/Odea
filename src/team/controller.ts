@@ -3,7 +3,7 @@ import type { KeepGuard } from "@/collab/keep";
 import { type SessionLink, ackSaved, linkSession } from "@/collab/link";
 import { type Frame, PIPE } from "@/collab/net";
 import { type CollabScheduler, type CollabSession, type Peer, peerColor } from "@/collab/session";
-import type { DocumentSaveTarget } from "@/data/types";
+import type { DocumentRef } from "@/data/types";
 import type { PresenceDoc, TeamControl, TeamPeer, TeamSelf } from "@/lib/bindings";
 import { merge3 } from "@/lib/merge3";
 import type { TeamNet } from "./net";
@@ -43,20 +43,15 @@ export interface TeamIO {
   /** 编辑器里没存的先存下去 */
   flush(): Promise<void>;
   /** 数据层里这一篇现在的正文（磁盘上的；某一天没写过时是延续来的） */
-  load(target: DocumentSaveTarget): Promise<string | undefined>;
-  save(target: DocumentSaveTarget, text: string): Promise<void>;
+  load(target: DocumentRef): Promise<string | undefined>;
+  save(target: DocumentRef, text: string): Promise<void>;
   /** 这一篇被别处改了（git 拉来的、别的程序）：给磁盘上的新正文 */
-  onExternal(target: DocumentSaveTarget, listener: (disk: string) => void): () => void;
+  onExternal(target: DocumentRef, listener: (disk: string) => void): () => void;
   /**
    * 守着这份会话：做客时主持人还没存下的字本机另留一份（collab/keep.ts，docs/协同编辑.md §24）。
    * host 是现在替我存盘的那位的名字。不给（测试）就不留
    */
-  keep?(
-    link: SessionLink,
-    target: DocumentSaveTarget,
-    doc: string,
-    host: () => string,
-  ): KeepGuard | null;
+  keep?(link: SessionLink, target: DocumentRef, doc: string, host: () => string): KeepGuard | null;
 }
 
 export interface TeamTiming {
@@ -92,7 +87,7 @@ export interface TeamView {
    * 目标 `goal-周期-开始日期`（team/store.ts 的 teamDocId）
    */
   doc: string;
-  target: DocumentSaveTarget;
+  target: DocumentRef;
 }
 
 export interface TeamDocSession {
@@ -111,7 +106,7 @@ type Role = "solo" | "host" | "joining" | "guest" | "orphan" | "takeover";
 
 interface Entry {
   doc: string;
-  target: DocumentSaveTarget;
+  target: DocumentRef;
   role: Role;
   /** 每换一次角色加一：异步做到一半角色变了的，回来以后就不接着做 */
   epoch: number;

@@ -8,7 +8,6 @@ import {
   guideOf,
   newerThan,
 } from "@/content/guide";
-import { formatMonthDayCN, goalTitle, periodStartOf } from "@/lib/date";
 import { countWords, makeExcerpt } from "@/lib/plainText";
 import {
   contextLine,
@@ -17,6 +16,7 @@ import {
   retargetWikiLinks,
   sameTitle,
 } from "@/lib/wikilinks";
+import { installedPlugins } from "@/plugins/registry";
 import type { Backend } from "./backend";
 import {
   UNSORTED,
@@ -43,35 +43,32 @@ import {
 import {
   type AppUpgrade,
   type Backlink,
-  type DayDoc,
   type DocHistory,
-  type DocumentSaveTarget,
+  type DocumentRef,
   type FindFile,
   type FindMatch,
   type FindOptions,
   type FolderDeletion,
-  type Goal,
-  type GoalHorizon,
   type GuideName,
   type GuideUpdate,
-  type JournalDoc,
-  type JournalVault,
   type LinkRewrite,
+  NOTE,
   type Note,
   type NoteSummary,
   ODEA_LAYOUT,
+  type PluginVault,
   type Relink,
   SYNC_OFF,
-  type Task,
   type TeamInfo,
   type TeamInvite,
   type TextHit,
   type TreeFile,
   type TreeNode,
+  type TypedDoc,
   type UpdateInfo,
   type VaultChange,
   type VaultInfo,
-  goalKey,
+  noteRef,
 } from "./types";
 
 /* ============================================================
@@ -80,7 +77,8 @@ import {
    只在 `pnpm dev` 直开 1420 端口调 UI 时用；桌面版走 Rust（仓库文件夹里的 .md 文件）。
    语义尽量贴近 Rust 实现（删除可撤销、归档清置顶、置顶排前），
    这样在浏览器里看到的行为和真机一致。跟文件打交道的操作（在文件夹中显示…）只在桌面版里有。
-   带日期的任务在这里是一份独立的列表，不从正文里解析。
+   插件的那一份由插件自己写（plugins/<id>/mock.ts，用下面「给插件的」那几样）：它的数据存在这个仓库里，
+   它的文档交过来，搜索、反链、历史版本、改写双链都算上。
    新仓库里只有使用指南（src/content/guide/），和桌面版一样；升级时的新旧也按同一套规矩管。
 
    状态存在 localStorage，改了 seed 想清空就升版本号。
@@ -103,11 +101,8 @@ type MockNote = Omit<Note, "idInFile"> & {
 
 interface MockState {
   notes: MockNote[];
-  tasks: Record<string, Task>;
-  /** 按日期索引的某天文档（不含任务） */
-  days: Record<string, { title: string; noteMd: string; updatedAt: number }>;
-  /** 按 `horizon:periodStart` 索引的目标 */
-  goals: Record<string, Goal>;
+  /** 插件的数据（mockData），按插件 id。P14.1 以前日程的 days、goals、tasks 放在最外层，日程自己认过去 */
+  plugins?: Record<string, unknown>;
   /** 删掉的笔记。和 Rust 侧的软删除一样可以撤销；旧版存档里没有这一项 */
   trash?: MockNote[];
   /** 「笔记」下面的文件夹（相对「笔记」的路径）；旧版存档里没有这一项 */
@@ -124,16 +119,13 @@ function load(): MockState {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) {
       const p = JSON.parse(raw) as MockState;
-      if (Array.isArray(p.notes) && p.tasks && p.days && p.goals) return p;
+      if (Array.isArray(p.notes)) return p;
     }
   } catch {
     /* 隐私模式 / 数据损坏：从一个新仓库开始 */
   }
   const fresh: MockState = {
     notes: GUIDES.map((guide) => newGuideNote(guide, Date.now())),
-    tasks: {},
-    days: {},
-    goals: {},
   };
   // 马上存下：指南的 id 是随机的，不存的话每次刷新都换一批，记住的「上次停在哪一篇」就对不上了
   save(fresh);
@@ -213,9 +205,6 @@ function present({ guide: _mark, ...note }: MockNote): Note {
   };
 }
 
-const dayRelPath = (date: string) => `日记/${date.slice(0, 4)}/${date}.md`;
-const goalRelPath = (periodStart: string) => `目标/${periodStart.slice(0, 4)}/${periodStart}.md`;
-
 function save(s: MockState) {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(s));
@@ -226,6 +215,58 @@ function save(s: MockState) {
 
 const state: MockState = load();
 if (refreshGuides(state)) save(state);
+
+/* ---------------- 给插件的（plugins/<id>/mock.ts） ---------------- */
+
+/** 插件的一篇文档：搜索、反链、历史版本、改写双链都要看到它 */
+export interface MockDoc {
+  ref: DocumentRef;
+  relPath: string;
+  /** 给人看的标题（同 Rust 的 DocType::display_title） */
+  title: string;
+  updatedAt: number;
+  /** 写过东西（命令面板、搜索只列这些） */
+  written: boolean;
+  /** 历史版本记在哪个键下（mockRecordVersion） */
+  historyKey: string;
+  get(): string;
+  /** 改写别处的双链时用：换掉正文（调用方随后存仓库、发通知） */
+  set(body: string): void;
+}
+
+export interface MockDocs {
+  plugin: string;
+  /** 放这些文档的文件夹：插件开着时不在文件树上 */
+  dirs: string[];
+  list(): MockDoc[];
+}
+
+const pluginDocs: MockDocs[] = [];
+
+export function registerMockDocs(docs: MockDocs): void {
+  if (!pluginDocs.some((other) => other.plugin === docs.plugin)) pluginDocs.push(docs);
+}
+
+/** 开着的插件的每一篇 */
+function typedDocs(): MockDoc[] {
+  const on = mockLayout().plugins;
+  return pluginDocs.filter((docs) => on.includes(docs.plugin)).flatMap((docs) => docs.list());
+}
+
+/** 插件存在预览仓库里的那一份（和笔记存在一起，mockSave 一起存）。legacy 是整个仓库，认以前放错地方的数据用 */
+export function mockData<T>(plugin: string, init: (legacy: Record<string, unknown>) => T): T {
+  state.plugins ??= {};
+  if (state.plugins[plugin] === undefined) {
+    state.plugins[plugin] = init(state as unknown as Record<string, unknown>);
+    save(state);
+  }
+  return state.plugins[plugin] as T;
+}
+
+export const mockSave = () => save(state);
+export const mockTick = () => tick();
+export const mockRecordVersion = (key: string, body: string, title = "") =>
+  recordVersion(key, body, title);
 
 /* ---------------- 逻辑目录 ----------------
    树的规矩用和前端乐观更新同一套（data/tree.ts，和 Rust 的 vault/tree.rs 一样）；新节点的 id 在这里
@@ -322,11 +363,12 @@ function matchesQuery(query: string, note: MockNote, folder: string, now: number
   });
 }
 
-/* ---------------- 日程、归档开关 ----------------
-   浏览器预览里只管窄栏上有没有日程、归档那几项：日记、目标照旧是日记、目标，树根照旧是「笔记」。
+/* ---------------- 插件、归档开关 ----------------
+   浏览器预览里只管窄栏上有没有插件的那几项、归档：日记、目标照旧是日记、目标，树根照旧是「笔记」。
    关了日程以后「整个仓库是一棵树」的样子要在桌面版里看（Rust 的 vault/layout.rs） */
 
-const JOURNAL_KEY = "odea.mock.journal";
+/** 开关过的插件：{ 插件 id: 开着没有 }。没开关过的照插件说的（Odea 的仓库默认开着日程） */
+const PLUGINS_KEY = "odea.mock.plugins";
 const ARCHIVE_KEY = "odea.mock.archive";
 
 /* ---------------- 团队仓库 ----------------
@@ -360,20 +402,32 @@ function saveMockTeam(team: MockTeam) {
   }
 }
 
+function pluginSwitches(): Record<string, boolean> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PLUGINS_KEY) ?? "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch {
+    /* 隐私模式、写坏了：照默认 */
+    return {};
+  }
+}
+
 function mockLayout() {
-  let journal = true;
   let archive = true;
   try {
-    journal = localStorage.getItem(JOURNAL_KEY) !== "off";
     archive = localStorage.getItem(ARCHIVE_KEY) !== "off";
   } catch {
     /* 隐私模式：开着 */
   }
+  const switches = pluginSwitches();
+  const plugins = installedPlugins()
+    .filter((plugin) => switches[plugin.id] ?? plugin.onByDefault)
+    .map((plugin) => plugin.id);
   const hiddenDirs = [
-    ...(journal ? [ODEA_LAYOUT.daysDir, ODEA_LAYOUT.goalsDir] : []),
+    ...pluginDocs.filter((docs) => plugins.includes(docs.plugin)).flatMap((docs) => docs.dirs),
     ...(archive ? [ODEA_LAYOUT.archiveDir] : []),
   ];
-  return { ...ODEA_LAYOUT, journal, archive, hiddenDirs };
+  return { ...ODEA_LAYOUT, plugins, archive, hiddenDirs };
 }
 
 function setMockSwitch(key: string, on: boolean) {
@@ -381,6 +435,14 @@ function setMockSwitch(key: string, on: boolean) {
     localStorage.setItem(key, on ? "" : "off");
   } catch {
     /* 忽略：刷新后又是开着的 */
+  }
+}
+
+function setPluginSwitch(plugin: string, on: boolean) {
+  try {
+    localStorage.setItem(PLUGINS_KEY, JSON.stringify({ ...pluginSwitches(), [plugin]: on }));
+  } catch {
+    /* 忽略：刷新后照默认 */
   }
 }
 
@@ -432,9 +494,8 @@ const vaultListeners = new Set<(change: VaultChange) => void>();
 function announce(change: Partial<VaultChange>) {
   const full: VaultChange = {
     notes: [],
-    days: [],
-    goals: [],
-    tasks: false,
+    docs: [],
+    plugins: [],
     conflicts: [],
     foundCopies: [],
     folders: false,
@@ -446,11 +507,10 @@ function announce(change: Partial<VaultChange>) {
   }, 0);
 }
 
-/** 正文里可能写着双链的每一篇（笔记、某一天、目标），改写别处的链接时用 */
-function linkSources() {
+/** 正文里可能写着双链的每一篇（笔记、插件的文档），改写别处的链接时用 */
+function linkSources(): LinkSource[] {
   const notes = state.notes.map((note) => ({
-    kind: "note" as const,
-    id: note.id,
+    ref: noteRef(note.id),
     relPath: present(note).relPath,
     title: note.title,
     get: () => note.contentMd,
@@ -462,40 +522,21 @@ function linkSources() {
       recordVersion(`note:${note.id}`, body, note.title);
     },
   }));
-  const days = Object.entries(state.days).map(([date, day]) => ({
-    kind: "day" as const,
-    id: date,
-    relPath: dayRelPath(date),
-    title: day.title ? `${formatMonthDayCN(date)} · ${day.title}` : formatMonthDayCN(date),
-    get: () => day.noteMd,
-    set: (body: string) => {
-      day.noteMd = body;
-      day.updatedAt = Date.now();
-      recordVersion(`day:${date}`, body);
-    },
-  }));
-  const goals = Object.entries(state.goals).map(([key, goal]) => ({
-    kind: "goal" as const,
-    id: key,
-    relPath: goalRelPath(goal.periodStart),
-    title: goalTitle(goal.horizon, goal.periodStart),
-    get: () => goal.contentMd,
-    set: (body: string) => {
-      goal.contentMd = body;
-      goal.updatedAt = Date.now();
-      recordVersion(`goal:${key}`, body);
-    },
-  }));
-  return [...notes, ...days, ...goals];
+  return [...notes, ...typedDocs()];
 }
 
-type LinkSource = ReturnType<typeof linkSources>[number];
+interface LinkSource {
+  ref: DocumentRef;
+  relPath: string;
+  title: string;
+  get: () => string;
+  set: (body: string) => void;
+}
 
 function announceSources(sources: LinkSource[]) {
   announce({
-    notes: sources.filter((s) => s.kind === "note").map((s) => s.id),
-    days: sources.filter((s) => s.kind === "day").map((s) => s.id),
-    goals: sources.filter((s) => s.kind === "goal").map((s) => s.id),
+    notes: sources.filter((s) => s.ref.type === NOTE).map((s) => s.ref.key),
+    docs: sources.filter((s) => s.ref.type !== NOTE).map((s) => s.ref),
   });
 }
 
@@ -581,48 +622,23 @@ function historyOf(key: string, body: string, title: string): MockVersion[] {
   return versionLog.get(key) ?? [];
 }
 
-const emptyGoal = (horizon: GoalHorizon, periodStart: string): Goal => ({
-  id: "",
-  horizon,
-  title: "",
-  periodStart,
-  contentMd: "",
-  createdAt: 0,
-  updatedAt: 0,
-  relPath: goalRelPath(periodStart),
-});
-
 /** 去掉正文：和 Rust 的 note_list 一样，列表里不带 */
 function summary(note: MockNote): NoteSummary {
   const { contentMd: _body, ...rest } = present(note);
   return rest;
 }
 
-/** 写过的某一天和目标，连同正文（journalList 去掉正文给出去，searchText 在正文里找） */
-function journalEntries(): (JournalDoc & { contentMd: string })[] {
-  const days = Object.entries(state.days)
-    .filter(([, day]) => day.noteMd || day.title)
-    .map(([date, day]) => ({
-      target: { kind: "day", id: date } as DocumentSaveTarget,
-      kind: "day" as const,
-      title: day.title ? `${formatMonthDayCN(date)} · ${day.title}` : formatMonthDayCN(date),
-      contentMd: day.noteMd,
-      updatedAt: day.updatedAt,
-    }));
-  const goals = Object.values(state.goals)
-    .filter((goal) => goal.contentMd)
-    .map((goal) => ({
-      target: {
-        kind: "goal",
-        horizon: goal.horizon,
-        periodStart: goal.periodStart,
-      } as DocumentSaveTarget,
-      kind: "goal" as const,
-      title: goalTitle(goal.horizon, goal.periodStart),
-      contentMd: goal.contentMd,
-      updatedAt: goal.updatedAt,
-    }));
-  return [...days, ...goals].sort((a, b) => b.updatedAt - a.updatedAt);
+/** 写过东西的插件文档，连同正文（docList 去掉正文给出去，searchText 在正文里找），最近改过的在前 */
+function typedEntries(): (TypedDoc & { contentMd: string })[] {
+  return typedDocs()
+    .filter((doc) => doc.written)
+    .map((doc) => ({
+      target: doc.ref,
+      title: doc.title,
+      updatedAt: doc.updatedAt,
+      contentMd: doc.get(),
+    }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 /* ---- 全局搜索（findInVault），同 Rust 的 domain::search::Finder / vault::find_text ---- */
@@ -1089,33 +1105,21 @@ export const mockBackend: Backend = {
     for (const other of state.notes) {
       if (other.id === id) continue;
       sources.push({
-        target: { kind: "note", id: other.id },
-        kind: "note",
+        target: noteRef(other.id),
         title: other.title,
         archived: other.isArchived,
         updatedAt: other.updatedAt,
       });
       bodies.push(other.contentMd);
     }
-    for (const [date, day] of Object.entries(state.days)) {
+    for (const doc of typedDocs()) {
       sources.push({
-        target: { kind: "day", id: date },
-        kind: "day",
-        title: day.title ? `${formatMonthDayCN(date)} · ${day.title}` : formatMonthDayCN(date),
+        target: doc.ref,
+        title: doc.title,
         archived: false,
-        updatedAt: day.updatedAt,
+        updatedAt: doc.updatedAt,
       });
-      bodies.push(day.noteMd);
-    }
-    for (const goal of Object.values(state.goals)) {
-      sources.push({
-        target: { kind: "goal", horizon: goal.horizon, periodStart: goal.periodStart },
-        kind: "goal",
-        title: goalTitle(goal.horizon, goal.periodStart),
-        archived: false,
-        updatedAt: goal.updatedAt,
-      });
-      bodies.push(goal.contentMd);
+      bodies.push(doc.get());
     }
     const out: Backlink[] = [];
     sources.forEach((source, index) => {
@@ -1142,7 +1146,7 @@ export const mockBackend: Backend = {
     if (!from || sameTitle(from, to)) return result;
     const sources = linkSources().filter(
       (source) =>
-        !(source.kind === "note" && source.id === id) &&
+        !(source.ref.type === NOTE && source.ref.key === id) &&
         findWikiLinks(source.get()).some((hit) => sameTitle(hit.title, from)),
     );
     if (!sources.length) return result;
@@ -1194,24 +1198,23 @@ export const mockBackend: Backend = {
     return touched.length;
   },
 
-  async docHistory(target: DocumentSaveTarget): Promise<DocHistory> {
+  async docHistory(target: DocumentRef): Promise<DocHistory> {
     await tick();
     let key: string;
     let body = "";
     let title = "";
-    if (target.kind === "note") {
-      const note = state.notes.find((x) => x.id === target.id);
-      if (!note) notFound(`note ${target.id}`);
+    if (target.type === NOTE) {
+      const note = state.notes.find((x) => x.id === target.key);
+      if (!note) notFound(`note ${target.key}`);
       key = `note:${note.id}`;
       body = note.contentMd;
       title = note.title;
-    } else if (target.kind === "day") {
-      key = `day:${target.id}`;
-      body = state.days[target.id]?.noteMd ?? "";
     } else {
-      const goal = goalKey(target.horizon, target.periodStart);
-      key = `goal:${goal}`;
-      body = state.goals[goal]?.contentMd ?? "";
+      const doc = typedDocs().find(
+        (other) => other.ref.type === target.type && other.ref.key === target.key,
+      );
+      key = doc?.historyKey ?? `${target.type}:${target.key}`;
+      body = doc?.get() ?? "";
     }
     const versions = historyOf(key, body, title).map(({ body: _body, ...version }) => version);
     return { unavailable: null, versions, more: false };
@@ -1229,29 +1232,28 @@ export const mockBackend: Backend = {
   async searchText(query, limit, archivedOnly) {
     await tick();
     const needle = query.trim().toLowerCase();
-    if (!needle) return { notes: [], journal: [] };
+    if (!needle) return { notes: [], docs: [] };
     const notes: TextHit[] = [];
     for (const note of archivedOnly ? listed(true) : [...listed(false), ...listed(true)]) {
       if (notes.length >= limit) break;
       const line = lineWith(note.contentMd, needle);
       if (line !== null) {
-        const target = { kind: "note", id: note.id } as const;
-        notes.push({ target, title: note.title, updatedAt: note.updatedAt, line });
-      }
-    }
-    const journal: TextHit[] = [];
-    for (const entry of archivedOnly ? [] : journalEntries()) {
-      if (journal.length >= limit) break;
-      const line = lineWith(entry.contentMd, needle);
-      if (line !== null)
-        journal.push({
-          target: entry.target,
-          title: entry.title,
-          updatedAt: entry.updatedAt,
+        notes.push({
+          target: noteRef(note.id),
+          title: note.title,
+          updatedAt: note.updatedAt,
           line,
         });
+      }
     }
-    return { notes, journal };
+    const docs: TextHit[] = [];
+    for (const entry of archivedOnly ? [] : typedEntries()) {
+      if (docs.length >= limit) break;
+      const line = lineWith(entry.contentMd, needle);
+      if (line !== null)
+        docs.push({ target: entry.target, title: entry.title, updatedAt: entry.updatedAt, line });
+    }
+    return { notes, docs };
   },
 
   async findInVault(query, options) {
@@ -1261,12 +1263,12 @@ export const mockBackend: Backend = {
     if (typeof finder === "string") return { files: [], total: 0, truncated: false, error: finder };
     const docs = [
       ...[...listed(false), ...listed(true)].map((note) => ({
-        target: { kind: "note", id: note.id } as DocumentSaveTarget,
+        target: noteRef(note.id),
         title: note.title,
         updatedAt: note.updatedAt,
         contentMd: note.contentMd,
       })),
-      ...journalEntries(),
+      ...typedEntries(),
     ];
     const files: FindFile[] = [];
     let total = 0;
@@ -1296,99 +1298,9 @@ export const mockBackend: Backend = {
     return { files, total, truncated: total > FIND_MATCH_LIMIT, error: null };
   },
 
-  async taskToggle(id) {
+  async docList(): Promise<TypedDoc[]> {
     await tick();
-    const t = state.tasks[id];
-    if (!t) notFound(`task ${id}`);
-    const done = t.status === "done";
-    t.status = done ? "todo" : "done";
-    save(state);
-    return { ...t };
-  },
-
-  /** 某个周期的目标；没写过就是一篇空文档，和 Rust 侧一样不落库 */
-  async goalGet(horizon, periodStart): Promise<Goal> {
-    await tick();
-    if (periodStartOf(horizon, periodStart) !== periodStart) {
-      throw { kind: "Invalid", message: `${periodStart} 不是 ${horizon} 周期的起点` };
-    }
-    const g = state.goals[goalKey(horizon, periodStart)];
-    return g ? { ...g, relPath: goalRelPath(periodStart) } : emptyGoal(horizon, periodStart);
-  },
-
-  async goalSave(horizon, periodStart, contentMd, _base): Promise<Goal> {
-    await tick();
-    const key = goalKey(horizon, periodStart);
-    const now = Date.now();
-    const current = state.goals[key];
-    state.goals[key] = current
-      ? { ...current, contentMd, updatedAt: now }
-      : {
-          ...emptyGoal(horizon, periodStart),
-          id: crypto.randomUUID(),
-          contentMd,
-          createdAt: now,
-          updatedAt: now,
-        };
-    recordVersion(`goal:${key}`, contentMd);
-    save(state);
-    return this.goalGet(horizon, periodStart);
-  },
-
-  /** carryOver：这一天没写过时延续之前最近写过的一天，不落库（和 Rust 侧一致） */
-  async calendarDay(date, carryOver): Promise<DayDoc> {
-    await tick();
-    const tasks = Object.values(state.tasks).filter((t) => t.dueDate === date);
-    const own = state.days[date];
-    const relPath = dayRelPath(date);
-    if (own) return { date, tasks, ...own, carriedFrom: null, relPath };
-
-    const previous = carryOver
-      ? Object.keys(state.days)
-          .filter((d) => d < date && (state.days[d]!.noteMd || state.days[d]!.title))
-          .sort()
-          .pop()
-      : undefined;
-    if (previous) {
-      return { date, tasks, ...state.days[previous]!, carriedFrom: previous, relPath };
-    }
-
-    return {
-      date,
-      title: "",
-      tasks,
-      noteMd: "",
-      updatedAt: Date.now(),
-      carriedFrom: null,
-      relPath,
-    };
-  },
-
-  async calendarDaySave(date, title, noteMd, _base): Promise<DayDoc> {
-    await tick();
-    state.days[date] = { title, noteMd, updatedAt: Date.now() };
-    recordVersion(`day:${date}`, noteMd);
-    save(state);
-    return this.calendarDay(date, false);
-  },
-
-  async calendarMarks(from, to) {
-    await tick();
-    const inRange = (date: string) => date >= from && date <= to;
-    const written = new Set<string>();
-    const open = new Set<string>();
-    for (const t of Object.values(state.tasks)) {
-      if (!t.dueDate || !inRange(t.dueDate)) continue;
-      (t.status === "done" ? written : open).add(t.dueDate);
-    }
-    for (const [d, v] of Object.entries(state.days))
-      if ((v.noteMd || v.title) && inRange(d)) written.add(d);
-    return { written, open };
-  },
-
-  async journalList(): Promise<JournalDoc[]> {
-    await tick();
-    return journalEntries().map(({ contentMd: _body, ...entry }) => entry);
+    return typedEntries().map(({ contentMd: _body, ...entry }) => entry);
   },
 
   async guidePending(): Promise<GuideUpdate[]> {
@@ -1431,17 +1343,15 @@ export const mockBackend: Backend = {
       root: "浏览器预览（localStorage）",
       notes: state.notes.filter((n) => !n.isArchived).length,
       archived: state.notes.filter((n) => n.isArchived).length,
-      days: Object.keys(state.days).length,
-      goals: Object.keys(state.goals).length,
-      tasks: Object.values(state.tasks).filter((t) => t.dueDate).length,
+      docs: typedDocs().length,
       layout: { ...mockLayout(), logical: !!state.tree },
       team: mockTeam().team,
     };
   },
 
-  async vaultSetJournal(on: boolean): Promise<VaultInfo> {
+  async vaultSetPlugin(plugin: string, on: boolean): Promise<VaultInfo> {
     await tick();
-    setMockSwitch(JOURNAL_KEY, on);
+    setPluginSwitch(plugin, on);
     return mockBackend.vaultInfo();
   },
 
@@ -1625,19 +1535,19 @@ export const mockBackend: Backend = {
   async openVaultLink() {
     desktopOnly();
   },
-  // 日程切换器：预览里另外假装有一个团队仓库开着日程，跳不过去
-  async journalVaults(): Promise<JournalVault[]> {
+  // 日程切换器这类：预览里另外假装有一个团队仓库也开着这个插件，跳不过去
+  async pluginVaults(plugin): Promise<PluginVault[]> {
     await tick();
-    if (!mockLayout().journal) return [];
+    if (!mockLayout().plugins.includes(plugin)) return [];
     return [
       { path: "mock", name: "Odea", team: mockTeam().team, current: true },
       { path: "mock-team", name: "产品组", team: true, current: false },
     ];
   },
-  async journalSwitch() {
+  async vaultGoto() {
     desktopOnly();
   },
-  async onJournalGoto() {
+  async onVaultGoto() {
     return () => {};
   },
 

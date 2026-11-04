@@ -15,7 +15,6 @@ use crate::collab::{
     NodeOptions, Permission, Reach, Relay, RelayCheck, SyncKind, TrustedPeer,
 };
 use crate::domain::model::*;
-use crate::domain::validate_date;
 use crate::error::{AppError, Result};
 use crate::keep::{self, GuestCopy};
 use crate::state::{AppState, Caller, Workspace, Ws};
@@ -47,7 +46,7 @@ pub fn announcer<R: Runtime>(app: AppHandle<R>, label: String) -> Announce {
     })
 }
 
-async fn blocking<T, F>(f: F) -> Result<T>
+pub(crate) async fn blocking<T, F>(f: F) -> Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
@@ -57,7 +56,8 @@ where
         .map_err(|e| AppError::Internal(format!("任务panic: {e}")))?
 }
 
-async fn with_vault<T, F>(ws: &Workspace, f: F) -> Result<T>
+/// 在阻塞线程池里拿这个窗口的仓库的锁做事（插件的命令也用它，plugins/journal/commands.rs）
+pub(crate) async fn with_vault<T, F>(ws: &Workspace, f: F) -> Result<T>
 where
     T: Send + 'static,
     F: FnOnce(&mut Vault) -> Result<T> + Send + 'static,
@@ -435,7 +435,7 @@ const HISTORY_LIMIT: usize = 200;
 /// 一篇文档的历史版本，新的在前。没开启同步（仓库根上没有 .git）时说一声
 #[tauri::command]
 #[specta::specta]
-pub async fn doc_history(ws: Ws, target: DocTarget) -> Result<DocHistory> {
+pub async fn doc_history(ws: Ws, target: DocRef) -> Result<DocHistory> {
     // 只在找路径时持仓库锁；翻 git 历史另开一个 Repository，不持锁
     let (root, rel, id) = with_vault(&ws, move |v| v.history_source(&target)).await?;
     blocking(move || {
@@ -530,7 +530,7 @@ fn with_search_db<T: Default>(
     Ok(scan(conn)?.unwrap_or_default())
 }
 
-/// 搜正文：大小写不敏感的子串，笔记（含归档）和日记、目标各自最多 limit 条；archived_only
+/// 搜正文：大小写不敏感的子串，笔记（含归档）和插件的文档（日记、目标）各自最多 limit 条；archived_only
 /// 只搜归档里的笔记（归档的搜索框）。被同一处后来的搜索顶掉的这一次返回空结果（前端只认最后一次的）
 #[tauri::command]
 #[specta::specta]
@@ -545,18 +545,19 @@ pub async fn search_text(
     let counter = &TEXT_SEARCH_GEN[archived_only as usize];
     let generation = counter.fetch_add(1, Ordering::SeqCst) + 1;
     let limit = limit.clamp(1, 1000) as usize;
-    let root = with_vault(&ws, |v| Ok(v.root().to_path_buf())).await?;
+    // 开着的插件的文档类型拿一份走（给插件的文档起标题），搜的时候不占仓库的锁
+    let (root, types) = with_vault(&ws, |v| Ok((v.root().to_path_buf(), v.layout().types.clone()))).await?;
     let path = boot::index_path(&state.data_dir, &root);
     blocking(move || {
         let cancelled = || counter.load(Ordering::SeqCst) != generation;
         with_search_db(path, &cancelled, |conn| {
-            crate::vault::search_text(conn, &query, limit, archived_only, cancelled)
+            crate::vault::search_text(conn, &query, limit, archived_only, &types, cancelled)
         })
     })
     .await
 }
 
-/// 全局搜索（Ctrl+Shift+F，像 VS Code 的「在文件中查找」）：笔记（含归档）、日记、目标的正文里
+/// 全局搜索（Ctrl+Shift+F，像 VS Code 的「在文件中查找」）：笔记（含归档）、插件的文档（日记、目标）的正文里
 /// 每一处命中，可以区分大小写、全词匹配、用正则。被后来的搜索顶掉的这一次返回空结果
 #[tauri::command]
 #[specta::specta]
@@ -568,99 +569,24 @@ pub async fn find_in_vault(
 ) -> Result<FindResult> {
     use std::sync::atomic::Ordering;
     let generation = FIND_GEN.fetch_add(1, Ordering::SeqCst) + 1;
-    let root = with_vault(&ws, |v| Ok(v.root().to_path_buf())).await?;
+    let (root, types) = with_vault(&ws, |v| Ok((v.root().to_path_buf(), v.layout().types.clone()))).await?;
     let path = boot::index_path(&state.data_dir, &root);
     blocking(move || {
         let cancelled = || FIND_GEN.load(Ordering::SeqCst) != generation;
         with_search_db(path, &cancelled, |conn| {
-            crate::vault::find_text(conn, &query, options, cancelled)
+            crate::vault::find_text(conn, &query, options, &types, cancelled)
         })
     })
     .await
 }
 
-/* ---------------- 任务 ---------------- */
+/* ---------------- 插件的文档（docs/插件与跨端.md §6.1） ---------------- */
 
-/// 勾选日历里的一条任务：改的是它所在文件里的那一行
+/// 所有写过东西的插件文档（某一天、某个周期的目标……，不带正文），最近改过的在前：命令面板按标题搜它们
 #[tauri::command]
 #[specta::specta]
-pub async fn task_toggle(ws: Ws, id: String) -> Result<Task> {
-    with_vault(&ws, move |v| v.toggle_task(&id)).await
-}
-
-/* ---------------- 目标 ---------------- */
-
-/// 某个周期的目标。period_start 由前端按 horizon 算好（周一 / 1 号 / 1 月 1 日），
-/// 这里校验它确实是周期起点。没写过的周期返回空文档。
-#[tauri::command]
-#[specta::specta]
-pub async fn goal_get(
-    ws: Ws,
-    horizon: String,
-    period_start: String,
-) -> Result<Goal> {
-    validate_date(&period_start)?;
-    with_vault(&ws, move |v| v.goal(&horizon, &period_start)).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn goal_save(
-    ws: Ws,
-    horizon: String,
-    period_start: String,
-    content_md: String,
-    base: Option<String>,
-) -> Result<Goal> {
-    validate_date(&period_start)?;
-    with_vault(&ws, move |v| v.save_goal_on(&horizon, &period_start, &content_md, base.as_deref())).await
-}
-
-/* ---------------- 日历 ---------------- */
-
-/// `carry_over` 只在请求「今天」时传 true：今天还没写过就延续之前最近的一天。
-#[tauri::command]
-#[specta::specta]
-pub async fn calendar_day(
-    ws: Ws,
-    date: String,
-    carry_over: bool,
-) -> Result<DayDoc> {
-    validate_date(&date)?;
-    with_vault(&ws, move |v| v.day(&date, carry_over)).await
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn calendar_day_save(
-    ws: Ws,
-    date: String,
-    title: String,
-    note_md: String,
-    base: Option<String>,
-) -> Result<DayDoc> {
-    validate_date(&date)?;
-    with_vault(&ws, move |v| v.save_day_on(&date, &title, &note_md, base.as_deref())).await
-}
-
-/// 月网格上的记号：写过记录 / 做过事的日子，和还有待办的日子
-#[tauri::command]
-#[specta::specta]
-pub async fn calendar_marks(
-    ws: Ws,
-    from: String,
-    to: String,
-) -> Result<CalendarMarks> {
-    validate_date(&from)?;
-    validate_date(&to)?;
-    with_vault(&ws, move |v| v.calendar_marks(&from, &to)).await
-}
-
-/// 所有写过的某一天、某个周期的目标，连同正文（命令面板搜它们）
-#[tauri::command]
-#[specta::specta]
-pub async fn journal_list(ws: Ws) -> Result<Vec<JournalDoc>> {
-    with_vault(&ws, |v| v.journal_list()).await
+pub async fn doc_list(ws: Ws) -> Result<Vec<TypedDoc>> {
+    with_vault(&ws, |v| v.doc_list()).await
 }
 
 /* ---------------- 使用指南（vault/guide.rs） ---------------- */
@@ -694,12 +620,12 @@ pub async fn vault_info(ws: Ws) -> Result<VaultInfo> {
     with_vault(&ws, |v| v.info()).await
 }
 
-/// 开 / 关日程（docs/仓库与启动器.md §6）：改仓库标记，每个文件按新的摆法重新认一遍（文件一个都不动）。
-/// 文件多的话剩下的在后台读，和打开仓库时一样报进度。前端拿到结果后整页重载
+/// 开 / 关一个插件（docs/插件与跨端.md §6.2；日程是 `odea.journal`，docs/仓库与启动器.md §6）：改仓库标记，
+/// 每个文件按新的摆法重新认一遍（文件一个都不动）。文件多的话剩下的在后台读，和打开仓库时一样报进度
 #[tauri::command]
 #[specta::specta]
-pub async fn vault_set_journal<R: Runtime>(app: AppHandle<R>, ws: Ws, on: bool) -> Result<VaultInfo> {
-    let backlog = with_vault(&ws, move |v| v.set_journal(on)).await?;
+pub async fn vault_set_plugin<R: Runtime>(app: AppHandle<R>, ws: Ws, plugin: String, on: bool) -> Result<VaultInfo> {
+    let backlog = with_vault(&ws, move |v| v.set_plugin(&plugin, on)).await?;
     spawn_backlog(app, ws.label.clone(), ws.vault.clone(), ws.indexing.clone(), backlog);
     with_vault(&ws, |v| v.info()).await
 }
@@ -825,11 +751,11 @@ pub fn spawn_backlog<R: Runtime>(
     });
 }
 
-/// 在系统的文件管理器里定位这篇文档的文件（选中它）。还没写过的某一天 /
-/// 某个周期没有文件，打开它将来所在的文件夹。
+/// 在系统的文件管理器里定位这篇文档的文件（选中它）。还没写过的插件文档（某一天、
+/// 某个周期）没有文件，打开它将来所在的文件夹。
 #[tauri::command]
 #[specta::specta]
-pub async fn vault_reveal(ws: Ws, target: DocTarget) -> Result<()> {
+pub async fn vault_reveal(ws: Ws, target: DocRef) -> Result<()> {
     let (path, is_file) = with_vault(&ws, move |v| v.locate(&target)).await?;
     blocking(move || {
         let result = if is_file {
@@ -860,7 +786,7 @@ pub async fn vault_open_folder(ws: Ws) -> Result<()> {
 #[specta::specta]
 pub async fn vault_attach(
     ws: Ws,
-    target: DocTarget,
+    target: DocRef,
     name: String,
     data_base64: String,
 ) -> Result<Attachment> {
@@ -879,7 +805,7 @@ pub async fn vault_attach(
 #[specta::specta]
 pub async fn vault_attach_path(
     ws: Ws,
-    target: DocTarget,
+    target: DocRef,
     path: String,
 ) -> Result<Attachment> {
     with_vault(&ws, move |v| v.attach_path(&target, std::path::Path::new(&path))).await
@@ -1931,7 +1857,7 @@ async fn store_attachment(
     let stored = tauri::async_runtime::spawn_blocking(move || {
         let mut vault = vault.lock().map_err(|_| "仓库锁坏了".to_string())?;
         vault
-            .attach(&DocTarget::Note { id: note }, &name, &bytes)
+            .attach(&DocRef::note(note), &name, &bytes)
             .map(|attachment| attachment.link)
             .map_err(|error| error.to_string())
     })
@@ -3615,7 +3541,7 @@ pub async fn team_close(ws: Ws, state: State<'_, AppState>, doc: String) -> Resu
 /// （设计 §22.2 规矩 2）。没开同步、没提交过是 None
 #[tauri::command]
 #[specta::specta]
-pub async fn team_base(ws: Ws, target: DocTarget) -> Result<Option<String>> {
+pub async fn team_base(ws: Ws, target: DocRef) -> Result<Option<String>> {
     let Ok((root, rel, id)) = with_vault(&ws, move |v| v.history_source(&target)).await else { return Ok(None) };
     blocking(move || {
         if !root.join(".git").exists() {

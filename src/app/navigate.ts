@@ -1,5 +1,6 @@
 import { useData } from "@/data/store";
-import { type DocumentAnchor, type DocumentSaveTarget, goalKey } from "@/data/types";
+import { type DocumentAnchor, type DocumentRef, NOTE } from "@/data/types";
+import { documentType } from "@/plugins/registry";
 import { useApp } from "./store";
 
 /**
@@ -51,10 +52,10 @@ export function selectNeighbor(id: string): void {
  * 那一处命中，见 DocumentAnchor）。DocumentView 在那一篇的编辑器挂上后滚过去。
  *
  * docKey 要和 data/adapter.ts 给每篇文档起的 key 一模一样，否则锚点永远等不到它那一篇：
- * 笔记 `note-` / 归档 `archive-` / 某一天 `day-` / 目标 `goal-周期键`。
+ * 笔记 `note-` / 归档 `archive-`；插件的文档由它的类型切过去、给出 key（某一天 `day-`、目标 `goal-周期键`）。
  */
 export function openDocument(
-  target: DocumentSaveTarget,
+  target: DocumentRef,
   anchor?: DocumentAnchor,
   /** 笔记开在新标签里（docs/标签页与分屏.md §4.1）；别的文档没有标签，不管它 */
   newTab = false,
@@ -62,50 +63,38 @@ export function openDocument(
   // 笔记的正文是按需取的：先取回来再切过去（一般就几毫秒），不然常常还要跨区，先换区、
   // 再在新的区里等正文，会先闪一下那个区上次显示的那一篇
   const data = useData.getState();
-  if (target.kind === "note" && data.bodies[target.id] === undefined) {
-    void data.loadBody(target.id).then(() => show(target, anchor, newTab));
+  if (target.type === NOTE && data.bodies[target.key] === undefined) {
+    void data.loadBody(target.key).then(() => show(target, anchor, newTab));
     return;
   }
   show(target, anchor, newTab);
 }
 
-function show(
-  target: DocumentSaveTarget,
-  anchor: DocumentAnchor | undefined,
-  newTab: boolean,
-): void {
+function show(target: DocumentRef, anchor: DocumentAnchor | undefined, newTab: boolean): void {
   const app = useApp.getState();
   let docKey: string;
-  if (target.kind === "note") {
-    if (useData.getState().archived.some((note) => note.id === target.id)) {
-      app.selectArchive(target.id);
+  if (target.type === NOTE) {
+    const id = target.key;
+    if (useData.getState().archived.some((note) => note.id === id)) {
+      app.selectArchive(id);
       app.setWorkspace("archive");
-      docKey = `archive-${target.id}`;
+      docKey = `archive-${id}`;
     } else if (app.activePopout) {
       // 从弹出窗口的正文里打开的（双链、反向链接）：开在那个窗口里，主窗口不动（docs/标签页与分屏.md §16）
-      if (newTab) app.openNoteTab(target.id, app.activePopout);
-      else app.selectNote(target.id, app.activePopout);
-      docKey = `note-${target.id}`;
+      if (newTab) app.openNoteTab(id, app.activePopout);
+      else app.selectNote(id, app.activePopout);
+      docKey = `note-${id}`;
     } else {
-      if (newTab) app.openNoteTab(target.id);
-      else app.selectNote(target.id);
+      if (newTab) app.openNoteTab(id);
+      else app.selectNote(id);
       app.setWorkspace("notes");
-      docKey = `note-${target.id}`;
+      docKey = `note-${id}`;
     }
-  } else if (target.kind === "day") {
-    if (target.id === app.todayDate) {
-      app.setWorkspace("today");
-    } else {
-      app.setCalendarScope("day");
-      app.selectDate(target.id);
-      app.setWorkspace("calendar");
-    }
-    docKey = `day-${target.id}`;
   } else {
-    app.setCalendarScope(target.horizon);
-    app.selectDate(target.periodStart);
-    app.setWorkspace("calendar");
-    docKey = `goal-${goalKey(target.horizon, target.periodStart)}`;
+    // 插件的文档：它的类型知道在哪一页（今天的在「今日TODO」，别的在日历里）
+    const type = documentType(target.type);
+    if (!type) return;
+    docKey = type.open(target.key);
   }
   const wanted = anchor && (anchor.heading || anchor.line !== undefined);
   app.setPendingAnchor(wanted ? { docKey, ...anchor } : null);

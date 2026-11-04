@@ -23,7 +23,8 @@ const source = {
   keymap: read("src/editor/markdownKeymap.ts"),
   editor: read("src/editor/MarkdownEditor.tsx"),
   table: read("src/editor/tableWidget.ts"),
-  palette: read("src/components/CommandPalette.tsx"),
+  // 命令面板里的一项可能是插件交来的（日程的「启用日程」「切换日程」在 plugins/journal/index.tsx）
+  palette: read("src/components/CommandPalette.tsx") + read("src/plugins/journal/index.tsx"),
   shell: read("src/app/Shell.tsx"),
   suggest: read("src/editor/suggest.ts"),
 };

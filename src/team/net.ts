@@ -1,5 +1,5 @@
 import { type Frame, decodeFrame, encodeFrame, errorText } from "@/collab/net";
-import type { DocumentSaveTarget } from "@/data/types";
+import type { DocumentRef } from "@/data/types";
 import type {
   AppError,
   Result as IpcResult,
@@ -35,7 +35,7 @@ export interface TeamNet {
   open(doc: string, member: number): Promise<void>;
   close(doc: string): Promise<void>;
   /** 这一篇在 git 里最近一次提交的正文（加入时算本机没提交的改动用） */
-  base(target: DocumentSaveTarget): Promise<string | null>;
+  base(target: DocumentRef): Promise<string | null>;
   /** git 同步一轮，等它做完（最多 wait 毫秒）。没开同步的马上回来 */
   syncNow(wait: number): Promise<void>;
   send(kind: number, member: number, doc: string, payload: Uint8Array): void;

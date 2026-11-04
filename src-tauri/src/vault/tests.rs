@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use super::*;
+use crate::plugins::journal::{self, JournalVault};
 
 struct Fixture {
     _dir: tempfile::TempDir,
@@ -211,14 +212,12 @@ fn the_trash_lists_deleted_notes_newest_first() {
 }
 
 fn find(f: &Fixture, query: &str, options: FindOptions) -> FindResult {
-    find_text(&f.vault.db, query, options, || false).unwrap().unwrap()
+    find_text(&f.vault.db, query, options, &f.vault.layout.types, || false).unwrap().unwrap()
 }
 
-fn note_id(target: &DocTarget) -> &str {
-    match target {
-        DocTarget::Note { id } => id,
-        other => panic!("不是笔记: {other:?}"),
-    }
+fn note_id(target: &DocRef) -> &str {
+    assert!(target.is_note(), "不是笔记: {target:?}");
+    &target.key
 }
 
 #[test]
@@ -266,7 +265,7 @@ fn find_orders_notes_then_archive_then_journal_and_skips_titles() {
     let notes: Vec<_> = found
         .files
         .iter()
-        .filter(|file| matches!(file.target, DocTarget::Note { .. }))
+        .filter(|file| file.target.is_note())
         .map(|file| note_id(&file.target).to_string())
         .collect();
     assert_eq!(notes.len(), 4, "只有标题里有的不算：{notes:?}");
@@ -274,7 +273,7 @@ fn find_orders_notes_then_archive_then_journal_and_skips_titles() {
     assert_eq!(notes.last(), Some(&archived), "归档的在笔记后面");
     assert!(notes.contains(&older) && notes.contains(&newer));
     // 日记和目标在所有笔记后面
-    let kinds: Vec<_> = found.files.iter().map(|file| matches!(file.target, DocTarget::Note { .. })).collect();
+    let kinds: Vec<_> = found.files.iter().map(|file| file.target.is_note()).collect();
     assert_eq!(kinds, vec![true, true, true, true, false, false]);
     assert!(found.files.iter().any(|file| file.title == "9月4日 · 周报"));
 }
@@ -332,7 +331,7 @@ fn find_caps_the_matches_it_returns_but_counts_them_all() {
     let counts: Vec<_> = found.files.iter().map(|file| (file.matches.len(), file.count as usize)).collect();
     assert!(counts[0].0 == counts[0].1 && counts[1].0 < counts[1].1, "{counts:?}");
     // 又来了新的搜索：这一次作废
-    assert!(find_text(&f.vault.db, "的", FindOptions::default(), || true).unwrap().is_none());
+    assert!(find_text(&f.vault.db, "的", FindOptions::default(), &f.vault.layout.types, || true).unwrap().is_none());
 }
 
 #[test]
@@ -466,13 +465,10 @@ fn dated_tasks_know_where_they_came_from() {
 
     let tasks = f.vault.day("2026-09-04", false).unwrap().tasks;
     let from_note = tasks.iter().find(|task| task.title == "交稿").unwrap();
-    assert!(matches!(&from_note.source, Some(DocTarget::Note { id }) if *id == note));
+    assert_eq!(from_note.source, Some(DocRef::note(&note)));
     assert_eq!(from_note.line, Some(2), "行号从 0 开始，和反向链接一样");
     let from_goal = tasks.iter().find(|task| task.title == "周目标里的").unwrap();
-    assert!(matches!(
-        &from_goal.source,
-        Some(DocTarget::Goal { horizon, period_start }) if horizon == "week" && period_start == "2026-08-31"
-    ));
+    assert_eq!(from_goal.source, Some(DocRef::new(journal::GOAL, "week:2026-08-31")));
 }
 
 #[test]
@@ -502,13 +498,13 @@ fn the_journal_lists_written_days_and_goals_by_title() {
     f.vault.save_goal("week", "2026-08-31", "本周重点").unwrap();
     f.vault.save_day("2026-09-05", "", "").unwrap();
 
-    let journal = f.vault.journal_list().unwrap();
-    let mut titles: Vec<(&str, &str)> = journal
+    let docs = f.vault.doc_list().unwrap();
+    let mut titles: Vec<(&str, &str)> = docs
         .iter()
-        .map(|doc| (doc.kind.as_str(), doc.title.as_str()))
+        .map(|doc| (doc.target.kind.as_str(), doc.title.as_str()))
         .collect();
     titles.sort();
-    assert_eq!(titles, vec![("day", "9月4日 · 周报"), ("goal", "第 36 周目标")]);
+    assert_eq!(titles, vec![(journal::DAY, "9月4日 · 周报"), (journal::GOAL, "第 36 周目标")]);
 }
 
 #[test]
@@ -539,7 +535,7 @@ fn note_lists_carry_everything_but_the_body() {
 }
 
 fn text_search(f: &Fixture, query: &str, limit: usize) -> TextSearch {
-    search_text(&f.vault.db, query, limit, false, || false).unwrap().unwrap()
+    search_text(&f.vault.db, query, limit, false, &f.vault.layout.types, || false).unwrap().unwrap()
 }
 
 #[test]
@@ -558,21 +554,18 @@ fn text_search_finds_substrings_like_the_palette_did() {
     let ids: Vec<_> = found
         .notes
         .iter()
-        .map(|hit| match &hit.target {
-            DocTarget::Note { id } => id.clone(),
-            other => panic!("不是笔记: {other:?}"),
-        })
+        .map(|hit| note_id(&hit.target).to_string())
         .collect();
     assert!(!ids.contains(&only_title));
     assert_eq!(ids.last(), Some(&archived), "归档的排在后面");
     assert!(ids.contains(&older) && ids.contains(&newer));
     // 返回命中的那一整行，原样
     let line_of = |id: &str| {
-        found.notes.iter().find(|hit| matches!(&hit.target, DocTarget::Note { id: i } if i == id)).unwrap().line.clone()
+        found.notes.iter().find(|hit| hit.target == DocRef::note(id)).unwrap().line.clone()
     };
     assert_eq!(line_of(&older), "今天的进度还可以，Hello World");
-    assert_eq!(found.journal.len(), 2, "某一天和目标的正文也搜");
-    assert!(found.journal.iter().any(|hit| hit.title == "9月4日 · 周报" && hit.line == "进度还可以"));
+    assert_eq!(found.docs.len(), 2, "某一天和目标的正文也搜");
+    assert!(found.docs.iter().any(|hit| hit.title == "9月4日 · 周报" && hit.line == "进度还可以"));
 
     // 大小写不敏感
     let found = text_search(&f, "hello WORLD", 10);
@@ -581,15 +574,15 @@ fn text_search_finds_substrings_like_the_palette_did() {
 
     // limit 各管各的；空的什么也不找
     assert_eq!(text_search(&f, "进度", 1).notes.len(), 1);
-    assert_eq!(text_search(&f, "进度", 1).journal.len(), 1);
+    assert_eq!(text_search(&f, "进度", 1).docs.len(), 1);
     assert!(text_search(&f, "  ", 10).notes.is_empty());
     // 归档的搜索框只要归档里的
-    let found = search_text(&f.vault.db, "度还可", 10, true, || false).unwrap().unwrap();
+    let found = search_text(&f.vault.db, "度还可", 10, true, &f.vault.layout.types, || false).unwrap().unwrap();
     assert_eq!(found.notes.len(), 1);
-    assert!(matches!(&found.notes[0].target, DocTarget::Note { id } if *id == archived));
-    assert!(found.journal.is_empty());
+    assert_eq!(found.notes[0].target, DocRef::note(&archived));
+    assert!(found.docs.is_empty());
     // 又来了新的搜索：这一次作废
-    assert!(search_text(&f.vault.db, "进度", 10, false, || true).unwrap().is_none());
+    assert!(search_text(&f.vault.db, "进度", 10, false, &f.vault.layout.types, || true).unwrap().is_none());
 }
 
 #[test]
@@ -622,7 +615,7 @@ fn toggling_a_task_edits_its_line_in_the_source_file() {
     );
     // 前端手里这篇的正文过时了：通知里要有它，日历也要刷新
     let announced = f.take_announced();
-    assert!(announced.iter().any(|change| change.notes.contains(&note) && change.tasks));
+    assert!(announced.iter().any(|change| change.notes.contains(&note) && change.plugins == vec![journal::ID]));
 
     let back = f.vault.toggle_task(&toggled.id).unwrap();
     assert_eq!(back.status, "todo");
@@ -654,7 +647,7 @@ fn saving_a_document_that_changes_its_dated_tasks_tells_the_calendar() {
     f.vault.note_update(&id, "复盘", "正文\n\n- [ ] 交稿 @2026-09-04").unwrap();
     let announced = f.take_announced();
     assert_eq!(announced.len(), 1);
-    assert!(announced[0].tasks);
+    assert_eq!(announced[0].plugins, vec![journal::ID]);
     assert!(announced[0].notes.is_empty(), "前端自己存的那篇不用再通知回去");
 
     // 没碰到带日期的任务：不打扰
@@ -765,9 +758,7 @@ fn keeping_a_conflict_copy_on_request() {
     f.vault.save_day("2026-09-26", "", "磁盘上的").unwrap();
     let title = f
         .vault
-        .keep_conflict_copy(&DocTarget::Day {
-            id: "2026-09-26".into(),
-        })
+        .keep_conflict_copy(&DocRef::new(journal::DAY, "2026-09-26"))
         .unwrap()
         .unwrap();
     assert!(title.starts_with("2026-09-26 (冲突 "));
@@ -785,10 +776,7 @@ fn conflict_copies_of_goals_point_at_the_period() {
     f.vault.save_goal("week", "2026-09-21", "这周的目标").unwrap();
     let title = f
         .vault
-        .keep_conflict_copy(&DocTarget::Goal {
-            horizon: "week".into(),
-            period_start: "2026-09-21".into(),
-        })
+        .keep_conflict_copy(&DocRef::new(journal::GOAL, "week:2026-09-21"))
         .unwrap()
         .unwrap();
     let copy = f
@@ -809,7 +797,7 @@ fn rescan_picks_up_external_adds_edits_renames_and_deletes() {
     f.write_externally("日记/2026/2026-09-26.md", "今天");
     let change = f.vault.rescan().unwrap();
     assert_eq!(change.notes, vec!["ext1"]);
-    assert_eq!(change.days, vec!["2026-09-26"]);
+    assert_eq!(change.docs, vec![DocRef::new(journal::DAY, "2026-09-26")]);
 
     // 没变的文件不再报
     assert!(f.vault.rescan().unwrap().is_empty());
@@ -825,7 +813,7 @@ fn rescan_picks_up_external_adds_edits_renames_and_deletes() {
 
     std::fs::remove_file(fsio::abs(&f.root, "日记/2026/2026-09-26.md")).unwrap();
     let change = f.vault.rescan().unwrap();
-    assert_eq!(change.days, vec!["2026-09-26"]);
+    assert_eq!(change.docs, vec![DocRef::new(journal::DAY, "2026-09-26")]);
     assert!(f.vault.day("2026-09-26", false).unwrap().note_md.is_empty());
 }
 
@@ -904,7 +892,7 @@ fn our_own_conflict_copies_are_recognized_too() {
     let id = f.vault.note_create("计划", "旧").unwrap();
     let copy_title = f
         .vault
-        .keep_conflict_copy(&DocTarget::Note { id: id.clone() })
+        .keep_conflict_copy(&DocRef::note(id.clone()))
         .unwrap()
         .unwrap();
     let copy = f
@@ -936,16 +924,16 @@ fn backlinks_come_from_notes_days_and_goals() {
     let links = f.vault.backlinks(&target).unwrap();
     let titles: Vec<&str> = links.iter().map(|link| link.title.as_str()).collect();
     assert_eq!(links.len(), 3, "{titles:?}");
-    let note = links.iter().find(|link| link.kind == "note").unwrap();
+    let note = links.iter().find(|link| link.target.is_note()).unwrap();
     assert_eq!(note.title, "复盘");
     assert_eq!(note.count, 2, "代码块里的不算");
     assert_eq!(note.lines[0].text, "回看 [[周报]] 的结论");
     assert_eq!(note.lines[1].line, 1);
-    let day = links.iter().find(|link| link.kind == "day").unwrap();
+    let day = links.iter().find(|link| link.target.kind == journal::DAY).unwrap();
     assert_eq!(day.title, "10月6日 · 周一");
     assert_eq!(day.lines[0].text, "整理 [[周报#结论]]");
-    assert!(matches!(&day.target, DocTarget::Day { id } if id == "2026-10-06"));
-    let goal = links.iter().find(|link| link.kind == "goal").unwrap();
+    assert_eq!(day.target, DocRef::new(journal::DAY, "2026-10-06"));
+    let goal = links.iter().find(|link| link.target.kind == journal::GOAL).unwrap();
     assert_eq!(goal.title, "第 41 周目标");
 }
 
@@ -985,7 +973,7 @@ fn renaming_a_note_rewrites_links_to_it_everywhere() {
     );
     let announced = f.take_announced();
     assert!(announced.iter().any(|change| change.notes.contains(&review)));
-    assert!(announced.iter().any(|change| change.days.iter().any(|d| d == "2026-10-06")));
+    assert!(announced.iter().any(|change| change.docs.iter().any(|d| d.key == "2026-10-06")));
     // 反向链接跟着新标题走
     assert_eq!(f.vault.backlinks(&target).unwrap().len(), 2);
 
@@ -1100,7 +1088,7 @@ fn moving_a_note_keeps_its_relative_images_working() {
     let id = f.vault.note_create("周报", "").unwrap();
     let image = f
         .vault
-        .attach(&DocTarget::Note { id: id.clone() }, "图.png", b"png")
+        .attach(&DocRef::note(id.clone()), "图.png", b"png")
         .unwrap();
     let body = format!("![图]({})\n[网](https://example.com)", image.link);
     f.vault.note_update(&id, "周报", &body).unwrap();
@@ -1205,7 +1193,7 @@ fn folders_made_outside_the_app_are_announced() {
 fn attachments_go_into_the_attachment_folder_with_relative_links() {
     let mut f = fixture();
     let id = f.vault.note_create("周报", "").unwrap();
-    let note = DocTarget::Note { id };
+    let note = DocRef::note(id);
 
     let pasted = f.vault.attach(&note, "image.png", b"png-bytes").unwrap();
     assert!(pasted.name.starts_with("粘贴-") && pasted.name.ends_with(".png"), "{}", pasted.name);
@@ -1225,7 +1213,7 @@ fn attachments_go_into_the_attachment_folder_with_relative_links() {
     // 某一天在 日记/2026/ 下面，要往上两层
     let day = f
         .vault
-        .attach(&DocTarget::Day { id: "2026-10-06".into() }, "a.pdf", b"pdf")
+        .attach(&DocRef::new(journal::DAY, "2026-10-06"), "a.pdf", b"pdf")
         .unwrap();
     assert_eq!(day.link, "../../附件/a.pdf");
     assert!(!day.is_image);
@@ -1275,7 +1263,7 @@ fn obsidian_vaults_put_attachments_where_obsidian_would() {
     fsio::write_atomic(&fsio::abs(&root, "工作/私密.md"), "别给").unwrap();
     let mut vault = Vault::open_in_memory(&root);
     let id = vault.note_list_full(false).unwrap().into_iter().find(|note| note.title == "周报").unwrap().id;
-    let note = DocTarget::Note { id: id.clone() };
+    let note = DocRef::note(id.clone());
     let pasted = vault.attach(&note, "截图.png", b"png").unwrap();
     assert_eq!(pasted.link, "截图.png", "和笔记放在一起，直接写名字");
     assert!(root.join("工作/截图.png").is_file());
@@ -1288,7 +1276,7 @@ fn obsidian_vaults_put_attachments_where_obsidian_would() {
     let mut vault = Vault::open_in_memory(&root);
     // 属性块里没写 id 的笔记，索引给的 id 只在这一次
     let id = vault.note_list_full(false).unwrap().into_iter().find(|note| note.title == "周报").unwrap().id;
-    let pasted = vault.attach(&DocTarget::Note { id }, "图.png", b"png").unwrap();
+    let pasted = vault.attach(&DocRef::note(id), "图.png", b"png").unwrap();
     assert_eq!(pasted.link, "../图.png");
     assert!(root.join("图.png").is_file());
 }
@@ -1297,7 +1285,7 @@ fn obsidian_vaults_put_attachments_where_obsidian_would() {
 fn dropped_files_are_copied_unless_already_attached() {
     let mut f = fixture();
     let id = f.vault.note_create("周报", "").unwrap();
-    let note = DocTarget::Note { id };
+    let note = DocRef::note(id);
     let outside = f._dir.path().join("桌面截图.jpg");
     std::fs::write(&outside, b"jpg").unwrap();
 
@@ -1340,16 +1328,14 @@ fn the_index_can_be_thrown_away_and_rebuilt_from_files() {
 fn locates_files_for_revealing_them() {
     let mut f = fixture();
     let id = f.vault.note_create("周报", "x").unwrap();
-    let (path, is_file) = f.vault.locate(&DocTarget::Note { id }).unwrap();
+    let (path, is_file) = f.vault.locate(&DocRef::note(id)).unwrap();
     assert!(is_file);
     assert_eq!(path, fsio::abs(&f.root, "笔记/周报.md"));
 
     // 还没写过的某一天：给它将来所在的、已经存在的那一层
     let (path, is_file) = f
         .vault
-        .locate(&DocTarget::Day {
-            id: "2030-01-01".into(),
-        })
+        .locate(&DocRef::new(journal::DAY, "2030-01-01"))
         .unwrap();
     assert!(!is_file);
     assert_eq!(path, f.root);
@@ -1445,9 +1431,9 @@ fn a_day_or_goal_not_read_yet_is_read_when_asked_for() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("仓库");
     write_notes(&root, 260);
-    let day = layout::day_path("2026-10-13").unwrap();
+    let day = journal::day_path("2026-10-13").unwrap();
     fsio::write_atomic(&fsio::abs(&root, &day), "今天的记录").unwrap();
-    let goal = layout::goal_path("week", "2026-10-12").unwrap();
+    let goal = journal::goal_path("week", "2026-10-12").unwrap();
     fsio::write_atomic(&fsio::abs(&root, &goal), "本周重点").unwrap();
     let (mut vault, backlog) = Vault::open_quick(&root, &dir.path().join("index.db")).unwrap();
     assert!(!backlog.is_empty());
@@ -1584,26 +1570,26 @@ fn large_vault_timings() {
     );
     for query in ["进度", "项目计划方案", "这个词哪儿都没有"] {
         let t = Instant::now();
-        let found = search_text(&vault.db, query, 8, false, || false).unwrap().unwrap();
+        let found = search_text(&vault.db, query, 8, false, &vault.layout.types, || false).unwrap().unwrap();
         eprintln!(
             "search_text「{query}」 {:>8.1} ms（{} + {} 条）",
             t.elapsed().as_secs_f64() * 1000.0,
             found.notes.len(),
-            found.journal.len()
+            found.docs.len()
         );
     }
 
     let t = Instant::now();
-    let journal = vault.journal_list().unwrap();
+    let docs = vault.doc_list().unwrap();
     let ms = t.elapsed().as_secs_f64() * 1000.0;
-    eprintln!("journal_list {} 篇            {ms:>8.1} ms", journal.len());
+    eprintln!("doc_list {} 篇                {ms:>8.1} ms", docs.len());
     let t = Instant::now();
     vault.calendar_marks("2025-01-01", "2027-12-31").unwrap();
     eprintln!("calendar_marks 三年         {:>8.1} ms", t.elapsed().as_secs_f64() * 1000.0);
     for (query, regex) in [("进度", false), ("项目计划方案", false), (r"第\d+周", true)] {
         let t = Instant::now();
         let options = FindOptions { regex, ..FindOptions::default() };
-        let found = find_text(&vault.db, query, options, || false).unwrap().unwrap();
+        let found = find_text(&vault.db, query, options, &vault.layout.types, || false).unwrap().unwrap();
         eprintln!(
             "find_text「{query}」 {:>8.1} ms（{} 篇 {} 处）",
             t.elapsed().as_secs_f64() * 1000.0,
@@ -1653,7 +1639,7 @@ fn a_folder_without_journal_is_all_notes_with_the_whole_vault_as_the_tree() {
     let mut titles: Vec<_> = vault.note_list(false).unwrap().into_iter().map(|note| note.title).collect();
     titles.sort();
     assert_eq!(titles, vec!["2026-10-20", "周报", "随手记"], "日记文件夹里的也是笔记");
-    assert!(vault.journal_list().unwrap().is_empty());
+    assert!(vault.doc_list().unwrap().is_empty());
     assert_eq!(vault.folders(), vec!["工作", "日记", "日记/2026"]);
 
     // 新建放在树根（仓库根），文件夹也建在仓库根上
@@ -1670,7 +1656,7 @@ fn a_folder_without_journal_is_all_notes_with_the_whole_vault_as_the_tree() {
     assert!(vault.note_archive(&id, None).is_err());
     assert!(!root.join("目标").exists());
     let info = vault.info().unwrap();
-    assert!(!info.layout.journal);
+    assert!(info.layout.plugins.is_empty());
     assert_eq!(info.layout.notes_dir, "");
 }
 
@@ -1688,7 +1674,7 @@ fn archive_works_without_the_journal() {
 
     vault.set_archive(true).unwrap();
     let info = vault.info().unwrap();
-    assert!(info.layout.archive && !info.layout.journal, "只开归档，不开日程");
+    assert!(info.layout.archive && info.layout.plugins.is_empty(), "只开归档，不开日程");
     assert_eq!(vault.note_list(true).unwrap().len(), 1, "开了以后「归档」里的是归档的笔记");
     vault.note_archive(&id, None).unwrap();
     assert!(root.join("归档/旧资料.md").is_file());
@@ -1699,8 +1685,8 @@ fn archive_works_without_the_journal() {
     assert!(root.join("旧资料.md").is_file());
 
     // 关日程不带走归档
-    vault.set_journal(true).unwrap();
-    vault.set_journal(false).unwrap();
+    vault.set_plugin(journal::ID, true).unwrap();
+    vault.set_plugin(journal::ID, false).unwrap();
     assert!(vault.info().unwrap().layout.archive);
 }
 
@@ -1713,7 +1699,7 @@ fn turning_journal_on_and_off_reclassifies_files_without_touching_them() {
     let index = dir.path().join("index.db");
     let (mut vault, _) = Vault::open_quick(&root, &index).unwrap();
 
-    let backlog = vault.set_journal(true).unwrap();
+    let backlog = vault.set_plugin(journal::ID, true).unwrap();
     assert!(backlog.is_empty(), "文件不多，当场读完");
     assert_eq!(vault.day("2026-10-20", false).unwrap().note_md, "今天");
     assert_eq!(vault.folders(), vec!["工作"], "日记从窄栏进，不在树上");
@@ -1732,8 +1718,8 @@ fn turning_journal_on_and_off_reclassifies_files_without_touching_them() {
     assert!(backlog.is_empty());
     assert_eq!(vault.day("2026-10-20", false).unwrap().note_md, "今天");
 
-    vault.set_journal(false).unwrap();
-    assert!(vault.journal_list().unwrap().is_empty(), "关了日程，日记又是笔记");
+    vault.set_plugin(journal::ID, false).unwrap();
+    assert!(vault.doc_list().unwrap().is_empty(), "关了日程，日记又是笔记");
     assert_eq!(vault.note_list(false).unwrap().len(), 4);
     assert!(vault.folders().contains(&"日记".to_string()));
     // 文件一个都没动（除了上面自己写的那一天）
@@ -1749,19 +1735,19 @@ fn journal_toggled_on_another_device_is_offered_then_applied() {
     let root = dir.path().join("仓库");
     plain_folder(&root);
     let mut vault = Vault::open_in_memory(&root);
-    assert!(vault.journal_list().unwrap().is_empty());
+    assert!(vault.doc_list().unwrap().is_empty());
     // 另一台设备开了日程，标记同步过来：这台先不换，告诉前端一回
     let marker_path = fsio::abs(&root, layout::VAULT_MARKER);
     let marker = serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).ok();
-    let marker = layout::marker_with_journal(marker, true);
+    let marker = layout::marker_with_switch(marker, journal::ID, true);
     fsio::write_atomic(&marker_path, &serde_json::to_string_pretty(&marker).unwrap()).unwrap();
     let change = vault.rescan().unwrap();
     assert!(change.layout);
-    assert!(!vault.layout.journal, "用户点之前照旧按原来的摆法");
+    assert!(!vault.layout.has_plugin(journal::ID), "用户点之前照旧按原来的摆法");
     assert!(!vault.rescan().unwrap().layout, "同一次变化只报一回");
     // 点了「切换过去」
     vault.relayout().unwrap();
-    assert!(vault.layout.journal);
+    assert!(vault.layout.has_plugin(journal::ID));
     assert_eq!(vault.day("2026-10-20", false).unwrap().note_md, "今天");
     assert!(!vault.rescan().unwrap().layout);
     // 只改了附件放哪：直接换上，不打扰
@@ -1779,14 +1765,14 @@ fn an_old_vault_keeps_its_notes_folder_as_the_tree_root_across_a_toggle() {
     f.vault.save_day("2026-10-20", "", "今天").unwrap();
     assert_eq!(f.vault.info().unwrap().layout.notes_dir, "笔记");
 
-    f.vault.set_journal(false).unwrap();
+    f.vault.set_plugin(journal::ID, false).unwrap();
     let layout = f.vault.info().unwrap().layout;
-    assert!(!layout.journal);
+    assert!(layout.plugins.is_empty());
     assert_eq!(layout.notes_dir, "", "关了日程，整个仓库在树上");
     assert!(f.vault.folders().contains(&"笔记".to_string()));
     assert!(f.vault.note_get(&id).is_ok());
 
-    f.vault.set_journal(true).unwrap();
+    f.vault.set_plugin(journal::ID, true).unwrap();
     assert_eq!(f.vault.info().unwrap().layout.notes_dir, "笔记", "再开回来，树根还是「笔记」");
     assert_eq!(f.vault.day("2026-10-20", false).unwrap().note_md, "今天");
 }
@@ -1800,7 +1786,7 @@ fn obsidian_daily_notes_show_up_as_days() {
     fsio::write_atomic(&fsio::abs(&root, "Daily/随便.md"), "不是日期").unwrap();
     fsio::write_atomic(
         &fsio::abs(&root, layout::VAULT_MARKER),
-        &serde_json::to_string(&layout::marker_with_journal(Some(layout::new_marker(false, false, 0)), true)).unwrap(),
+        &serde_json::to_string(&layout::marker_with_switch(Some(layout::new_marker(false, false, 0)), journal::ID, true)).unwrap(),
     )
     .unwrap();
     let mut vault = Vault::open_in_memory(&root);
@@ -1863,7 +1849,7 @@ fn a_new_logical_vault_keeps_notes_flat_and_the_tree_in_the_manifest() {
     new_logical(&root);
     let mut vault = Vault::open_in_memory(&root);
     let info = vault.info().unwrap();
-    assert!(info.layout.logical && info.layout.journal);
+    assert!(info.layout.logical && info.layout.plugins == vec![journal::ID]);
     assert_eq!(info.layout.notes_dir, "");
     // 指南平放在仓库根上，树上放在根这一层
     assert!(root.join("欢迎使用 Odea.md").is_file());

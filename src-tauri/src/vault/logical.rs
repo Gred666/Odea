@@ -523,7 +523,7 @@ impl Vault {
         let marker = std::fs::read_to_string(&marker_path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok());
-        let marker = layout::marker_logical(marker, self.layout.journal);
+        let marker = layout::marker_logical(marker);
         fsio::write_atomic(&fsio::abs(&self.root, tree::TREE_FILE), &built.render())?;
         fsio::write_atomic(&marker_path, &serde_json::to_string_pretty(&marker)?)?;
         self.layout = layout::Layout::load(&self.root);

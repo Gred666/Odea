@@ -1,6 +1,5 @@
 import { useApp } from "@/app/store";
 import { ColumnButton, ListColumn } from "@/components/ListColumn";
-import type { CalendarMarks } from "@/data/types";
 import { cn } from "@/lib/cn";
 import {
   type ISODate,
@@ -17,11 +16,13 @@ import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { AnimatePresence, animate, motion, useMotionValue, useTransform } from "motion/react";
 import { useEffect, useState } from "react";
+import { useJournal } from "./store";
+import type { CalendarMarks } from "./types";
 
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"] as const;
 
 /**
- * 月历面板。
+ * 月历面板：日历那一页的列表栏（导航贡献点的 List）。
  *
  * 打开就是今天：selectedDate 的初始值是 today()，零点会由 startTodayTicker 翻页。
  * 「今天」按钮只在离开今天时出现 —— 停在今天的时候它没有任何事可做，
@@ -36,10 +37,11 @@ const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"] as const;
  * 周数列和整周的底色留着 —— 周/GOAL 跟着选中日期所在的那一周走，
  * 这条底色就是「现在看的是哪一周」。
  */
-export function CalendarPanel({ marks }: { marks: CalendarMarks }) {
-  const selected = useApp((s) => s.selectedDate);
-  const todayISO = useApp((s) => s.todayDate);
-  const selectDate = useApp((s) => s.selectDate);
+export function CalendarPanel() {
+  const marks = useJournal((s) => s.marks);
+  const selected = useJournal((s) => s.selectedDate);
+  const todayISO = useJournal((s) => s.todayDate);
+  const selectDate = useJournal((s) => s.selectDate);
 
   const [anchor, setAnchor] = useState<ISODate>(() => startOfMonth(selected));
   const [dir, setDir] = useState<1 | -1>(1);

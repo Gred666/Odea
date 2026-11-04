@@ -2,7 +2,7 @@ import { useApp } from "@/app/store";
 import { backend } from "@/data/backend";
 import { conflictOriginalContent, conflictOriginalTitle } from "@/data/conflicts";
 import { messageOf, useData } from "@/data/store";
-import type { DocHistory, DocVersion, DocumentSaveTarget } from "@/data/types";
+import { type DocHistory, type DocVersion, type DocumentRef, NOTE } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime, formatTimestampFull } from "@/lib/date";
 import { diffLines, diffStats } from "@/lib/lineDiff";
@@ -50,7 +50,7 @@ function whoOf(version: DocVersion): string {
 }
 
 /** 取历史；第一版（最近一次同步）一般就是现在的正文，那就先选中上一版 —— 打开是想看以前的。选中那一版的正文也先读好 */
-async function loadHistory(target: DocumentSaveTarget): Promise<Result> {
+async function loadHistory(target: DocumentRef): Promise<Result> {
   try {
     const api = await backend();
     const history = await api.docHistory(target);
@@ -73,12 +73,12 @@ async function loadHistory(target: DocumentSaveTarget): Promise<Result> {
 
 /** 卡片上那一篇：取好了的话 ready 有值；先打开的话是 null，正文自己等 pending */
 interface Opening {
-  target: DocumentSaveTarget;
+  target: DocumentRef;
   pending: Promise<Result>;
   ready: Result | null;
 }
 
-const keyOf = (target: DocumentSaveTarget) => JSON.stringify(target);
+const keyOf = (target: DocumentRef) => JSON.stringify(target);
 
 export function HistoryDialog() {
   const requested = useApp((s) => s.historyFor);
@@ -333,7 +333,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
         {versions.map((item, index) => {
           const active = index === selected;
           const renamed =
-            target.kind === "note" && item.title && currentTitle && item.title !== currentTitle;
+            target.type === NOTE && item.title && currentTitle && item.title !== currentTitle;
           return (
             <button
               key={item.blob + item.time}

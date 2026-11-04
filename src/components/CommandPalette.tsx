@@ -8,12 +8,14 @@ import { UNSORTED, folderLabel, folderName, folderOf, smartQuery } from "@/data/
 import { useData } from "@/data/store";
 import { useTeam } from "@/data/team";
 import { useTextSearch } from "@/data/textSearch";
-import type {
-  DocumentSaveTarget,
-  JournalDoc,
-  NoteSummary,
-  TextHit,
-  WorkspaceId,
+import {
+  type DocumentRef,
+  NOTE,
+  type NoteSummary,
+  type TextHit,
+  type TypedDoc,
+  type WorkspaceId,
+  noteRef,
 } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
@@ -22,14 +24,17 @@ import { popoverCard, spring, tween } from "@/lib/motion";
 import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/paletteSearch";
 import { isMac } from "@/lib/platform";
 import {
+  type PaletteCommand,
+  documentType,
+  installedPlugins,
+  pluginNavItems,
+} from "@/plugins/registry";
+import {
   Archive,
   ArchiveX,
   ArrowDown,
   ArrowUp,
   BookOpen,
-  CalendarCheck,
-  CalendarDays,
-  CalendarOff,
   CircleFadingArrowUp,
   Cloud,
   CornerDownLeft,
@@ -52,14 +57,11 @@ import {
   PanelLeftOpen,
   Plus,
   RefreshCw,
-  Repeat,
   ScrollText,
   Search,
   Server,
   Sparkles,
-  SquareCheckBig,
   Sun,
-  Target,
   TextSearch,
   Trash2,
   Users,
@@ -68,12 +70,11 @@ import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { version as APP_VERSION } from "../../package.json";
-import { journalSwitchNext } from "./JournalSwitcher";
 
+/** 分组。插件的文档、插件的命令带着自己的组名（日程的「日记与目标」，plugins/registry.ts） */
 type Group =
   | "最近"
   | "笔记"
-  | "日记与目标"
   | "操作"
   | "跳转"
   | "外观"
@@ -82,7 +83,8 @@ type Group =
   | "同步"
   | "帮助"
   | "新建"
-  | "搜索";
+  | "搜索"
+  | (string & {});
 
 interface Item {
   id: string;
@@ -130,8 +132,8 @@ const FIND_SHORTCUT = isMac ? "Cmd+Shift+F" : "Ctrl+Shift+F";
  *   跳转侧栏上就有，最常用的是回到刚才那几篇
  * - 搜索：标题连续命中 > 几个词都出现 > 按顺序跳着命中；命令还认别名（「深色」「dark」都能找到
  *   「切换到暗色」）；笔记的正文也搜，命中的那一行显示在标题下面。命中的字标成强调色
- * - 日记（某一天）和目标也搜：打开面板时取一次它们的标题（data/store 的 loadJournal）。
- *   正文（笔记、日记、目标）由 Rust 在索引里搜（data/textSearch）：前端不留全文。
+ * - 插件的文档（日程的某一天、目标）也搜：打开面板时取一次它们的标题（data/store 的 loadTypedDocs）。
+ *   正文（笔记、插件的文档）由 Rust 在索引里搜（data/textSearch）：前端不留全文。
  *   标题命中的立刻出来，正文命中的晚几毫秒补上
  * - 打了字就一定有「新建笔记「…」」和最后一项「在所有笔记里搜索「…」」（全局搜索，FindDialog）：
  *   什么都没搜到也不是死路
@@ -145,7 +147,7 @@ export function CommandPalette({
   docTarget,
 }: {
   /** 正在看的那篇文档（「在文件夹中显示当前文档」用）；空状态、扩展页没有 */
-  docTarget?: DocumentSaveTarget;
+  docTarget?: DocumentRef;
 }) {
   const open = useApp((s) => s.paletteOpen);
   const setOpen = useApp((s) => s.setPaletteOpen);
@@ -158,12 +160,13 @@ export function CommandPalette({
   const noteFolder = useApp((s) => s.noteFolder);
   const notes = useData((s) => s.notes);
   const archived = useData((s) => s.archived);
-  const journal = useData((s) => s.journal);
+  const typedDocs = useData((s) => s.typedDocs);
   const panelCollapsed = useApp((s) => s.panelCollapsed);
   const setPanelCollapsed = useApp((s) => s.setPanelCollapsed);
-  // 这个仓库开没开日程（docs/仓库与启动器.md §6）：没开的话没有今日TODO、目标、日历、归档
-  const journalOn = useData((s) => s.layout.journal);
-  const setJournal = useData((s) => s.setJournal);
+  // 这个仓库开着哪些插件（docs/仓库与启动器.md §6）：没开日程的话没有今日TODO、目标、日历
+  const plugins = useData((s) => s.layout.plugins);
+  const setPlugin = useData((s) => s.setPlugin);
+  const pluginCommands = usePluginCommands(plugins);
   const archiveOn = useData((s) => s.layout.archive);
   const setArchive = useData((s) => s.setArchive);
   const setTrashOpen = useApp((s) => s.setTrashOpen);
@@ -218,8 +221,8 @@ export function CommandPalette({
 
   useEffect(() => {
     if (open) {
-      // 日记和目标不常驻内存：每次打开取一份最新的（一次往返，几百篇也只是几百段文字）
-      void useData.getState().loadJournal();
+      // 插件的文档不常驻内存：每次打开取一份最新的（一次往返，几百篇也只是几百段文字）
+      void useData.getState().loadTypedDocs();
       // 从对话框「返回」回来的：接着刚才打的字（PaletteBack.tsx）
       const restore = useApp.getState().paletteRestore;
       if (restore) useApp.setState({ paletteRestore: null });
@@ -317,23 +320,11 @@ export function CommandPalette({
         : []),
 
       nav("notes", "文件", FolderTree, "notes files 笔记 列表 文件树 文件夹"),
-      ...(journalOn
-        ? [
-            nav("today", "今日TODO", SquareCheckBig, "today 今天 待办 todo"),
-            nav("goal", "/GOAL", Target, "goal 目标 周 月 年"),
-            nav("calendar", "日历", CalendarDays, "calendar 日期 某天"),
-            // 日程切换器（docs/协同编辑.md §22.6）：团队的、个人的日程在不同的仓库里
-            {
-              id: "journal-switch",
-              group: "跳转",
-              icon: Repeat,
-              label: "切换日程",
-              hint: isMac ? "Ctrl+Option+J" : "Ctrl+Alt+J",
-              keywords: "journal switch team personal 切换 日程 团队 个人 仓库 今日 todo 目标 日历",
-              run: () => void journalSwitchNext(),
-            } satisfies Item,
-          ]
-        : []),
+      // 开着的插件的导航项（日程：今日TODO、目标、日历）和命令（日程切换器）
+      ...pluginNavItems()
+        .filter((item) => plugins.includes(item.plugin))
+        .map((item) => nav(item.id, item.label, item.icon, item.keywords)),
+      ...pluginCommands.map((command) => ({ ...command }) satisfies Item),
       ...(archiveOn ? [nav("archive", "归档", Archive, "archive 存档")] : []),
 
       themeItem("light", "切换到亮色", Sun, "light 浅色 白天 日间 亮"),
@@ -372,17 +363,23 @@ export function CommandPalette({
         keywords: "vault 仓库 切换 switch 启动器 launcher 新建 打开文件夹 窗口 obsidian",
         run: () => void backend().then((api) => api.showLauncher()),
       },
-      {
-        id: "toggle-journal",
-        group: "文件",
-        icon: journalOn ? CalendarOff : CalendarCheck,
-        label: journalOn ? "关闭日程" : "启用日程",
-        hint: journalOn
-          ? "窄栏上不再有今日TODO、目标、日历，文件都留着"
-          : "今日TODO、目标、日历；放在这个仓库的日记、目标文件夹里",
-        keywords: "journal 日程 日记 今日 todo 目标 goal 日历 calendar 启用 开启 关闭 obsidian",
-        run: () => void setJournal(!journalOn),
-      },
+      // 开 / 关插件（日程）：文件都留着，关了以后日记、目标是普通文件夹里的普通笔记
+      ...installedPlugins().flatMap((plugin) => {
+        if (!plugin.toggle) return [];
+        const on = plugins.includes(plugin.id);
+        const look = on ? plugin.toggle.off : plugin.toggle.on;
+        return [
+          {
+            id: `toggle-${plugin.id}`,
+            group: "文件",
+            icon: look.icon,
+            label: look.label,
+            hint: look.hint,
+            keywords: plugin.toggle.keywords,
+            run: () => void setPlugin(plugin.id, !on),
+          } satisfies Item,
+        ];
+      }),
       {
         id: "toggle-archive",
         group: "文件",
@@ -460,7 +457,7 @@ export function CommandPalette({
       // 「邀请协作」换成打开那一次（一篇只能在一次协作里）
       ...(() => {
         const items: Item[] = [];
-        const noteId = docTarget?.kind === "note" ? docTarget.id : null;
+        const noteId = docTarget?.type === NOTE ? docTarget.key : null;
         const inside =
           noteId !== null
             ? (hostedIn[noteId] ?? overlapOf({ kind: "doc", noteId, title: "" }) ?? null)
@@ -635,7 +632,7 @@ export function CommandPalette({
         label: "使用指南",
         hint: "五个区、常用操作、笔记存在哪",
         keywords: "help guide 帮助 说明 说明书 教程 上手 入门 新手 欢迎",
-        run: () => void openGuide("welcome").then((id) => id && openDocument({ kind: "note", id })),
+        run: () => void openGuide("welcome").then((id) => id && openDocument(noteRef(id))),
       },
       {
         id: "guide-syntax",
@@ -644,7 +641,7 @@ export function CommandPalette({
         label: "语法全览",
         hint: "所有 Markdown 语法和快捷键",
         keywords: "markdown syntax shortcut 语法 快捷键 格式 公式 表格 帮助",
-        run: () => void openGuide("syntax").then((id) => id && openDocument({ kind: "note", id })),
+        run: () => void openGuide("syntax").then((id) => id && openDocument(noteRef(id))),
       },
       // 新版本（技术方案 §14.4）：后台下好了的直接打开卡片；没有的话现在查一次
       update
@@ -704,8 +701,9 @@ export function CommandPalette({
     setReduceMotion,
     panelCollapsed,
     setPanelCollapsed,
-    journalOn,
-    setJournal,
+    plugins,
+    setPlugin,
+    pluginCommands,
     archiveOn,
     setArchive,
     setTrashOpen,
@@ -727,7 +725,7 @@ export function CommandPalette({
     team,
   ]);
 
-  const currentNote = docTarget?.kind === "note" ? docTarget.id : null;
+  const currentNote = docTarget?.type === NOTE ? docTarget.key : null;
 
   /** 「最近」：最近改过的几篇，正在看的那篇不算 */
   const recent = useMemo<Item[]>(
@@ -781,7 +779,7 @@ export function CommandPalette({
     }
     for (const hit of body?.notes ?? []) {
       // 标题已经命中的不再按正文算一次（byId 里删掉了）
-      const note = hit.target.kind === "note" ? byId.get(hit.target.id) : undefined;
+      const note = hit.target.type === NOTE ? byId.get(hit.target.key) : undefined;
       const snippet = note && usable(hit) ? snippetAround(hit.line, q) : null;
       if (note && snippet)
         found.push({ item: noteItem(note, "笔记", { hint: whereOf(note), snippet }), score: 30 });
@@ -789,24 +787,23 @@ export function CommandPalette({
     found.sort((a, b) => b.score - a.score);
     scored.push(...found.slice(0, NOTE_RESULTS));
 
-    // 日记和目标：标题（「10月6日 · …」「第 41 周目标」）和正文都搜，排在同分的笔记后面
+    // 插件的文档（日记和目标）：标题（「10月6日 · …」「第 41 周目标」）和正文都搜，排在同分的笔记后面
     const days: { item: Item; score: number }[] = [];
     const titled = new Set<string>();
-    for (const entry of journal) {
+    for (const entry of typedDocs) {
       const title = matchText(entry.title, q);
       if (!title) continue;
       const hint = formatRelativeTime(entry.updatedAt);
-      days.push({ item: journalItem(entry, { hint, ranges: title.ranges }), score: title.score });
-      titled.add(journalKey(entry.target));
+      days.push({ item: typedItem(entry, { hint, ranges: title.ranges }), score: title.score });
+      titled.add(typedKey(entry.target));
     }
-    for (const hit of body?.journal ?? []) {
-      if (hit.target.kind === "note" || titled.has(journalKey(hit.target)) || !usable(hit))
-        continue;
+    for (const hit of body?.docs ?? []) {
+      if (hit.target.type === NOTE || titled.has(typedKey(hit.target)) || !usable(hit)) continue;
       const snippet = snippetAround(hit.line, q);
       if (!snippet) continue;
-      const entry: JournalDoc = { ...hit, kind: hit.target.kind };
+      const entry: TypedDoc = { target: hit.target, title: hit.title, updatedAt: hit.updatedAt };
       const hint = formatRelativeTime(entry.updatedAt);
-      days.push({ item: journalItem(entry, { hint, snippet }), score: 28 });
+      days.push({ item: typedItem(entry, { hint, snippet }), score: 28 });
     }
     days.sort((a, b) => b.score - a.score);
     scored.push(...days.slice(0, NOTE_RESULTS));
@@ -843,7 +840,7 @@ export function CommandPalette({
       run: () => setFindOpen(true, q),
     });
     return ordered;
-  }, [query, recent, commands, notes, archived, journal, noteFolder, searched, setFindOpen]);
+  }, [query, recent, commands, notes, archived, typedDocs, noteFolder, searched, setFindOpen]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 输入变化时复位高亮
   useEffect(() => setCursor(0), [query]);
@@ -1088,9 +1085,9 @@ function whereOf(note: NoteSummary): string {
     .join(" · ");
 }
 
-/** 某一天 / 某个周期的目标的键：标题命中过的不再按正文算一次 */
-function journalKey(target: DocumentSaveTarget): string {
-  return target.kind === "goal" ? `goal:${target.horizon}:${target.periodStart}` : target.id;
+/** 插件的一篇的键：标题命中过的不再按正文算一次 */
+function typedKey(target: DocumentRef): string {
+  return `${target.type}:${target.key}`;
 }
 
 function noteItem(note: NoteSummary, group: Group, extra: Partial<Item>): Item {
@@ -1101,27 +1098,39 @@ function noteItem(note: NoteSummary, group: Group, extra: Partial<Item>): Item {
     label: note.title,
     ...extra,
     run: () => {
-      openDocument({ kind: "note", id: note.id });
+      openDocument(noteRef(note.id));
       // 列表栏也换到它所在的文件夹、把它滚出来：正文和列表对得上
       if (!note.isArchived) useApp.getState().openNoteFolder(folderOf(note));
     },
   };
 }
 
-/** 某一天 / 某个周期的目标：打开它（今天的在「今日TODO」，别的在日历里） */
-function journalItem(entry: JournalDoc, extra: Partial<Item>): Item {
-  const id =
-    entry.target.kind === "goal"
-      ? `${entry.target.horizon}:${entry.target.periodStart}`
-      : entry.target.id;
+/** 插件的一篇（某一天、某个周期的目标）：打开它，它的类型知道在哪一页（今天的在「今日TODO」，别的在日历里） */
+function typedItem(entry: TypedDoc, extra: Partial<Item>): Item {
+  const type = documentType(entry.target.type);
   return {
-    id: `journal-${entry.kind}-${id}`,
-    group: "日记与目标",
-    icon: entry.kind === "goal" ? Target : CalendarDays,
+    id: `doc-${typedKey(entry.target)}`,
+    group: type?.group ?? "文件",
+    icon: type?.icon ?? FileText,
     label: entry.title,
     ...extra,
     run: () => openDocument(entry.target),
   };
+}
+
+/**
+ * 开着的插件的命令（贡献点 commands）。每个装着的插件的 useCommands 都调一遍（插件在第一帧之前就装好了，
+ * 个数和顺序每次渲染都一样，挨个调不违反 hook 的规矩），关着的插件的不要
+ */
+function usePluginCommands(enabled: string[]): PaletteCommand[] {
+  const out: PaletteCommand[] = [];
+  for (const plugin of installedPlugins()) {
+    const hook = plugin.useCommands;
+    if (!hook) continue;
+    const commands = hook();
+    if (enabled.includes(plugin.id)) out.push(...commands);
+  }
+  return out;
 }
 
 /**
@@ -1132,9 +1141,9 @@ async function createNoteNamed(folder: string, title?: string) {
   const data = useData.getState();
   const id = await data.createNote(folder);
   if (!id) return;
-  if (title) await data.saveTitle({ kind: "note", id }, title);
+  if (title) await data.saveTitle(noteRef(id), title);
   useApp.getState().setFocusRequest({ docKey: `note-${id}`, at: title ? "body" : "title" });
-  openDocument({ kind: "note", id });
+  openDocument(noteRef(id));
 }
 
 /** 命中的字标成强调色（不加底色：一排高亮块太吵） */

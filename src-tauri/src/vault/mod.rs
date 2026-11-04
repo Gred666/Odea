@@ -29,7 +29,6 @@ mod import;
 mod logical;
 pub mod query;
 pub mod seed;
-pub mod tasks;
 pub mod team;
 pub mod tree;
 pub mod watch;
@@ -43,12 +42,13 @@ use rusqlite::Connection;
 
 use crate::db::now_ms;
 use crate::domain::model::{
-    Attachment, Backlink, BacklinkLine, CalendarMarks, DayDoc, DocTarget, FindFile, FindMatch,
-    FindOptions, FindResult, FolderDeletion, Goal, JournalDoc, LinkRewrite, Note, NoteSummary,
-    Relink, Task, TextHit, TextSearch, TrashedNote, TreeFile, VaultChange, VaultInfo, VaultLayout,
+    Attachment, Backlink, BacklinkLine, DocRef, FindFile, FindMatch, FindOptions, FindResult,
+    FolderDeletion, LinkRewrite, Note, NoteSummary, Relink, TextHit, TextSearch, TrashedNote, TreeFile,
+    TypedDoc, VaultChange, VaultInfo, VaultLayout, NOTE,
 };
 use crate::domain::search;
 use crate::error::{AppError, Result};
+use crate::plugins::{self, DocType, IndexPart};
 use frontmatter::FrontMatter;
 use index::DocRow;
 use layout::Slot;
@@ -89,7 +89,7 @@ pub struct Vault {
     db: Connection,
     log: activity::Log,
     announce: Option<Announce>,
-    /// 这个仓库怎么摆：日程开没开、文件树的根、日记目标归档在哪（.odea/vault.json）
+    /// 这个仓库怎么摆：开着哪些插件（它们的文档类型）、文件树的根、归档在哪（.odea/vault.json）
     layout: layout::Layout,
     /// 磁盘上的仓库标记在别处改了、已经告诉过前端的那一种摆法（check_layout）：同一次变化只报一回
     layout_pending: Option<String>,
@@ -110,30 +110,37 @@ pub struct Vault {
 impl VaultChange {
     pub fn is_empty(&self) -> bool {
         self.notes.is_empty()
-            && self.days.is_empty()
-            && self.goals.is_empty()
-            && !self.tasks
+            && self.docs.is_empty()
+            && self.plugins.is_empty()
             && self.conflicts.is_empty()
             && self.found_copies.is_empty()
             && !self.folders
             && !self.layout
     }
 
+    /// 这个插件在索引里另存的那一份变了（日程：带日期的任务）
+    pub fn touch_plugin(&mut self, id: &str) {
+        if !self.plugins.iter().any(|known| known == id) {
+            self.plugins.push(id.to_string());
+        }
+    }
+
     fn record(&mut self, row: &DocRow) {
-        let key = change_key(row);
-        let list = match row.kind {
-            "day" => &mut self.days,
-            "goal" => &mut self.goals,
-            _ => &mut self.notes,
-        };
-        if !list.contains(&key) {
-            list.push(key);
+        if row.kind == NOTE {
+            if !self.notes.contains(&row.id) {
+                self.notes.push(row.id.clone());
+            }
+        } else {
+            let doc = doc_ref(row);
+            if !self.docs.contains(&doc) {
+                self.docs.push(doc);
+            }
         }
     }
 
     /// 把另一批变化并进来（去重）
     fn absorb(&mut self, other: VaultChange) {
-        fn extend(into: &mut Vec<String>, from: Vec<String>) {
+        fn extend<T: PartialEq>(into: &mut Vec<T>, from: Vec<T>) {
             for item in from {
                 if !into.contains(&item) {
                     into.push(item);
@@ -141,37 +148,31 @@ impl VaultChange {
             }
         }
         extend(&mut self.notes, other.notes);
-        extend(&mut self.days, other.days);
-        extend(&mut self.goals, other.goals);
+        extend(&mut self.docs, other.docs);
+        extend(&mut self.plugins, other.plugins);
         extend(&mut self.conflicts, other.conflicts);
         extend(&mut self.found_copies, other.found_copies);
-        self.tasks |= other.tasks;
         self.folders |= other.folders;
         self.layout |= other.layout;
     }
 
     /// 去掉前端自己发起的那篇：它刚拿到了结果，不用再刷一遍
     fn without(mut self, row: &DocRow) -> Self {
-        let key = change_key(row);
-        match row.kind {
-            "day" => self.days.retain(|item| *item != key),
-            "goal" => self.goals.retain(|item| *item != key),
-            _ => self.notes.retain(|item| *item != key),
+        if row.kind == NOTE {
+            self.notes.retain(|id| *id != row.id);
+        } else {
+            let doc = doc_ref(row);
+            self.docs.retain(|item| *item != doc);
         }
         self
     }
 }
 
-/// 前端认的键：笔记是 id，某一天是日期，目标是 `week:2026-09-21`（和前端 goalKey 一样）
-fn change_key(row: &DocRow) -> String {
-    match row.kind {
-        "day" => row.day.clone().unwrap_or_default(),
-        "goal" => format!(
-            "{}:{}",
-            row.horizon.as_deref().unwrap_or_default(),
-            row.period_start.as_deref().unwrap_or_default()
-        ),
-        _ => row.id.clone(),
+/// 这一行是哪一篇：笔记按 id，插件的文档按类型和 key
+fn doc_ref(row: &DocRow) -> DocRef {
+    match &row.key {
+        Some(key) if row.kind != NOTE => DocRef::new(&row.kind, key),
+        _ => DocRef::note(&row.id),
     }
 }
 
@@ -249,18 +250,21 @@ impl Vault {
         &self.root
     }
 
-    /// 开 / 关日程（docs/仓库与启动器.md §6）：改仓库标记，按新的摆法把每个文件重新认一遍 ——
-    /// 日记、目标从笔记变成某一天 / 目标，或者反过来。文件一个都不动。
+    /// 开 / 关一个插件（docs/插件与跨端.md §6.2，日程见 docs/仓库与启动器.md §6）：改仓库标记，按新的摆法
+    /// 把每个文件重新认一遍 —— 日记、目标从笔记变成某一天 / 目标，或者反过来。文件一个都不动。
     /// 要读的不多就当场读完；多的交回去，调用方在后台读（和 open_quick 一样）
-    pub fn set_journal(&mut self, on: bool) -> Result<Backlog> {
+    pub fn set_plugin(&mut self, id: &str, on: bool) -> Result<Backlog> {
+        let plugin = plugins::find(id).ok_or_else(|| AppError::Invalid(format!("没有这个插件: {id}")))?;
         let path = fsio::abs(&self.root, layout::VAULT_MARKER);
         let marker = std::fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok());
-        let marker = layout::marker_with_journal(marker, on);
+        let marker = layout::marker_with_switch(marker, id, on);
         fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker)?)?;
         let backlog = self.relayout()?;
-        self.log.record("vault", "journal", if on { "enabled" } else { "disabled" });
+        // 行为日志跟着仓库同步：照老版本的名字记（开关日程记的是 journal）
+        let name = plugin.legacy_feature().unwrap_or(id);
+        self.log.record("vault", name, if on { "enabled" } else { "disabled" });
         Ok(backlog)
     }
 
@@ -271,7 +275,7 @@ impl Vault {
         let marker = std::fs::read_to_string(&path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok());
-        let marker = layout::marker_with_archive(marker, on);
+        let marker = layout::marker_with_switch(marker, layout::ARCHIVE_SWITCH, on);
         fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker)?)?;
         let backlog = self.relayout()?;
         self.log.record("vault", "archive", if on { "enabled" } else { "disabled" });
@@ -325,7 +329,8 @@ impl Vault {
         self.announce = Some(announce);
     }
 
-    fn announce(&self, change: VaultChange) {
+    /// 告诉前端仓库里别处变了（空的不发）
+    pub fn announce(&self, change: VaultChange) {
         if change.is_empty() {
             return;
         }
@@ -459,7 +464,7 @@ impl Vault {
         Ok(())
     }
 
-    /// 某一天 / 某个周期的文件在磁盘上，索引里还没有（后台还没读到它，见 open_quick）：
+    /// 插件的一篇（某一天、某个周期的目标）的文件在磁盘上，索引里还没有（后台还没读到它，见 open_quick）：
     /// 当场读进来。不然前端拿到的是一篇空文档，一编辑就把磁盘上那一篇盖掉了
     fn index_if_unseen(&mut self, rel: &str) -> Result<()> {
         if index::by_path(&self.db, rel)?.is_none() && fsio::abs(&self.root, rel).is_file() {
@@ -506,15 +511,20 @@ impl Vault {
     }
 
     fn forget(&mut self, row: &DocRow, change: &mut VaultChange) -> Result<()> {
-        if !index::doc_tasks(&self.db, &row.id)?.is_empty() {
-            change.tasks = true;
+        for plugin in index::remove(&self.db, &row.id, &self.parts())? {
+            change.touch_plugin(plugin);
         }
-        index::remove(&self.db, &row.id)?;
         change.record(row);
         Ok(())
     }
 
-    fn read(&self, rel: &str) -> Result<Option<String>> {
+    /// 开着的插件在索引里另存的那几份（日程：带日期的任务）
+    fn parts(&self) -> Vec<&'static dyn IndexPart> {
+        self.layout.plugins.iter().filter_map(|id| plugins::find(id)?.index_part()).collect()
+    }
+
+    /// 读仓库里的一个文件（不在了是 None）
+    pub fn read(&self, rel: &str) -> Result<Option<String>> {
         match std::fs::read(fsio::abs(&self.root, rel)) {
             Ok(bytes) => Ok(Some(match String::from_utf8(bytes) {
                 Ok(text) => text,
@@ -552,34 +562,19 @@ impl Vault {
 
         let (meta, body) = frontmatter::split(text);
         let mut slot = self.layout.classify(rel);
-        // 同一天、同一个周期只能有一篇；多出来的（比如手动拷了一份）当普通笔记
-        match &slot {
-            Slot::Day(date) => {
-                if index::day(&self.db, date)?.is_some_and(|other| other.rel_path != rel) {
-                    slot = Slot::Note { archived: false };
-                }
+        // 插件的同一篇（同一天、同一个周期）只能有一个文件；多出来的（比如手动拷了一份）当普通笔记
+        if let Slot::Typed { kind, key } = &slot {
+            if index::typed(&self.db, kind, key)?.is_some_and(|other| other.rel_path != rel) {
+                slot = Slot::Note { archived: false };
             }
-            Slot::Goal {
-                horizon,
-                period_start,
-            } => {
-                if index::goal(&self.db, horizon, period_start)?
-                    .is_some_and(|other| other.rel_path != rel)
-                {
-                    slot = Slot::Note { archived: false };
-                }
-            }
-            Slot::Note { .. } => {}
         }
 
         let stem = layout::stem_of(rel);
         let mut row = DocRow {
             id: String::new(),
-            kind: "note",
+            kind: NOTE.to_string(),
             rel_path: rel.to_string(),
-            day: None,
-            horizon: None,
-            period_start: None,
+            key: None,
             title: String::new(),
             excerpt: search::make_excerpt(&body, 60),
             word_count: search::count_words(&body),
@@ -606,40 +601,23 @@ impl Vault {
                 row.archived = archived;
                 row.archived_at = archived.then(|| meta.archived.unwrap_or(mtime));
             }
-            Slot::Day(date) => {
-                row.id = format!("day:{date}");
-                row.kind = "day";
-                row.title = meta.title.clone().unwrap_or_default();
-                row.day = Some(date);
+            Slot::Typed { kind, key } => {
+                let ty = self
+                    .layout
+                    .doc_type(kind)
+                    .cloned()
+                    .ok_or_else(|| AppError::Internal(format!("认出来的类型不在了: {kind}")))?;
+                row.id = ty.index_id(&key);
+                row.kind = kind.to_string();
+                row.title = ty.title(&key, meta.title.as_deref());
+                row.key = Some(key);
             }
-            Slot::Goal {
-                horizon,
-                period_start,
-            } => {
-                row.id = format!("goal:{horizon}:{period_start}");
-                row.kind = "goal";
-                row.title = layout::goal_title(horizon, &period_start);
-                row.horizon = Some(horizon.to_string());
-                row.period_start = Some(period_start);
-            }
-        }
-
-        let scheduled = tasks::scan(&body);
-        let previous_tasks = match &previous {
-            Some(previous) => index::doc_tasks(&self.db, &previous.id)?,
-            None => Vec::new(),
-        };
-        let same_tasks = previous_tasks.len() == scheduled.len()
-            && previous_tasks
-                .iter()
-                .zip(&scheduled)
-                .all(|(a, b)| a.line == b.line && a.raw == b.raw);
-        if !same_tasks {
-            change.tasks = true;
         }
 
         row.content_md = body;
-        index::put(&self.db, &row, &scheduled)?;
+        for plugin in index::put(&self.db, &row, &self.parts())? {
+            change.touch_plugin(plugin);
+        }
 
         if let Some(previous) = &previous {
             if previous.id != row.id {
@@ -648,7 +626,7 @@ impl Vault {
         }
         change.record(&row);
         // 新出现的冲突副本（网盘同步时两边都改过）：让前端提示一声
-        if previous.is_none() && row.kind == "note" && self.conflict_of(&row)?.is_some() {
+        if previous.is_none() && row.kind == NOTE && self.conflict_of(&row)?.is_some() {
             change.found_copies.push(row.title.clone());
         }
         Ok(row)
@@ -657,16 +635,16 @@ impl Vault {
     /// 这篇笔记是不是另一篇的冲突副本，是的话返回原文的 id。两条线索：
     /// 1. 属性块里的 id 被另一个文件占着 —— 网盘把整个文件拷了一份，id 也跟着拷了；
     /// 2. 文件名是冲突副本的样子（见 layout::conflict_originals），而且同一个文件夹里
-    ///    真有那篇原文。原文也可以是某一天 / 某个周期的目标：「日记/2026/2026-10-07 (冲突 …).md」
-    ///    的名字不是日期，扫描时当笔记，原文 id 是 `day:2026-10-07`（目标是 `goal:week:2026-09-21`）
+    ///    真有那篇原文。原文也可以是插件的一篇（某一天、某个周期的目标）：「日记/2026/2026-10-07 (冲突 …).md」
+    ///    的名字不是日期，扫描时当笔记，原文 id 是那一篇在索引里的 id（`day:2026-10-07`、`goal:week:2026-09-21`）
     ///    —— 两台设备都改了今日TODO，是同步里最常见的冲突。
     fn conflict_of(&self, row: &DocRow) -> Result<Option<String>> {
-        if row.kind != "note" {
+        if row.kind != NOTE {
             return Ok(None);
         }
         if let Some(file_id) = row.file_id.as_deref().filter(|id| *id != row.id) {
             if let Some(original) = index::by_id(&self.db, file_id)? {
-                if original.kind == "note" && original.rel_path != row.rel_path {
+                if original.kind == NOTE && original.rel_path != row.rel_path {
                     return Ok(Some(original.id));
                 }
             }
@@ -689,14 +667,15 @@ impl Vault {
 
     /// 笔记的 id：属性块里的（没被别的文件占用的话）；否则沿用这个路径原来的；再否则新分配一个。
     /// 新分配的只在索引里，下次应用写这个文件时才写进属性块。
+    /// 插件的文档在索引里用的 id（`day:…`、`goal:…`）不分给笔记，插件关着也一样
     fn note_id_for(&self, rel: &str, meta_id: Option<&str>, previous: Option<&DocRow>) -> Result<String> {
-        let usable = |id: &str| !id.starts_with("day:") && !id.starts_with("goal:");
+        let usable = |id: &str| !plugins::reserved_id(id);
         if let Some(id) = meta_id.filter(|id| usable(id)) {
             if !index::id_taken(&self.db, id, rel)? {
                 return Ok(id.to_string());
             }
         }
-        if let Some(previous) = previous.filter(|row| row.kind == "note") {
+        if let Some(previous) = previous.filter(|row| row.kind == NOTE) {
             if !index::id_taken(&self.db, &previous.id, rel)? {
                 return Ok(previous.id.clone());
             }
@@ -704,7 +683,8 @@ impl Vault {
         Ok(crate::db::new_id())
     }
 
-    fn write_and_index(&mut self, rel: &str, text: &str, change: &mut VaultChange) -> Result<DocRow> {
+    /// 写一个文件（原子替换）再读进索引
+    pub fn write_and_index(&mut self, rel: &str, text: &str, change: &mut VaultChange) -> Result<DocRow> {
         let path = fsio::abs(&self.root, rel);
         fsio::write_atomic(&path, text)?;
         let (mtime, size) = fsio::stat(&path)
@@ -845,7 +825,7 @@ impl Vault {
 
     fn note_row(&self, id: &str) -> Result<DocRow> {
         index::by_id(&self.db, id)?
-            .filter(|row| row.kind == "note")
+            .filter(|row| row.kind == NOTE)
             .ok_or_else(|| AppError::NotFound(format!("note {id}")))
     }
 
@@ -1304,83 +1284,68 @@ impl Vault {
         Ok(notes)
     }
 
-    /* ---------------- 某一天 ---------------- */
+    /* ---------------- 插件的文档（某一天、某个周期的目标……） ----------------
+       核心给插件开的那几样（docs/插件与跨端.md §5.1：L2 用得到的内部接口，不对外承诺）：
+       按类型取一篇、按类型存一篇，加上上面的 read / write_and_index / announce，和行为日志、索引 */
 
-    fn tasks_due(&self, date: &str) -> Result<Vec<Task>> {
-        Ok(index::tasks_due(&self.db, date)?
-            .iter()
-            .map(task_from_row)
-            .collect())
+    /// 这个仓库怎么摆（开着哪些插件、它们的文档类型）
+    pub fn layout(&self) -> &layout::Layout {
+        &self.layout
     }
 
-    /// `carry` 只在请求「今天」时为 true：今天还没写过，就延续之前最近写过的一天
-    /// （不落库，用户一编辑才以今天的身份写文件）。
-    pub fn day(&mut self, date: &str, carry: bool) -> Result<DayDoc> {
-        if index::day(&self.db, date)?.is_none() {
-            self.index_if_unseen(&self.layout.day_path(date)?)?;
-        }
-        let tasks = self.tasks_due(date)?;
-        if let Some(row) = index::day(&self.db, date)? {
-            return Ok(DayDoc {
-                date: date.to_string(),
-                title: row.title,
-                tasks,
-                note_md: row.content_md,
-                updated_at: row.updated_at,
-                carried_from: None,
-                rel_path: row.rel_path,
-            });
-        }
-        // 还没写过：给它将来的位置（延续来的内容也是以今天的身份写到这里）
-        let rel_path = self.layout.day_path(date)?;
-        if carry {
-            if let Some(previous) = index::latest_day_before(&self.db, date)? {
-                return Ok(DayDoc {
-                    date: date.to_string(),
-                    title: previous.title,
-                    tasks,
-                    note_md: previous.content_md,
-                    updated_at: previous.updated_at,
-                    carried_from: previous.day,
-                    rel_path,
-                });
-            }
-        }
-        Ok(DayDoc {
-            date: date.to_string(),
-            title: String::new(),
-            tasks,
-            note_md: String::new(),
-            updated_at: now_ms(),
-            carried_from: None,
-            rel_path,
-        })
+    /// 索引：插件在上面查自己的文档和自己另存的那几张表
+    pub fn db(&self) -> &Connection {
+        &self.db
     }
 
-    /// 写某一天。标题和正文都清空了就删掉这个文件 —— 空文件留在文件夹里只是杂物。
-    /// 不带 base 的这个是测试搭场景用的（应用里走 save_day_on）
-    #[cfg(test)]
-    pub fn save_day(&mut self, date: &str, title: &str, body: &str) -> Result<DayDoc> {
-        self.save_day_on(date, title, body, None)
+    /// 行为日志：插件记自己的事（勾了一条任务）
+    pub fn log_mut(&mut self) -> &mut activity::Log {
+        &mut self.log
     }
 
-    /// 写某一天。base 同 note_save：编辑器照着改的那一版正文的指纹，磁盘上已经不是那一版了就先另存冲突副本
-    pub fn save_day_on(&mut self, date: &str, title: &str, body: &str, base: Option<&str>) -> Result<DayDoc> {
-        self.layout.require_journal()?;
-        if index::day(&self.db, date)?.is_none() {
-            self.index_if_unseen(&self.layout.day_path(date)?)?;
+    fn doc_type_of(&self, doc: &DocRef) -> Result<Arc<dyn DocType>> {
+        self.layout
+            .doc_type(&doc.kind)
+            .cloned()
+            .ok_or_else(|| AppError::Invalid(format!("这个仓库没开管「{}」的插件", doc.kind)))
+    }
+
+    /// 插件的这一篇放在哪（还没写过的是它将来的位置）
+    pub fn typed_path(&self, doc: &DocRef) -> Result<String> {
+        self.doc_type_of(doc)?.path_of(&doc.key)
+    }
+
+    /// 索引里插件的这一篇。磁盘上有、索引里还没有的（后台还没读到它）当场读进来
+    pub fn typed_doc(&mut self, doc: &DocRef) -> Result<Option<DocRow>> {
+        if let Some(row) = index::typed(&self.db, &doc.kind, &doc.key)? {
+            return Ok(Some(row));
         }
-        let existing = index::day(&self.db, date)?;
+        let rel = self.typed_path(doc)?;
+        self.index_if_unseen(&rel)?;
+        index::typed(&self.db, &doc.kind, &doc.key)
+    }
+
+    /// 写插件的一篇：位置照它的类型（写过的就在原处），edit 改属性块（某一天的标题）。
+    /// 属性块和正文都空了就删掉这个文件 —— 空文件留在文件夹里只是杂物。base 同 note_save
+    pub fn save_typed(
+        &mut self,
+        doc: &DocRef,
+        body: &str,
+        base: Option<&str>,
+        edit: impl FnOnce(&mut FrontMatter),
+    ) -> Result<()> {
+        let ty = self.doc_type_of(doc)?;
+        let existing = self.typed_doc(doc)?;
         let mut change = VaultChange::default();
         let rel = match &existing {
             Some(row) => {
                 self.keep_unseen_edits(row, base, body, &mut change)?;
                 row.rel_path.clone()
             }
-            None => self.layout.day_path(date)?,
+            None => ty.path_of(&doc.key)?,
         };
         let (mut meta, _) = frontmatter::split(&self.read(&rel)?.unwrap_or_default());
-        meta.title = (!title.is_empty()).then(|| title.to_string());
+        edit(&mut meta);
 
         if meta.is_empty() && body.trim().is_empty() {
             if let Some(row) = &existing {
@@ -1389,37 +1354,21 @@ impl Vault {
             }
         } else {
             let saved = self.write_and_index(&rel, &frontmatter::render(&meta, body), &mut change)?;
-            self.log.record("day", date, "updated");
+            self.log.record(ty.log_entity(), &ty.log_id(&doc.key), "updated");
             change = change.without(&saved);
         }
         self.announce(change);
-        self.day(date, false)
+        Ok(())
     }
 
-    pub fn calendar_marks(&self, from: &str, to: &str) -> Result<CalendarMarks> {
-        let (written, open) = index::calendar_marks(&self.db, from, to)?;
-        Ok(CalendarMarks { written, open })
-    }
-
-    /// 日历上有记号的所有日子（不分哪一种）
-    #[cfg(test)]
-    pub fn marked_dates(&self, from: &str, to: &str) -> Result<Vec<String>> {
-        let marks = self.calendar_marks(from, to)?;
-        let mut all: Vec<String> = marks.written.into_iter().chain(marks.open).collect();
-        all.sort();
-        all.dedup();
-        Ok(all)
-    }
-
-    /// 所有写过的某一天、某个周期的目标，最近改过的在前（命令面板搜它们）
-    pub fn journal_list(&self) -> Result<Vec<JournalDoc>> {
-        Ok(index::journal(&self.db)?
+    /// 所有写过东西的插件文档，最近改过的在前（命令面板按标题搜它们，正文走 search_text）
+    pub fn doc_list(&self) -> Result<Vec<TypedDoc>> {
+        Ok(index::typed_docs(&self.db)?
             .into_iter()
             .map(|row| {
-                let (target, title) = target_and_title(&row);
-                JournalDoc {
+                let (target, title) = target_and_title(&row, &self.layout.types);
+                TypedDoc {
                     target,
-                    kind: row.kind.to_string(),
                     title,
                     updated_at: row.updated_at,
                 }
@@ -1427,145 +1376,16 @@ impl Vault {
             .collect())
     }
 
-    /* ---------------- 目标 ---------------- */
-
-    pub fn goal(&mut self, horizon: &str, period_start: &str) -> Result<Goal> {
-        layout::validate_period_start(horizon, period_start)?;
-        if index::goal(&self.db, horizon, period_start)?.is_none() {
-            self.index_if_unseen(&self.layout.goal_path(horizon, period_start)?)?;
-        }
-        Ok(match index::goal(&self.db, horizon, period_start)? {
-            Some(row) => Goal {
-                id: row.id,
-                horizon: horizon.to_string(),
-                title: row.title,
-                period_start: period_start.to_string(),
-                content_md: row.content_md,
-                created_at: row.created_at,
-                updated_at: row.updated_at,
-                rel_path: row.rel_path,
-            },
-            None => Goal {
-                id: String::new(),
-                horizon: horizon.to_string(),
-                title: String::new(),
-                period_start: period_start.to_string(),
-                content_md: String::new(),
-                created_at: 0,
-                updated_at: 0,
-                rel_path: self.layout.goal_path(horizon, period_start)?,
-            },
-        })
-    }
-
-    /// 测试搭场景用（应用里走 save_goal_on）
-    #[cfg(test)]
-    pub fn save_goal(&mut self, horizon: &str, period_start: &str, body: &str) -> Result<Goal> {
-        self.save_goal_on(horizon, period_start, body, None)
-    }
-
-    /// 写某个周期的目标。base 同 note_save
-    pub fn save_goal_on(
-        &mut self,
-        horizon: &str,
-        period_start: &str,
-        body: &str,
-        base: Option<&str>,
-    ) -> Result<Goal> {
-        self.layout.require_journal()?;
-        layout::validate_period_start(horizon, period_start)?;
-        if index::goal(&self.db, horizon, period_start)?.is_none() {
-            self.index_if_unseen(&self.layout.goal_path(horizon, period_start)?)?;
-        }
-        let existing = index::goal(&self.db, horizon, period_start)?;
-        let mut change = VaultChange::default();
-        let rel = match &existing {
-            Some(row) => {
-                self.keep_unseen_edits(row, base, body, &mut change)?;
-                row.rel_path.clone()
-            }
-            None => self.layout.goal_path(horizon, period_start)?,
-        };
-        let (meta, _) = frontmatter::split(&self.read(&rel)?.unwrap_or_default());
-
-        if meta.is_empty() && body.trim().is_empty() {
-            if let Some(row) = &existing {
-                self.remove_doc(row, &mut change)?;
-                change = change.without(row);
-            }
-        } else {
-            let saved = self.write_and_index(&rel, &frontmatter::render(&meta, body), &mut change)?;
-            self.log.record("goal", &saved.id, "updated");
-            change = change.without(&saved);
-        }
-        self.announce(change);
-        self.goal(horizon, period_start)
-    }
-
-    /* ---------------- 任务 ---------------- */
-
-    /// 勾选日历里的一条任务 = 改它所在文件里的那一行。
-    pub fn toggle_task(&mut self, id: &str) -> Result<Task> {
-        let task = index::task(&self.db, id)?
-            .ok_or_else(|| AppError::NotFound(format!("task {id}")))?;
-        let row = index::by_id(&self.db, &task.doc_id)?
-            .ok_or_else(|| AppError::NotFound(format!("task {id} 所在的文档")))?;
-        let text = self
-            .read(&row.rel_path)?
-            .ok_or_else(|| AppError::NotFound(format!("task {id} 所在的文件")))?;
-        let (meta, body) = frontmatter::split(&text);
-        let mut lines: Vec<String> = body.split('\n').map(str::to_string).collect();
-
-        // 行号对得上就用它；对不上（文件在索引之后被改过）就找原文一样的那一行，
-        // 只有唯一一行时才动 —— 宁可报错，也不勾错
-        let line = if lines.get(task.line).is_some_and(|line| *line == task.raw) {
-            task.line
-        } else {
-            let found: Vec<usize> = lines
-                .iter()
-                .enumerate()
-                .filter(|(_, line)| **line == task.raw)
-                .map(|(index, _)| index)
-                .collect();
-            match found.as_slice() {
-                [only] => *only,
-                _ => {
-                    return Err(AppError::Invalid(
-                        "这条任务所在的文档刚被改过，找不到它了，刷新后再试".into(),
-                    ))
-                }
-            }
-        };
-        lines[line] = tasks::toggle_line(&lines[line])
-            .ok_or_else(|| AppError::Invalid(format!("第 {} 行不是任务", line + 1)))?;
-
-        let mut change = VaultChange::default();
-        let saved = self.write_and_index(
-            &row.rel_path,
-            &frontmatter::render(&meta, &lines.join("\n")),
-            &mut change,
-        )?;
-        let done = !task.done;
-        self.log.record_with(
-            "task",
-            &saved.id,
-            if done { "completed" } else { "reopened" },
-            Some(&task.title),
-        );
-        // 前端手里这篇文档的正文过时了：连同它一起通知
-        change.tasks = true;
-        self.announce(change);
-
-        index::task(&self.db, &index::task_id(&saved.id, line))?
-            .map(|row| task_from_row(&row))
-            .ok_or_else(|| AppError::Internal(format!("task {id} 勾选后读不到")))
+    /// 行为日志里这一篇记成什么：笔记是 note，插件的文档照插件说的（老版本记的什么就是什么）
+    fn entity_of(&self, row: &DocRow) -> &'static str {
+        self.layout.doc_type(&row.kind).map_or("note", |ty| ty.log_entity())
     }
 
     /* ---------------- 文件 ---------------- */
 
-    /// 这篇文档的文件在哪。还没写过的某一天 / 某个周期没有文件，给它将来所在的、
+    /// 这篇文档的文件在哪。还没写过的插件文档（某一天、某个周期）没有文件，给它将来所在的、
     /// 已经存在的最近一层文件夹。第二个值表示是不是文件本身。
-    pub fn locate(&self, target: &DocTarget) -> Result<(PathBuf, bool)> {
+    pub fn locate(&self, target: &DocRef) -> Result<(PathBuf, bool)> {
         let rel = self.target_rel(target)?;
         let path = fsio::abs(&self.root, &rel);
         if path.is_file() {
@@ -1584,27 +1404,20 @@ impl Vault {
         Ok((self.root.clone(), false))
     }
 
-    fn target_rel(&self, target: &DocTarget) -> Result<String> {
-        Ok(match target {
-            DocTarget::Note { id } => self.note_row(id)?.rel_path,
-            DocTarget::Day { id } => match index::day(&self.db, id)? {
-                Some(row) => row.rel_path,
-                None => self.layout.day_path(id)?,
-            },
-            DocTarget::Goal {
-                horizon,
-                period_start,
-            } => match index::goal(&self.db, horizon, period_start)? {
-                Some(row) => row.rel_path,
-                None => self.layout.goal_path(horizon, period_start)?,
-            },
+    fn target_rel(&self, target: &DocRef) -> Result<String> {
+        if target.is_note() {
+            return Ok(self.note_row(&target.key)?.rel_path);
+        }
+        Ok(match index::typed(&self.db, &target.kind, &target.key)? {
+            Some(row) => row.rel_path,
+            None => self.typed_path(target)?,
         })
     }
 
     /// 把磁盘上那一版另存一份冲突副本，返回它的标题。应用里的保存不再走这一步（版本对不上时
     /// keep_unseen_edits 自己另存），留给测试搭「已经有冲突副本」的场景
     #[cfg(test)]
-    pub fn keep_conflict_copy(&mut self, target: &DocTarget) -> Result<Option<String>> {
+    pub fn keep_conflict_copy(&mut self, target: &DocRef) -> Result<Option<String>> {
         let rel = self.target_rel(target)?;
         let Some(text) = self.read(&rel)? else {
             return Ok(None);
@@ -1697,10 +1510,9 @@ impl Vault {
                     text: links::context_line(text, &note.title),
                 });
             }
-            let (target, title) = target_and_title(&row);
+            let (target, title) = target_and_title(&row, &self.layout.types);
             out.push(Backlink {
                 target,
-                kind: row.kind.to_string(),
                 title,
                 archived: row.archived,
                 updated_at: row.updated_at,
@@ -1773,9 +1585,9 @@ impl Vault {
             };
             let after = frontmatter::render(&meta, &body);
             let saved = self.write_and_index(&row.rel_path, &after, &mut change)?;
-            self.log.record(saved.kind, &saved.id, "updated");
+            self.log.record(self.entity_of(&saved), &saved.id, "updated");
             result.links += count as i64;
-            result.docs.push(target_and_title(&saved).1);
+            result.docs.push(target_and_title(&saved, &self.layout.types).1);
             result.rewrites.push(LinkRewrite {
                 rel_path: row.rel_path.clone(),
                 before,
@@ -1800,7 +1612,7 @@ impl Vault {
                 continue;
             }
             let saved = self.write_and_index(&rewrite.rel_path, &rewrite.before, &mut change)?;
-            self.log.record(saved.kind, &saved.id, "updated");
+            self.log.record(self.entity_of(&saved), &saved.id, "updated");
             restored += 1;
         }
         self.announce(change);
@@ -1808,12 +1620,9 @@ impl Vault {
     }
 
     /// 历史版本要找的文件：仓库根、相对路径，笔记再加上属性块里的 id（改名、挪文件夹之后靠它认）
-    pub fn history_source(&self, target: &DocTarget) -> Result<(PathBuf, String, Option<String>)> {
+    pub fn history_source(&self, target: &DocRef) -> Result<(PathBuf, String, Option<String>)> {
         let rel = self.target_rel(target)?;
-        let id = match target {
-            DocTarget::Note { id } => Some(id.clone()),
-            _ => None,
-        };
+        let id = target.is_note().then(|| target.key.clone());
         Ok((self.root.clone(), rel, id))
     }
 
@@ -1822,7 +1631,7 @@ impl Vault {
     /// 把一个文件（粘贴的图片、拖进来的文件）存进这篇文档的附件文件夹（Odea 的仓库是「附件」，
     /// Obsidian 的库照它的设置，Layout::attachment_dir），返回从这篇文档引用它的相对路径。
     /// 同名的文件已经在了：内容一样就直接用它，不一样就换个名字。
-    pub fn attach(&mut self, target: &DocTarget, name: &str, bytes: &[u8]) -> Result<Attachment> {
+    pub fn attach(&mut self, target: &DocRef, name: &str, bytes: &[u8]) -> Result<Attachment> {
         if bytes.is_empty() {
             return Err(AppError::Invalid("文件是空的".into()));
         }
@@ -1875,7 +1684,7 @@ impl Vault {
     /// 协作时访客要的文件（docs/协同编辑.md §7.2）：只给放在这篇附件位置上的（Layout::is_attachment_of，
     /// 不给别的笔记），规范化之后（符号链接解开）还在那个文件夹里。返回磁盘上的路径
     pub fn attachment_for_guest(&self, note: &str, file_rel: &str) -> Result<PathBuf> {
-        let doc_rel = self.target_rel(&DocTarget::Note { id: note.to_string() })?;
+        let doc_rel = self.target_rel(&DocRef::note(note))?;
         let refuse = || AppError::Invalid("只给这篇笔记的附件".into());
         if !self.layout.is_attachment_of(&doc_rel, file_rel) {
             return Err(refuse());
@@ -1893,7 +1702,7 @@ impl Vault {
     }
 
     /// 拖进来的是磁盘上的文件：读出来存进附件文件夹。本来就在这篇的附件文件夹里的，直接引用。
-    pub fn attach_path(&mut self, target: &DocTarget, source: &Path) -> Result<Attachment> {
+    pub fn attach_path(&mut self, target: &DocRef, source: &Path) -> Result<Attachment> {
         let name = source
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -1932,16 +1741,12 @@ impl Vault {
             root: self.root.to_string_lossy().into_owned(),
             notes: counts.notes,
             archived: counts.archived,
-            days: counts.days,
-            goals: counts.goals,
-            tasks: counts.tasks,
+            docs: counts.docs,
             layout: VaultLayout {
                 logical: self.tree.is_some(),
-                journal: self.layout.journal,
+                plugins: self.layout.plugins.iter().map(|id| id.to_string()).collect(),
                 archive: self.layout.archiving,
                 notes_dir: self.layout.notes.clone(),
-                days_dir: self.layout.days.clone(),
-                goals_dir: self.layout.goals.clone(),
                 archive_dir: self.layout.archive.clone(),
                 hidden_dirs: self.layout.hidden_dirs().into_iter().map(String::from).collect(),
             },
@@ -1992,12 +1797,14 @@ fn trash_rel(id: &str) -> String {
 /// 搜正文（命令面板；archived_only 是归档的搜索框）：大小写不敏感的子串，和以前前端在全文里
 /// indexOf 的结果一样。
 /// 不在 Vault 上 —— 调用方拿一个单独的只读连接来搜，不占仓库的锁，搜大仓库时保存不用等
-/// （索引是 WAL）。cancelled() 返回 true 说明又来了新的搜索，这一次作废，返回 None
+/// （索引是 WAL）。types 是开着的插件的文档类型（给插件的文档起标题），从仓库那里拿一份。
+/// cancelled() 返回 true 说明又来了新的搜索，这一次作废，返回 None
 pub fn search_text(
     conn: &Connection,
     query: &str,
     limit: usize,
     archived_only: bool,
+    types: &[Arc<dyn DocType>],
     cancelled: impl Fn() -> bool,
 ) -> Result<Option<TextSearch>> {
     let needle = query.trim().to_lowercase();
@@ -2007,15 +1814,14 @@ pub fn search_text(
     let Some(found) = index::scan_text(conn, &needle, archived_only, cancelled)? else {
         return Ok(None);
     };
-    let (mut notes, mut journal): (Vec<_>, Vec<_>) =
-        found.into_iter().partition(|hit| hit.doc.kind == "note");
+    let (mut notes, mut docs): (Vec<_>, Vec<_>) = found.into_iter().partition(|hit| hit.doc.kind == NOTE);
     notes.sort_by(|a, b| list_order(&a.doc, &b.doc));
-    journal.sort_by(|a, b| b.doc.updated_at.cmp(&a.doc.updated_at));
+    docs.sort_by(|a, b| b.doc.updated_at.cmp(&a.doc.updated_at));
     let hits = |list: Vec<index::TextMatch>| -> Vec<TextHit> {
         list.into_iter()
             .take(limit)
             .map(|hit| {
-                let (target, title) = target_and_title(&hit.doc);
+                let (target, title) = target_and_title(&hit.doc, types);
                 TextHit {
                     target,
                     title,
@@ -2027,7 +1833,7 @@ pub fn search_text(
     };
     Ok(Some(TextSearch {
         notes: hits(notes),
-        journal: hits(journal),
+        docs: hits(docs),
     }))
 }
 
@@ -2057,12 +1863,13 @@ const PREVIEW_AFTER: usize = 160;
 const PREVIEW_TEXT: usize = 200;
 
 /// 全局搜索（commands::find_in_vault）：每一篇里每一处命中，一行一行地找，和 VS Code 的
-/// 「在文件中查找」一样只搜正文。不在 Vault 上，理由同 search_text。
+/// 「在文件中查找」一样只搜正文。不在 Vault 上，理由同 search_text（types 也是）。
 /// 正则写错了放在结果的 error 里；cancelled() 返回 true 说明又来了新的搜索，这一次作废，返回 None
 pub fn find_text(
     conn: &Connection,
     query: &str,
     options: FindOptions,
+    types: &[Arc<dyn DocType>],
     cancelled: impl Fn() -> bool,
 ) -> Result<Option<FindResult>> {
     let finder = match search::Finder::new(query, options) {
@@ -2105,15 +1912,14 @@ pub fn find_text(
         return Ok(None);
     }
 
-    let (mut notes, mut journal): (Vec<_>, Vec<_>) =
-        found.into_iter().partition(|(doc, _, _)| doc.kind == "note");
+    let (mut notes, mut docs): (Vec<_>, Vec<_>) = found.into_iter().partition(|(doc, _, _)| doc.kind == NOTE);
     notes.sort_by(|a, b| list_order(&a.0, &b.0));
-    journal.sort_by(|a, b| b.0.updated_at.cmp(&a.0.updated_at));
+    docs.sort_by(|a, b| b.0.updated_at.cmp(&a.0.updated_at));
 
-    let total: usize = notes.iter().chain(&journal).map(|(_, _, count)| count).sum();
+    let total: usize = notes.iter().chain(&docs).map(|(_, _, count)| count).sum();
     let mut budget = FIND_MATCH_LIMIT;
     let mut files = Vec::new();
-    for (doc, hits, count) in notes.into_iter().chain(journal) {
+    for (doc, hits, count) in notes.into_iter().chain(docs) {
         if budget == 0 {
             break;
         }
@@ -2128,7 +1934,7 @@ pub fn find_text(
             })
             .collect();
         budget -= matches.len();
-        let (target, title) = target_and_title(&doc);
+        let (target, title) = target_and_title(&doc, types);
         files.push(FindFile {
             target,
             title,
@@ -2214,77 +2020,13 @@ fn note_from_row(row: &DocRow, conflict_of: Option<String>) -> Note {
     }
 }
 
-/// 「9月26日」
-fn month_day(date: &str) -> String {
-    match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
-        Ok(date) => {
-            use chrono::Datelike;
-            format!("{}月{}日", date.month(), date.day())
-        }
-        Err(_) => date.to_string(),
-    }
-}
-
-/// 指向这篇文档的目标，和给人看的标题（笔记标题、「10月6日 · 周报」、「第 41 周目标」）
-fn target_and_title(row: &DocRow) -> (DocTarget, String) {
-    match row.kind {
-        "day" => {
-            let date = row.day.clone().unwrap_or_default();
-            let title = if row.title.is_empty() {
-                month_day(&date)
-            } else {
-                format!("{} · {}", month_day(&date), row.title)
-            };
-            (DocTarget::Day { id: date }, title)
-        }
-        "goal" => (
-            DocTarget::Goal {
-                horizon: row.horizon.clone().unwrap_or_default(),
-                period_start: row.period_start.clone().unwrap_or_default(),
-            },
-            row.title.clone(),
-        ),
-        _ => (DocTarget::Note { id: row.id.clone() }, row.title.clone()),
-    }
-}
-
-/// 灰色小字：分类 · 时间 · 出处
-fn task_from_row(row: &index::TaskRow) -> Task {
-    let target = match row.doc_kind {
-        "day" => row.doc_day.clone().map(|id| DocTarget::Day { id }),
-        "goal" => Some(DocTarget::Goal {
-            horizon: row.doc_horizon.clone().unwrap_or_default(),
-            period_start: row.doc_period_start.clone().unwrap_or_default(),
-        }),
-        _ => Some(DocTarget::Note {
-            id: row.doc_id.clone(),
-        }),
+/// 指向这篇文档的 DocRef，和给人看的标题（笔记是标题；插件的文档照插件说的：「10月6日 · 周报」、「第 41 周目标」）
+fn target_and_title(row: &DocRow, types: &[Arc<dyn DocType>]) -> (DocRef, String) {
+    let title = match (&row.key, types.iter().find(|ty| ty.id() == row.kind)) {
+        (Some(key), Some(ty)) => ty.display_title(key, &row.title),
+        _ => row.title.clone(),
     };
-    let source = match row.doc_kind {
-        "day" => row.doc_day.as_deref().map(month_day),
-        "goal" => Some(layout::goal_title(
-            row.doc_horizon.as_deref().unwrap_or_default(),
-            row.doc_period_start.as_deref().unwrap_or_default(),
-        )),
-        _ => Some(row.doc_title.clone()),
-    };
-    let meta = [row.category.clone(), row.time_label.clone(), source]
-        .into_iter()
-        .flatten()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
-    Task {
-        id: row.id.clone(),
-        title: row.title.clone(),
-        status: (if row.done { "done" } else { "todo" }).to_string(),
-        meta: (!meta.is_empty()).then_some(meta),
-        due_date: Some(row.due_date.clone()),
-        time_label: row.time_label.clone(),
-        category: row.category.clone(),
-        source: target,
-        line: Some(row.line as i64),
-    }
+    (doc_ref(row), title)
 }
 
 #[cfg(test)]

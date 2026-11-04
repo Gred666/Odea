@@ -53,7 +53,7 @@ describe("mock backend：使用指南", () => {
     expect(notes.map((note) => note.title)).toEqual(["欢迎使用 Odea", "语法全览"]);
     expect(notes[0]!.isPinned).toBe(true);
     expect(await api.noteList(true)).toEqual([]);
-    expect(await api.journalList()).toEqual([]);
+    expect(await api.docList()).toEqual([]);
     expect(await api.guidePending()).toEqual([]);
     // 给前端的笔记里没有 mock 自己的记号；列表里不带正文（和 Rust 的 note_list 一样）
     expect(Object.keys(notes[0]!)).not.toContain("guide");

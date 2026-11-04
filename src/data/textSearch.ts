@@ -17,7 +17,7 @@ export interface TextSearchDone {
   result: TextSearch;
 }
 
-const EMPTY: TextSearch = { notes: [], journal: [] };
+const EMPTY: TextSearch = { notes: [], docs: [] };
 
 export function useTextSearch(
   query: string,

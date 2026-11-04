@@ -6,10 +6,16 @@ import { useCollab } from "@/collab/store";
 import { attachFiles, attachPaths, documentFolder } from "@/data/attachments";
 import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, saveKeyOf, useData } from "@/data/store";
-import type { DocumentModel, DocumentSaveTarget } from "@/data/types";
+import {
+  type DocumentModel,
+  type DocumentRef,
+  NOTE,
+  isShared,
+  noteRef,
+  vaultRef,
+} from "@/data/types";
 import type { EditorOutlineHandle } from "@/editor/MarkdownEditor";
 import type { WikiCandidate } from "@/editor/suggest";
-import type { TemplateContext } from "@/editor/templates";
 import { cn } from "@/lib/cn";
 import { snapToDevicePixels } from "@/lib/devicePixels";
 import { useLingering } from "@/lib/lingering";
@@ -32,13 +38,11 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { DayTasks } from "./ActionItem";
 import { Backlinks } from "./Backlinks";
 import { CollabBanner, CollabPresence } from "./CollabDialog";
 import { ConflictBanner } from "./ConflictBanner";
 import { EmptyState } from "./EmptyArt";
 import { GuideUpdateBanner } from "./GuideUpdateBanner";
-import { JournalSwitcher, journalPageOf } from "./JournalSwitcher";
 import { NotePath } from "./NotePath";
 import { Outline } from "./Outline";
 import { OverlayScrollbar } from "./OverlayScrollbar";
@@ -77,15 +81,13 @@ export const preloadEditor = async () => {
 
 /* ============================================================
    统一文档视图。
-   笔记 / 今日TODO / GOAL / 日历某天 / 归档项 —— 全部由它渲染。
-   新增内容类型只需要在 adapter 里多映射一个 DocumentModel，
-   不需要写新的视图组件。
+   笔记 / 归档项 / 插件的文档（今日TODO、GOAL、日历某天）—— 全部由它渲染。
+   新增内容类型只需要在 adapter（或插件的 useDocument）里多映射一个 DocumentModel，
+   不需要写新的视图组件：插件要的那几样填 DocumentModel 的槽位（眉题后面的控件、分段、正文后面的一段、模板）。
    ============================================================ */
 
 export function DocumentView({
   doc,
-  onToggleTask,
-  onSegmentChange,
   onDelete,
   onSaveDocument,
   onSaveTitle,
@@ -97,11 +99,9 @@ export function DocumentView({
   outline: outlineShown = true,
 }: {
   doc: DocumentModel;
-  onToggleTask: (id: string) => void;
-  onSegmentChange?: (v: string) => void;
   onDelete?: () => void;
-  onSaveDocument?: (target: DocumentSaveTarget, markdown: string) => Promise<void>;
-  onSaveTitle?: (target: DocumentSaveTarget, title: string) => Promise<void>;
+  onSaveDocument?: (target: DocumentRef, markdown: string) => Promise<void>;
+  onSaveTitle?: (target: DocumentRef, title: string) => Promise<void>;
   editorEnabled?: boolean;
   /** 笔记的标签栏显示着：滚下去以后「路径 / 标题」出在它底下一行，不在最上面那条里（那里是标签） */
   tabBar?: boolean;
@@ -161,7 +161,7 @@ export function DocumentView({
       notes.find((note) => note.title.trim().toLowerCase() === wanted) ??
       archived.find((note) => note.title.trim().toLowerCase() === wanted);
     if (hit) {
-      openDocument({ kind: "note", id: hit.id }, heading ? { heading } : undefined, newTab);
+      openDocument(noteRef(hit.id), heading ? { heading } : undefined, newTab);
       return;
     }
     const here = notes.find((note) => note.id === noteIdRef.current);
@@ -171,7 +171,7 @@ export function DocumentView({
       .then((id) => {
         if (!id) return;
         useApp.getState().setFocusRequest({ docKey: `note-${id}`, at: "body" });
-        openDocument({ kind: "note", id }, undefined, newTab);
+        openDocument(noteRef(id), undefined, newTab);
       });
   }, []);
 
@@ -253,19 +253,10 @@ export function DocumentView({
   // 仓库里的那一篇（保存、历史版本、附件、在文件夹里显示都按它）。做客的那一篇（协作时别人的文档）
   // 不在仓库里，这些都没有
   const editorTarget = doc.editor?.target;
-  const target = editorTarget?.kind === "shared" ? undefined : editorTarget;
-  const shared = editorTarget?.kind === "shared";
-  // 某一天 / 某个周期的文档能用 `/模板`（editor/templates.ts）；笔记不接。
-  // 只取类型：模板本身在编辑器分包里，不进主包
-  const todayDate = useApp((s) => s.todayDate);
-  const dayId = target?.kind === "day" ? target.id : null;
-  const goalHorizon = target?.kind === "goal" ? target.horizon : null;
-  const goalStart = target?.kind === "goal" ? target.periodStart : null;
-  const templateContext = useMemo<TemplateContext | undefined>(() => {
-    if (dayId) return { scope: "day", date: dayId, today: todayDate };
-    if (goalHorizon && goalStart) return { scope: goalHorizon, date: goalStart, today: todayDate };
-    return undefined;
-  }, [dayId, goalHorizon, goalStart, todayDate]);
+  const target = vaultRef(editorTarget);
+  const shared = !!editorTarget && isShared(editorTarget);
+  // 插件填了模板槽位的文档（某一天、某个周期）能用 `/模板`（editor/templates.ts）；笔记不接
+  const templateContext = doc.templates;
   const handleExternalConflict = useCallback(() => {
     if (target) useData.getState().markConflict(target);
   }, [target]);
@@ -301,7 +292,7 @@ export function DocumentView({
     (paths: string[]) => useCollab.getState().attachPaths(paths),
     [],
   );
-  const noteId = target?.kind === "note" ? target.id : null;
+  const noteId = target?.type === NOTE ? target.key : null;
   noteIdRef.current = noteId;
   // 这篇是用户改过的使用指南、这个版本带着新版：标题上方问换不换
   const guideUpdate = useData((s) =>
@@ -422,9 +413,7 @@ export function DocumentView({
                     稍长就被它截掉。挪上来之后标题独占整行；这一行的高度钉在小字
                     的一行高，控件比它高出来的部分往上溢进顶部留白里（负外边距），
                     标题的位置不受影响，切「日TODO ↔ 周/GOAL」时控件也不挪窝。 */}
-                      {(doc.eyebrow ||
-                        doc.folder !== undefined ||
-                        (doc.segments && onSegmentChange)) && (
+                      {(doc.eyebrow || doc.folder !== undefined || doc.segments) && (
                         <div className="mb-2 flex min-h-[20px] items-end justify-between gap-8">
                           {doc.eyebrow && (
                             <div className="flex min-w-0 items-center gap-1.5">
@@ -434,8 +423,8 @@ export function DocumentView({
                               >
                                 {doc.eyebrow}
                               </p>
-                              {/* 日程切换器（docs/协同编辑.md §22.6）：开着日程的仓库有两个以上时才有 */}
-                              {journalPageOf(workspace) && <JournalSwitcher />}
+                              {/* 小字后面的控件（槽位）：日程切换器（docs/协同编辑.md §22.6） */}
+                              {doc.eyebrowAccessory}
                             </div>
                           )}
                           {/* 笔记：这篇在哪个文件夹（列表栏退回上层后，深处那篇在列表里看不见） */}
@@ -449,7 +438,7 @@ export function DocumentView({
                           {/* 盒子钉成小号控件的高（30），-10 之后正好是这一行的 20：大号的（34，/GOAL 那组）
                             多出来的 4px 往下垂进 mb-2 的空里，不再把这一行撑成 24 —— 以前 /GOAL 的标题、
                             分隔线、正文都比别的页低 4px，切过去就跳一下 */}
-                          {doc.segments && onSegmentChange && (
+                          {doc.segments && (
                             <div className="-mt-2.5 ml-auto h-[30px] shrink-0">
                               <Segmented
                                 group={doc.segments.group}
@@ -470,7 +459,7 @@ export function DocumentView({
                                   };
                                 })}
                                 value={doc.segments.active}
-                                onChange={onSegmentChange}
+                                onChange={doc.segments.onChange}
                                 size={doc.segments.options.length > 3 ? "sm" : "md"}
                               />
                             </div>
@@ -541,8 +530,8 @@ export function DocumentView({
                           onDocumentChange={handleDocumentChange}
                           // 做客的那一篇：双链指向的是主持人的笔记，不在这里打开
                           onWikiLink={shared ? undefined : handleWikiLink}
-                          // 日历当日安排跟在正文后面：编辑器别再撑 360px 把任务推到底下
-                          fill={!doc.dayTasks?.length}
+                          // 正文后面还有一段（日历的当日安排）：编辑器别再撑 360px 把它推到底下
+                          fill={!doc.afterBody}
                           // 切走时缓存编辑器状态，切回来不用再解析全文
                           cacheKey={saveKey(doc)}
                           externalRevision={externalRevision}
@@ -563,9 +552,8 @@ export function DocumentView({
                         <DocumentPreview markdown={doc.bodyMd} />
                       )}
 
-                      {doc.dayTasks && doc.dayTasks.length > 0 && (
-                        <DayTasks tasks={doc.dayTasks} onToggle={onToggleTask} />
-                      )}
+                      {/* 正文后面的一段（槽位）：日历某一天的当日安排 */}
+                      {doc.afterBody}
 
                       {/* ---------- 反向链接：别的文档里写了 [[这篇]] 的地方 ---------- */}
                       {noteId && <Backlinks key={noteId} noteId={noteId} title={doc.title} />}
@@ -898,7 +886,7 @@ const DocumentPreview = memo(function DocumentPreview({ markdown }: { markdown: 
 function saveKey(doc: DocumentModel): string {
   const target = doc.editor?.target;
   if (!target) return "";
-  return target.kind === "shared" ? `shared:${target.id}` : saveKeyOf(target);
+  return isShared(target) ? `shared:${target.id}` : saveKeyOf(target);
 }
 
 /**

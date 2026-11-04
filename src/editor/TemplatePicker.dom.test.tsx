@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 
+import { TEMPLATES, scopeLabel, templatePlaceholder } from "@/plugins/journal/templates";
+import { registerTemplates } from "@/plugins/registry";
 import { undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { MotionGlobalConfig } from "motion/react";
@@ -18,7 +20,15 @@ MotionGlobalConfig.skipAnimations = true;
  * 方向键 / 回车 / Esc 由编辑器转给选择器。
  */
 
-const DAY: TemplateContext = { scope: "day", date: "2026-09-27", today: "2026-09-27" };
+// 用日程那几套模板测（插件在启动时交来，这里直接登记）。选择器的标题、空文档的提示是文档模型给的
+registerTemplates(TEMPLATES);
+
+function context(scope: "day" | "week", date: string, today: string): TemplateContext {
+  const base = { scope, date, today, label: "", placeholder: templatePlaceholder(scope) };
+  return { ...base, label: scopeLabel(base) };
+}
+
+const DAY = context("day", "2026-09-27", "2026-09-27");
 
 let host: HTMLDivElement;
 let root: Root;
@@ -164,11 +174,7 @@ describe("模板选择器", () => {
   });
 
   it("offers only week templates in a week goal", async () => {
-    const { view } = await openEditor("", {
-      scope: "week",
-      date: "2026-09-28",
-      today: "2026-09-27",
-    });
+    const { view } = await openEditor("", context("week", "2026-09-28", "2026-09-27"));
     await type(view, "/模板");
     expect(options().map((option) => option.dataset.template)).toEqual([
       "week-plan",

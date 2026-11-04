@@ -5,12 +5,11 @@ import { useTeam } from "@/data/team";
 import { type VaultEntry, launcherApi } from "@/launcher/api";
 import { cn } from "@/lib/cn";
 import { isTauri } from "@/lib/tauri";
+import { installedPlugins } from "@/plugins/registry";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   Archive,
   ArchiveX,
-  CalendarCheck,
-  CalendarOff,
   ChevronsUpDown,
   FolderOpen,
   FolderOutput,
@@ -47,8 +46,8 @@ const folderName = (path: string) =>
 
 export function VaultSwitcher() {
   const root = useData((s) => s.vaultRoot);
-  const journal = useData((s) => s.layout.journal);
-  const setJournal = useData((s) => s.setJournal);
+  const plugins = useData((s) => s.layout.plugins);
+  const setPlugin = useData((s) => s.setPlugin);
   const archive = useData((s) => s.layout.archive);
   const setArchive = useData((s) => s.setArchive);
   const setTrashOpen = useApp((s) => s.setTrashOpen);
@@ -177,12 +176,21 @@ export function VaultSwitcher() {
               onSelect={() => void backend().then((api) => api.showLauncher().catch(fail))}
             />
             <DropdownMenu.Separator className="mx-1 my-1 h-px bg-line" />
-            <MenuItem
-              icon={journal ? CalendarOff : CalendarCheck}
-              label={journal ? "关闭日程" : "启用日程"}
-              hint={journal ? "日记、目标的文件都留着" : "今日TODO、目标、日历"}
-              onSelect={() => void setJournal(!journal)}
-            />
+            {/* 开 / 关插件（日程）：文件都留着 */}
+            {installedPlugins().map((plugin) => {
+              if (!plugin.toggle) return null;
+              const on = plugins.includes(plugin.id);
+              const look = on ? plugin.toggle.off : plugin.toggle.on;
+              return (
+                <MenuItem
+                  key={plugin.id}
+                  icon={look.icon}
+                  label={look.label}
+                  hint={look.menuHint}
+                  onSelect={() => void setPlugin(plugin.id, !on)}
+                />
+              );
+            })}
             <MenuItem
               icon={archive ? ArchiveX : Archive}
               label={archive ? "关闭归档" : "启用归档"}

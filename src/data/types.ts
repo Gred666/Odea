@@ -1,5 +1,6 @@
 import type { CollabSession } from "@/collab/session";
 import type { ISODate } from "@/lib/date";
+import type { ReactNode } from "react";
 
 /* ============================================================
    领域类型
@@ -9,8 +10,37 @@ import type { ISODate } from "@/lib/date";
    命名保持 camelCase（Rust 侧用 #[serde(rename_all = "camelCase")]）。
    ============================================================ */
 
-/** 导航区。「一切皆文档」——每个区最终都渲染成 DocumentView。扩展页还没有运行时，先不进导航 */
-export type WorkspaceId = "notes" | "today" | "goal" | "calendar" | "archive" | "extensions";
+/**
+ * 导航区（导航项的 id）。核心的是 notes（文件）、archive（归档）、extensions（扩展页，还没有运行时，不进导航），
+ * 别的由插件的导航贡献点声明（src/plugins/registry.ts；日程的是 today / goal / calendar）。
+ * 「一切皆文档」——每个区最终都渲染成 DocumentView
+ */
+export type WorkspaceId = string;
+
+/* ---------------- 文档（docs/插件与跨端.md §6.1） ---------------- */
+
+/** 核心只认的那一种文档：仓库里的一个 Markdown 文件 */
+export const NOTE = "note";
+
+/**
+ * 仓库里的一篇。type 带命名空间：核心只认 `note`，别的由插件声明（`journal.day`、`journal.goal`，
+ * src/plugins/）；key 的格式由那个类型自己定：笔记 id、`2026-11-03`、`week:2026-11-02`
+ */
+export interface DocumentRef {
+  type: string;
+  key: string;
+}
+
+/** 指向一篇笔记 */
+export const noteRef = (id: string): DocumentRef => ({ type: NOTE, key: id });
+
+/** 插件的一篇文档（不带正文）：命令面板按标题搜它们，正文走 searchText。对应 Rust 的 TypedDoc */
+export interface TypedDoc {
+  target: DocumentRef;
+  /** 给人看的标题：「10月6日 · 完成专注模式原型」「第 41 周目标」 */
+  title: string;
+  updatedAt: number;
+}
 
 /* ---------------- 笔记 ---------------- */
 
@@ -33,8 +63,8 @@ export interface NoteSummary {
   /** 在仓库里的相对路径（正斜杠）。正文里的相对图片路径以它所在的文件夹为基准 */
   relPath: string;
   /**
-   * 这篇是另一篇的冲突副本（同步撞车、或本应用另存的）：原文的 id。原文也可以是
-   * 某一天（`day:2026-10-07`）或某个周期的目标（`goal:week:2026-09-21`），见 data/conflicts.ts
+   * 这篇是另一篇的冲突副本（同步撞车、或本应用另存的）：原文的 id。原文也可以是插件的一篇
+   * （某一天 `day:2026-10-07`、某个周期的目标 `goal:week:2026-09-21`），见 data/conflicts.ts
    */
   conflictOf: string | null;
   /**
@@ -62,115 +92,22 @@ export interface TrashedNote {
   purgeAt: number;
 }
 
-/* ---------------- 任务 ----------------
-   日历「当日安排」里的一条。它就是某篇文档正文里带日期的 `- [ ]`：
-   `- [ ] 力量训练 @2026-08-29 18:30 #健康`（见 src-tauri/src/vault/tasks.rs）。
-   在日历里勾选，改的是原文件里的那一行。
-*/
-
-export type TaskStatus = "todo" | "done";
-
-export interface Task {
-  /** 所在文档的 id # 行号。只在勾选的那一下用 */
-  id: string;
-  title: string;
-  status: TaskStatus;
-  /** 任务下方的灰色小字：「健康 · 18:30 · 本周目标」（分类 · 时间 · 出处） */
-  meta: string | null;
-  dueDate: ISODate | null;
-  /** 「上午」「16:00」「18:30」这类展示用时间 */
-  timeLabel: string | null;
-  /** 分类：任务里的第一个 #标签 */
-  category: string | null;
-  /** 写着这条任务的那篇文档（日历里点「出处」跳过去）；浏览器预览里的演示任务没有 */
-  source?: DocumentSaveTarget | null;
-  /** 在那篇正文里的行号（从 0 开始） */
-  line?: number | null;
-}
-
-/** 日历月网格上的两种记号 */
-export interface CalendarMarks {
-  /** 留下过东西的日子：这一天的记录写过，或者有做完了的任务 */
-  written: Set<ISODate>;
-  /** 还有没做完的任务的日子 */
-  open: Set<ISODate>;
-}
-
-/** 写过的某一天 / 某个周期的目标（不带正文）：命令面板按标题搜它们，正文走 searchText */
-export interface JournalDoc {
-  target: DocumentSaveTarget;
-  kind: "day" | "goal";
-  /** 「10月6日 · 完成专注模式原型」「第 41 周目标」 */
-  title: string;
-  updatedAt: number;
-}
-
-/* ---------------- 目标 ---------------- */
-
-export type GoalHorizon = "week" | "month" | "year";
-
-/**
- * 某个周期（某一周 / 某个月 / 某一年）的目标，一个周期一篇。
- * 键是 horizon + periodStart；还没写过的周期是一篇空文档（id 为空、updatedAt 为 0），
- * 第一次保存时才落库。
- */
-export interface Goal {
-  /** 还没落库时为空串 */
-  id: string;
-  horizon: GoalHorizon;
-  /** 库里的原始标题；界面展示用 goalTitle() 按周期算，不用它 */
-  title: string;
-  /** 该周期的起点：周一 / 1 号 / 1 月 1 日 */
-  periodStart: ISODate;
-  contentMd: string;
-  createdAt: number;
-  updatedAt: number;
-  /** 在仓库里的相对路径；还没写过的周期是它将来的位置 */
-  relPath: string;
-}
-
-/** goals 缓存的键 */
-export const goalKey = (horizon: GoalHorizon, periodStart: ISODate) => `${horizon}:${periodStart}`;
-
-/* ---------------- 日历 ---------------- */
-
-/**
- * 某一天的文档：「今日TODO」就是今天这一篇，日历里点到哪天就是哪一篇。
- * 和笔记一样有可编辑的标题。
- */
-export interface DayDoc {
-  date: ISODate;
-  /** 空串表示还没起标题，界面上显示占位「无标题笔记」 */
-  title: string;
-  /** 当天的待办 / 事件 */
-  tasks: Task[];
-  noteMd: string;
-  updatedAt: number;
-  /**
-   * 这一天还没写过、内容是从之前最近一天延续来的：那一天的日期。
-   * 只有「今天」会延续；用户一编辑就以这一天自己的身份落库。
-   */
-  carriedFrom: ISODate | null;
-  /** 在仓库里的相对路径；还没写过的日子是它将来的位置 */
-  relPath: string;
-}
-
 /* ---------------- 搜索 ---------------- */
 
 /** searchText 的一条：正文里出现了要找的字的文档 */
 export interface TextHit {
-  target: DocumentSaveTarget;
-  /** 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc） */
+  target: DocumentRef;
+  /** 笔记是它的标题；插件的文档是给人看的标题（同 TypedDoc） */
   title: string;
   updatedAt: number;
   /** 第一次出现的那一行（很长的截一段）：面板在里面截出要显示的一小段（snippetAround） */
   line: string;
 }
 
-/** 搜正文：笔记（含归档，顺序同两个列表接起来）和日记、目标，各自最多 limit 条 */
+/** 搜正文：笔记（含归档，顺序同两个列表接起来）和插件的文档（日记、目标……），各自最多 limit 条 */
 export interface TextSearch {
   notes: TextHit[];
-  journal: TextHit[];
+  docs: TextHit[];
 }
 
 /** 全局搜索（findInVault）的条件：和编辑器里查找面板的三个开关一样 */
@@ -195,8 +132,8 @@ export interface FindMatch {
 
 /** 全局搜索里命中了的一篇 */
 export interface FindFile {
-  target: DocumentSaveTarget;
-  /** 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc） */
+  target: DocumentRef;
+  /** 笔记是它的标题；插件的文档是给人看的标题（同 TypedDoc） */
   title: string;
   updatedAt: number;
   /** 这一篇里给出的命中（总数到了上限，后面的就不给了） */
@@ -224,7 +161,7 @@ export interface DocumentAnchor {
   match?: MatchAnchor;
 }
 
-/** 全局搜索的结果：笔记（含归档，顺序同两个列表接起来）在前，日记、目标（最近改过的在前）在后 */
+/** 全局搜索的结果：笔记（含归档，顺序同两个列表接起来）在前，插件的文档（最近改过的在前）在后 */
 export interface FindResult {
   files: FindFile[];
   /** 一共几处（没给出来的也数了） */
@@ -244,12 +181,10 @@ export interface FindResult {
 export interface VaultChange {
   /** 变了（或没了）的笔记 id */
   notes: string[];
-  /** 变了的某一天 */
-  days: ISODate[];
-  /** 变了的目标，`week:2026-09-21`（同 goalKey） */
-  goals: string[];
-  /** 带日期的任务有变化：当日安排和日历上的小圆点要刷新 */
-  tasks: boolean;
+  /** 变了（或没了）的插件文档（某一天、某个周期的目标……）：交给插件刷新 */
+  docs: DocumentRef[];
+  /** 这几个插件在索引里另存的那一份变了（日程：带日期的任务，当日安排和日历上的小圆点要刷新） */
+  plugins: string[];
   /** 这次产生的冲突副本的标题（编辑器里有没存的修改时外部改动到了，另存的那一份） */
   conflicts: string[];
   /** 新出现的冲突副本（同步时两边都改过，网盘或另一台设备另存的那一份）的标题 */
@@ -368,17 +303,14 @@ export interface TeamInvite {
   already: boolean;
 }
 
-/** 这台电脑上开着日程的一个仓库（日程切换器，§22.6） */
-export interface JournalVault {
+/** 这台电脑上开着某个插件的一个仓库（日程切换器在开着日程的几个仓库之间跳，docs/协同编辑.md §22.6） */
+export interface PluginVault {
   path: string;
   name: string;
   team: boolean;
   /** 就是这个窗口的仓库 */
   current: boolean;
 }
-
-/** 日程切换器跳过去以后停在哪一页 */
-export type JournalPage = "today" | "goal" | "calendar";
 
 /** 同步用的代理：用户填的，和实际在用的（填的 > 环境变量 > 系统代理） */
 export interface SyncProxy {
@@ -488,11 +420,10 @@ export interface ImportReport {
 
 /* ---------------- 反向链接 ---------------- */
 
-/** 一篇正文里写了 `[[这篇的标题]]` 的文档（笔记、某一天、目标都算） */
+/** 一篇正文里写了 `[[这篇的标题]]` 的文档（笔记、插件的文档都算） */
 export interface Backlink {
   /** 链过来的那篇，点一下跳过去 */
-  target: DocumentSaveTarget;
-  kind: "note" | "day" | "goal";
+  target: DocumentRef;
   /** 给人看的标题：笔记标题、「10月6日 · 周一」、「第 41 周目标」 */
   title: string;
   archived: boolean;
@@ -590,44 +521,42 @@ export interface VaultInfo {
   root: string;
   notes: number;
   archived: number;
-  days: number;
-  goals: number;
-  tasks: number;
+  /** 插件的文档（某一天、目标……）几篇 */
+  docs: number;
   layout: VaultLayout;
   /** 团队仓库（docs/协同编辑.md §22.3） */
   team: boolean;
 }
 
 /**
- * 这个仓库怎么摆（docs/仓库与启动器.md §6，Rust 的 vault/layout.rs）：开没开日程、文件树的根在哪。
+ * 这个仓库怎么摆（docs/仓库与启动器.md §6，Rust 的 vault/layout.rs）：开着哪些插件、文件树的根在哪。
  * 窄栏上有哪几项、一篇笔记在树上哪个文件夹（data/folders.ts）都看它
  */
 export interface VaultLayout {
   /** 逻辑目录（§7）：文件树是清单里摆的那一棵（treeView），文件夹不在硬盘上 */
   logical: boolean;
-  /** 开没开日程（今日TODO、目标、日历） */
-  journal: boolean;
+  /** 开着的插件（`odea.journal` ……，src/plugins/）：仓库标记里想用、这个版本也带着的那几个 */
+  plugins: string[];
   /** 开没开归档：和日程分开，只写笔记的人也能归档旧资料 */
   archive: boolean;
   /** 文件树的根：「笔记」，或者整个仓库（空串） */
   notesDir: string;
-  daysDir: string;
-  goalsDir: string;
   archiveDir: string;
-  /** 不在树上的文件夹（日程开着时的日记、目标，归档开着时的归档）：里面的笔记算在树根这一层 */
+  /** 不在树上的文件夹（插件放文档的文件夹，归档开着时的归档）：里面的笔记算在树根这一层 */
   hiddenDirs: string[];
 }
 
-/** Odea 自己建的仓库：日程、归档开着，树根是「笔记」。取到仓库的真实摆法之前先当它是这样 */
+/**
+ * Odea 自己建的仓库：归档开着，树根是「笔记」；默认开着的插件（日程）由插件的注册表补上
+ * （plugins/registry.ts 的 defaultLayout）。取到仓库的真实摆法之前先当它是这样
+ */
 export const ODEA_LAYOUT: VaultLayout = {
   logical: false,
-  journal: true,
+  plugins: [],
   archive: true,
   notesDir: "笔记",
-  daysDir: "日记",
-  goalsDir: "目标",
   archiveDir: "归档",
-  hiddenDirs: ["日记", "目标", "归档"],
+  hiddenDirs: ["归档"],
 };
 
 /**
@@ -655,10 +584,23 @@ export interface OutlineItem {
 /* ============================================================
    统一文档模型
    ★ 整个应用最重要的抽象。
-   笔记 / 今日TODO / GOAL / 日历某天 / 归档项 —— 全部归一到这里，
-   由同一个 DocumentView 渲染。新增一种内容类型 = 多一个 adapter 映射，
-   不需要写新的视图组件。
+   笔记 / 归档项 / 插件的文档（今日TODO、GOAL、日历某天）—— 全部归一到这里，
+   由同一个 DocumentView 渲染。插件不写新的视图组件，填这里的槽位（docs/插件与跨端.md §5.6）：
+   眉题、眉题旁边的一个控件、分段、正文后面的一段、模板、状态栏。
    ============================================================ */
+
+/** 这篇能用哪一组模板（贡献点 templates，editor/templates.ts）：scope 是那一组的名字，date / today 交给模板算日期 */
+export interface TemplateContext {
+  scope: string;
+  /** 某一天：那一天；周期：周期起点 */
+  date: ISODate;
+  /** 今天。已经过去的复盘节点不再排进日历 */
+  today: ISODate;
+  /** 选择器标题上的那一小段：「9月27日 · 周日」「第 40 周」 */
+  label: string;
+  /** 空文档里的占位提示：告诉人可以从模板开始 */
+  placeholder: string;
+}
 
 export interface DocumentModel {
   /** 用于 React key 和滚动位置记忆 */
@@ -667,8 +609,8 @@ export interface DocumentModel {
   /** 标题上方的横幅，如归档视图的「已归档 · 2026年8月18日」 */
   banner?: { icon: "archive"; text: string };
   /** 这篇是另一篇的冲突副本：标题上方换成冲突横幅（打开原文 / 留这一版 / 删掉这份） */
-  /** 这篇是冲突副本：原文是哪篇（笔记、某一天或某个周期的目标，见 data/conflicts.ts） */
-  conflict?: { copyId: string; original: DocumentSaveTarget; originalTitle: string };
+  /** 这篇是冲突副本：原文是哪篇（笔记，或者插件的一篇，见 data/conflicts.ts） */
+  conflict?: { copyId: string; original: DocumentRef; originalTitle: string };
   /**
    * 没有内容可显示（一篇笔记都没有、归档是空的）：正文区换成插画 + 一句话，
    * 不再假装是一篇标题叫「还没有笔记」的文档
@@ -678,14 +620,27 @@ export interface DocumentModel {
   relPath?: string;
   /** 笔记：id 写在属性块里了（NoteSummary.idInFile）。团队协作按它认同一篇，没写的按相对路径 */
   idInFile?: boolean;
-  /** 标题上方的分段控件。short：正文区窄的时候每一项换成的短字（日历那四段） */
-  segments?: { group: string; options: string[]; short?: string[]; active: string };
+  /**
+   * 标题上方的分段控件（槽位）。short：正文区窄的时候每一项换成的短字（日历那四段）；
+   * onChange：点了哪一段，由填这个槽位的插件处理
+   */
+  segments?: {
+    group: string;
+    options: string[];
+    short?: string[];
+    active: string;
+    onChange: (value: string) => void;
+  };
   /** 统一的 Markdown 正文 */
   bodyMd: string;
-  /** 日历某一天的「当日安排」：别的文档里写着这一天的任务，列在正文后面 */
-  dayTasks?: Task[];
+  /** 正文后面的一段（槽位）：日历某一天的「当日安排」。有它的时候编辑器不撑满一屏 */
+  afterBody?: ReactNode;
+  /** 这篇能用的模板（槽位）：在一行里只写 `/模板` 就弹出来 */
+  templates?: TemplateContext;
   /** 标题上方的一行小字，如日历某天的「9月15日 · 周二」 */
   eyebrow?: string;
+  /** 小字后面的一个控件（槽位）：日程切换器 */
+  eyebrowAccessory?: ReactNode;
   /** 笔记所在的文件夹（相对「笔记」，空串是最上层）：标题上方显示成一行路径。只有笔记有 */
   folder?: string;
   /** 底部状态栏的分段文字 */
@@ -709,11 +664,6 @@ export interface DocumentModel {
   };
 }
 
-export type DocumentSaveTarget =
-  | { kind: "note"; id: string }
-  | { kind: "goal"; horizon: GoalHorizon; periodStart: ISODate }
-  | { kind: "day"; id: ISODate };
-
 /**
  * 在别人那里做客的那一篇（docs/协同编辑.md §3）：真相在主持人那台，访客这边不落盘，
  * 保存、改标题都没有。id 是这次会话的键。只出现在文档模型的编辑器目标上
@@ -724,4 +674,12 @@ export interface SharedTarget {
 }
 
 /** 编辑器在编辑什么：仓库里的一篇，或者做客的那一篇 */
-export type EditorTarget = DocumentSaveTarget | SharedTarget;
+export type EditorTarget = DocumentRef | SharedTarget;
+
+/** 做客的那一篇（不在仓库里） */
+export const isShared = (target: EditorTarget | undefined): target is SharedTarget =>
+  !!target && "kind" in target;
+
+/** 编辑器目标里仓库的那一篇；做客的那一篇不算 */
+export const vaultRef = (target: EditorTarget | undefined): DocumentRef | undefined =>
+  target && !isShared(target) ? target : undefined;

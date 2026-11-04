@@ -130,7 +130,6 @@ import {
   applyTemplate,
   carriedTasks,
   hasOtherContent,
-  templatePlaceholder,
   templateTrigger,
   templatesFor,
 } from "./templates";
@@ -228,7 +227,7 @@ const wikiKey = (title: string) => title.trim().toLowerCase();
 /** 一个都不认识：双链全按「不存在」画（做客的那一篇） */
 const NO_TITLES: ReadonlySet<string> = new Set();
 
-/** 笔记的空白正文里显示的提示（某一天 / 某个周期的用 templatePlaceholder） */
+/** 笔记的空白正文里显示的提示（填了模板槽位的文档 —— 某一天、某个周期 —— 用槽位里的 placeholder） */
 const NOTE_PLACEHOLDER = "写点什么…　输入 / 插入标题、待办、表格，[[ 链接到别的笔记";
 /** 最近切走的这么多篇留着。大文档一篇的状态有几 MB，不能无限留 */
 const STATE_CACHE_LIMIT = 12;
@@ -550,7 +549,7 @@ export function MarkdownEditor({
 
     const templateExtensions: Extension[] = templateContextRef.current
       ? [
-          placeholder(templatePlaceholder(templateContextRef.current.scope)),
+          placeholder(templateContextRef.current.placeholder),
           EditorView.updateListener.of((update) => {
             if (templateOpenRef.current) {
               // 接着打字、退格、光标挪走、点到别处：触发词不在了就收起

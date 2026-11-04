@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { useData } from "@/data/store";
-import type { NoteSummary } from "@/data/types";
+import { NOTE, type NoteSummary, noteRef } from "@/data/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type MockNet, createMockNet } from "./mockNet";
 import { PIPE, decodeFrame, encodeFrame } from "./net";
@@ -59,9 +59,9 @@ beforeEach(() => {
     bodies: { n1: "第一行\n第二行\n第三行" },
     externalRevisions: {},
     saveDocument: vi.fn(async (target, text) => {
-      if (target.kind !== "note") return;
-      saved.push({ id: target.id, text });
-      useData.setState((state) => ({ bodies: { ...state.bodies, [target.id]: text } }));
+      if (target.type !== NOTE) return;
+      saved.push({ id: target.key, text });
+      useData.setState((state) => ({ bodies: { ...state.bodies, [target.key]: text } }));
     }),
     createNote: vi.fn(async () => "copy-1"),
     saveTitle: vi.fn(async () => {}),
@@ -251,10 +251,7 @@ describe("访客", () => {
 
     const copied = await store().saveCopy();
     expect(copied).toBe("copy-1");
-    expect(useData.getState().saveTitle).toHaveBeenCalledWith(
-      { kind: "note", id: "copy-1" },
-      "周会记录",
-    );
+    expect(useData.getState().saveTitle).toHaveBeenCalledWith(noteRef("copy-1"), "周会记录");
     // 要来的图片存进了自己的附件（浏览器预览里是 data: 地址），正文里换成新的；别的照原样
     const copy = saved.at(-1)!;
     expect(copy.id).toBe("copy-1");

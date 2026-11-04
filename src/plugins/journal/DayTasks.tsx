@@ -1,10 +1,11 @@
 import { openDocument } from "@/app/navigate";
 import { useApp } from "@/app/store";
-import type { Task } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { ArrowUpRight } from "lucide-react";
 import { motion } from "motion/react";
+import { useJournal } from "./store";
+import type { Task } from "./types";
 
 /* ============================================================
    日历「当日安排」里的一条任务 —— 别的文档里写着这一天的 `- [ ] … @日期`。
@@ -151,8 +152,9 @@ function Checkbox({ done, reduce }: { done: boolean; reduce: boolean }) {
 
 /* ---------------- 当日安排 ---------------- */
 
-/** 列在某一天正文后面，没有小标题 */
-export function DayTasks({ tasks, onToggle }: { tasks: Task[]; onToggle: (id: string) => void }) {
+/** 列在某一天正文后面，没有小标题（文档槽位 afterBody） */
+export function DayTasks({ tasks }: { tasks: Task[] }) {
+  const onToggle = useJournal((s) => s.toggleTask);
   return (
     <section className="mt-7">
       <ul className="border-t border-line">

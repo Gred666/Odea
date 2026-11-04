@@ -13,9 +13,17 @@
 - 围栏代码块里的不算
 
 在日历里勾选，改的是原文件里的那一行。
+
+这是日程插件的 Rust 那一半（docs/插件与跨端.md §5.1 的 L2）：扫正文、记进索引里另存的 task 表都在这里，
+核心的索引只在写入、删除一篇时叫它一声（plugins::IndexPart）。
 ============================================================ */
 
 use chrono::NaiveDate;
+use rusqlite::{params, Connection, OptionalExtension, Row};
+
+use crate::error::Result;
+use crate::plugins::IndexPart;
+use crate::vault::index::DocRow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScheduledTask {
@@ -196,6 +204,206 @@ pub fn toggle_line(raw: &str) -> Option<String> {
     out.push_str(&raw[mark + 1..]);
     Some(out)
 }
+
+/* ---------------- 在索引里另存的那一张表（plugins::IndexPart） ----------------
+   每篇文档（笔记、某一天、目标都算）读进索引时扫一遍正文，带日期的任务记进 task 表，和文档同一个事务。
+   日历的当日安排、月网格上的记号都从这里查 */
+
+const SCHEMA: &str = "
+CREATE TABLE task (
+  id         TEXT    PRIMARY KEY,           -- 文档 id # 行号
+  doc_id     TEXT    NOT NULL,
+  line       INTEGER NOT NULL,
+  raw        TEXT    NOT NULL,
+  title      TEXT    NOT NULL,
+  done       INTEGER NOT NULL,
+  due_date   TEXT    NOT NULL,
+  time_label TEXT,
+  category   TEXT
+);
+CREATE INDEX task_doc ON task(doc_id);
+CREATE INDEX task_due ON task(due_date);
+";
+
+pub struct Tasks;
+
+pub static TASKS: Tasks = Tasks;
+
+impl IndexPart for Tasks {
+    fn plugin(&self) -> &'static str {
+        super::ID
+    }
+
+    fn schema(&self) -> &'static str {
+        SCHEMA
+    }
+
+    fn tables(&self) -> &'static [&'static str] {
+        &["task"]
+    }
+
+    /// 按正文重新记这一篇的任务。和它上一次的那几条比：行号、原文都一样就算没变（日历不用刷新）
+    fn put(&self, conn: &Connection, doc: &DocRow, replaced: &[String]) -> Result<bool> {
+        let scheduled = scan(&doc.content_md);
+        let mut previous = Vec::new();
+        for id in replaced {
+            previous.extend(doc_tasks(conn, id)?);
+        }
+        let same = previous.len() == scheduled.len()
+            && previous
+                .iter()
+                .zip(&scheduled)
+                .all(|(a, b)| a.line == b.line && a.raw == b.raw);
+        for id in replaced {
+            conn.execute("DELETE FROM task WHERE doc_id = ?1", params![id])?;
+        }
+        for task in &scheduled {
+            conn.execute(
+                "INSERT INTO task (id, doc_id, line, raw, title, done, due_date, time_label, category)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                params![
+                    task_id(&doc.id, task.line),
+                    doc.id,
+                    task.line as i64,
+                    task.raw,
+                    task.title,
+                    task.done as i64,
+                    task.due_date,
+                    task.time_label,
+                    task.category,
+                ],
+            )?;
+        }
+        Ok(!same)
+    }
+
+    fn remove(&self, conn: &Connection, id: &str) -> Result<bool> {
+        Ok(conn.execute("DELETE FROM task WHERE doc_id = ?1", params![id])? > 0)
+    }
+}
+
+pub fn task_id(doc_id: &str, line: usize) -> String {
+    format!("{doc_id}#{line}")
+}
+
+/// 一篇文档当前索引里的任务，用来判断这次写入有没有改到日历
+fn doc_tasks(conn: &Connection, doc_id: &str) -> Result<Vec<ScheduledTask>> {
+    let mut stmt = conn.prepare(
+        "SELECT line, raw, title, done, due_date, time_label, category
+         FROM task WHERE doc_id = ?1 ORDER BY line",
+    )?;
+    let rows = stmt.query_map(params![doc_id], |r| {
+        Ok(ScheduledTask {
+            line: r.get::<_, i64>(0)? as usize,
+            raw: r.get(1)?,
+            title: r.get(2)?,
+            done: r.get::<_, i64>(3)? != 0,
+            due_date: r.get(4)?,
+            time_label: r.get(5)?,
+            category: r.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// 日历上的一条任务，带着它所在的文档
+#[derive(Debug, Clone)]
+pub struct TaskRow {
+    pub id: String,
+    pub doc_id: String,
+    pub line: usize,
+    pub raw: String,
+    pub title: String,
+    pub done: bool,
+    pub due_date: String,
+    pub time_label: Option<String>,
+    pub category: Option<String>,
+    /// 所在文档的类型（note，或者插件的文档类型）、key、标题
+    pub doc_kind: String,
+    pub doc_key: Option<String>,
+    pub doc_title: String,
+}
+
+const TASK_COLUMNS: &str = "t.id, t.doc_id, t.line, t.raw, t.title, t.done, t.due_date,
+    t.time_label, t.category, d.kind, d.key, d.title AS doc_title";
+
+fn task_row(r: &Row) -> rusqlite::Result<TaskRow> {
+    Ok(TaskRow {
+        id: r.get("id")?,
+        doc_id: r.get("doc_id")?,
+        line: r.get::<_, i64>("line")? as usize,
+        raw: r.get("raw")?,
+        title: r.get("title")?,
+        done: r.get::<_, i64>("done")? != 0,
+        due_date: r.get("due_date")?,
+        time_label: r.get("time_label")?,
+        category: r.get("category")?,
+        doc_kind: r.get("kind")?,
+        doc_key: r.get("key")?,
+        doc_title: r.get("doc_title")?,
+    })
+}
+
+/// 某一天的任务。那一天自己的文档里写的不算 —— 它们就在正文里，不用再列一遍。
+/// 归档笔记里的也不算。先列没写时间的，再按一天里的先后（上午算 9 点、下午 14 点…）。
+pub fn tasks_due(conn: &Connection, date: &str) -> Result<Vec<TaskRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {TASK_COLUMNS} FROM task t JOIN doc d ON d.id = t.doc_id
+         WHERE t.due_date = ?1 AND NOT (d.kind = ?2 AND d.key = ?1) AND d.is_archived = 0
+         ORDER BY t.time_label IS NOT NULL,
+           CASE t.time_label
+             WHEN '全天' THEN '00:00' WHEN '上午' THEN '09:00' WHEN '中午' THEN '12:00'
+             WHEN '下午' THEN '14:00' WHEN '晚上' THEN '19:00'
+             ELSE substr('0' || t.time_label, -5)
+           END,
+           d.rel_path, t.line"
+    ))?;
+    let rows = stmt.query_map(params![date, super::DAY], task_row)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn task(conn: &Connection, id: &str) -> Result<Option<TaskRow>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {TASK_COLUMNS} FROM task t JOIN doc d ON d.id = t.doc_id WHERE t.id = ?1"),
+            params![id],
+            task_row,
+        )
+        .optional()?)
+}
+
+/// 日历上的记号。written：写过记录的日子，和有做完了的任务的日子；
+/// open：还有没做完的任务的日子。归档里的文档不算
+pub fn calendar_marks(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let dates = |sql: &str, args: &[&dyn rusqlite::ToSql]| -> Result<Vec<String>> {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(args, |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    };
+    let written = dates(
+        "SELECT DISTINCT d FROM (
+           SELECT key AS d FROM doc WHERE kind = ?3 AND (title != '' OR content_md != '')
+           UNION
+           SELECT t.due_date AS d FROM task t JOIN doc x ON x.id = t.doc_id
+             WHERE x.is_archived = 0 AND t.done = 1
+         )
+         WHERE d BETWEEN ?1 AND ?2
+         ORDER BY d",
+        params![from, to, super::DAY],
+    )?;
+    let open = dates(
+        "SELECT DISTINCT t.due_date FROM task t JOIN doc x ON x.id = t.doc_id
+         WHERE x.is_archived = 0 AND t.done = 0 AND t.due_date BETWEEN ?1 AND ?2
+         ORDER BY t.due_date",
+        params![from, to],
+    )?;
+    Ok((written, open))
+}
+
 
 #[cfg(test)]
 mod tests {

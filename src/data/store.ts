@@ -1,7 +1,7 @@
 import { useApp } from "@/app/store";
-import { type ISODate, today } from "@/lib/date";
 import { fingerprint } from "@/lib/fingerprint";
 import { isTauri } from "@/lib/tauri";
+import { type Plugin, defaultLayout, documentType, installedPlugins } from "@/plugins/registry";
 import { create } from "zustand";
 import { version as APP_VERSION } from "../../package.json";
 import { type Backend, backend } from "./backend";
@@ -33,30 +33,26 @@ import {
 } from "./tree";
 import {
   type AppUpgrade,
-  type CalendarMarks,
   type ChangeRootMode,
-  type DayDoc,
-  type DocumentSaveTarget,
+  type DocumentRef,
   type FolderDeletion,
-  type Goal,
-  type GoalHorizon,
   type GuideName,
   type GuideUpdate,
   type IndexProgress,
-  type JournalDoc,
+  NOTE,
   type Note,
   type NoteSummary,
   ODEA_LAYOUT,
   SYNC_OFF,
   type SyncStatus,
-  type Task,
   type TreeFile,
   type TreeNode,
+  type TypedDoc,
   type UpdateInfo,
   type VaultChange,
   type VaultInfo,
   type VaultLayout,
-  goalKey,
+  noteRef,
 } from "./types";
 
 interface DataState {
@@ -70,24 +66,14 @@ interface DataState {
   bodies: Record<string, string>;
   /** 取这篇笔记的正文放进 bodies（有了就只记一下最近用过）。笔记不在了返回 undefined */
   loadBody: (id: string) => Promise<string | undefined>;
-  tasks: Record<string, Task>;
-  /** 按 `horizon:periodStart` 缓存的目标（见 goalKey）。没写过的周期也会缓存一篇空文档。 */
-  goals: Record<string, Goal>;
   /**
-   * 按日期缓存的某天文档。「今日TODO」就是今天这一篇 ——
-   * 今天还没写过时后端会把之前最近一天延续过来（carriedFrom），用户一编辑才落库。
-   */
-  dayDocs: DayDoc[];
-  /** 日历月网格上的记号：写过记录 / 做过事的日子，还有待办的日子 */
-  marks: CalendarMarks;
-  /** 重新取一次日历记号（勾了任务、别处改了带日期的任务） */
-  refreshMarks: () => Promise<void>;
-  /**
-   * 所有写过的某一天、某个周期的目标（不带正文）。命令面板打开时取一次，按标题和笔记一起搜
+   * 所有写过东西的插件文档（某一天、某个周期的目标……，不带正文）。命令面板打开时取一次，按标题和笔记一起搜
    * （正文走 searchText）；取回来之前是空的。
    */
-  journal: JournalDoc[];
-  loadJournal: () => Promise<void>;
+  typedDocs: TypedDoc[];
+  loadTypedDocs: () => Promise<void>;
+  /** 插件的文档变了几次（存了、改了标题、别处改了）：反向链接拿它当「正文变了」的信号 */
+  typedTick: number;
   /**
    * 仓库文件夹的绝对路径（浏览器预览里是 null）。正文里的相对图片路径（附件）
    * 按「仓库 + 文档所在的文件夹」解析，见 editor/html.ts 的 resolveImageSource。
@@ -96,13 +82,16 @@ interface DataState {
   /** 团队仓库（docs/协同编辑.md §22.3）：仓库菜单里是「团队成员…」，日程切换器里带小人图标 */
   team: boolean;
   /**
-   * 这个仓库怎么摆（docs/仓库与启动器.md §6）：开没开日程、文件树的根在哪。取到仓库信息之前
+   * 这个仓库怎么摆（docs/仓库与启动器.md §6）：开着哪些插件、文件树的根在哪。取到仓库信息之前
    * 当它是 Odea 自己建的仓库
    */
   layout: VaultLayout;
-  /** 开 / 关日程：先把编辑器里的都存掉，后端按新的摆法重新认一遍文件，就地换上（switchLayout） */
-  setJournal: (on: boolean) => Promise<void>;
-  /** 开 / 关归档（和日程分开，只写笔记的人也能归档旧资料）：和 setJournal 一样存掉、重认、换上 */
+  /**
+   * 开 / 关一个插件（日程是 odea.journal）：先把编辑器里的都存掉，后端按新的摆法重新认一遍文件，
+   * 就地换上（switchLayout）
+   */
+  setPlugin: (plugin: string, on: boolean) => Promise<void>;
+  /** 开 / 关归档（和日程分开，只写笔记的人也能归档旧资料）：和 setPlugin 一样存掉、重认、换上 */
   setArchive: (on: boolean) => Promise<void>;
   /**
    * 别的设备开关了日程、转成了逻辑目录（同步过来，VaultChange.layout）：提示条问一句「切换过去」。
@@ -130,7 +119,7 @@ interface DataState {
    * 记下那一版，下一次保存把它当 base 带上 —— 后端一看磁盘上已经不是那一版，先把磁盘上的另存成
    * 冲突副本，再写编辑器里的，两边都不丢（判断在后端，见 staleBases）
    */
-  markConflict: (target: DocumentSaveTarget) => void;
+  markConflict: (target: DocumentRef) => void;
   /** 仓库里别处发生的变化（文件监听、勾任务改了别的文档）：刷新受影响的缓存 */
   applyVaultChange: (change: VaultChange) => Promise<void>;
   /**
@@ -138,7 +127,7 @@ interface DataState {
    * Vault::open_quick）：读到哪了。没在读是 null。读完之前列表、搜索、日历里暂时缺一部分
    */
   indexing: IndexProgress | null;
-  /** 后台读完了：列表、文件夹、日历记号整个重新取一遍 */
+  /** 后台读完了：列表、文件夹、插件的（日历记号……）整个重新取一遍 */
   reloadIndexed: () => Promise<void>;
   /** 多设备同步的状态（技术方案 §5.9）；没开同步时 state 是 off */
   syncStatus: SyncStatus;
@@ -155,7 +144,7 @@ interface DataState {
    */
   installUpdate: () => Promise<string>;
   /** 在系统的文件管理器里定位这篇文档的文件 */
-  revealDocument: (target: DocumentSaveTarget) => Promise<void>;
+  revealDocument: (target: DocumentRef) => Promise<void>;
   openVaultFolder: () => Promise<void>;
   /**
    * 换一个文件夹当仓库。先把编辑器里的都存掉；换成功就整页重载。`move`：不问，现在的笔记直接
@@ -176,34 +165,17 @@ interface DataState {
    * 的保存队列就跟着没了 —— 失败的那一版以前就这样丢了，再打开还是旧内容。现在留在
    * 这里：再打开这篇显示的是它（adapter），下一次保存成功就清掉，关窗时也会再试一次。
    */
-  drafts: Record<string, { target: DocumentSaveTarget; contentMd: string }>;
+  drafts: Record<string, { target: DocumentRef; contentMd: string }>;
   /** 把所有草稿再存一遍。关窗时在编辑器 flush 之后调用。 */
   flushDrafts: () => Promise<void>;
 
   initialize: () => Promise<void>;
   /**
-   * 取某一天的文档。`asToday` 为 true 时（这一天就是今天）允许延续之前最近的一天。
-   * 已缓存的日期不重复取；今天的缓存如果还是延续来的、且又过了一天，会由 loadDay
-   * 的调用方通过 todayDate 变化自然刷新。
-   */
-  loadDay: (date: ISODate, asToday?: boolean) => Promise<void>;
-  /** 取某个周期的目标（没写过就是空文档）。已缓存的不重复取。 */
-  loadGoal: (horizon: GoalHorizon, periodStart: ISODate) => Promise<void>;
-  /**
-   * 丢掉缓存里所有「延续来的」某天文档。跨过零点时调：昨天那份延续来的内容
-   * 从来不是昨天自己的记录，留着的话翻回昨天会把它当成昨天写的。
-   *
-   * 新的今天如果缓存着一篇空白文档也一并丢掉：它是还没成为「今天」时取的
-   * （比如前一晚在日历里点开过明天），当时没有尝试延续；留着的话 loadDay
-   * 命中缓存，今日TODO 就一直是空白，不会延续前一天。
-   */
-  forgetCarriedDays: (today: ISODate) => void;
-  /**
    * 存正文。带着「编辑器照着改的那一版」（store 里这一篇的正文，或者 markConflict 记下的那一版）的指纹：
    * 磁盘上已经不是那一版了，后端先另存冲突副本再写（vault/mod.rs 的 keep_unseen_edits）。
-   * 笔记只写正文，标题是 saveTitle 的事（noteRename），两样互不覆盖
+   * 笔记只写正文，标题是 saveTitle 的事（noteRename），两样互不覆盖。插件的文档交给它的 DocumentType 存
    */
-  saveDocument: (target: DocumentSaveTarget, contentMd: string) => Promise<void>;
+  saveDocument: (target: DocumentRef, contentMd: string) => Promise<void>;
   /** 新建一篇空笔记（放在 folder 里，默认「笔记」本身），返回后端分配的 id；失败返回 null。 */
   createNote: (folder?: string) => Promise<string | null>;
   /**
@@ -278,10 +250,10 @@ interface DataState {
   } | null;
   dismissUndoable: () => void;
   /**
-   * 改标题：笔记和某一天都行；GOAL 的标题由周期决定，改不了。
+   * 改标题：笔记，和 DocumentType 有 rename 的插件文档（某一天）；GOAL 的标题由周期决定，改不了。
    * 笔记改了标题，别处的 `[[旧标题]]` 随后跟着改成新标题（relinkTitle）
    */
-  saveTitle: (target: DocumentSaveTarget, title: string) => Promise<void>;
+  saveTitle: (target: DocumentRef, title: string) => Promise<void>;
   /**
    * 笔记改了标题之后：别处链到旧标题的 `[[…]]` 改成新标题，底部提示条可以撤销。
    * 改不了（新标题写不进双链、和别的笔记重名）时提示一句为什么
@@ -291,8 +263,7 @@ interface DataState {
    * 把一篇文档的正文换成历史里的某一版（when 是那一版的时间，提示条里说）。
    * 底部提示条可以撤销：换回恢复之前的正文
    */
-  restoreVersion: (target: DocumentSaveTarget, body: string, when: string) => Promise<void>;
-  toggleTask: (id: string) => Promise<void>;
+  restoreVersion: (target: DocumentRef, body: string, when: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
   /** 归档。底部提示条可以撤销；撤销本身（undoable: false）不再给提示条 */
   archiveNote: (id: string, options?: { undoable?: boolean }) => Promise<void>;
@@ -317,13 +288,10 @@ interface DataState {
   createNoteWith: (title: string, contentMd: string) => Promise<string | null>;
   /**
    * 处理一篇冲突副本：`copy` = 用副本这一版替换原文，然后删掉副本；`original` = 留原文、
-   * 删掉副本。删掉的副本进回收站，撤销提示条照常能撤销。返回原文（笔记、某一天或目标），
+   * 删掉副本。删掉的副本进回收站，撤销提示条照常能撤销。返回原文（笔记，或者插件的一篇），
    * 横幅接着打开它。
    */
-  resolveConflict: (
-    copyId: string,
-    keep: "copy" | "original",
-  ) => Promise<DocumentSaveTarget | null>;
+  resolveConflict: (copyId: string, keep: "copy" | "original") => Promise<DocumentRef | null>;
 
   /* ---- 使用指南（src-tauri/src/vault/guide.rs）：没改过的升级时自动换新，改过的在那一篇上问 ---- */
   /** 用户改过、而这个版本带着新版的指南。启动时取一次 */
@@ -351,7 +319,7 @@ export const messageOf = (error: unknown): string => {
   return JSON.stringify(error);
 };
 
-/** 新笔记 / 还没起标题的某一天的占位标题。空标题存不进去 —— saveTitle 会拒绝空串。 */
+/** 新笔记 / 还没起标题的某一天（日程插件）的占位标题。空标题存不进去 —— saveTitle 会拒绝空串。 */
 export const NEW_NOTE_TITLE = "无标题笔记";
 
 const noteOrder = (a: NoteSummary, b: NoteSummary) =>
@@ -402,28 +370,8 @@ const refreshedBody = (bodies: Record<string, string>, note: Note) =>
     ? bodies
     : withBody(bodies, note.id, note.contentMd);
 
-/** 日历记号取多大的范围：两个 Set 而已，一次取完比按月分页省事 */
-const MARKS_FROM = "2000-01-01";
-const MARKS_TO = "2100-12-31";
-
-const isDone = (task: Task) => task.status === "done";
-
 /** 提示条里的标题：还没起名的显示占位 */
 const titleOf = (note: NoteSummary) => note.title.trim() || NEW_NOTE_TITLE;
-
-/** 某一天写没写过记录变了：只动 written，待办那一种等 refreshMarks */
-function withWritten(marks: CalendarMarks, date: string, written: boolean): CalendarMarks {
-  if (marks.written.has(date) === written) return marks;
-  const next = new Set(marks.written);
-  if (written) next.add(date);
-  else next.delete(date);
-  return { ...marks, written: next };
-}
-
-const withGoal = (goals: Record<string, Goal>, goal: Goal): Record<string, Goal> => ({
-  ...goals,
-  [goalKey(goal.horizon, goal.periodStart)]: goal,
-});
 
 /** 放回原来的位置，而不是按排序规则重排 —— 撤销后它应该出现在删掉之前那一行。 */
 const insertAt = (notes: NoteSummary[], index: number, note: NoteSummary): NoteSummary[] => [
@@ -431,22 +379,6 @@ const insertAt = (notes: NoteSummary[], index: number, note: NoteSummary): NoteS
   note,
   ...notes.slice(index),
 ];
-
-const withDay = (days: DayDoc[], day: DayDoc): DayDoc[] => [
-  ...days.filter((item) => item.date !== day.date),
-  day,
-];
-
-/** 任务只出现在某一天的「当日安排」里 */
-function patchTask(state: DataState, id: string, task: Task): Partial<DataState> {
-  return {
-    tasks: { ...state.tasks, [id]: task },
-    dayDocs: state.dayDocs.map((day) => ({
-      ...day,
-      tasks: day.tasks.map((item) => (item.id === id ? task : item)),
-    })),
-  };
-}
 
 let initializePromise: Promise<void> | null = null;
 /** 仓库变化的订阅只装一次（initialize 失败重试时不重复装） */
@@ -467,7 +399,7 @@ const bumped = (revisions: Record<string, number>, key: string) => ({
  * 同一篇文档的正文写入排队：每次写都带着「照着哪一版改的」（base，见 saveDocument），
  * 上一次写完、store 里换成刚写的那一版以后才轮到下一次去算 base —— 不排队的话第二次带的
  * 还是第一次之前的版本，后端会当成别处改过、白白另存一份冲突副本。
- * 某一天的标题和正文是一个文件里一起写的（calendarDaySave），也排在这条队里。
+ * 插件的文档标题和正文在一个文件里一起写的（某一天），改标题也排在这条队里。
  * 笔记改标题不用排（noteRename 只改标题、文件名，不碰正文）
  */
 const writeQueues = new Map<string, Promise<unknown>>();
@@ -489,6 +421,12 @@ const basesBeforeExternal = new Map<string, string>();
 const staleBases = new Map<string, string>();
 
 /** 这一篇被别处改了、store 里换成了新正文：编辑器据此换上（externalRevisions 加一），记下改之前那一版 */
+export function markExternal(target: DocumentRef, previous: string | undefined): void {
+  useData.setState((state) => ({
+    externalRevisions: externalBump(state.externalRevisions, saveKeyOf(target), previous),
+  }));
+}
+
 function externalBump(
   revisions: Record<string, number>,
   key: string,
@@ -565,20 +503,25 @@ function scheduleSmart() {
   smartTimer = setTimeout(() => void useData.getState().refreshSmart(), 600);
 }
 
-/** 仓库的摆法定下来：树根给 data/folders.ts；没开日程、归档的话，停在那几页的回到文件 */
+/** 仓库的摆法定下来：树根给 data/folders.ts；没开的插件、归档，停在那几页的回到文件 */
 function applyLayout(layout: VaultLayout) {
   setTreeLayout(layout);
   useData.setState({ layout });
-  useApp.getState().fitLayout(layout.journal, layout.archive);
+  useApp.getState().fitLayout(layout);
+}
+
+/** 这个仓库开着的插件（装着的里面） */
+export function enabledPlugins(layout = useData.getState().layout): Plugin[] {
+  return installedPlugins().filter((plugin) => layout.plugins.includes(plugin.id));
 }
 
 /**
- * 摆法换了（开关日程 / 归档，别的设备改了标记、点了「切换过去」）：就地换上，不整页重载
+ * 摆法换了（开关插件 / 归档，别的设备改了标记、点了「切换过去」）：就地换上，不整页重载
  * （docs/仓库与启动器.md §16）。以前整页重载，窗口空一下、开场再播一遍，开日程还跳到今日TODO。
  *
  * 后端把每个文件按新的摆法重新认了一遍（索引清空重读）：日记、目标从笔记变成某一天 / 目标或者反过来，
- * 属性块里没记 id 的笔记连 id 都换了。所以两个列表、文件夹、日历记号整个重取，选中的那一篇按路径找回来；
- * 日程开关变了的话，某一天 / 目标的缓存也作废。停在哪一页不动，那一页没了才回到文件（fitLayout）。
+ * 属性块里没记 id 的笔记连 id 都换了。所以两个列表、文件夹整个重取，选中的那一篇按路径找回来；
+ * 开关了的插件缓存作废，一直开着的插件重取（日历记号）。停在哪一页不动，那一页没了才回到文件（fitLayout）。
  * 这些都在同一个同步块里放进 store，React 只画一次。
  * 主持着协作、团队仓库照旧整页重载：会话认的是笔记 id，id 一换就对不上了
  */
@@ -601,10 +544,9 @@ async function switchLayout(change: (api: Backend) => Promise<VaultInfo>) {
     return;
   }
   const logical = info.layout.logical;
-  const [notes, archived, marks, progress, tree, folders, files] = await Promise.all([
+  const [notes, archived, progress, tree, folders, files] = await Promise.all([
     api.noteList(false),
     api.noteList(true),
-    api.calendarMarks(MARKS_FROM, MARKS_TO),
     Promise.resolve()
       .then(() => api.indexProgress())
       .catch(() => null),
@@ -637,7 +579,8 @@ async function switchLayout(change: (api: Backend) => Promise<VaultInfo>) {
   );
 
   // 从这里起不再 await：摆法、列表、选中一起落进去
-  const journalChanged = info.layout.journal !== before.layout.journal;
+  const pluginsBefore = before.layout.plugins;
+  const pluginsChanged = pluginsBefore.join("|") !== info.layout.plugins.join("|");
   applyLayout(info.layout);
   // 树的样子要在列表进 store 之前给 data/folders.ts（同 initialize）
   const shape = logical && tree ? treeState(tree) : { tree: null, folders };
@@ -648,14 +591,20 @@ async function switchLayout(change: (api: Backend) => Promise<VaultInfo>) {
       notes: notes.sort(noteOrder),
       archived,
       bodies,
-      marks,
       ...shape,
       files,
       indexing: progress && progress.done < progress.total ? progress : null,
       layoutChanged: false,
-      ...(journalChanged ? { dayDocs: [], goals: {}, tasks: {}, journal: [] } : {}),
+      ...(pluginsChanged ? { typedDocs: [] } : {}),
     };
   });
+  // 开关了的插件缓存作废（重新开着的那个，它挂上来的副作用会去取）；一直开着的重取（日历记号）
+  for (const plugin of installedPlugins()) {
+    const was = pluginsBefore.includes(plugin.id);
+    const now = info.layout.plugins.includes(plugin.id);
+    if (was !== now) plugin.reset?.();
+    else if (now) void plugin.reindexed?.();
+  }
   const byPath = new Map(notes.map((note) => [note.relPath, note.id]));
   useApp.setState({ selectedArchiveId: archiveId });
   useApp.getState().remapTabs((id) => {
@@ -697,18 +646,6 @@ export const useData = create<DataState>((set, get) => ({
     bodyRequests.set(id, request);
     return request;
   },
-  tasks: {},
-  goals: {},
-  dayDocs: [],
-  marks: { written: new Set(), open: new Set() },
-  refreshMarks: async () => {
-    try {
-      const marks = await (await backend()).calendarMarks(MARKS_FROM, MARKS_TO);
-      set({ marks });
-    } catch (error) {
-      set({ error: messageOf(error) });
-    }
-  },
   indexing: null,
   reloadIndexed: async () => {
     // 正在初始化的话等它取完：不然它晚到的那份读了一半的列表会把这里取的全的盖掉
@@ -720,31 +657,30 @@ export const useData = create<DataState>((set, get) => ({
     } catch (error) {
       set({ error: messageOf(error) });
     }
-    // 文件夹、日历记号和当日安排；延续来的「今天」是按读了一半的索引找的「之前最近一天」，也重取
+    // 文件夹；插件的（日历记号、当日安排、延续来的「今天」）各自重取
     await get().applyVaultChange({
       notes: [],
-      days: get()
-        .dayDocs.filter((day) => day.carriedFrom)
-        .map((day) => day.date),
-      goals: [],
-      tasks: true,
+      docs: [],
+      plugins: [],
       conflicts: [],
       foundCopies: [],
       folders: true,
       layout: false,
     });
-    if (get().journal.length) await get().loadJournal();
+    for (const plugin of enabledPlugins()) await plugin.reindexed?.();
+    if (get().typedDocs.length) await get().loadTypedDocs();
     try {
       set({ guideUpdates: await api.guidePending() });
     } catch {
       // 取不到就不问：指南还是用户自己那一版，什么也没丢
     }
   },
-  journal: [],
-  loadJournal: async () => {
+  typedTick: 0,
+  typedDocs: [],
+  loadTypedDocs: async () => {
     try {
-      const journal = await (await backend()).journalList();
-      set({ journal });
+      const typedDocs = await (await backend()).docList();
+      set({ typedDocs });
     } catch {
       // 取不到就只搜笔记：命令面板里的附加结果，不该为它弹错误提示
     }
@@ -752,9 +688,9 @@ export const useData = create<DataState>((set, get) => ({
   vaultRoot: null,
   team: false,
   layout: ODEA_LAYOUT,
-  setJournal: async (on) => {
+  setPlugin: async (plugin, on) => {
     try {
-      await switchLayout((api) => api.vaultSetJournal(on));
+      await switchLayout((api) => api.vaultSetPlugin(plugin, on));
     } catch (error) {
       set({ error: messageOf(error) });
     }
@@ -871,55 +807,11 @@ export const useData = create<DataState>((set, get) => ({
       }
     }
 
-    const todayDate = today();
-    // 只刷新缓存里有的：没打开过的那一天 / 周期，下次切过去时自然会取
-    const days = new Set(change.days.filter((date) => get().dayDocs.some((d) => d.date === date)));
-    if (change.tasks) for (const day of get().dayDocs) days.add(day.date);
-    for (const date of days) {
-      try {
-        const fresh = await api.calendarDay(date, date === todayDate);
-        const contentChanged = change.days.includes(date);
-        set((state) => {
-          const previous = state.dayDocs.find((day) => day.date === date);
-          if (!previous) return {};
-          // 只是任务变了：正文不动（编辑器那边可能正有没存的修改）
-          const next = contentChanged ? fresh : { ...previous, tasks: fresh.tasks };
-          return {
-            dayDocs: withDay(state.dayDocs, next),
-            tasks: {
-              ...state.tasks,
-              ...Object.fromEntries(fresh.tasks.map((task) => [task.id, task])),
-            },
-            externalRevisions:
-              contentChanged && previous.noteMd !== fresh.noteMd
-                ? externalBump(state.externalRevisions, `day:${date}`, previous.noteMd)
-                : state.externalRevisions,
-          };
-        });
-      } catch (error) {
-        set({ error: messageOf(error) });
-      }
+    // 插件的文档、插件在索引里另存的那一份：交给插件（某一天、目标、带日期的任务）
+    for (const plugin of enabledPlugins()) {
+      if (plugin.applyChange) await plugin.applyChange(change);
     }
-
-    for (const key of change.goals) {
-      if (!get().goals[key]) continue;
-      const [horizon, periodStart] = key.split(":") as [GoalHorizon, ISODate];
-      try {
-        const fresh = await api.goalGet(horizon, periodStart);
-        set((state) => ({
-          goals: withGoal(state.goals, fresh),
-          externalRevisions:
-            state.goals[key]?.contentMd !== fresh.contentMd
-              ? externalBump(state.externalRevisions, `goal:${key}`, state.goals[key]?.contentMd)
-              : state.externalRevisions,
-        }));
-      } catch (error) {
-        set({ error: messageOf(error) });
-      }
-    }
-
-    if (change.tasks) await get().refreshMarks();
-
+    if (change.docs.length) set((state) => ({ typedTick: state.typedTick + 1 }));
     if (change.folders) await get().refreshFolders();
 
     if (change.layout) set({ layoutChanged: true });
@@ -998,14 +890,13 @@ export const useData = create<DataState>((set, get) => ({
             .then(() => api.noteGet(id))
             .catch(() => null);
         const early = [selectedNoteId, selectedArchiveId].filter(Boolean).map(bodyOf);
-        const [notes, archived, folders, marks, info, indexing, tree] = await Promise.all([
+        const [notes, archived, folders, info, indexing, tree] = await Promise.all([
           api.noteList(false),
           api.noteList(true),
           // 文件夹列表取不到也不耽误启动：笔记都在，只是先全摊在「全部笔记」里
           Promise.resolve()
             .then(() => api.folderList())
             .catch(() => [] as string[]),
-          api.calendarMarks(MARKS_FROM, MARKS_TO),
           // 只要路径（附件的相对路径按它解析）；取不到不耽误启动
           Promise.resolve()
             .then(() => api.vaultInfo())
@@ -1020,8 +911,9 @@ export const useData = create<DataState>((set, get) => ({
         ]);
         // 进度事件比这一问先到的话，用事件里那个新的
         set((state) => ({ indexing: state.indexing ?? indexing }));
-        // 仓库的摆法要在列表进 store 之前定：笔记在树上哪个文件夹按它算（data/folders.ts）
-        if (info) applyLayout(info.layout);
+        // 仓库的摆法要在列表进 store 之前定：笔记在树上哪个文件夹按它算（data/folders.ts）。
+        // 取不到的照 Odea 自己建的仓库（默认开着的插件开着）
+        applyLayout(info?.layout ?? defaultLayout());
         const logicalTree = info?.layout.logical && tree ? treeState(tree) : null;
         // 正文显示的是哪篇和 data/adapter.ts 的口径一样：选中的不在了就是列表第一篇
         let bodies: Record<string, string> = {};
@@ -1070,14 +962,13 @@ export const useData = create<DataState>((set, get) => ({
             // 取不到就当没开同步
           });
 
-        // 目标和某天的文档都按需取：切到哪个周期 / 哪一天再 loadGoal / loadDay
+        // 插件的文档都按需取：它们挂上来的副作用去取（日程：今天这一篇、这一期的目标、日历记号）
         set((state) => ({
           notes: notes.sort(noteOrder),
           archived,
           bodies: { ...state.bodies, ...bodies },
           folders,
           ...logicalTree,
-          marks,
           vaultRoot: isTauri && info ? info.root : null,
           team: info?.team ?? false,
           initialized: true,
@@ -1100,92 +991,24 @@ export const useData = create<DataState>((set, get) => ({
     return initializePromise;
   },
 
-  loadDay: async (date, asToday = false) => {
-    if (get().dayDocs.some((day) => day.date === date)) return;
-    try {
-      const day = await (await backend()).calendarDay(date, asToday);
-      set((state) => ({
-        dayDocs: withDay(state.dayDocs, day),
-        tasks: {
-          ...state.tasks,
-          ...Object.fromEntries(day.tasks.map((task) => [task.id, task])),
-        },
-      }));
-    } catch (error) {
-      set({ error: messageOf(error) });
-    }
-  },
-
-  loadGoal: async (horizon, periodStart) => {
-    if (get().goals[goalKey(horizon, periodStart)]) return;
-    try {
-      const goal = await (await backend()).goalGet(horizon, periodStart);
-      set((state) => ({ goals: withGoal(state.goals, goal) }));
-    } catch (error) {
-      set({ error: messageOf(error) });
-    }
-  },
-
-  forgetCarriedDays: (today) =>
-    set((state) => {
-      const stale = (day: DayDoc) =>
-        !!day.carriedFrom || (day.date === today && !day.title && !day.noteMd);
-      return state.dayDocs.some(stale)
-        ? { dayDocs: state.dayDocs.filter((day) => !stale(day)) }
-        : {};
-    }),
-
   saveDocument: async (target, contentMd) => {
     const key = saveKeyOf(target);
 
     /**
-     * 真正写库的部分。三种目标各自判重后再落盘。返回 false 表示文档还没加载、
+     * 真正写库的部分。各自判重后再落盘。返回 false 表示文档还没加载、
      * 什么都没做；true 表示库里已经是这一版了（刚写的，或者本来就一样）。
      */
     const write = async (): Promise<boolean> => {
-      if (target.kind === "goal") {
-        const { horizon, periodStart } = target;
-        const source = get().goals[goalKey(horizon, periodStart)];
-        // 这个周期还没取回来就别写：编辑器是空的，一输入会把已有的目标整篇覆盖
-        if (!source) return false;
-        if (source.contentMd === contentMd) return true;
-        const updated = await (await backend()).goalSave(
-          horizon,
-          periodStart,
-          contentMd,
-          baseOf(key, source.contentMd),
-        );
-        set((state) => ({ goals: withGoal(state.goals, updated) }));
-        return true;
+      // 插件的文档交给它的类型：缓存在插件那边，照着哪一版改的（base）还是这里算
+      if (target.type !== NOTE) {
+        const type = documentType(target.type);
+        if (!type) return false;
+        const written = await type.save(target.key, contentMd, (current) => baseOf(key, current));
+        if (written) set((state) => ({ typedTick: state.typedTick + 1 }));
+        return written;
       }
 
-      if (target.kind === "day") {
-        const id = target.id;
-        const source = get().dayDocs.find((day) => day.date === id);
-        // 这一天还没加载完就别写。以前 `source?.noteMd === contentMd` 在
-        // source 为 undefined 时不拦截，编辑器又是空的，
-        // 于是一输入就把当天原有的备注整篇覆盖掉了。
-        if (!source) return false;
-        if (source.noteMd === contentMd) return true;
-        // 延续来的今天：第一次编辑就带着延续来的标题一起，以今天的身份落库
-        const updated = await (await backend()).calendarDaySave(
-          id,
-          source.title,
-          contentMd,
-          baseOf(key, source.noteMd),
-        );
-        set((state) => ({
-          dayDocs: withDay(state.dayDocs, updated),
-          marks: withWritten(
-            state.marks,
-            id,
-            !!(contentMd.trim() || updated.title || updated.tasks.some(isDone)),
-          ),
-        }));
-        return true;
-      }
-
-      const id = target.id;
+      const id = target.key;
       const source =
         get().notes.find((note) => note.id === id) ?? get().archived.find((note) => note.id === id);
       if (!source) return false;
@@ -1261,7 +1084,7 @@ export const useData = create<DataState>((set, get) => ({
     const id = await get().createNote(folder);
     if (!id) return null;
     try {
-      await get().saveTitle({ kind: "note", id }, title);
+      await get().saveTitle(noteRef(id), title);
     } catch {
       // 标题没存上：笔记已经建了，留着「无标题」也能用，错误在状态栏里
     }
@@ -1287,32 +1110,23 @@ export const useData = create<DataState>((set, get) => ({
 
   saveTitle: async (target, title) => {
     const cleanTitle = title.trim();
-    if (!cleanTitle || target.kind === "goal") return;
+    if (!cleanTitle) return;
+    // 插件的文档：类型有 rename 才改得了（目标的标题由周期决定，没有）
+    const type = target.type === NOTE ? undefined : documentType(target.type);
+    if (target.type !== NOTE && !type?.rename) return;
     const key = saveKeyOf(target);
     let renamed: { id: string; from: string } | null = null;
 
     const write = async () => {
-      const api = await backend();
-
-      if (target.kind === "day") {
-        const source = get().dayDocs.find((day) => day.date === target.id);
-        if (!source || source.title === cleanTitle) return;
-        // 某一天的标题和正文在一个文件里一起写：排在正文的保存后面，source 在轮到自己时才读（见 serialized）。
-        // 延续来的今天在这里第一次落库：正文照延续的存，标题换成新的
-        const updated = await api.calendarDaySave(
-          target.id,
-          cleanTitle,
-          source.noteMd,
-          baseOf(key, source.noteMd),
-        );
-        set((state) => ({
-          dayDocs: withDay(state.dayDocs, updated),
-          marks: withWritten(state.marks, target.id, true),
-        }));
+      if (type?.rename) {
+        // 标题和正文在一个文件里一起写：排在正文的保存后面，缓存里的正文在轮到自己时才读（见 serialized）
+        await type.rename(target.key, cleanTitle, (current) => baseOf(key, current));
+        set((state) => ({ typedTick: state.typedTick + 1 }));
         return;
       }
 
-      const id = target.id;
+      const api = await backend();
+      const id = target.key;
       const source =
         get().notes.find((note) => note.id === id) ?? get().archived.find((note) => note.id === id);
       if (!source || source.title === cleanTitle) return;
@@ -1332,7 +1146,7 @@ export const useData = create<DataState>((set, get) => ({
     };
 
     try {
-      await (target.kind === "day" ? serialized(key, write) : write());
+      await (type ? serialized(key, write) : write());
       set((state) => (clearsSaveError(state, key) ? { saveError: null } : {}));
     } catch (error) {
       set({ saveError: { key, message: messageOf(error) } });
@@ -1378,7 +1192,8 @@ export const useData = create<DataState>((set, get) => ({
       // 编辑器里没存的先存掉：恢复之前的样子要是最新的，晚到的保存也不会把旧正文写回来
       const { flushAllEditors } = await import("@/editor/saveBus");
       await flushAllEditors();
-      if (target.kind === "note") await get().loadBody(target.id);
+      if (target.type === NOTE) await get().loadBody(target.key);
+      else await documentType(target.type)?.load(target.key);
       const before = conflictOriginalContent(target, get());
       if (before === undefined || before === body) return;
       const key = saveKeyOf(target);
@@ -1405,22 +1220,6 @@ export const useData = create<DataState>((set, get) => ({
       });
     } catch (error) {
       set({ error: messageOf(error) });
-    }
-  },
-
-  toggleTask: async (id) => {
-    const current = get().tasks[id];
-    if (!current) return;
-    const done = current.status === "done";
-    const optimistic: Task = { ...current, status: done ? "todo" : "done" };
-    set((state) => patchTask(state, id, optimistic));
-    try {
-      const saved = await (await backend()).taskToggle(id);
-      set((state) => patchTask(state, id, saved));
-      // 这一天还有没有没做完的：日历上的记号跟着变
-      void get().refreshMarks();
-    } catch (error) {
-      set((state) => ({ ...patchTask(state, id, current), error: messageOf(error) }));
     }
   },
 
@@ -1621,7 +1420,7 @@ export const useData = create<DataState>((set, get) => ({
   createNoteWith: async (title, contentMd) => {
     const id = await get().createNote();
     if (!id) return null;
-    const target = { kind: "note", id } as const;
+    const target = noteRef(id);
     try {
       await get().saveTitle(target, title);
       await get().saveDocument(target, contentMd);
@@ -1810,7 +1609,7 @@ export const useData = create<DataState>((set, get) => ({
       // 相对链接会改写，不能让一次晚到的保存把旧链接写回去
       const { flushAllEditors } = await import("@/editor/saveBus");
       await flushAllEditors();
-      const key = saveKeyOf({ kind: "note", id });
+      const key = saveKeyOf(noteRef(id));
       const moved = await serialized(key, async () => (await backend()).noteMove(id, folder));
       const summary = summaryOf(moved);
       set((state) => ({
@@ -2008,10 +1807,9 @@ export const useData = create<DataState>((set, get) => ({
     if (conflictOriginalTitle(target, get()) === undefined) return null;
     try {
       if (keep === "copy") {
-        // 某一天 / 目标是按需取的：没取回来时 saveDocument 什么都不写
-        if (target.kind === "day") await get().loadDay(target.id, target.id === today());
-        if (target.kind === "goal") await get().loadGoal(target.horizon, target.periodStart);
-        if (target.kind === "note") await get().loadBody(target.id);
+        // 插件的文档是按需取的：没取回来时 saveDocument 什么都不写
+        if (target.type === NOTE) await get().loadBody(target.key);
+        else await documentType(target.type)?.load(target.key);
         const current = conflictOriginalContent(target, get());
         const copyBody = await get().loadBody(copy.id);
         if (current === undefined || copyBody === undefined) return null;
@@ -2042,7 +1840,7 @@ export const useData = create<DataState>((set, get) => ({
   adoptGuideUpdate: async (id) => {
     const update = get().guideUpdates.find((item) => item.id === id);
     if (!update) return;
-    const target: DocumentSaveTarget = { kind: "note", id };
+    const target = noteRef(id);
     try {
       // 编辑器里没存的先存掉：撤销时换回来的要是最新的那一版
       const { flushAllEditors } = await import("@/editor/saveBus");
@@ -2119,10 +1917,14 @@ function clearsSaveError(state: DataState, key: string): boolean {
   return !!state.saveError && (state.saveError.key === key || state.saveError.key === null);
 }
 
-/** 保存中状态的键：和 DocumentView 里 savingDocs.has(saveKey(doc)) 用同一个算法 */
-export function saveKeyOf(target: DocumentSaveTarget): string {
-  if (target.kind === "goal") return `goal:${goalKey(target.horizon, target.periodStart)}`;
-  return `${target.kind}:${target.id}`;
+/**
+ * 一篇文档在内存里的键（保存中、草稿、外部改动的计数、编辑器状态的缓存都按它），也是记住看到哪的键
+ * （lib/viewMemory，存在本机）：笔记是 `note:<id>`，插件的文档是它在索引里的 id（`day:…`、`goal:…`），
+ * 和以前的版本一样，升级上来记住的位置还在
+ */
+export function saveKeyOf(target: DocumentRef): string {
+  if (target.type === NOTE) return `note:${target.key}`;
+  return documentType(target.type)?.idOf(target.key) ?? `${target.type}:${target.key}`;
 }
 
 // 智能文件夹按笔记筛：列表变了（存了、改了标题、别处改了文件）隔一会儿再筛一遍

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { useData } from "@/data/store";
+import { noteRef } from "@/data/types";
 import { beforeEach, describe, expect, it } from "vitest";
 import { openDocument, selectNeighbor } from "./navigate";
 import { emptyLayout, newPane } from "./panes";
@@ -297,14 +298,14 @@ describe("popout windows", () => {
     start("a", "b");
     useData.setState({ bodies: { a: "", b: "", c: "" }, archived: [] });
     popOut("b");
-    openDocument({ kind: "note", id: "c" });
+    openDocument(noteRef("c"));
     expect(popouts()).toEqual([">c*"]);
     expect(layout()).toEqual([">a*"]);
     useApp.getState().walkTab(-1, () => true, useApp.getState().activePopout!);
     expect(popouts()).toEqual([">b*"]);
     // 回到主窗口：列表、搜索打开的照旧在主窗口
     useApp.getState().setActivePopout(null);
-    openDocument({ kind: "note", id: "c" });
+    openDocument(noteRef("c"));
     expect(layout()).toEqual([">c*"]);
     expect(popouts()).toEqual(["b*"]);
   });

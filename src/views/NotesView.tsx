@@ -32,7 +32,7 @@ import {
 } from "@/data/folders";
 import { useData } from "@/data/store";
 import { type Shortcut, moveBranch } from "@/data/tree";
-import type { NoteSummary, TreeFile } from "@/data/types";
+import { type NoteSummary, type TreeFile, noteRef } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { animatedEmojiText } from "@/lib/emojiText";
 import { spring, tween } from "@/lib/motion";
@@ -1934,7 +1934,7 @@ function useNoteMenu(note: NoteSummary): MenuAction[] {
       id: "reveal",
       label: "在文件夹中显示",
       icon: FolderOpen,
-      onSelect: () => void revealDocument({ kind: "note", id: note.id }),
+      onSelect: () => void revealDocument(noteRef(note.id)),
     },
     ...(archiveOn
       ? [

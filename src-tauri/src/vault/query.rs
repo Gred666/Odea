@@ -205,11 +205,9 @@ mod tests {
     fn row(title: &str, body: &str) -> DocRow {
         DocRow {
             id: "n".into(),
-            kind: "note",
+            kind: "note".into(),
             rel_path: format!("{title}.md"),
-            day: None,
-            horizon: None,
-            period_start: None,
+            key: None,
             title: title.into(),
             content_md: body.into(),
             excerpt: String::new(),

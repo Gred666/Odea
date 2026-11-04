@@ -2,6 +2,7 @@ import { type PopoutHandle, paneOfLabel, popoutHandle } from "@/app/popout";
 import { type NotePane, useApp } from "@/app/store";
 import { usePaneDocument } from "@/data/adapter";
 import { NEW_NOTE_TITLE, useData } from "@/data/store";
+import { NOTE, vaultRef } from "@/data/types";
 import { type PaneWindow, PaneWindowContext } from "@/lib/paneWindow";
 import { onPopoutCloseRequested, popoutControls, popoutOp, popoutTitle } from "@/lib/tauri";
 import { setTeamView, teamDocId } from "@/team/store";
@@ -138,7 +139,6 @@ function PopoutWindow({ pane, ...handlers }: { pane: NotePane } & Handlers) {
 const PopoutBody = memo(function PopoutBody({
   pane,
   handle,
-  onToggleTask,
   onSaveDocument,
   onSaveTitle,
 }: { pane: NotePane; handle: PopoutHandle } & Handlers) {
@@ -178,7 +178,8 @@ const PopoutBody = memo(function PopoutBody({
   useEffect(() => {
     if (!active) return;
     const view = teamTarget.current;
-    setTeamView(teamDoc && view && view.kind !== "shared" ? { doc: teamDoc, target: view } : null);
+    const doc = vaultRef(view);
+    setTeamView(teamDoc && doc ? { doc: teamDoc, target: doc } : null);
   }, [active, teamDoc]);
 
   const controls = useMemo(
@@ -188,10 +189,10 @@ const PopoutBody = memo(function PopoutBody({
 
   const handleDelete = () => {
     // 删的是这个窗口里的这一篇：先关掉它的标签（最后一个的话窗口也关了），再删
-    const target = doc.editor?.target;
-    if (target?.kind !== "note") return;
+    const target = vaultRef(doc.editor?.target);
+    if (target?.type !== NOTE) return;
     useApp.getState().closeTab(pane.activeTab);
-    void useData.getState().deleteNote(target.id);
+    void useData.getState().deleteNote(target.key);
   };
 
   return (
@@ -201,7 +202,6 @@ const PopoutBody = memo(function PopoutBody({
         <NoteTabs pane={pane} shown={initialized} focused last />
         <DocumentView
           doc={doc}
-          onToggleTask={onToggleTask}
           onDelete={handleDelete}
           onSaveDocument={onSaveDocument}
           onSaveTitle={onSaveTitle}

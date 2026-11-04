@@ -1,6 +1,7 @@
 import { openDocument } from "@/app/navigate";
 import { useApp } from "@/app/store";
 import { NEW_NOTE_TITLE, useData } from "@/data/store";
+import { noteRef } from "@/data/types";
 import { tween } from "@/lib/motion";
 import {
   Archive,
@@ -81,11 +82,11 @@ export function UndoToast() {
       // 撤销完回到那一篇（它在笔记里就打开笔记，回了归档就打开归档）
       if (deleted) {
         const id = await undoDelete();
-        if (id) openDocument({ kind: "note", id });
+        if (id) openDocument(noteRef(id));
       } else if (undoable) {
         dismissUndoable();
         await undoable.undo();
-        if (undoable.reopen) openDocument({ kind: "note", id: undoable.reopen });
+        if (undoable.reopen) openDocument(noteRef(undoable.reopen));
       }
     } finally {
       setBusy(false);

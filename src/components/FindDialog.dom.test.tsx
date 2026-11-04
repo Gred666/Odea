@@ -4,7 +4,7 @@ import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backend } from "../data/backend";
-import type { FindOptions, FindResult, NoteSummary } from "../data/types";
+import { type FindOptions, type FindResult, type NoteSummary, noteRef } from "../data/types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -15,7 +15,7 @@ import type { FindOptions, FindResult, NoteSummary } from "../data/types";
 const result: FindResult = {
   files: [
     {
-      target: { kind: "note", id: "a" },
+      target: noteRef("a"),
       title: "周报",
       updatedAt: 1,
       count: 2,
@@ -25,8 +25,9 @@ const result: FindResult = {
       ],
     },
     {
-      target: { kind: "day", id: "2026-10-16" },
-      title: "10月16日",
+      // 插件的一篇（图标照插件说的，没装就是文件图标）
+      target: { type: "test.page", key: "16" },
+      title: "第 16 页",
       updatedAt: 1,
       count: 1,
       matches: [{ line: 1, column: 1, length: 2, before: "把", text: "进度", after: "推完" }],

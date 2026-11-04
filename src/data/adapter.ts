@@ -1,44 +1,19 @@
 import { useApp } from "@/app/store";
 import { useCollab } from "@/collab/store";
-import {
-  type ISODate,
-  formatDayEyebrowCN,
-  formatFullCN,
-  formatMonthDayCN,
-  formatPeriodCN,
-  formatRelativeTime,
-  formatTimestampFull,
-  goalTitle,
-  periodStartOf,
-  toISODate,
-} from "@/lib/date";
+import { formatFullCN, formatRelativeTime, formatTimestampFull, toISODate } from "@/lib/date";
+import { installedPlugins } from "@/plugins/registry";
 import { teamDocId, useTeam } from "@/team/store";
 import { useEffect, useRef } from "react";
 import { conflictOriginalTitle, conflictTarget } from "./conflicts";
 import { folderOf } from "./folders";
-import { NEW_NOTE_TITLE, saveKeyOf, useData } from "./store";
-import {
-  type DayDoc,
-  type DocumentModel,
-  type DocumentSaveTarget,
-  type Goal,
-  type GoalHorizon,
-  type NoteSummary,
-  goalKey,
-} from "./types";
+import { saveKeyOf, useData } from "./store";
+import { type DocumentModel, type DocumentRef, NOTE, type NoteSummary, noteRef } from "./types";
 
 /* ============================================================
    把「当前工作区 + 选中项」映射成统一的 DocumentModel。
    ★ 这是「一切皆文档」抽象的落点 ——
-   五个视图的差异全部收敛在这一个函数里，
+   核心的几页（笔记、归档）在这里，插件的页由插件给出那一篇（文档类型注册表，plugins/registry.ts）：
    DocumentView 完全不知道自己在渲染笔记还是日历。
-
-   日历和今日TODO、GOAL 的关系：
-   - 今日TODO = 今天这一天的文档；日历里点到今天看到的就是同一篇。
-   - 今天还没写过时延续之前最近的一天（carriedFrom），一编辑就以今天落库；
-     翻到昨天、前天，看到的是那一天自己的内容。
-   - GOAL 一个周期一篇：/GOAL 页看今天所在的周 / 月 / 年，日历的
-     周·月·年 看选中日期所在的周期；没写过就是空白。
    ============================================================ */
 
 export function useCurrentDocument(): DocumentModel {
@@ -65,24 +40,39 @@ function useWithTeam(doc: DocumentModel): DocumentModel {
   };
 }
 
+/**
+ * 保存失败、还没落盘的正文优先于库里的版本：切走再切回来，用户写的东西还在。
+ * 返回「有草稿就用草稿，没有就用库里的正文」（插件给出它的文档时也用它）
+ */
+export function useDraftOr(): (target: DocumentRef, stored: string) => string {
+  const drafts = useData((s) => s.drafts);
+  return (target, stored) => drafts[saveKeyOf(target)]?.contentMd ?? stored;
+}
+
+/**
+ * 插件的页显示哪一篇（文档槽位）：每个装着的插件的 useDocument 都调一遍，是它的页的那一个给出文档。
+ * 插件在第一帧之前就装好了（plugins/index.ts），个数和顺序每次渲染都一样，挨个调不违反 hook 的规矩
+ */
+function usePluginDocument(page: string): DocumentModel | null {
+  let found: DocumentModel | null = null;
+  for (const plugin of installedPlugins()) {
+    const hook = plugin.useDocument;
+    const doc = hook(page);
+    if (!found && doc) found = doc;
+  }
+  return found;
+}
+
 function useVaultDocument(): DocumentModel {
   const workspace = useApp((s) => s.workspace);
   const selectedNoteId = useApp((s) => s.selectedNoteId);
   const selectedArchiveId = useApp((s) => s.selectedArchiveId);
-  const selectedDate = useApp((s) => s.selectedDate);
-  const todayDate = useApp((s) => s.todayDate);
-  const calendarScope = useApp((s) => s.calendarScope);
-  const goalHorizon = useApp((s) => s.goalHorizon);
 
   const notes = useData((s) => s.notes);
   const archived = useData((s) => s.archived);
   const bodies = useData((s) => s.bodies);
-  const goals = useData((s) => s.goals);
-  const dayDocs = useData((s) => s.dayDocs);
-  // 保存失败、还没落盘的正文优先于库里的版本：切走再切回来，用户写的东西还在
-  const drafts = useData((s) => s.drafts);
-  const draftOr = (target: DocumentSaveTarget, stored: string) =>
-    drafts[saveKeyOf(target)]?.contentMd ?? stored;
+  const draftOr = useDraftOr();
+  const pluginDocument = usePluginDocument(workspace);
 
   // 协作（docs/协同编辑.md）：做客时正文区换成共享的那一篇
   const showShared = useCollab((s) => s.showShared);
@@ -119,49 +109,6 @@ function useVaultDocument(): DocumentModel {
     case "notes":
       return noteDoc;
 
-    /* ---------------- 今日 TODO：就是今天这一天 ---------------- */
-    case "today": {
-      const day = dayDocs.find((d) => d.date === todayDate);
-      return dayDocument(todayDate, day, todayDate, undefined, draftOr);
-    }
-
-    /* ---------------- /GOAL：今天所在的周期 ---------------- */
-    case "goal": {
-      const periodStart = periodStartOf(goalHorizon, todayDate);
-      const goal = goals[goalKey(goalHorizon, periodStart)];
-      return goalDocument(
-        goalHorizon,
-        periodStart,
-        goal,
-        {
-          group: "goal",
-          options: ["周", "月", "年"],
-          active: horizonLabel(goalHorizon),
-        },
-        draftOr,
-      );
-    }
-
-    /* ---------------- 日历 ---------------- */
-    case "calendar": {
-      const segments = {
-        group: "calendar",
-        options: ["日TODO", "周/GOAL", "月/GOAL", "年/GOAL"],
-        short: ["日", "周", "月", "年"],
-        active: scopeLabel(calendarScope),
-      };
-
-      // 分段切到周/月/年：选中日期所在周期的 GOAL
-      if (calendarScope !== "day") {
-        const periodStart = periodStartOf(calendarScope, selectedDate);
-        const goal = goals[goalKey(calendarScope, periodStart)];
-        return goalDocument(calendarScope, periodStart, goal, segments, draftOr);
-      }
-
-      const day = dayDocs.find((d) => d.date === selectedDate);
-      return dayDocument(selectedDate, day, todayDate, segments, draftOr);
-    }
-
     /* ---------------- 归档 ---------------- */
     case "archive": {
       const note = shownArchived;
@@ -183,19 +130,20 @@ function useVaultDocument(): DocumentModel {
           icon: "archive",
           text: `已归档 · ${formatFullCN(toISODate(new Date(note.archivedAt ?? note.updatedAt)))}`,
         },
-        bodyMd: draftOr({ kind: "note", id: note.id }, body ?? ""),
+        bodyMd: draftOr(noteRef(note.id), body ?? ""),
         statusParts: body === undefined ? ["载入中…"] : noteStatus(note, "最后编辑于"),
         // 归档里的也能直接删（进回收站，可以撤销），不用先恢复出来
         deletable: true,
-        editor:
-          body === undefined
-            ? undefined
-            : { target: { kind: "note", id: note.id }, titleEditable: true },
+        editor: body === undefined ? undefined : { target: noteRef(note.id), titleEditable: true },
       };
     }
 
     case "extensions":
       return { key: "empty-扩展", title: "扩展", bodyMd: "", statusParts: [] };
+
+    /* ---------------- 插件的页（今日TODO、目标、日历……）；认不出来的回到笔记那一篇 ---------------- */
+    default:
+      return pluginDocument ?? noteDoc;
   }
 }
 
@@ -209,9 +157,7 @@ function useNoteDocument(noteId: string, active: boolean): DocumentModel {
   const bodies = useData((s) => s.bodies);
   // 后台还在把文件读进索引（第一次打开一个大文件夹）：一篇都没有不等于「还没有笔记」
   const indexing = useData((s) => s.indexing !== null);
-  const drafts = useData((s) => s.drafts);
-  const draftOr = (target: DocumentSaveTarget, stored: string) =>
-    drafts[saveKeyOf(target)]?.contentMd ?? stored;
+  const draftOr = useDraftOr();
   // 主持的那几篇笔记带上各自的会话（一篇只在一个会话里，docs/协同编辑.md §25）
   const hostedDocs = useCollab((s) => s.hostedDocs);
   const hostedCollab = (id: string) => {
@@ -244,15 +190,12 @@ function useNoteDocument(noteId: string, active: boolean): DocumentModel {
     relPath: note.relPath,
     idInFile: note.idInFile,
     folder: folderOf(note),
-    bodyMd: draftOr({ kind: "note", id: note.id }, body ?? ""),
+    bodyMd: draftOr(noteRef(note.id), body ?? ""),
     statusParts: body === undefined ? ["载入中…"] : noteStatus(note, "上次更新"),
     deletable: true,
     collab: hostedCollab(note.id),
     // 正文取回来之前不给编辑器：空着挂上的话，一输入就把原来的正文整篇覆盖了
-    editor:
-      body === undefined
-        ? undefined
-        : { target: { kind: "note", id: note.id }, titleEditable: true },
+    editor: body === undefined ? undefined : { target: noteRef(note.id), titleEditable: true },
   };
 }
 
@@ -260,11 +203,11 @@ function useNoteDocument(noteId: string, active: boolean): DocumentModel {
 
 /**
  * 显示这一篇要哪几篇的正文：它自己，是冲突副本的话还有原文（横幅要对比两版；
- * 原文是某一天 / 目标的由横幅自己去取）
+ * 原文是插件的一篇的由横幅自己去取）
  */
 function bodiesFor(note: NoteSummary): string[] {
   const original = note.conflictOf ? conflictTarget(note.conflictOf) : null;
-  return original?.kind === "note" ? [note.id, original.id] : [note.id];
+  return original?.type === NOTE ? [note.id, original.key] : [note.id];
 }
 
 /**
@@ -293,81 +236,6 @@ function useShownNote(wanted: NoteSummary | undefined, active: boolean): NoteSum
   return previous && bodies[previous.id] !== undefined ? previous : wanted;
 }
 
-/* ---------------- 两种按周期 / 按天的文档 ---------------- */
-
-/** 有草稿就用草稿，没有就用库里的正文 */
-type DraftOr = (target: DocumentSaveTarget, stored: string) => string;
-
-/**
- * 某一天的文档。`day` 还没取回来之前不给编辑器 —— 否则它会以空文档挂载，
- * 用户在空白页上一输入就把当天原有的内容覆盖掉。
- */
-function dayDocument(
-  date: ISODate,
-  day: DayDoc | undefined,
-  todayDate: ISODate,
-  segments: DocumentModel["segments"],
-  draftOr: DraftOr,
-): DocumentModel {
-  const tasks = day?.tasks ?? [];
-  const isToday = date === todayDate;
-
-  const statusParts: string[] = [];
-  if (!day) statusParts.push("载入中…");
-  else {
-    if (tasks.length) statusParts.push(`${tasks.length} 项安排`);
-    if (day.carriedFrom) {
-      statusParts.push(`延续自 ${formatMonthDayCN(day.carriedFrom)}，还没有今天自己的记录`);
-    } else if (!day.title && !day.noteMd) {
-      statusParts.push("这一天还没有记录");
-    } else {
-      statusParts.push(`上次更新 ${formatRelativeTime(day.updatedAt)}`);
-    }
-    if (isToday && !day.carriedFrom) statusParts.push("今天的内容会延续到明天，直到你改动它");
-  }
-
-  return {
-    key: `day-${date}`,
-    // 空标题显示占位；标题栏是可编辑的，和笔记一样
-    title: day?.title || NEW_NOTE_TITLE,
-    eyebrow: isToday ? `今天 · ${formatDayEyebrowCN(date)}` : formatDayEyebrowCN(date),
-    segments,
-    bodyMd: day ? draftOr({ kind: "day", id: date }, day.noteMd) : "",
-    relPath: day?.relPath,
-    dayTasks: tasks.length ? tasks : undefined,
-    statusParts,
-    editor: day ? { target: { kind: "day", id: date }, titleEditable: true } : undefined,
-  };
-}
-
-/** 某个周期的目标。标题由周期算出来，不可编辑；没写过就是空白编辑器。 */
-function goalDocument(
-  horizon: GoalHorizon,
-  periodStart: ISODate,
-  goal: Goal | undefined,
-  segments: DocumentModel["segments"],
-  draftOr: DraftOr,
-): DocumentModel {
-  const statusParts: string[] = [formatPeriodCN(horizon, periodStart)];
-  if (!goal) statusParts.push("载入中…");
-  else if (goal.updatedAt === 0) statusParts.push("这个周期还没写过目标");
-  else
-    statusParts.push(
-      `${countGoalWords(goal.contentMd)} 字`,
-      `上次更新 ${formatRelativeTime(goal.updatedAt)}`,
-    );
-
-  return {
-    key: `goal-${goalKey(horizon, periodStart)}`,
-    title: goalTitle(horizon, periodStart),
-    segments,
-    bodyMd: goal ? draftOr({ kind: "goal", horizon, periodStart }, goal.contentMd) : "",
-    relPath: goal?.relPath,
-    statusParts,
-    editor: goal ? { target: { kind: "goal", horizon, periodStart } } : undefined,
-  };
-}
-
 /* ---------------- 辅助 ---------------- */
 
 /**
@@ -386,7 +254,7 @@ function emptyDoc(empty: NonNullable<DocumentModel["empty"]>): DocumentModel {
   return { key: `empty-${empty.title}`, title: empty.title, bodyMd: "", statusParts: [], empty };
 }
 
-/** 这篇是冲突副本、原文还在：冲突横幅要的东西。原文是某一天 / 目标时，正文由横幅按需去取 */
+/** 这篇是冲突副本、原文还在：冲突横幅要的东西。原文是插件的一篇时，正文由横幅按需去取 */
 function conflictOf(
   note: NoteSummary,
   notes: NoteSummary[],
@@ -397,27 +265,4 @@ function conflictOf(
   const originalTitle = conflictOriginalTitle(original, { notes, archived });
   if (originalTitle === undefined) return undefined;
   return { copyId: note.id, original, originalTitle };
-}
-
-function horizonLabel(h: GoalHorizon): string {
-  return h === "week" ? "周" : h === "month" ? "月" : "年";
-}
-
-export function labelToHorizon(l: string): GoalHorizon {
-  return l === "月" ? "month" : l === "年" ? "year" : "week";
-}
-
-function scopeLabel(s: "day" | "week" | "month" | "year"): string {
-  return s === "day" ? "日TODO" : s === "week" ? "周/GOAL" : s === "month" ? "月/GOAL" : "年/GOAL";
-}
-
-export function labelToScope(l: string): "day" | "week" | "month" | "year" {
-  return l === "周/GOAL" ? "week" : l === "月/GOAL" ? "month" : l === "年/GOAL" ? "year" : "day";
-}
-
-/** GOAL 文档没有预存字数，实时算一下 */
-function countGoalWords(md: string): number {
-  const cjk = (md.match(/[一-龥]/g) ?? []).length;
-  const en = (md.match(/[a-zA-Z0-9]+/g) ?? []).length;
-  return cjk + en;
 }

@@ -22,13 +22,7 @@ import {
   samePlacement,
   viewportSize,
 } from "./EmojiPicker";
-import {
-  CARET,
-  type DocTemplate,
-  type TemplateContext,
-  type TemplateMode,
-  scopeLabel,
-} from "./templates";
+import { CARET, type DocTemplate, type TemplateContext, type TemplateMode } from "./templates";
 
 /* ============================================================
    模板选择器（在一行里输入 `/模板`）。
@@ -176,7 +170,7 @@ export function TemplatePicker({
           <LayoutTemplate size={14} strokeWidth={1.9} className="shrink-0 text-faint" />
           <span className="text-[12px] font-medium text-body">模板</span>
           <span className="text-faint/60">·</span>
-          <span className="truncate text-[12px] text-muted">{scopeLabel(context)}</span>
+          <span className="truncate text-[12px] text-muted">{context.label}</span>
         </div>
 
         <div ref={bodyRef} className="flex" style={{ height: place.gridMax ?? BODY_HEIGHT }}>

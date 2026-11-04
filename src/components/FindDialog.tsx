@@ -3,20 +3,18 @@ import { useApp } from "@/app/store";
 import { folderLabel, folderOf } from "@/data/folders";
 import { useData } from "@/data/store";
 import { useFindInVault } from "@/data/textSearch";
-import type { FindFile, FindMatch, FindOptions, NoteSummary } from "@/data/types";
+import {
+  type FindFile,
+  type FindMatch,
+  type FindOptions,
+  NOTE,
+  type NoteSummary,
+} from "@/data/types";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
 import { popoverCard, tween } from "@/lib/motion";
-import {
-  Archive,
-  ArrowDown,
-  ArrowUp,
-  CalendarDays,
-  CornerDownLeft,
-  FileText,
-  Target,
-  TextSearch,
-} from "lucide-react";
+import { documentType } from "@/plugins/registry";
+import { Archive, ArrowDown, ArrowUp, CornerDownLeft, FileText, TextSearch } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -163,8 +161,8 @@ export function FindDialog() {
     });
     // 列表栏也换到它所在的文件夹、把它滚出来（同命令面板）
     const target = file.target;
-    if (target.kind === "note") {
-      const note = byId.get(target.id);
+    if (target.type === NOTE) {
+      const note = byId.get(target.key);
       if (note && !note.isArchived) useApp.getState().openNoteFolder(folderOf(note));
     }
   };
@@ -399,23 +397,21 @@ function selectionSeed(): string | undefined {
 }
 
 function fileKey(file: FindFile): string {
-  const target = file.target;
-  if (target.kind === "goal") return `goal:${target.horizon}:${target.periodStart}`;
-  return `${target.kind}:${target.id}`;
+  return `${file.target.type}:${file.target.key}`;
 }
 
+/** 笔记是文件（归档的是归档盒），插件的文档用它的类型的图标（某一天是日历，目标是靶心） */
 function iconOf(file: FindFile, byId: Map<string, NoteSummary>): LucideIcon {
   const target = file.target;
-  if (target.kind === "day") return CalendarDays;
-  if (target.kind === "goal") return Target;
-  return byId.get(target.id)?.isArchived ? Archive : FileText;
+  if (target.type !== NOTE) return documentType(target.type)?.icon ?? FileText;
+  return byId.get(target.key)?.isArchived ? Archive : FileText;
 }
 
-/** 篇名右边的小字：笔记是出处（「归档 · 工作 / 周报」，「笔记」根下的不写），日记、目标是多久前改的 */
+/** 篇名右边的小字：笔记是出处（「归档 · 工作 / 周报」，「笔记」根下的不写），插件的文档是多久前改的 */
 function hintOf(file: FindFile, byId: Map<string, NoteSummary>): string {
   const target = file.target;
-  if (target.kind !== "note") return formatRelativeTime(file.updatedAt);
-  const note = byId.get(target.id);
+  if (target.type !== NOTE) return formatRelativeTime(file.updatedAt);
+  const note = byId.get(target.key);
   if (!note) return "";
   return [note.isArchived ? "归档" : "", folderLabel(folderOf(note))]
     .filter((part) => part && part !== folderLabel(""))
