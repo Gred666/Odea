@@ -127,12 +127,15 @@ function Pane({ pane, ...props }: PaneProps & { pane: NotePane }) {
   const focus = () => {
     if (props.notes && !props.focused) useApp.getState().focusPane(pane.id);
   };
+  // 只有一栏（别的区、做客）时占满：这一栏可能是笔记分屏里的一栏，size 还是 0.5。
+  // flex-grow 加起来不到 1 时只分走那么多比例的空白，日历、归档、今日TODO 就只占左半边
+  const grow = props.count > 1 ? pane.size : 1;
   return (
     <div
       ref={ref}
       data-pane={pane.id}
       className="relative h-full min-w-0"
-      style={{ flex: `${pane.size} 1 0px` }}
+      style={{ flex: `${grow} 1 0px` }}
       onPointerDownCapture={focus}
       onFocusCapture={focus}
     >

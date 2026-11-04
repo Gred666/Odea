@@ -2248,6 +2248,11 @@ body.odea-dragging .odea-row-actions {
   cursor: text;
   transition: background-color var(--duration-fast) var(--ease-out-quint);
 }
+/* 空格子也占一行字的高度：没有字就没有行框，一行只剩上下留白（19px），一点进去子编辑器有一行，
+   整行跳到 43px、离开又缩回去，下面的东西跟着上下跳（2026-11-04）。零宽空格不进 DOM，复制、量光标都不受影响 */
+.odea-editor .cm-odea-table-widget :is(th, td):empty::before {
+  content: "\200b";
+}
 .odea-editor .cm-odea-table-widget :is(th, td):not(.is-col0) {
   border-left: 1px solid color-mix(in srgb, var(--table-rule) 65%, transparent);
 }

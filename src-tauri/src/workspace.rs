@@ -128,7 +128,9 @@ fn build_vault_window<R: Runtime>(
         .center()
         .decorations(false)
         .visible(false)
-        .background_color(BACKGROUND);
+        .background_color(BACKGROUND)
+        // 表格格子里右键菜单的「粘贴」读剪贴板（navigator.clipboard.readText）：不开的话 WebView2 每次都弹权限框
+        .enable_clipboard_access();
     // 把标签拖成独立窗口（docs/标签页与分屏.md §16）：页面 window.open 的空白页由 popout 接住
     #[cfg(feature = "desktop-runtime")]
     let builder = builder.on_new_window({
@@ -603,6 +605,8 @@ pub fn show_guest<R: Runtime>(app: &AppHandle<R>, link: Option<String>) -> Resul
         .decorations(false)
         .visible(false)
         .background_color(BACKGROUND)
+        // 和仓库窗口一样：表格右键菜单的「粘贴」读剪贴板
+        .enable_clipboard_access()
         .build()?;
     Ok(())
 }

@@ -58,6 +58,8 @@ pub fn create<R: Runtime>(
         .decorations(false)
         .visible(false)
         .background_color(background)
+        // 弹出窗口里的表格右键「粘贴」用这个窗口的 navigator.clipboard（和仓库窗口一样开读剪贴板）
+        .enable_clipboard_access()
         .build();
     match built {
         Ok(window) => {

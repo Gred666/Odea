@@ -1238,8 +1238,11 @@ function splitIn(block: HTMLElement, rect: CellRect) {
 function clearIn(block: HTMLElement, rect: CellRect) {
   const state = states.get(block)!;
   const selection = state.selection;
+  // 在正在改的那一格里右键「清空内容」：清完接着改这一格
+  const editing = state.editing ? cellIndex(state.editing) : null;
   apply(block, clearCells(data(block), grid(block), rect), "delete", (target) => {
     if (selection) select(target, selection.anchor, selection.head);
+    else if (editing) focusCell(target, editing.row, editing.col, "end");
   });
 }
 
@@ -1486,7 +1489,70 @@ function columnMenu(block: HTMLElement, rect: CellRect): MenuEntry[] {
   ];
 }
 
-function cellMenu(view: EditorView, block: HTMLElement, rect: CellRect): MenuEntry[] {
+/**
+ * 正在改的那一格里右键：这一格文字的剪切、复制、粘贴（和子编辑器里按 Ctrl+X / C / V 一样）。
+ * 读剪贴板要权限：桌面端的窗口开了读剪贴板（src-tauri 里 enable_clipboard_access），浏览器里会问一下
+ */
+function textMenu(block: HTMLElement, field: CellEditor): MenuEntry[] {
+  const clipboard = winOf(block).navigator.clipboard as Clipboard | undefined;
+  const selected = field.selectedText;
+  const nothing = !selected && "没有选中文字";
+  return [
+    {
+      label: "剪切",
+      icon: "cut",
+      hint: `${MOD_KEY}+X`,
+      disabled: (!clipboard && "读写不了剪贴板，用快捷键") || nothing,
+      run: () => {
+        void clipboard?.writeText(selected);
+        field.insert("", "delete.cut");
+      },
+    },
+    {
+      label: "复制",
+      icon: "copy",
+      hint: `${MOD_KEY}+C`,
+      disabled: (!clipboard && "读写不了剪贴板，用快捷键") || nothing,
+      run: () => void clipboard?.writeText(selected),
+    },
+    {
+      label: "粘贴",
+      icon: "paste",
+      hint: `${MOD_KEY}+V`,
+      disabled: !clipboard?.readText && "读不了剪贴板，用快捷键",
+      run: () => void pasteText(block, field),
+    },
+  ];
+}
+
+/** 菜单里的「粘贴」：一块格子（Excel、网页上的表）从这一格起铺开，一段字插在光标处（和 Ctrl+V 一样） */
+async function pasteText(block: HTMLElement, field: CellEditor) {
+  let text = "";
+  try {
+    text = await winOf(block).navigator.clipboard.readText();
+  } catch {
+    // 没给读剪贴板的权限：焦点已经回到格子里，按 Ctrl+V 照样能贴
+    return;
+  }
+  const state = states.get(block);
+  if (!text || !state?.editing || state.field !== field) return;
+  const plain = { getData: (type: string) => (type === "text/plain" ? text : "") };
+  const cells = clipboardCells(plain as DataTransfer, state.widget.format);
+  if (cells && (cells.length > 1 || (cells[0]?.length ?? 0) > 1)) {
+    const { row, col } = cellIndex(state.editing);
+    pasteInto(block, cellRect(state.widget.grid.ownerOf(row, col)!), cells);
+    return;
+  }
+  field.insert(text, "input.paste");
+}
+
+/** editing：在正在改的那一格里右键（Delete 在格子里是删一个字，「清空内容」不标这个快捷键） */
+function cellMenu(
+  view: EditorView,
+  block: HTMLElement,
+  rect: CellRect,
+  editing = false,
+): MenuEntry[] {
   const state = states.get(block)!;
   const g = state.widget.grid;
   if (!editable(state)) {
@@ -1531,7 +1597,12 @@ function cellMenu(view: EditorView, block: HTMLElement, rect: CellRect): MenuEnt
     "separator",
     ...alignmentEntry(block, rect),
     ...sortEntries(block, rect),
-    { label: "清空内容", icon: "clear", hint: "Delete", run: () => clearIn(block, rect) },
+    {
+      label: "清空内容",
+      icon: "clear",
+      hint: editing ? undefined : "Delete",
+      run: () => clearIn(block, rect),
+    },
     { label: "复制为 Markdown", icon: "copy", run: () => copyAsMarkdown(block, rect) },
     "separator",
     {
@@ -1574,9 +1645,11 @@ function openMenu(block: HTMLElement, at: { x: number; y: number }, entries: Men
     state.menu = false;
     if (!block.isConnected) return;
     const sink = part<HTMLTextAreaElement>(block, ".cm-odea-table-sink");
-    // 菜单里的操作会自己放焦点（进格子、选格子）；没放的回到选区
+    // 菜单里的操作会自己放焦点（进格子、选格子）；没放的回到选区 / 正在改的那一格
     queueMicrotask(() => {
       if (!block.isConnected || state.menu) return;
+      // 开菜单时浮着的控件都收了：鼠标还停在表格上的话按它摆回来
+      refreshSoon(block);
       const active = docOf(block).activeElement;
       if (block.contains(active)) {
         paintSelection(block);
@@ -1586,7 +1659,10 @@ function openMenu(block: HTMLElement, at: { x: number; y: number }, entries: Men
         resetSink(sink);
         sink.focus({ preventScroll: true });
         paintSelection(block);
-      } else if (!state.editing) deactivate(block);
+      } else if (state.editing) {
+        // 在正在改的那一格里右键（复制、复制为 Markdown 之类不挪焦点的）：回到格子里接着打字
+        state.field?.focus();
+      } else deactivate(block);
     });
   });
 }
@@ -1652,22 +1728,93 @@ function hideHover(block: HTMLElement) {
   }
 }
 
+/** 可见的那一截表格的左右边（横向滑动时） */
+const visibleSpan = (g: Geometry) => ({
+  left: Math.max(g.table.left, g.view.left),
+  right: Math.min(g.table.right, g.view.right),
+});
+
+/** 行抓手摆到第 row 行的左边、竖着居中 */
+function placeRowGrip(block: HTMLElement, g: Geometry, row: number) {
+  const grip = part(block, ".cm-odea-table-grip.is-row")!;
+  const span = g.rows[row]!;
+  grip.dataset.index = String(row);
+  grip.style.left = `${Math.round(g.frame.left - g.base.left - 20)}px`;
+  grip.style.top = `${Math.round((span.top + span.bottom) / 2 - g.base.top - 11)}px`;
+}
+
+/** 列抓手摆到第 col 列露出来的那一截的正上方 */
+function placeColGrip(block: HTMLElement, g: Geometry, col: number) {
+  const grip = part(block, ".cm-odea-table-grip.is-col")!;
+  const span = g.cols[col]!;
+  const visible = visibleSpan(g);
+  const center = (Math.max(span.left, visible.left) + Math.min(span.right, visible.right)) / 2;
+  grip.dataset.index = String(col);
+  grip.style.left = `${Math.round(center - g.base.left - 11)}px`;
+  grip.style.top = `${Math.round(g.table.top - g.base.top - 8)}px`;
+}
+
+/** 下边、右边的「+」贴着表格的底边、右边 */
+function placeAdds(block: HTMLElement, g: Geometry) {
+  const addRow = part(block, ".cm-odea-table-add.is-row")!;
+  const addCol = part(block, ".cm-odea-table-add.is-col")!;
+  addRow.style.left = `${Math.round(g.frame.left - g.base.left)}px`;
+  addRow.style.top = `${Math.round(g.frame.bottom - g.base.top + 4)}px`;
+  addRow.style.width = `${Math.round(g.frame.width)}px`;
+  addCol.style.left = `${Math.round(g.frame.right - g.base.left + 4)}px`;
+  addCol.style.top = `${Math.round(g.table.top - g.base.top)}px`;
+  addCol.style.height = `${Math.round(Math.min(g.table.height, g.frame.bottom - g.table.top))}px`;
+}
+
+/**
+ * 按着鼠标（拖选格子、拖抓手）时表格变了：哪些控件露着不变，露着的跟着表格挪。
+ * 按下就是点进格子 —— 点进空格子、拖选时收起子编辑器，那一行的高度跟着变；以前这时 hover 整个不管，
+ * 松手也不补，下边的「+」停在旧的底边上，直到鼠标再动一下（2026-11-04）
+ */
+function follow(block: HTMLElement, g: Geometry) {
+  placeAdds(block, g);
+  for (const selector of [".cm-odea-table-add.is-row", ".cm-odea-table-add.is-col"]) {
+    const node = part(block, selector);
+    if (node?.classList.contains("is-shown")) reveal(node, true);
+  }
+  const rowGrip = part(block, ".cm-odea-table-grip.is-row")!;
+  if (rowGrip.classList.contains("is-shown")) {
+    const row = Number(rowGrip.dataset.index);
+    if (row < g.rows.length) {
+      placeRowGrip(block, g, row);
+      reveal(rowGrip, true);
+    } else reveal(rowGrip, false);
+  }
+  const colGrip = part(block, ".cm-odea-table-grip.is-col")!;
+  if (colGrip.classList.contains("is-shown")) {
+    const col = Number(colGrip.dataset.index);
+    if (col < g.cols.length) {
+      placeColGrip(block, g, col);
+      reveal(colGrip, true);
+    } else reveal(colGrip, false);
+  }
+}
+
 function hover(block: HTMLElement, x: number, y: number) {
   const state = states.get(block);
-  if (!state || state.menu || state.pointer || !state.widget.table.layout) return;
+  // 菜单开着：浮着的控件开菜单时都收起来了
+  if (!state || state.menu || !state.widget.table.layout) return;
   if (!editable(state)) {
     hideHover(block);
     return;
   }
   const g = geometry(block);
+  if (state.pointer) {
+    follow(block, g);
+    return;
+  }
   const rowGrip = part(block, ".cm-odea-table-grip.is-row")!;
   const colGrip = part(block, ".cm-odea-table-grip.is-col")!;
   const insert = part(block, ".cm-odea-table-insert")!;
   const line = part(block, ".cm-odea-table-line")!;
   const rowSpans = g.rows.map((row) => ({ start: row.top, end: row.bottom }));
   const colSpans = g.cols.map((col) => ({ start: col.left, end: col.right }));
-  const visibleLeft = Math.max(g.table.left, g.view.left);
-  const visibleRight = Math.min(g.table.right, g.view.right);
+  const { left: visibleLeft, right: visibleRight } = visibleSpan(g);
   const row = x >= g.frame.left - 30 && x <= g.frame.right ? indexAt(rowSpans, y) : -1;
   const col =
     x >= visibleLeft && x < visibleRight && y >= g.table.top - 24 && y <= g.table.bottom
@@ -1731,19 +1878,12 @@ function hover(block: HTMLElement, x: number, y: number) {
   }
 
   if (row >= 0 && !(target && target.kind === "row")) {
-    const span = g.rows[row]!;
-    rowGrip.dataset.index = String(row);
-    rowGrip.style.left = `${Math.round(g.frame.left - g.base.left - 20)}px`;
-    rowGrip.style.top = `${Math.round((span.top + span.bottom) / 2 - g.base.top - 11)}px`;
+    placeRowGrip(block, g, row);
     reveal(rowGrip, true);
   } else if (!target || target.kind !== "row") reveal(rowGrip, false);
 
   if (col >= 0 && !(target && target.kind === "col")) {
-    const span = g.cols[col]!;
-    const center = (Math.max(span.left, visibleLeft) + Math.min(span.right, visibleRight)) / 2;
-    colGrip.dataset.index = String(col);
-    colGrip.style.left = `${Math.round(center - g.base.left - 11)}px`;
-    colGrip.style.top = `${Math.round(g.table.top - g.base.top - 8)}px`;
+    placeColGrip(block, g, col);
     reveal(colGrip, true);
   } else if (!target || target.kind !== "col") reveal(colGrip, false);
 
@@ -1753,16 +1893,9 @@ function hover(block: HTMLElement, x: number, y: number) {
     y <= g.frame.bottom + 24 &&
     x >= g.frame.left - 30 &&
     x <= g.frame.right + 24;
-  const addRow = part(block, ".cm-odea-table-add.is-row")!;
-  const addCol = part(block, ".cm-odea-table-add.is-col")!;
-  addRow.style.left = `${Math.round(g.frame.left - g.base.left)}px`;
-  addRow.style.top = `${Math.round(g.frame.bottom - g.base.top + 4)}px`;
-  addRow.style.width = `${Math.round(g.frame.width)}px`;
-  addCol.style.left = `${Math.round(g.frame.right - g.base.left + 4)}px`;
-  addCol.style.top = `${Math.round(g.table.top - g.base.top)}px`;
-  addCol.style.height = `${Math.round(Math.min(g.table.height, g.frame.bottom - g.table.top))}px`;
-  reveal(addRow, over);
-  reveal(addCol, over);
+  placeAdds(block, g);
+  reveal(part(block, ".cm-odea-table-add.is-row"), over);
+  reveal(part(block, ".cm-odea-table-add.is-col"), over);
 }
 
 /* ---------------- 拖抓手：点 = 选中 + 菜单，拖 = 换位置 ---------------- */
@@ -1891,9 +2024,12 @@ function startGripDrag(block: HTMLElement, grip: HTMLElement, event: PointerEven
       );
       return;
     }
-    if (before === null) return;
-    if (isRow) moveRowsTo(block, from, to, before);
-    else moveColumnsTo(block, from, to, before);
+    if (before !== null) {
+      if (isRow) moveRowsTo(block, from, to, before);
+      else moveColumnsTo(block, from, to, before);
+    }
+    // 拖的时候抓手都藏了：松手按鼠标停的那一行（列）再出来
+    refresh(block);
   };
   win.addEventListener("pointermove", move);
   win.addEventListener("pointerup", up);
@@ -1945,6 +2081,8 @@ function trackCellDrag(block: HTMLElement, table: HTMLElement, start: HTMLTableC
     state.pointer = null;
     block.classList.remove("is-selecting");
     paintSelection(block);
+    // 按着的时候抓手、「+」只跟着表格挪、不换（hover 里的 follow）：松手按鼠标现在停的地方重新摆一次
+    refresh(block);
   };
   state.stopTracking = up;
   win.addEventListener("mousemove", move);
@@ -1967,7 +2105,7 @@ function listen(
   frame.addEventListener("mousedown", (event) => {
     if (event.button !== 0) {
       // 右键按下时浏览器会把光标挪到点的地方 —— 挪进表格，CodeMirror 就当光标进了表格，
-      // 整张表退回源码（菜单还没弹出来）。正在改的那一格里照常（系统的剪切、复制菜单）
+      // 整张表退回源码（菜单还没弹出来）。正在改的那一格里照常：光标挪到点的地方，菜单里的「粘贴」贴在那里
       if (event.button === 2 && !editingCell(event.target)) event.preventDefault();
       return;
     }
@@ -2023,9 +2161,20 @@ function listen(
     const cell = cellFromEvent(table, event.target);
     const state = states.get(block);
     if (!cell || !state?.widget.table.layout) return;
-    // 正在改的那一格里右键：系统的剪切、复制、拼写检查
-    if (state.editing === cell) return;
     event.preventDefault();
+    // 正在改的那一格里右键：还是表格的菜单，顶上加这一格文字的剪切、复制、粘贴（不转成选格子，
+    // 选中的字、光标都留着）。以前这里放给系统菜单：点进一格再右键，只有点到格子边上（落在旁边那一格）
+    // 才出表格的菜单（2026-11-04）。右键按下时浏览器照常把光标挪到点的地方（点在选中的字上不挪）
+    if (state.editing === cell && state.field) {
+      const { row, col } = cellIndex(cell);
+      const owner = state.widget.grid.ownerOf(row, col)!;
+      openMenu(block, { x: event.clientX, y: event.clientY }, [
+        ...textMenu(block, state.field),
+        "separator",
+        ...cellMenu(view, block, cellRect(owner), true),
+      ]);
+      return;
+    }
     const at = cellIndex(cell);
     const rect = selectionRect(state);
     const inside =

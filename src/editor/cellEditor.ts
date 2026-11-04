@@ -430,10 +430,16 @@ export class CellEditor {
     this.view.dispatch({ selection: { anchor }, annotations: cellSync.of(true) });
   }
 
-  /** 在光标处插入文字（替换选中的） */
-  insert(text: string) {
+  /** 选中的字（没选中是空串） */
+  get selectedText(): string {
+    const { main } = this.view.state.selection;
+    return this.view.state.sliceDoc(main.from, main.to);
+  }
+
+  /** 在光标处插入文字（替换选中的；text 是空串就是删掉选中的） */
+  insert(text: string, userEvent = "input") {
     this.view.dispatch(this.view.state.replaceSelection(text), {
-      userEvent: "input",
+      userEvent,
       scrollIntoView: true,
     });
   }

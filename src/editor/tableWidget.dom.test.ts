@@ -60,7 +60,7 @@ const selected = (parent: HTMLElement) =>
   );
 const sink = (parent: HTMLElement) =>
   parent.querySelector<HTMLTextAreaElement>(".cm-odea-table-sink")!;
-/** 右键一格，点菜单里的一项（正在编辑的格子先按 Esc 选中：编辑中右键是系统菜单） */
+/** 右键一格，点菜单里的一项（正在编辑的格子先按 Esc 选中：编辑中右键的菜单顶上多了剪切、复制、粘贴，操作对着这一格） */
 const fromMenu = (parent: HTMLElement, cell: HTMLElement, label: string) => {
   if (editing(parent) === cell) press(cell, { key: "Escape" });
   cell.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
@@ -162,6 +162,53 @@ describe("表格里直接编辑", () => {
     fromMenu(parent, editing(parent)!, "删除这一行");
     expect(view.state.doc.toString()).toBe("| a |\n|---|\n| 1 |\n| 2 |\n|   |\n\n后");
     expect(editing(parent)).toBe(cellAt(parent, 1, 0));
+  });
+
+  it("opens the table menu with cut / copy / paste when right-clicking the cell being edited", () => {
+    // 以前编辑中的格子里右键放给系统菜单：只有点到格子边上（落在旁边那一格）才出表格的菜单
+    const { parent, view } = mount("| 名字 | 备注 |\n| --- | --- |\n| 甲 | 你好世界 |\n\n后");
+    click(cellAt(parent, 1, 1));
+    const cell = editing(parent)!;
+    // happy-dom 写 DOM 选区时同步发 selectionchange（见下面 Mod+B 那一条），选字、剪切这两步先挡掉
+    const mute = (event: Event) => event.stopImmediatePropagation();
+    document.addEventListener("selectionchange", mute, true);
+    try {
+      fieldOf(cell)!.dispatch({ selection: { anchor: 2, head: 4 } });
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+      cell.querySelector(".cm-content")!.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      const labels = [
+        ...document.querySelectorAll(
+          '.cm-odea-table-menu[data-state="open"] .cm-odea-table-menu-text',
+        ),
+      ].map((node) => node.textContent);
+      expect(labels.slice(0, 3)).toEqual(["剪切", "复制", "粘贴"]);
+      expect(labels).toContain("删除这一行");
+
+      // 剪切：选中的字没了、写回正文，还在改这一格（没转成选格子）
+      [...document.querySelectorAll<HTMLButtonElement>(".cm-odea-table-menu-item")]
+        .find((button) => button.textContent?.startsWith("剪切"))!
+        .click();
+    } finally {
+      document.removeEventListener("selectionchange", mute, true);
+    }
+    expect(view.state.doc.line(3).text).toBe("| 甲 | 你好 |");
+    expect(editing(parent)).toBe(cell);
+    expect(selected(parent)).toEqual([]);
+
+    // 「清空内容」对着正在改的这一格，清完接着改它
+    cell.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+    );
+    [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '.cm-odea-table-menu[data-state="open"] .cm-odea-table-menu-item',
+      ),
+    ]
+      .find((button) => button.textContent?.startsWith("清空内容"))!
+      .click();
+    expect(view.state.doc.line(3).text).toBe("| 甲 |  |");
+    expect(editing(parent)).toBe(cellAt(parent, 1, 1));
   });
 
   it("fills in the missing cells of a short row", () => {
