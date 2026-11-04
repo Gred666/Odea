@@ -90,6 +90,31 @@ fn old_doc_targets_are_read_as_doc_refs() {
 }
 
 #[test]
+fn doc_refs_are_written_back_in_the_old_shape() {
+    // 访客留底照 0.7.0 的写法写（keep.rs）：写出去的老写法读回来还是同一篇
+    let docs = [
+        DocRef::note("n1"),
+        DocRef::new(DAY, "2026-11-03"),
+        DocRef::new(GOAL, "week:2026-11-02"),
+        DocRef::new(GOAL, "month:2026-11-01"),
+        DocRef::new(GOAL, "year:2026-01-01"),
+    ];
+    for doc in docs {
+        let legacy = doc.legacy_value().unwrap_or_else(|| panic!("{doc:?} 没有老写法"));
+        assert!(legacy.get("type").is_none(), "{legacy}");
+        assert_eq!(serde_json::from_value::<DocRef>(legacy).unwrap(), doc);
+    }
+    assert_eq!(DocRef::new(DAY, "2026-11-03").legacy_value(), Some(json!({ "kind": "day", "id": "2026-11-03" })));
+    assert_eq!(
+        DocRef::new(GOAL, "week:2026-11-02").legacy_value(),
+        Some(json!({ "kind": "goal", "horizon": "week", "periodStart": "2026-11-02" }))
+    );
+    // 没有老写法的：以后插件的类型；目标的 key 坏了的也不硬写
+    assert_eq!(DocRef::new("test.page", "7").legacy_value(), None);
+    assert_eq!(DocRef::new(GOAL, "坏的").legacy_value(), None);
+}
+
+#[test]
 fn folders_come_from_the_marker_then_obsidian() {
     // 配置里乱写的文件夹不收
     let folders = Folders::read(Some(&json!({ "folders": { "days": "/Daily/", "goals": ".hidden" } })), || None);

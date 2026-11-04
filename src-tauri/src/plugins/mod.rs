@@ -99,6 +99,11 @@ pub trait Plugin: Send + Sync {
     fn legacy_ref(&self, _value: &Value) -> Option<DocRef> {
         None
     }
+    /// 反过来：自己的一篇照老格式写成什么样。访客留底照它写，降级回老版本还读得出；
+    /// 没有老格式的（以后插件的类型）返回 None，照新格式 `{ type, key }` 写
+    fn legacy_value(&self, _doc: &DocRef) -> Option<Value> {
+        None
+    }
     /// 从旧版的 SQLite 库（ontheway.db，vault/legacy.rs）搬自己的那部分，写出来的文件记进 written。
     /// 返回搬了什么、各几条（给搬家报告）
     fn import_legacy(
@@ -133,4 +138,9 @@ pub fn index_parts() -> Vec<&'static dyn IndexPart> {
 /// 老格式的文档引用（访客留底里存着的）交给认得它的插件
 pub fn legacy_ref(value: &Value) -> Option<DocRef> {
     builtin().iter().find_map(|plugin| plugin.legacy_ref(value))
+}
+
+/// 插件的一篇照老格式写成什么样（笔记的在 DocRef::legacy_value 里）；没有老格式是 None
+pub fn legacy_value(doc: &DocRef) -> Option<Value> {
+    builtin().iter().find_map(|plugin| plugin.legacy_value(doc))
 }

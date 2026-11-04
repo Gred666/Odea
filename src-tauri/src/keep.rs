@@ -8,6 +8,10 @@
 
 放在应用数据目录的 guest-copies/ 下，不在仓库里：不进 git、不同步，只是这台电脑上的一份留底。
 一篇一个 JSON 文件，文件名是 key 的指纹；回收站对话框里列出来，能存成一篇笔记或者丢掉。
+
+文件里的 target 照 0.7.0 的写法写（`{ kind: "note", id }`、`{ kind: "day", id }`、
+`{ kind: "goal", horizon, periodStart }`，docs/插件与跨端.md §13.2）：0.7.0 遇到读不了的文件整个跳过，
+降级回去这几份就从列表里没了。读的时候两种写法都认（DocRef 的 Deserialize）。交给前端的照旧是 `{ type, key }`
 ============================================================ */
 
 use std::path::{Path, PathBuf};
@@ -30,7 +34,7 @@ pub struct GuestCopy {
     /// 团队仓库里的一篇：那个仓库的路径（在那个仓库的窗口里列出来）。邀请做客的是 None，哪个窗口都列
     pub vault: Option<String>,
     /// 团队仓库里的哪一篇：那个仓库里它的正文和这份一样了（git 拉来了主持人存的那一版），这份就可以删了。
-    /// 0.7.0 及以前存的是老格式（`{ kind: "day", id }`），DocRef 读的时候认得
+    /// 文件里照老格式写（`{ kind: "day", id }`，见 on_disk），DocRef 读的时候两种都认
     pub target: Option<DocRef>,
     /// 主持人是谁（给人看）
     pub host: String,
@@ -49,7 +53,17 @@ fn file_of(data_dir: &Path, key: &str) -> PathBuf {
 
 pub fn put(data_dir: &Path, copy: &GuestCopy) -> Result<()> {
     std::fs::create_dir_all(dir_of(data_dir))?;
-    fsio::write_atomic(&file_of(data_dir, &copy.key), &serde_json::to_string(copy)?)
+    fsio::write_atomic(&file_of(data_dir, &copy.key), &serde_json::to_string(&on_disk(copy)?)?)
+}
+
+/// 写进文件的样子：target 换成老写法（DocRef::legacy_value），没有老写法的（以后插件的类型）照 `{ type, key }`。
+/// 只改文件：GuestCopy 自己的 Serialize 是给前端的（IPC），那边认的是 `{ type, key }`
+fn on_disk(copy: &GuestCopy) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(copy)?;
+    if let Some(legacy) = copy.target.as_ref().and_then(DocRef::legacy_value) {
+        value["target"] = legacy;
+    }
+    Ok(value)
 }
 
 pub fn drop_copy(data_dir: &Path, key: &str) -> Result<()> {
@@ -139,9 +153,115 @@ mod tests {
                 DocRef::new("journal.goal", "week:2026-11-02"),
             ]
         );
-        // 新存的是 { type, key }
-        put(data, &GuestCopy { target: Some(DocRef::new("journal.day", "2026-11-04")), ..copy("d", "字", 2) }).unwrap();
-        let text = std::fs::read_to_string(file_of(data, "d")).unwrap();
-        assert!(text.contains(r#""target":{"type":"journal.day","key":"2026-11-04"}"#), "{text}");
+    }
+
+    /// 0.7.0 的 DocTarget 和 GuestCopy（照 3481315 的 domain/model.rs、keep.rs 抄的）：
+    /// 降级回 0.7.0，它要读得出新版写的留底
+    mod v070 {
+        use serde::Deserialize;
+
+        #[derive(Debug, PartialEq, Deserialize)]
+        #[serde(tag = "kind", rename_all = "lowercase")]
+        pub enum DocTarget {
+            Note {
+                id: String,
+            },
+            Day {
+                id: String,
+            },
+            Goal {
+                horizon: String,
+                #[serde(rename = "periodStart")]
+                period_start: String,
+            },
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        #[allow(dead_code)]
+        pub struct GuestCopy {
+            pub key: String,
+            pub title: String,
+            pub vault: Option<String>,
+            pub target: Option<DocTarget>,
+            pub host: String,
+            pub text: String,
+            pub saved_at: i64,
+        }
+    }
+
+    fn with_target(key: &str, target: Option<DocRef>) -> GuestCopy {
+        GuestCopy { vault: Some("D:/仓库".into()), target, ..copy(key, "字", 1) }
+    }
+
+    fn file_json(data: &Path, key: &str) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(file_of(data, key)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn copies_are_written_the_way_0_7_0_wrote_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        let cases = [
+            ("note", DocRef::note("n1"), serde_json::json!({ "kind": "note", "id": "n1" })),
+            ("day", DocRef::new("journal.day", "2026-11-03"), serde_json::json!({ "kind": "day", "id": "2026-11-03" })),
+            (
+                "week",
+                DocRef::new("journal.goal", "week:2026-11-02"),
+                serde_json::json!({ "kind": "goal", "horizon": "week", "periodStart": "2026-11-02" }),
+            ),
+            (
+                "year",
+                DocRef::new("journal.goal", "year:2026-01-01"),
+                serde_json::json!({ "kind": "goal", "horizon": "year", "periodStart": "2026-01-01" }),
+            ),
+        ];
+        for (key, target, _) in &cases {
+            put(data, &with_target(key, Some(target.clone()))).unwrap();
+        }
+        // 以后插件的类型没有老写法：照新格式写；没有 target 的（邀请做客）是 null
+        put(data, &with_target("page", Some(DocRef::new("test.page", "7")))).unwrap();
+        put(data, &with_target("none", None)).unwrap();
+
+        for (key, _, legacy) in &cases {
+            assert_eq!(file_json(data, key)["target"], *legacy, "{key}");
+        }
+        assert_eq!(file_json(data, "page")["target"], serde_json::json!({ "type": "test.page", "key": "7" }));
+        assert_eq!(file_json(data, "none")["target"], serde_json::Value::Null);
+
+        // 读回来和写进去的一样（内存里、给前端的都是 { type, key }）
+        let mut kept = list(data);
+        kept.sort_by(|a, b| a.key.cmp(&b.key));
+        let read: Vec<(String, Option<DocRef>)> = kept.into_iter().map(|copy| (copy.key, copy.target)).collect();
+        let mut wrote: Vec<(String, Option<DocRef>)> =
+            cases.iter().map(|(key, target, _)| (key.to_string(), Some(target.clone()))).collect();
+        wrote.push(("none".into(), None));
+        wrote.push(("page".into(), Some(DocRef::new("test.page", "7"))));
+        wrote.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(read, wrote);
+        let ipc = serde_json::to_value(with_target("day", Some(DocRef::new("journal.day", "2026-11-03")))).unwrap();
+        assert_eq!(ipc["target"], serde_json::json!({ "type": "journal.day", "key": "2026-11-03" }), "给前端的不变");
+    }
+
+    #[test]
+    fn version_0_7_0_reads_the_copies_this_version_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        put(data, &with_target("note", Some(DocRef::note("n1")))).unwrap();
+        put(data, &with_target("day", Some(DocRef::new("journal.day", "2026-11-03")))).unwrap();
+        put(data, &with_target("goal", Some(DocRef::new("journal.goal", "month:2026-11-01")))).unwrap();
+        put(data, &with_target("none", None)).unwrap();
+        let old = |key: &str| -> v070::GuestCopy {
+            serde_json::from_str(&std::fs::read_to_string(file_of(data, key)).unwrap())
+                .unwrap_or_else(|error| panic!("0.7.0 读不出 {key}: {error}"))
+        };
+        assert_eq!(old("note").target, Some(v070::DocTarget::Note { id: "n1".into() }));
+        assert_eq!(old("day").target, Some(v070::DocTarget::Day { id: "2026-11-03".into() }));
+        assert_eq!(
+            old("goal").target,
+            Some(v070::DocTarget::Goal { horizon: "month".into(), period_start: "2026-11-01".into() })
+        );
+        assert_eq!(old("none").target, None);
+        assert_eq!(old("day").saved_at, 1);
     }
 }

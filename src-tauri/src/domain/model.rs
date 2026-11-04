@@ -170,6 +170,15 @@ impl DocRef {
     pub fn is_note(&self) -> bool {
         self.kind == NOTE
     }
+
+    /// 0.7.0 及以前的写法（DocTarget：`{ kind: "note", id }`，插件的那几种由插件给）。落在盘上、老版本还会去读的
+    /// 地方照它写（访客留底，keep.rs），降级回老版本也读得出。没有老写法的类型（以后插件的）是 None
+    pub fn legacy_value(&self) -> Option<serde_json::Value> {
+        if self.is_note() {
+            return Some(serde_json::json!({ "kind": "note", "id": self.key }));
+        }
+        crate::plugins::legacy_value(self)
+    }
 }
 
 /// 也收老格式（0.7.0 及以前的 DocTarget：`{ kind: "note", id }`，插件的那几种交给插件认）：

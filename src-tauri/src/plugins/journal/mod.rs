@@ -105,6 +105,18 @@ impl Plugin for Journal {
         }
     }
 
+    /// 0.7.0 的 DocTarget 的写法：`{ kind: "day", id }`、`{ kind: "goal", horizon, periodStart }`
+    fn legacy_value(&self, doc: &DocRef) -> Option<Value> {
+        match doc.kind.as_str() {
+            DAY => Some(serde_json::json!({ "kind": "day", "id": doc.key })),
+            GOAL => {
+                let (horizon, period_start) = split_goal_key(&doc.key).ok()?;
+                Some(serde_json::json!({ "kind": "goal", "horizon": horizon, "periodStart": period_start }))
+            }
+            _ => None,
+        }
+    }
+
     fn import_legacy(
         &self,
         conn: &Connection,
