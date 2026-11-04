@@ -15,7 +15,10 @@ P12.3 弹出窗口（`window.open` 的子窗口和主窗口同一个 JS 环境�
 窗格里的东西别写死全局 `document` / `window`，用 `usePaneWindow` / `docOf` / `winOf`）、
 `表格.md`（P13：表格编辑重做、合并单元格写成 GFM 里的 `<` / `^`；P13.1–P13.4 做完了，§11、§12 是实现记录：
 格子里是一个子 CodeMirror（`cellEditor.ts`，组字期间不写回、组完和别人的改动合到一起），HTML 表格也能改（`htmlTable.ts`）；
-格子里的组字用 `scripts/perf/table-ime.mjs` 在真 Chrome 里验）。
+格子里的组字用 `scripts/perf/table-ime.mjs` 在真 Chrome 里验）、
+`插件与跨端.md`（P14 大升级的设计稿，还没动代码：功能做插件、引擎做模块，插件分 L0 声明 / L1 沙箱脚本 / L2 内置；
+第三方代码跑在 opaque origin 的 sandboxed iframe 里；继续用 Tauri、按平台选引擎（Linux 换 CEF，macOS 实测再定），手机用系统 WebView；
+GPUI、Electron、把正文搬进 Rust 这一轮都不做，§9 有为什么）。
 改动之前先看相关的那几节，那里的规矩都是实测踩出来的。
 
 - 回复、注释、文档一律用中文
