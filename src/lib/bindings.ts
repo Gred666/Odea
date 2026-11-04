@@ -415,7 +415,7 @@ async vaultImport(folder: string) : Promise<Result<ImportReport | null, AppError
 }
 },
 /**
- * 搜正文：大小写不敏感的子串，笔记（含归档）和日记、目标各自最多 limit 条；archived_only
+ * 搜正文：大小写不敏感的子串，笔记（含归档）和插件的文档（日记、目标）各自最多 limit 条；archived_only
  * 只搜归档里的笔记（归档的搜索框）。被同一处后来的搜索顶掉的这一次返回空结果（前端只认最后一次的）
  */
 async searchText(query: string, limit: number, archivedOnly: boolean) : Promise<Result<TextSearch, AppError>> {
@@ -427,7 +427,7 @@ async searchText(query: string, limit: number, archivedOnly: boolean) : Promise<
 }
 },
 /**
- * 全局搜索（Ctrl+Shift+F，像 VS Code 的「在文件中查找」）：笔记（含归档）、日记、目标的正文里
+ * 全局搜索（Ctrl+Shift+F，像 VS Code 的「在文件中查找」）：笔记（含归档）、插件的文档（日记、目标）的正文里
  * 每一处命中，可以区分大小写、全词匹配、用正则。被后来的搜索顶掉的这一次返回空结果
  */
 async findInVault(query: string, options: FindOptions) : Promise<Result<FindResult, AppError>> {
@@ -500,11 +500,11 @@ async calendarMarks(from: string, to: string) : Promise<Result<CalendarMarks, Ap
 }
 },
 /**
- * 所有写过的某一天、某个周期的目标，连同正文（命令面板搜它们）
+ * 所有写过东西的插件文档（某一天、某个周期的目标……，不带正文），最近改过的在前：命令面板按标题搜它们
  */
-async journalList() : Promise<Result<JournalDoc[], AppError>> {
+async docList() : Promise<Result<TypedDoc[], AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("journal_list") };
+    return { status: "ok", data: await TAURI_INVOKE("doc_list") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -552,12 +552,12 @@ async vaultInfo() : Promise<Result<VaultInfo, AppError>> {
 }
 },
 /**
- * 开 / 关日程（docs/仓库与启动器.md §6）：改仓库标记，每个文件按新的摆法重新认一遍（文件一个都不动）。
- * 文件多的话剩下的在后台读，和打开仓库时一样报进度。前端拿到结果后整页重载
+ * 开 / 关一个插件（docs/插件与跨端.md §6.2；日程是 `odea.journal`，docs/仓库与启动器.md §6）：改仓库标记，
+ * 每个文件按新的摆法重新认一遍（文件一个都不动）。文件多的话剩下的在后台读，和打开仓库时一样报进度
  */
-async vaultSetJournal(on: boolean) : Promise<Result<VaultInfo, AppError>> {
+async vaultSetPlugin(plugin: string, on: boolean) : Promise<Result<VaultInfo, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("vault_set_journal", { on }) };
+    return { status: "ok", data: await TAURI_INVOKE("vault_set_plugin", { plugin, on }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -598,10 +598,10 @@ async indexProgress() : Promise<Result<IndexProgress | null, AppError>> {
 }
 },
 /**
- * 在系统的文件管理器里定位这篇文档的文件（选中它）。还没写过的某一天 /
- * 某个周期没有文件，打开它将来所在的文件夹。
+ * 在系统的文件管理器里定位这篇文档的文件（选中它）。还没写过的插件文档（某一天、
+ * 某个周期）没有文件，打开它将来所在的文件夹。
  */
-async vaultReveal(target: DocTarget) : Promise<Result<null, AppError>> {
+async vaultReveal(target: DocRef) : Promise<Result<null, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("vault_reveal", { target }) };
 } catch (e) {
@@ -656,7 +656,7 @@ async noteRelinkUndo(rewrites: LinkRewrite[]) : Promise<Result<number, AppError>
 /**
  * 一篇文档的历史版本，新的在前。没开启同步（仓库根上没有 .git）时说一声
  */
-async docHistory(target: DocTarget) : Promise<Result<DocHistory, AppError>> {
+async docHistory(target: DocRef) : Promise<Result<DocHistory, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("doc_history", { target }) };
 } catch (e) {
@@ -679,7 +679,7 @@ async docVersionText(blob: string) : Promise<Result<string, AppError>> {
  * 粘贴进来的文件（剪贴板里的图片）存进「附件」文件夹。内容以 base64 传过来 ——
  * 一个字节一个数字的 JSON 数组，几 MB 的截图要序列化成几千万个字符。
  */
-async vaultAttach(target: DocTarget, name: string, dataBase64: string) : Promise<Result<Attachment, AppError>> {
+async vaultAttach(target: DocRef, name: string, dataBase64: string) : Promise<Result<Attachment, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("vault_attach", { target, name, dataBase64 }) };
 } catch (e) {
@@ -690,7 +690,7 @@ async vaultAttach(target: DocTarget, name: string, dataBase64: string) : Promise
 /**
  * 拖进窗口的文件（桌面端拿到的是路径）存进「附件」文件夹
  */
-async vaultAttachPath(target: DocTarget, path: string) : Promise<Result<Attachment, AppError>> {
+async vaultAttachPath(target: DocRef, path: string) : Promise<Result<Attachment, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("vault_attach_path", { target, path }) };
 } catch (e) {
@@ -860,22 +860,23 @@ async launcherOpenLink(link: string) : Promise<Result<null, AppError>> {
 }
 },
 /**
- * 这台电脑上开着日程的仓库：个人的在前，再按名字
+ * 这台电脑上开着这个插件（`odea.journal` ……）的仓库：个人的在前，再按名字
  */
-async journalVaults() : Promise<Result<JournalVault[], AppError>> {
+async pluginVaults(plugin: string) : Promise<Result<PluginVault[], AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("journal_vaults") };
+    return { status: "ok", data: await TAURI_INVOKE("plugin_vaults", { plugin }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
 /**
- * 跳到另一个仓库的日程：它的窗口提到前面（没开着就打开），摆在当前窗口的位置和大小上，停在同一页
+ * 跳到另一个仓库的某一页：它的窗口提到前面（没开着就打开），摆在当前窗口的位置和大小上，
+ * 停在 page 那一页（带着 arg）
  */
-async journalSwitch(path: string, page: string, date: string) : Promise<Result<null, AppError>> {
+async vaultGoto(path: string, page: string, arg: string) : Promise<Result<null, AppError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("journal_switch", { path, page, date }) };
+    return { status: "ok", data: await TAURI_INVOKE("vault_goto", { path, page, arg }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1646,7 +1647,7 @@ async teamClose(doc: string) : Promise<Result<null, AppError>> {
  * 这一篇在 git 里最近一次提交的正文（不含属性块）：加入别人的会话时，本机没提交的改动按它算出来合进去
  * （设计 §22.2 规矩 2）。没开同步、没提交过是 None
  */
-async teamBase(target: DocTarget) : Promise<Result<string | null, AppError>> {
+async teamBase(target: DocRef) : Promise<Result<string | null, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("team_base", { target }) };
 } catch (e) {
@@ -1730,25 +1731,25 @@ collabCopyReady: CollabCopyReady,
 collabEvent: CollabEvent,
 collabLink: CollabLink,
 indexProgress: IndexProgress,
-journalGoto: JournalGoto,
 launcherLink: LauncherLink,
 syncNotice: SyncNotice,
 syncStatusChanged: SyncStatusChanged,
 teamChanged: TeamChanged,
 updateReady: UpdateReady,
-vaultChanged: VaultChanged
+vaultChanged: VaultChanged,
+vaultGoto: VaultGoto
 }>({
 collabCopyReady: "collab-copy-ready",
 collabEvent: "collab-event",
 collabLink: "collab-link",
 indexProgress: "index-progress",
-journalGoto: "journal-goto",
 launcherLink: "launcher-link",
 syncNotice: "sync-notice",
 syncStatusChanged: "sync-status-changed",
 teamChanged: "team-changed",
 updateReady: "update-ready",
-vaultChanged: "vault-changed"
+vaultChanged: "vault-changed",
+vaultGoto: "vault-goto"
 })
 
 /** user-defined constants **/
@@ -1807,11 +1808,7 @@ export type Backlink = {
 /**
  * 链过来的那篇，点一下跳过去
  */
-target: DocTarget; 
-/**
- * note | day | goal
- */
-kind: string; 
+target: DocRef; 
 /**
  * 给人看的标题：笔记标题、「9月26日」、「第 39 周目标」
  */
@@ -2037,13 +2034,10 @@ versions: DocVersion[];
  */
 more: boolean }
 /**
- * 指向一篇文档：和前端的 DocumentSaveTarget 同形
+ * 仓库里的一篇（docs/插件与跨端.md §6.1）。type 带命名空间：核心只认 `note`，别的由插件声明
+ * （`journal.day`、`journal.goal`，plugins/）；key 的格式由那个类型自己定：笔记 id、`2026-11-03`、`week:2026-11-02`
  */
-export type DocTarget = { kind: "note"; id: string } | 
-/**
- * id 是日期 YYYY-MM-DD
- */
-{ kind: "day"; id: string } | { kind: "goal"; horizon: string; periodStart: string }
+export type DocRef = { type: string; key: string }
 export type DocVersion = { 
 /**
  * 这一版文件内容的 git 对象 id，交给 doc_version_text 取正文
@@ -2098,9 +2092,9 @@ export type EndReason =
 /**
  * 全局搜索里命中了的一篇
  */
-export type FindFile = { target: DocTarget; 
+export type FindFile = { target: DocRef; 
 /**
- * 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc）
+ * 笔记是它的标题；插件的文档是给人看的标题（同 TypedDoc）
  */
 title: string; updatedAt: number; 
 /**
@@ -2132,7 +2126,7 @@ before: string; text: string; after: string }
  */
 export type FindOptions = { caseSensitive: boolean; wholeWord: boolean; regex: boolean }
 /**
- * 全局搜索的结果：笔记（含归档，顺序同两个列表接起来）在前，日记、目标（最近改过的在前）在后
+ * 全局搜索的结果：笔记（含归档，顺序同两个列表接起来）在前，插件的文档（日记、目标……，最近改过的在前）在后
  */
 export type FindResult = { files: FindFile[]; 
 /**
@@ -2223,9 +2217,10 @@ key: string; title: string;
  */
 vault: string | null; 
 /**
- * 团队仓库里的哪一篇：那个仓库里它的正文和这份一样了（git 拉来了主持人存的那一版），这份就可以删了
+ * 团队仓库里的哪一篇：那个仓库里它的正文和这份一样了（git 拉来了主持人存的那一版），这份就可以删了。
+ * 0.7.0 及以前存的是老格式（`{ kind: "day", id }`），DocRef 读的时候认得
  */
-target: DocTarget | null; 
+target: DocRef | null; 
 /**
  * 主持人是谁（给人看）
  */
@@ -2301,38 +2296,6 @@ export type InvitePreview = {
  */
 relay: string | null }
 /**
- * 写过的某一天 / 某个周期的目标（不带正文）：命令面板拿它按标题搜日记和目标，正文走 search_text
- */
-export type JournalDoc = { target: DocTarget; 
-/**
- * day | goal
- */
-kind: string; 
-/**
- * 给人看的标题：「10月6日 · 完成专注模式原型」「第 41 周目标」
- */
-title: string; updatedAt: number }
-/**
- * 跳过去之后那个窗口停在哪一页（前端收到 JournalGoto 再翻过去）
- */
-export type JournalGoto = { 
-/**
- * `today` / `goal` / `calendar`
- */
-page: string; 
-/**
- * 日历选中的那一天（YYYY-MM-DD）
- */
-date: string }
-/**
- * 这台电脑上开着日程的一个仓库（日程切换器，docs/协同编辑.md §22.6）
- */
-export type JournalVault = { path: string; name: string; team: boolean; 
-/**
- * 就是这个窗口的仓库
- */
-current: boolean }
-/**
  * 启动器收到一个团队仓库的链接（它已经开着时）
  */
 export type LauncherLink = string
@@ -2388,6 +2351,14 @@ idInFile: boolean }
  * 权限：能改，或者只读（主持人随时能改）
  */
 export type Permission = "edit" | "read"
+/**
+ * 这台电脑上开着某个插件的一个仓库（日程切换器在开着日程的几个仓库之间跳，docs/协同编辑.md §22.6）
+ */
+export type PluginVault = { path: string; name: string; team: boolean; 
+/**
+ * 就是这个窗口的仓库
+ */
+current: boolean }
 export type PopoutOp = 
 /**
  * 前端画好第一帧：显示出来、拿到焦点
@@ -2723,7 +2694,7 @@ oversized: SyncOversized[] }
  */
 export type SyncStatusChanged = SyncStatus
 /**
- * 日历「当日安排」里的一条：某篇文档正文里带日期的 `- [ ]`（见 vault/tasks.rs）
+ * 日历「当日安排」里的一条：某篇文档正文里带日期的 `- [ ]`（见 tasks.rs）
  */
 export type Task = { 
 /**
@@ -2741,7 +2712,7 @@ meta: string | null; dueDate: string | null; timeLabel: string | null; category:
 /**
  * 写着这条任务的那篇文档：日历里点「出处」跳过去
  */
-source: DocTarget | null; 
+source: DocRef | null; 
 /**
  * 在那篇正文里的行号（从 0 开始）
  */
@@ -2877,9 +2848,9 @@ firewall: Firewall }
 /**
  * search_text 的一条：正文里出现了要找的字的文档
  */
-export type TextHit = { target: DocTarget; 
+export type TextHit = { target: DocRef; 
 /**
- * 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc）
+ * 笔记是它的标题；插件的文档是给人看的标题（同 TypedDoc）
  */
 title: string; updatedAt: number; 
 /**
@@ -2887,9 +2858,9 @@ title: string; updatedAt: number;
  */
 line: string }
 /**
- * 搜正文的结果：笔记（含归档，顺序同两个列表接起来）和日记、目标（最近改过的在前）各自最多 limit 条
+ * 搜正文的结果：笔记（含归档，顺序同两个列表接起来）和插件的文档（日记、目标……，最近改过的在前）各自最多 limit 条
  */
-export type TextSearch = { notes: TextHit[]; journal: TextHit[] }
+export type TextSearch = { notes: TextHit[]; docs: TextHit[] }
 /**
  * 回收站里的一篇（`.odea/trash/<id>.md`）：回收站对话框列它们，恢复走 note_undelete
  */
@@ -2968,6 +2939,14 @@ id: string;
  */
 name: string; permission: Permission }
 /**
+ * 插件的一篇文档（某一天、某个周期的目标……），不带正文：命令面板拿它按标题搜，正文走 search_text
+ */
+export type TypedDoc = { target: DocRef; 
+/**
+ * 给人看的标题：「10月6日 · 完成专注模式原型」「第 41 周目标」
+ */
+title: string; updatedAt: number }
+/**
  * 一个等着装的新版本
  */
 export type UpdateInfo = { version: string; 
@@ -2993,7 +2972,7 @@ manual: string | null }
 export type UpdateReady = UpdateInfo
 /**
  * 仓库里别处发生的变化：文件被外部程序改了，或者一次操作连带改了别的文档
- * （在日历里勾任务，改的是任务所在的那篇）。前端据此刷新缓存。
+ * （在日历里勾任务，改的是任务所在的那篇）。前端据此刷新缓存（插件的那部分交给插件）。
  */
 export type VaultChange = { 
 /**
@@ -3001,17 +2980,13 @@ export type VaultChange = {
  */
 notes: string[]; 
 /**
- * 变了的某一天（YYYY-MM-DD）
+ * 变了（或没了）的插件文档（某一天、某个周期的目标……）
  */
-days: string[]; 
+docs: DocRef[]; 
 /**
- * 变了的目标，`week:2026-09-21`，和前端 goalKey 一样
+ * 这几个插件在索引里另存的那一份变了（日程：带日期的任务，日历的当日安排和小圆点要刷新）
  */
-goals: string[]; 
-/**
- * 带日期的任务有变化：日历的当日安排和小圆点要刷新
- */
-tasks: boolean; 
+plugins: string[]; 
 /**
  * 这次产生的冲突副本的标题（编辑器里有没存的修改时外部改动到了，另存的那一份）
  */
@@ -3057,11 +3032,27 @@ missing: boolean;
  * 逻辑目录（docs/仓库与启动器.md §7）：列表上前面一个小图标
  */
 logical: boolean }
+/**
+ * 跳过去之后那个窗口停在哪一页（前端收到 VaultGoto 再翻过去）
+ */
+export type VaultGoto = { 
+/**
+ * 导航项的 id：日程的是 `today` / `goal` / `calendar`
+ */
+page: string; 
+/**
+ * 那一页自己认的参数：日程是日历选中的那一天（YYYY-MM-DD）
+ */
+arg: string }
 export type VaultInfo = { 
 /**
  * 仓库文件夹的绝对路径
  */
-root: string; notes: number; archived: number; days: number; goals: number; tasks: number; layout: VaultLayout; 
+root: string; notes: number; archived: number; 
+/**
+ * 插件的文档（某一天、目标……）几篇
+ */
+docs: number; layout: VaultLayout; 
 /**
  * 团队仓库（仓库标记里写着 team，docs/协同编辑.md §22.3）
  */
@@ -3075,9 +3066,9 @@ export type VaultLayout = {
  */
 logical: boolean; 
 /**
- * 开没开日程（今日TODO、目标、日历）
+ * 开着的插件（`odea.journal` ……，plugins/）：仓库标记里想用、这个版本也带着的那几个
  */
-journal: boolean; 
+plugins: string[]; 
 /**
  * 开没开归档。和日程分开（只写笔记的人也要归档旧资料）；老仓库的标记里没写的跟着日程
  */
@@ -3085,9 +3076,9 @@ archive: boolean;
 /**
  * 文件树的根：「笔记」，或者整个仓库（空串）
  */
-notesDir: string; daysDir: string; goalsDir: string; archiveDir: string; 
+notesDir: string; archiveDir: string; 
 /**
- * 不在树上的文件夹（日程开着时的日记、目标，归档开着时的归档）：里面的笔记算在树根这一层
+ * 不在树上的文件夹（插件放文档的文件夹，归档开着时的归档）：里面的笔记算在树根这一层
  */
 hiddenDirs: string[] }
 

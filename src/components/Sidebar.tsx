@@ -1,4 +1,4 @@
-import { JOURNAL_WORKSPACES, NAV_WIDTH, hasListColumn, useApp } from "@/app/store";
+import { NAV_WIDTH, hasListColumn, useApp } from "@/app/store";
 import { useData } from "@/data/store";
 import type { SyncState, WorkspaceId } from "@/data/types";
 import { cn } from "@/lib/cn";
@@ -6,10 +6,10 @@ import { snapToDevicePixels } from "@/lib/devicePixels";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { shortcut } from "@/lib/platform";
 import { describeSync } from "@/lib/syncText";
+import { pluginNavItems } from "@/plugins/registry";
 import { useTeam } from "@/team/store";
 import {
   Archive,
-  CalendarDays,
   CircleFadingArrowUp,
   Cloud,
   CloudAlert,
@@ -19,8 +19,6 @@ import {
   LoaderCircle,
   RefreshCw,
   Search,
-  SquareCheckBig,
-  Target,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion, motionValue, useAnimationControls } from "motion/react";
@@ -33,17 +31,19 @@ interface NavItem {
   id: WorkspaceId;
   label: string;
   icon: LucideIcon;
+  /** 插件的导航项：哪个插件的（仓库开着它才有）。核心的「文件」「归档」没有 */
+  plugin?: string;
 }
 
-// 「文件」一直在；今日 / 目标 / 日历 / 归档是「日程」，仓库开了才有（docs/仓库与启动器.md §6）。
-// 扩展页还没有运行时（下载下来的只是一份清单），先不进导航；页面本身留着
-const NAV: NavItem[] = [
-  { id: "notes", label: "文件", icon: FolderTree },
-  { id: "today", label: "今日TODO", icon: SquareCheckBig },
-  { id: "goal", label: "/GOAL", icon: Target },
-  { id: "calendar", label: "日历", icon: CalendarDays },
-  { id: "archive", label: "归档", icon: Archive },
-];
+// 「文件」一直在；归档单独一个开关；中间是开着的插件的导航项（日程的今日 / 目标 / 日历，
+// 导航贡献点，plugins/registry.ts）。扩展页还没有运行时（下载下来的只是一份清单），先不进导航；页面本身留着
+const NOTES_ITEM: NavItem = { id: "notes", label: "文件", icon: FolderTree };
+const ARCHIVE_ITEM: NavItem = { id: "archive", label: "归档", icon: Archive };
+
+/** 窄栏上可能出现的每一项，按顺序 */
+function allNav(): NavItem[] {
+  return [NOTES_ITEM, ...pluginNavItems(), ARCHIVE_ITEM];
+}
 
 /**
  * 窄栏上一格：40×40，左右各留 12，图标居中，中心落在 32（64 宽的正中）。
@@ -76,14 +76,13 @@ export function Sidebar() {
   const setWorkspace = useApp((s) => s.setWorkspace);
   const panelCollapsed = useApp((s) => s.panelCollapsed);
   const setPanelCollapsed = useApp((s) => s.setPanelCollapsed);
-  const journal = useData((s) => s.layout.journal);
+  const plugins = useData((s) => s.layout.plugins);
   const archive = useData((s) => s.layout.archive);
   const appReduce = useApp((s) => s.reduceMotion);
   const systemReduce = usePrefersReducedMotion();
   const reduce = appReduce || systemReduce;
-  const items = NAV.filter(
-    (item) =>
-      (journal || !JOURNAL_WORKSPACES.includes(item.id)) && (archive || item.id !== "archive"),
+  const items = allNav().filter((item) =>
+    item.plugin ? plugins.includes(item.plugin) : archive || item.id !== "archive",
   );
   const listRef = useRef<HTMLUListElement>(null);
   const { rows, leaving, booted } = useNavRows(listRef, items, reduce);
@@ -109,7 +108,7 @@ export function Sidebar() {
         <Logo collapsed reduce={reduce} fade={LOGO_HIDDEN} />
       </div>
 
-      {/* 开关日程、归档是就地换的（data/store 的 switchLayout）：多出来 / 没了的那几项怎么进出见 useNavRows */}
+      {/* 开关插件、归档是就地换的（data/store 的 switchLayout）：多出来 / 没了的那几项怎么进出见 useNavRows */}
       <ul ref={listRef} className="flex flex-col px-3 pt-1">
         {rows.map((item, i) => (
           <NavRow
@@ -334,26 +333,11 @@ function FootControls() {
  * 全部只动 transform（rotate / scale / y），走合成器，不触发排版。
  * 摆动类的支点要挪：铃铛在钟顶、归档盒在底边，用 origin 单独给。
  */
-const ICON_MOTION: Record<WorkspaceId, { to: TargetAndTransition; origin: string }> = {
+const ICON_MOTION: Record<string, { to: TargetAndTransition; origin: string }> = {
   // 文件树晃一下：支点在左下角，像翻开一摞文件
   notes: {
     to: { rotate: [0, -12, 6, 0], scale: [1, 1.1, 1], transition: { duration: 0.42 } },
     origin: "30% 80%",
-  },
-  // 勾上一项：先按下去，再弹起来
-  today: {
-    to: { scale: [1, 0.8, 1.14, 1], y: [0, 1.5, -1, 0], transition: { duration: 0.42 } },
-    origin: "50% 60%",
-  },
-  // 命中靶心：先收后放
-  goal: {
-    to: { scale: [1, 0.78, 1.18, 1], transition: { duration: 0.44 } },
-    origin: "50% 50%",
-  },
-  // 翻一页，轻轻跳一下
-  calendar: {
-    to: { y: [0, -3.5, 0], scale: [1, 1.09, 1], transition: { duration: 0.4 } },
-    origin: "50% 50%",
   },
   // 盖子压下去再回弹，支点在盒底
   archive: {
@@ -377,7 +361,7 @@ const ENTER_MS = 180;
 const ENTER_DELAY = 70;
 
 /**
- * 开关日程、归档时窄栏那几项的进出（2026-10-28）。
+ * 开关插件（日程）、归档时窄栏那几项的进出（2026-10-28）。
  *
  * 以前是动高度（0 ↔ 38）：高度只能在主线程上一帧一帧算，可开关的那一下主线程正忙着按新的列表
  * 把整个应用重画一遍（4 倍降速的开发版里一下 106ms），接着今天那一篇取回来又是 53ms ——
@@ -405,7 +389,7 @@ function useNavRows(
   const fades = useRef(new Map<WorkspaceId, Animation>());
   // 这一次刚拿掉、还没登记进 leaving 的：这一帧先照旧画着，下面的 layout effect 开始淡
   const dropping = reduce ? [] : shown.current.filter((id) => !ids.includes(id));
-  const rows = NAV.filter(
+  const rows = allNav().filter(
     (item) => ids.includes(item.id) || leaving.includes(item.id) || dropping.includes(item.id),
   );
   const rowsKey = rows.map((item) => item.id).join("|");
@@ -498,7 +482,9 @@ function NavRow({
   onSelect: () => void;
 }) {
   const Icon = item.icon;
-  const motionSpec = ICON_MOTION[item.id];
+  // 核心的那几项在上面；插件的导航项自己带着（今日TODO 是勾上一项、目标是命中靶心、日历是翻一页）
+  const motionSpec = ICON_MOTION[item.id] ??
+    pluginNavItems().find((other) => other.id === item.id)?.motion ?? { to: {}, origin: "50% 50%" };
   const icon = useAnimationControls();
 
   // Shell 上那层 MotionConfig 管不到这里：reducedMotion="always" 不会拦

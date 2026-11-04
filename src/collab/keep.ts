@@ -1,4 +1,4 @@
-import type { DocumentSaveTarget } from "@/data/types";
+import type { DocumentRef } from "@/data/types";
 import { type GuestCopy, commands } from "@/lib/bindings";
 import { isTauri } from "@/lib/tauri";
 import { create } from "zustand";
@@ -102,7 +102,7 @@ export interface KeepOptions {
   host: () => string;
   /** 团队仓库里的一篇：仓库路径和是哪一篇。邀请做客的是 null */
   vault: string | null;
-  target: DocumentSaveTarget | null;
+  target: DocumentRef | null;
   /** 有没盖住的字以后多久写一次（节流）。测试里改小 */
   delay?: number;
 }

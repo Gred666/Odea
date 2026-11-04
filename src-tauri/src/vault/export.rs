@@ -112,6 +112,7 @@ fn free_file(dest: &Path, rel: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::journal::JournalVault;
 
     #[test]
     fn exports_the_tree_as_real_folders_with_working_links() {

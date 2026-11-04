@@ -65,43 +65,11 @@ pub struct TrashedNote {
     pub purge_at: i64,
 }
 
-/// 日历「当日安排」里的一条：某篇文档正文里带日期的 `- [ ]`（见 vault/tasks.rs）
+/// 插件的一篇文档（某一天、某个周期的目标……），不带正文：命令面板拿它按标题搜，正文走 search_text
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct Task {
-    /// 所在文档的 id # 行号。只在勾选的那一下用，文档改过之后就不作数了
-    pub id: String,
-    pub title: String,
-    /// todo | done
-    pub status: String,
-    /// 灰色小字：分类 · 时间 · 出处
-    pub meta: Option<String>,
-    pub due_date: Option<String>,
-    pub time_label: Option<String>,
-    pub category: Option<String>,
-    /// 写着这条任务的那篇文档：日历里点「出处」跳过去
-    pub source: Option<DocTarget>,
-    /// 在那篇正文里的行号（从 0 开始）
-    pub line: Option<i64>,
-}
-
-/// 日历月网格上的两种记号
-#[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct CalendarMarks {
-    /// 留下过东西的日子：这一天的记录写过，或者有做完了的任务
-    pub written: Vec<String>,
-    /// 还有没做完的任务的日子
-    pub open: Vec<String>,
-}
-
-/// 写过的某一天 / 某个周期的目标（不带正文）：命令面板拿它按标题搜日记和目标，正文走 search_text
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct JournalDoc {
-    pub target: DocTarget,
-    /// day | goal
-    pub kind: String,
+pub struct TypedDoc {
+    pub target: DocRef,
     /// 给人看的标题：「10月6日 · 完成专注模式原型」「第 41 周目标」
     pub title: String,
     pub updated_at: i64,
@@ -111,55 +79,20 @@ pub struct JournalDoc {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TextHit {
-    pub target: DocTarget,
-    /// 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc）
+    pub target: DocRef,
+    /// 笔记是它的标题；插件的文档是给人看的标题（同 TypedDoc）
     pub title: String,
     pub updated_at: i64,
     /// 第一次出现的那一行（很长的话截一段，前后各留一大截）：前端在里面再截出要显示的一小段
     pub line: String,
 }
 
-/// 搜正文的结果：笔记（含归档，顺序同两个列表接起来）和日记、目标（最近改过的在前）各自最多 limit 条
+/// 搜正文的结果：笔记（含归档，顺序同两个列表接起来）和插件的文档（日记、目标……，最近改过的在前）各自最多 limit 条
 #[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TextSearch {
     pub notes: Vec<TextHit>,
-    pub journal: Vec<TextHit>,
-}
-
-/// 某个周期（某一周 / 某个月 / 某一年）的目标。
-/// 一个周期一篇；还没写过的周期返回空文档（id 为空、updated_at 为 0），
-/// 第一次保存时才落库。
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct Goal {
-    /// 还没落库时为空串
-    pub id: String,
-    /// week | month | year
-    pub horizon: String,
-    pub title: String,
-    /// 周期起点：周一 / 1 号 / 1 月 1 日
-    pub period_start: String,
-    pub content_md: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-    /// 在仓库里的相对路径；还没写过的周期是它将来的位置
-    pub rel_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct DayDoc {
-    pub date: String,
-    pub title: String,
-    pub tasks: Vec<Task>,
-    pub note_md: String,
-    pub updated_at: i64,
-    /// 这一天还没写过、内容是从之前最近一天延续来的：那一天的日期。
-    /// 只有请求「今天」时才会延续；用户一编辑，就以这一天自己的身份落库。
-    pub carried_from: Option<String>,
-    /// 在仓库里的相对路径；还没写过的日子是它将来的位置
-    pub rel_path: String,
+    pub docs: Vec<TextHit>,
 }
 
 /// 全局搜索（find_in_vault）的条件：和编辑器里查找面板的三个开关一样
@@ -190,8 +123,8 @@ pub struct FindMatch {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct FindFile {
-    pub target: DocTarget,
-    /// 笔记是它的标题；某一天 / 目标是给人看的标题（同 JournalDoc）
+    pub target: DocRef,
+    /// 笔记是它的标题；插件的文档是给人看的标题（同 TypedDoc）
     pub title: String,
     pub updated_at: i64,
     /// 这一篇里给出的命中（总数到了上限，后面的就不给了）
@@ -200,7 +133,7 @@ pub struct FindFile {
     pub count: u32,
 }
 
-/// 全局搜索的结果：笔记（含归档，顺序同两个列表接起来）在前，日记、目标（最近改过的在前）在后
+/// 全局搜索的结果：笔记（含归档，顺序同两个列表接起来）在前，插件的文档（日记、目标……，最近改过的在前）在后
 #[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct FindResult {
@@ -213,37 +146,61 @@ pub struct FindResult {
     pub error: Option<String>,
 }
 
-/// 指向一篇文档：和前端的 DocumentSaveTarget 同形
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum DocTarget {
-    Note {
-        id: String,
-    },
-    /// id 是日期 YYYY-MM-DD
-    Day {
-        id: String,
-    },
-    Goal {
-        horizon: String,
-        #[serde(rename = "periodStart")]
-        period_start: String,
-    },
+/// 核心只认的那一种文档：仓库里的一个 Markdown 文件
+pub const NOTE: &str = "note";
+
+/// 仓库里的一篇（docs/插件与跨端.md §6.1）。type 带命名空间：核心只认 `note`，别的由插件声明
+/// （`journal.day`、`journal.goal`，plugins/）；key 的格式由那个类型自己定：笔记 id、`2026-11-03`、`week:2026-11-02`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, specta::Type)]
+pub struct DocRef {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub key: String,
+}
+
+impl DocRef {
+    pub fn new(kind: impl Into<String>, key: impl Into<String>) -> Self {
+        Self { kind: kind.into(), key: key.into() }
+    }
+
+    pub fn note(id: impl Into<String>) -> Self {
+        Self::new(NOTE, id)
+    }
+
+    pub fn is_note(&self) -> bool {
+        self.kind == NOTE
+    }
+}
+
+/// 也收老格式（0.7.0 及以前的 DocTarget：`{ kind: "note", id }`，插件的那几种交给插件认）：
+/// 访客留底（keep.rs）把它原样存在应用数据目录里，升级上来还得读得出 —— 读不出的那份会被整个跳过
+impl<'de> Deserialize<'de> for DocRef {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        use serde_json::Value;
+        let value = Value::deserialize(deserializer)?;
+        let text = |key: &str| value.get(key).and_then(Value::as_str);
+        if let (Some(kind), Some(key)) = (text("type"), text("key")) {
+            return Ok(DocRef::new(kind, key));
+        }
+        if let (Some(NOTE), Some(id)) = (text("kind"), text("id")) {
+            return Ok(DocRef::note(id));
+        }
+        crate::plugins::legacy_ref(&value)
+            .ok_or_else(|| serde::de::Error::custom(format!("认不出这篇文档: {value}")))
+    }
 }
 
 /// 仓库里别处发生的变化：文件被外部程序改了，或者一次操作连带改了别的文档
-/// （在日历里勾任务，改的是任务所在的那篇）。前端据此刷新缓存。
+/// （在日历里勾任务，改的是任务所在的那篇）。前端据此刷新缓存（插件的那部分交给插件）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultChange {
     /// 变了（或没了）的笔记 id
     pub notes: Vec<String>,
-    /// 变了的某一天（YYYY-MM-DD）
-    pub days: Vec<String>,
-    /// 变了的目标，`week:2026-09-21`，和前端 goalKey 一样
-    pub goals: Vec<String>,
-    /// 带日期的任务有变化：日历的当日安排和小圆点要刷新
-    pub tasks: bool,
+    /// 变了（或没了）的插件文档（某一天、某个周期的目标……）
+    pub docs: Vec<DocRef>,
+    /// 这几个插件在索引里另存的那一份变了（日程：带日期的任务，日历的当日安排和小圆点要刷新）
+    pub plugins: Vec<String>,
     /// 这次产生的冲突副本的标题（编辑器里有没存的修改时外部改动到了，另存的那一份）
     pub conflicts: Vec<String>,
     /// 新出现的冲突副本（网盘同步时两边都改过，网盘另存的那一份）的标题
@@ -323,9 +280,7 @@ pub struct TreeNode {
 #[serde(rename_all = "camelCase")]
 pub struct Backlink {
     /// 链过来的那篇，点一下跳过去
-    pub target: DocTarget,
-    /// note | day | goal
-    pub kind: String,
+    pub target: DocRef,
     /// 给人看的标题：笔记标题、「9月26日」、「第 39 周目标」
     pub title: String,
     pub archived: bool,
@@ -427,9 +382,8 @@ pub struct VaultInfo {
     pub root: String,
     pub notes: i64,
     pub archived: i64,
-    pub days: i64,
-    pub goals: i64,
-    pub tasks: i64,
+    /// 插件的文档（某一天、目标……）几篇
+    pub docs: i64,
     pub layout: VaultLayout,
     /// 团队仓库（仓库标记里写着 team，docs/协同编辑.md §22.3）
     pub team: bool,
@@ -441,16 +395,14 @@ pub struct VaultInfo {
 pub struct VaultLayout {
     /// 逻辑目录（docs/仓库与启动器.md §7）：文件树是清单里摆的那一棵（tree_view），不按文件夹
     pub logical: bool,
-    /// 开没开日程（今日TODO、目标、日历）
-    pub journal: bool,
+    /// 开着的插件（`odea.journal` ……，plugins/）：仓库标记里想用、这个版本也带着的那几个
+    pub plugins: Vec<String>,
     /// 开没开归档。和日程分开（只写笔记的人也要归档旧资料）；老仓库的标记里没写的跟着日程
     pub archive: bool,
     /// 文件树的根：「笔记」，或者整个仓库（空串）
     pub notes_dir: String,
-    pub days_dir: String,
-    pub goals_dir: String,
     pub archive_dir: String,
-    /// 不在树上的文件夹（日程开着时的日记、目标，归档开着时的归档）：里面的笔记算在树根这一层
+    /// 不在树上的文件夹（插件放文档的文件夹，归档开着时的归档）：里面的笔记算在树根这一层
     pub hidden_dirs: Vec<String>,
 }
 
@@ -602,10 +554,10 @@ pub struct TeamInvite {
     pub already: bool,
 }
 
-/// 这台电脑上开着日程的一个仓库（日程切换器，docs/协同编辑.md §22.6）
+/// 这台电脑上开着某个插件的一个仓库（日程切换器在开着日程的几个仓库之间跳，docs/协同编辑.md §22.6）
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
-pub struct JournalVault {
+pub struct PluginVault {
     pub path: String,
     pub name: String,
     pub team: bool,

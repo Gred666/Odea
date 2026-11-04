@@ -44,7 +44,7 @@ describe("mock findInVault", () => {
     expect(found.total).toBe(3);
     expect(found.files).toHaveLength(1);
     const [file] = found.files;
-    expect(file?.target).toEqual({ kind: "note", id: ids[0] });
+    expect(file?.target).toEqual({ type: "note", key: ids[0] });
     expect(file?.count).toBe(3);
     expect(file?.matches.map((m) => [m.line, m.column, m.length])).toEqual([
       [2, 3, 2],

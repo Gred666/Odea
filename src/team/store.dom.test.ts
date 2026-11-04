@@ -4,7 +4,7 @@ import { useApp } from "@/app/store";
 import type { CollabScheduler } from "@/collab/session";
 import { useCurrentDocument } from "@/data/adapter";
 import { useData } from "@/data/store";
-import type { DocumentModel, NoteSummary } from "@/data/types";
+import { type DocumentModel, NOTE, type NoteSummary, isShared, noteRef } from "@/data/types";
 import { act, createElement } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,9 +47,9 @@ beforeEach(() => {
     externalRevisions: {},
     loadBody: vi.fn(async (id: string) => useData.getState().bodies[id]),
     saveDocument: vi.fn(async (target, text) => {
-      if (target.kind !== "note") return;
+      if (target.type !== NOTE) return;
       saved.push(text);
-      useData.setState((state) => ({ bodies: { ...state.bodies, [target.id]: text } }));
+      useData.setState((state) => ({ bodies: { ...state.bodies, [target.key]: text } }));
     }),
   });
   useApp.setState({ workspace: "notes", selectedNoteId: "n1" });
@@ -63,13 +63,14 @@ afterEach(async () => {
 });
 
 describe("团队仓库的窗口", () => {
-  it("文档 id：笔记是属性块里的 id（没写的按相对路径），某一天、目标按日期；做客的那篇没有", () => {
+  it("文档 id：笔记是属性块里的 id（没写的按相对路径），插件的文档照插件说的；做客的那篇没有", () => {
+    // 某一天、目标的 id（day-…、goal-week-…）在 plugins/journal/store.test.ts
     const base = { key: "k", title: "", bodyMd: "", statusParts: [] } as unknown as DocumentModel;
     const note = (id: string, relPath: string, idInFile: boolean): DocumentModel => ({
       ...base,
       relPath,
       idInFile,
-      editor: { target: { kind: "note", id }, titleEditable: true },
+      editor: { target: noteRef(id), titleEditable: true },
     });
     expect(teamDocId(note("n1", DOC, true))).toBe("note-n1");
     // 开着的时候改了名（文件跟着改名）：还是这一篇的那份会话
@@ -78,21 +79,13 @@ describe("团队仓库的窗口", () => {
     expect(teamDocId(note("n2", DOC, false))).toBe(DOC);
     // 开着的时候第一次存盘把 id 写进了属性块：不换，不然会话当场分成两份
     expect(teamDocId(note("n2", DOC, true))).toBe(DOC);
+    // 没装的插件的文档：认不出是哪一篇，不进团队
     expect(
       teamDocId({
         ...base,
-        editor: { target: { kind: "day", id: "2026-10-22" }, titleEditable: false },
+        editor: { target: { type: "test.gone", key: "1" }, titleEditable: false },
       }),
-    ).toBe("day-2026-10-22");
-    expect(
-      teamDocId({
-        ...base,
-        editor: {
-          target: { kind: "goal", horizon: "week", periodStart: "2026-10-19" },
-          titleEditable: false,
-        },
-      }),
-    ).toBe("goal-week-2026-10-19");
+    ).toBeNull();
     expect(
       teamDocId({ ...base, editor: { target: { kind: "shared", id: "s" }, titleEditable: false } }),
     ).toBeNull();
@@ -135,13 +128,13 @@ describe("团队仓库的窗口", () => {
       shown = doc;
       const id = teamDocId(doc);
       const target = doc.editor?.target;
-      if (id && target && target.kind !== "shared") setTeamView({ doc: id, target });
+      if (id && target && !isShared(target)) setTeamView({ doc: id, target });
       return null;
     }
     const container = document.createElement("div");
     root = createRoot(container);
     act(() => root!.render(createElement(Probe)));
-    host.view({ doc: DOC, target: { kind: "note", id: "n1" } });
+    host.view({ doc: DOC, target: noteRef("n1") });
 
     await until("编辑器拿到会话", () => !!(shown as DocumentModel | null)?.collab);
     expect((shown as unknown as DocumentModel).collab).toMatchObject({

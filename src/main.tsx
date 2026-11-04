@@ -1,5 +1,7 @@
 // 第一个：改名前 otw. 开头的存储键先换成 odea.，后面的模块一加载就会读它们
 import "@/lib/legacyStorage";
+// 装上内置插件（日程）：数据层初始化、第一帧之前就得在
+import "@/plugins";
 import { Shell } from "@/app/Shell";
 import { armIntro, markShown } from "@/app/intro";
 import { initPreferences, restoreVaultSession } from "@/app/store";

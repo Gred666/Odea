@@ -96,17 +96,6 @@ export function periodEndOf(horizon: PeriodHorizon, periodStart: ISODate): ISODa
   return `${periodStart.slice(0, 4)}-12-31`;
 }
 
-/**
- * GOAL 文档的标题，按周期算而不是存在库里 ——
- * 「本周目标」这种相对说法过了这周就不对了。
- * 「第 37 周目标」「九月目标」「2026 年目标」
- */
-export function goalTitle(horizon: PeriodHorizon, periodStart: ISODate): string {
-  if (horizon === "week") return `第 ${isoWeekNumber(periodStart)} 周目标`;
-  if (horizon === "month") return `${formatMonthCN(periodStart)}目标`;
-  return `${formatYear(periodStart)} 年目标`;
-}
-
 /** 周期的范围说明，放在状态栏：「9月14日 – 9月20日」「2026年9月」「2026年」 */
 export function formatPeriodCN(horizon: PeriodHorizon, periodStart: ISODate): string {
   if (horizon === "week") {

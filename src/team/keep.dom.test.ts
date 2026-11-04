@@ -2,7 +2,7 @@
 
 import { keepGuestCopy, listGuestCopies, useGuestCopies } from "@/collab/keep";
 import type { CollabScheduler } from "@/collab/session";
-import type { DocumentSaveTarget } from "@/data/types";
+import { type DocumentRef, noteRef } from "@/data/types";
 import { beforeEach, describe, expect, it } from "vitest";
 import { TeamController, type TeamIO, type TeamSnapshot } from "./controller";
 import { type MockTeamHub, createMockTeamHub } from "./mockNet";
@@ -11,7 +11,7 @@ import { type MockTeamHub, createMockTeamHub } from "./mockNet";
    一个进程里起两台设备（mockNet 的 hub），访客那台接 keepGuestCopy，看它什么时候留、什么时候删 */
 
 const DOC = "note-n1";
-const TARGET: DocumentSaveTarget = { kind: "note", id: "n1" };
+const TARGET: DocumentRef = noteRef("n1");
 const ORIGINAL = "# 周会\n\n- 张三：接口";
 
 const scheduler: CollabScheduler = {

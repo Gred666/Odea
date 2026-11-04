@@ -3,7 +3,7 @@ import type { NotePane } from "@/app/panes";
 import { useApp } from "@/app/store";
 import { usePaneDocument } from "@/data/adapter";
 import { useData } from "@/data/store";
-import type { DocumentModel, DocumentSaveTarget } from "@/data/types";
+import { type DocumentModel, type DocumentRef, NOTE, isShared, vaultRef } from "@/data/types";
 import { useInstantLayoutTransition } from "motion/react";
 import {
   Fragment,
@@ -40,10 +40,8 @@ const MIN_PANE = 320;
 const OUTLINE_PANE = 1060;
 
 export interface Handlers {
-  onToggleTask: (id: string) => void;
-  onSegmentChange?: (v: string) => void;
-  onSaveDocument: (target: DocumentSaveTarget, markdown: string) => Promise<void>;
-  onSaveTitle: (target: DocumentSaveTarget, title: string) => Promise<void>;
+  onSaveDocument: (target: DocumentRef, markdown: string) => Promise<void>;
+  onSaveTitle: (target: DocumentRef, title: string) => Promise<void>;
 }
 
 export const activeNoteOf = (pane: Pick<NotePane, "tabs" | "activeTab">) =>
@@ -55,7 +53,7 @@ export function DocumentPanes({ doc, ...handlers }: { doc: DocumentModel } & Han
   const activePane = useApp((s) => s.activePane);
   const notes = workspace === "notes";
   // 做客：正文区是共享的那一篇，只有一栏（标签栏也收起，设计 §3）
-  const guest = doc.editor?.target.kind === "shared";
+  const guest = isShared(doc.editor?.target);
   const focused = notePanes.find((pane) => pane.id === activePane) ?? notePanes[0]!;
   const panes = notes && !guest ? notePanes : [focused];
   const rowRef = useRef<HTMLDivElement>(null);
@@ -158,8 +156,6 @@ const PaneBody = memo(function PaneBody({
   focused,
   mirror,
   shellDoc,
-  onToggleTask,
-  onSegmentChange,
   onSaveDocument,
   onSaveTitle,
 }: PaneProps & {
@@ -177,19 +173,15 @@ const PaneBody = memo(function PaneBody({
   const shown = !notes || focused ? shellDoc : own;
   const doc = mirror && shown.collab ? collabElsewhere(shown) : shown;
   const tabsShown =
-    notes &&
-    !zen &&
-    initialized &&
-    doc.editor?.target.kind !== "shared" &&
-    (count > 1 || tabs.length > 1);
+    notes && !zen && initialized && !isShared(doc.editor?.target) && (count > 1 || tabs.length > 1);
   const wide = usePaneWide(hostRef, count > 1);
 
   const handleDelete = () => {
     // 删的是这个窗格里的这一篇。按下的那一刻这个窗格已经成了正在写的（外壳的 focus）
-    const target = doc.editor?.target;
-    if (target?.kind !== "note") return;
-    selectNeighbor(target.id);
-    void useData.getState().deleteNote(target.id);
+    const target = vaultRef(doc.editor?.target);
+    if (target?.type !== NOTE) return;
+    selectNeighbor(target.key);
+    void useData.getState().deleteNote(target.key);
   };
 
   return (
@@ -202,8 +194,6 @@ const PaneBody = memo(function PaneBody({
       />
       <DocumentView
         doc={doc}
-        onToggleTask={onToggleTask}
-        onSegmentChange={onSegmentChange}
         onDelete={handleDelete}
         onSaveDocument={onSaveDocument}
         onSaveTitle={onSaveTitle}

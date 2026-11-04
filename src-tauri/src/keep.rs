@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::model::DocTarget;
+use crate::domain::model::DocRef;
 use crate::error::Result;
 use crate::vault::fsio;
 
@@ -29,8 +29,9 @@ pub struct GuestCopy {
     pub title: String,
     /// 团队仓库里的一篇：那个仓库的路径（在那个仓库的窗口里列出来）。邀请做客的是 None，哪个窗口都列
     pub vault: Option<String>,
-    /// 团队仓库里的哪一篇：那个仓库里它的正文和这份一样了（git 拉来了主持人存的那一版），这份就可以删了
-    pub target: Option<DocTarget>,
+    /// 团队仓库里的哪一篇：那个仓库里它的正文和这份一样了（git 拉来了主持人存的那一版），这份就可以删了。
+    /// 0.7.0 及以前存的是老格式（`{ kind: "day", id }`），DocRef 读的时候认得
+    pub target: Option<DocRef>,
     /// 主持人是谁（给人看）
     pub host: String,
     pub text: String,
@@ -107,5 +108,40 @@ mod tests {
         assert_eq!(list(data).len(), 1, "删两次也不报错");
         std::fs::write(dir_of(data).join("坏的.json"), "{").unwrap();
         assert_eq!(list(data).len(), 1, "读不了的跳过");
+    }
+
+    #[test]
+    fn copies_kept_by_older_versions_are_still_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path();
+        std::fs::create_dir_all(dir_of(data)).unwrap();
+        // 0.7.0 存的：target 是老的 DocTarget
+        let old = |key: &str, target: &str| {
+            format!(
+                r#"{{"key":"{key}","title":"周报","vault":"D:/仓库","target":{target},"host":"小王","text":"字","savedAt":1}}"#
+            )
+        };
+        std::fs::write(dir_of(data).join("a.json"), old("a", r#"{"kind":"note","id":"n1"}"#)).unwrap();
+        std::fs::write(dir_of(data).join("b.json"), old("b", r#"{"kind":"day","id":"2026-11-03"}"#)).unwrap();
+        std::fs::write(
+            dir_of(data).join("c.json"),
+            old("c", r#"{"kind":"goal","horizon":"week","periodStart":"2026-11-02"}"#),
+        )
+        .unwrap();
+        let mut kept = list(data);
+        kept.sort_by(|a, b| a.key.cmp(&b.key));
+        let targets: Vec<DocRef> = kept.into_iter().filter_map(|copy| copy.target).collect();
+        assert_eq!(
+            targets,
+            vec![
+                DocRef::note("n1"),
+                DocRef::new("journal.day", "2026-11-03"),
+                DocRef::new("journal.goal", "week:2026-11-02"),
+            ]
+        );
+        // 新存的是 { type, key }
+        put(data, &GuestCopy { target: Some(DocRef::new("journal.day", "2026-11-04")), ..copy("d", "字", 2) }).unwrap();
+        let text = std::fs::read_to_string(file_of(data, "d")).unwrap();
+        assert!(text.contains(r#""target":{"type":"journal.day","key":"2026-11-04"}"#), "{text}");
     }
 }

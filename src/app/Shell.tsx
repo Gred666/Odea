@@ -1,5 +1,5 @@
 import { ZEN_TRANSITION } from "@/app/navMotion";
-import { LIST_WIDTH, chromeWidth, hasListColumn, startTodayTicker, useApp } from "@/app/store";
+import { LIST_WIDTH, chromeWidth, hasListColumn, useApp } from "@/app/store";
 import { CollabDialog, CollabRequests, CollabResume } from "@/components/CollabDialog";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DocumentPanes } from "@/components/DocumentPanes";
@@ -7,7 +7,6 @@ import { ErrorToast, LayoutChangeToast, NoticeToast } from "@/components/ErrorTo
 import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
-import { journalSwitchNext } from "@/components/JournalSwitcher";
 import { useTabKeys } from "@/components/NoteTabs";
 import { Popouts } from "@/components/Popouts";
 import { RelayDialog } from "@/components/RelayDialog";
@@ -20,16 +19,15 @@ import { TrashDialog } from "@/components/TrashDialog";
 import { UndoToast } from "@/components/UndoToast";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { VaultSwitcher } from "@/components/VaultSwitcher";
-import { labelToHorizon, labelToScope, useCurrentDocument } from "@/data/adapter";
-import { backend } from "@/data/backend";
-import { saveKeyOf, useData } from "@/data/store";
+import { useCurrentDocument } from "@/data/adapter";
+import { enabledPlugins, saveKeyOf, useData } from "@/data/store";
+import { noteRef, vaultRef } from "@/data/types";
 import { pinEditorStates } from "@/editor/statePins";
 import { cn } from "@/lib/cn";
-import { periodStartOf } from "@/lib/date";
 import { tween } from "@/lib/motion";
+import { navItemOf } from "@/plugins/registry";
 import { initTeam, setTeamView, teamDocId } from "@/team/store";
 import { ArchiveList } from "@/views/ArchiveView";
-import { CalendarPanel } from "@/views/CalendarView";
 import { ExtensionsView } from "@/views/ExtensionsView";
 import { NotesList } from "@/views/NotesView";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
@@ -48,32 +46,24 @@ const FRAME_DISSOLVE = { duration: 0.18, ease: [0.22, 1, 0.36, 1] } as const;
 
 export function Shell() {
   const workspace = useApp((s) => s.workspace);
-  const setCalendarScope = useApp((s) => s.setCalendarScope);
-  const setGoalHorizon = useApp((s) => s.setGoalHorizon);
   const reduceMotion = useApp((s) => s.reduceMotion);
   const zen = useApp((s) => s.zen);
-  const selectedDate = useApp((s) => s.selectedDate);
-  const todayDate = useApp((s) => s.todayDate);
-  const calendarScope = useApp((s) => s.calendarScope);
-  const goalHorizon = useApp((s) => s.goalHorizon);
   const panelCollapsed = useApp((s) => s.panelCollapsed);
-  const journal = useData((s) => s.layout.journal);
+  // 开着的插件：它们的副作用跟着主窗口挂着（日程：零点翻页、按需取数据、日程切换器）
+  const layout = useData((s) => s.layout);
+  const plugins = enabledPlugins(layout);
+  // 插件的页带的列表栏（日历的月格子）
+  const PluginList = navItemOf(workspace)?.List;
 
   const notes = useData((s) => s.notes);
   const archived = useData((s) => s.archived);
-  const marks = useData((s) => s.marks);
-  const toggleTask = useData((s) => s.toggleTask);
   const restoreNote = useData((s) => s.restoreNote);
-  const loadDay = useData((s) => s.loadDay);
-  const loadGoal = useData((s) => s.loadGoal);
-  const forgetCarriedDays = useData((s) => s.forgetCarriedDays);
   const saveDocument = useData((s) => s.saveDocument);
   const saveTitle = useData((s) => s.saveTitle);
 
   const doc = useCurrentDocument();
   // 命令面板里那些「这一篇」的命令只认仓库里的文档（做客的那一篇不算）
-  const editorTarget = doc.editor?.target;
-  const docTarget = editorTarget?.kind === "shared" ? undefined : editorTarget;
+  const docTarget = vaultRef(doc.editor?.target);
   // 列表栏收起了（像 VS Code 的侧栏）：和今日TODO、目标一样只剩窄栏和正文
   const showList = hasListColumn(workspace) && !panelCollapsed;
   // 专注模式要把整条 chrome 推出去有多远
@@ -83,9 +73,6 @@ export function Shell() {
   // （docs/标签页与分屏.md §15.6；以前在这里换一屏，每个编辑器都重建，卡几百毫秒）
   const frame =
     workspace === "extensions" ? "extensions" : hasListColumn(workspace) ? "listed" : "full";
-
-  // 零点翻页
-  useEffect(() => startTodayTicker(), []);
 
   // 笔记的窗格和标签（docs/标签页与分屏.md）：标签栏在每个窗格里（DocumentPanes），这里管快捷键、对账、缓存
   const initialized = useData((s) => s.initialized);
@@ -101,7 +88,7 @@ export function Shell() {
     s.notePanes.flatMap((pane) => pane.tabs.map((tab) => tab.noteId)).join("\n"),
   );
   useEffect(() => {
-    pinEditorStates(openNotes.split("\n").map((id) => saveKeyOf({ kind: "note", id })));
+    pinEditorStates(openNotes.split("\n").map((id) => saveKeyOf(noteRef(id))));
   }, [openNotes]);
 
   // 团队仓库（docs/协同编辑.md §22.4）：起团队端点；编辑器里换了哪一篇告诉它（别人也开着就进同一个会话）
@@ -120,29 +107,6 @@ export function Shell() {
     setTeamView(teamDoc && target ? { doc: teamDoc, target } : null);
   }, [teamDoc, popoutActive]);
 
-  // 今天这一篇一进应用就取：今日TODO 页渲染的就是它，而下面那个 effect 只管
-  // 日历和 /GOAL，不给今日TODO 单独取。
-  // /GOAL 这一期的目标也先取着：第一次点过去是现成的，不先空着一页「载入中…」、再换上正文。
-  // 跨过零点后，昨天那份「延续来的」缓存不再作数（它从来不是昨天自己的内容）。
-  useEffect(() => {
-    // 没开日程的仓库没有今日TODO（docs/仓库与启动器.md §6）
-    if (!journal) return;
-    forgetCarriedDays(todayDate);
-    void loadDay(todayDate, true);
-    const horizon = useApp.getState().goalHorizon;
-    void loadGoal(horizon, periodStartOf(horizon, todayDate));
-  }, [forgetCarriedDays, journal, loadDay, loadGoal, todayDate]);
-
-  // 日历：选中的那一天 / 那一天所在周期的目标；/GOAL：今天所在周期的目标
-  useEffect(() => {
-    if (workspace === "calendar") {
-      if (calendarScope === "day") void loadDay(selectedDate, selectedDate === todayDate);
-      else void loadGoal(calendarScope, periodStartOf(calendarScope, selectedDate));
-    } else if (workspace === "goal") {
-      void loadGoal(goalHorizon, periodStartOf(goalHorizon, todayDate));
-    }
-  }, [calendarScope, goalHorizon, loadDay, loadGoal, selectedDate, todayDate, workspace]);
-
   // Esc 退出专注模式。走冒泡阶段并且看 defaultPrevented ——
   // 命令面板在捕获阶段处理 Esc 并且会 preventDefault，这样两者不会打架：
   // 面板开着时 Esc 先关面板，再按一次才退出专注模式。
@@ -156,34 +120,6 @@ export function Shell() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-
-  // 日程切换器（docs/协同编辑.md §22.6）：从别的仓库的窗口跳过来，翻到那一页那一天；Ctrl+Alt+J 轮着切。
-  // 按 code 认 J：macOS 上按着 Option 时 key 是别的字
-  useEffect(() => {
-    const unlisten = backend().then((api) =>
-      api.onJournalGoto((page, date) => {
-        const app = useApp.getState();
-        app.setWorkspace(page);
-        if (page === "calendar") app.selectDate(date);
-      }),
-    );
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.code !== "KeyJ" || !e.altKey || !(e.ctrlKey || e.metaKey)) return;
-      if (!useData.getState().layout.journal) return;
-      e.preventDefault();
-      void journalSwitchNext();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("keydown", onKey, true);
-      void unlisten.then((stop) => stop());
-    };
-  }, []);
-
-  const handleSegment = (v: string) => {
-    if (workspace === "goal") setGoalHorizon(labelToHorizon(v));
-    else if (workspace === "calendar") setCalendarScope(labelToScope(v));
-  };
 
   return (
     <MotionConfig reducedMotion={reduceMotion ? "always" : "user"}>
@@ -258,14 +194,14 @@ export function Shell() {
                         className="h-full"
                       >
                         {workspace === "notes" && <NotesList notes={notes} />}
-                        {workspace === "calendar" && <CalendarPanel marks={marks} />}
+                        {PluginList && <PluginList />}
                         {workspace === "archive" && (
                           <ArchiveList items={archived} onRestore={restoreNote} />
                         )}
                       </motion.div>
                     </AnimatePresence>
                   </div>
-                  {/* 仓库名 ⌄：换仓库、开关日程（Obsidian 也放在这里）。在换内容的那一层外面，
+                  {/* 仓库名 ⌄：换仓库、开关插件（日程，Obsidian 也放在这里）。在换内容的那一层外面，
                       切工作区时它不跟着淡出淡入 */}
                   <VaultSwitcher />
                 </motion.div>
@@ -277,7 +213,7 @@ export function Shell() {
         {/* ---------- 主内容 ----------
             按「版面」换，不按区换：frame 是「这一区有列表栏 / 没有 / 扩展页」。列表栏收起了也算有：
             在笔记里收起 / 展开它不换一屏，正文那一列自己滑过去（DocumentView 的 CenteredColumn）。
-            版面一样的两页（今日TODO ↔ /GOAL，笔记 ↔ 日历 ↔ 归档）是同一个 DocumentView，
+            版面一样的两页（今日TODO ↔ /GOAL，笔记 ↔ 日历 ↔ 归档，插件的页也一样）是同一个 DocumentView，
             只是换了一篇文档 —— 和在列表里换一篇笔记一样走 SwapFade 的溶解：标题、分隔线、
             状态栏原地不动，只有字换掉。2026-10-28 以前按区换，今日TODO ↔ /GOAL 是整屏卸掉
             重挂：旧的一屏 140ms 淡出还往旁边挪 12px，新的一屏 220ms 淡入，分隔线从 0 再展开一次、
@@ -315,13 +251,7 @@ export function Shell() {
                 <ExtensionsView />
               ) : (
                 // 一排窗格（笔记分屏时几栏，别的区一栏）；每栏的标签栏、删除都在里面
-                <DocumentPanes
-                  doc={doc}
-                  onToggleTask={toggleTask}
-                  onSegmentChange={handleSegment}
-                  onSaveDocument={saveDocument}
-                  onSaveTitle={saveTitle}
-                />
+                <DocumentPanes doc={doc} onSaveDocument={saveDocument} onSaveTitle={saveTitle} />
               )}
             </motion.main>
           </AnimatePresence>
@@ -350,7 +280,9 @@ export function Shell() {
         <TrashDialog />
         <UpdateDialog />
         {/* 弹出窗口（docs/标签页与分屏.md §16）：每个 portal 进它自己的窗口，这里不占地方 */}
-        <Popouts onToggleTask={toggleTask} onSaveDocument={saveDocument} onSaveTitle={saveTitle} />
+        <Popouts onSaveDocument={saveDocument} onSaveTitle={saveTitle} />
+        {/* 开着的插件跟着主窗口挂着的副作用（plugins/registry.ts 的 Effects） */}
+        {plugins.map((plugin) => plugin.Effects && <plugin.Effects key={plugin.id} />)}
         {/* 开场：冷启动时盖在最上面，写一个「O」再把它送回侧栏（components/Intro.tsx） */}
         <Intro />
       </div>

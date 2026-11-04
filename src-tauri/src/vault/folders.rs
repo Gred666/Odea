@@ -378,7 +378,7 @@ mod tests {
         fsio::write_atomic(&fsio::abs(root, "笔记/工作.md"), "一篇叫工作的笔记").unwrap();
         assert_eq!(list(root, &layout::Layout::odea()), vec!["工作", "工作/周报", "读书"]);
         // 整个仓库是树根（没开日程）：日记也是一个普通文件夹
-        let plain = layout::Layout { journal: false, notes: String::new(), ..layout::Layout::odea() };
+        let plain = layout::Layout { plugins: Vec::new(), types: Vec::new(), notes: String::new(), ..layout::Layout::odea() };
         assert_eq!(list(root, &plain), vec!["日记", "日记/2026", "笔记", "笔记/工作", "笔记/工作/周报", "笔记/读书"]);
         // 开了日程、树根是整个仓库：日记不在树上
         let journal = layout::Layout { notes: String::new(), ..layout::Layout::odea() };

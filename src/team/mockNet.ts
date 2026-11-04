@@ -1,5 +1,5 @@
 import { type Frame, PIPE } from "@/collab/net";
-import type { DocumentSaveTarget } from "@/data/types";
+import type { DocumentRef } from "@/data/types";
 import type { PresenceDoc, TeamControl, TeamPeer, TeamSelf } from "@/lib/bindings";
 import type { TeamNet } from "./net";
 
@@ -36,15 +36,12 @@ export interface MockTeamHub {
   setOnline(id: string, online: boolean): void;
   /** 这两台互相连不上（各自和别人照常） */
   block(a: string, b: string): void;
-  setBase(id: string, target: DocumentSaveTarget, text: string): void;
+  setBase(id: string, target: DocumentRef, text: string): void;
   /** 这台同步过几轮 git */
   syncs(id: string): number;
 }
 
-const keyOf = (target: DocumentSaveTarget) =>
-  target.kind === "goal"
-    ? `goal:${target.horizon}:${target.periodStart}`
-    : `${target.kind}:${target.id}`;
+const keyOf = (target: DocumentRef) => `${target.type}:${target.key}`;
 
 export function createMockTeamHub(): MockTeamHub {
   const devices = new Map<string, MockDevice>();

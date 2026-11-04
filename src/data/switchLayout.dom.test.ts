@@ -1,22 +1,24 @@
 // @vitest-environment happy-dom
 
 import { useApp } from "@/app/store";
+import { registerPlugin } from "@/plugins/registry";
+import { FileText } from "lucide-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backend } from "./backend";
 import { type NoteSummary, ODEA_LAYOUT, type VaultInfo, type VaultLayout } from "./types";
 
 /*
- * 开关日程 / 归档就地换上（data/store 的 switchLayout），不整页重载：
+ * 开关插件 / 归档就地换上（data/store 的 switchLayout），不整页重载：
  * 停在哪一页不动（那一页没了才回到文件），列表整个重取，选中的那一篇按路径找回来
- * （后端重新认文件时，属性块里没记 id 的笔记 id 会换），日程开关变了的话某一天 / 目标的缓存作废。
+ * （后端重新认文件时，属性块里没记 id 的笔记 id 会换），开关了的插件缓存作废、一直开着的重取。
+ * 这里装一个假的插件（一个导航项「页」，把 Daily 里的文件认成它的文档）测这套机制
  */
 
 const api = {
-  vaultSetJournal: vi.fn(),
+  vaultSetPlugin: vi.fn(),
   vaultSetArchive: vi.fn(),
   noteList: vi.fn(),
   noteGet: vi.fn(),
-  calendarMarks: vi.fn(),
   indexProgress: vi.fn(),
   treeView: vi.fn(),
   folderList: vi.fn(),
@@ -29,6 +31,31 @@ const hosted: { hostedDocs: Record<string, unknown> } = { hostedDocs: {} };
 vi.mock("./backend", () => ({ backend: async () => api as unknown as Backend }));
 vi.mock("@/editor/saveBus", () => ({ flushAllEditors: async () => {} }));
 vi.mock("@/collab/store", () => ({ useCollab: { getState: () => hosted } }));
+
+const PAGES = "test.pages";
+const reset = vi.fn();
+const reindexed = vi.fn(async () => {});
+registerPlugin({
+  id: PAGES,
+  name: "测试用的页",
+  onByDefault: false,
+  defaultDirs: [],
+  documentTypes: [],
+  nav: [
+    {
+      id: "pages",
+      plugin: PAGES,
+      label: "页",
+      icon: FileText,
+      order: 10,
+      keywords: "",
+      motion: { to: {}, origin: "50% 50%" },
+    },
+  ],
+  useDocument: () => null,
+  reset,
+  reindexed,
+});
 
 const { useData } = await import("./store");
 
@@ -50,18 +77,17 @@ const summary = (id: string, relPath: string): NoteSummary => ({
 
 const OPENED: VaultLayout = {
   ...ODEA_LAYOUT,
-  journal: false,
+  plugins: [],
   archive: false,
   notesDir: "",
   hiddenDirs: [],
 };
+const PAGES_ON: VaultLayout = { ...OPENED, plugins: [PAGES], hiddenDirs: ["Daily"] };
 const info = (layout: VaultLayout): VaultInfo => ({
   root: "D:/库",
   notes: 2,
   archived: 0,
-  days: 0,
-  goals: 0,
-  tasks: 0,
+  docs: 0,
   layout,
   team: false,
 });
@@ -70,13 +96,14 @@ const reload = vi.fn();
 
 beforeEach(() => {
   for (const fn of Object.values(api)) fn.mockReset();
+  reset.mockClear();
+  reindexed.mockClear();
   hosted.hostedDocs = {};
   reload.mockReset();
   Object.defineProperty(window, "location", {
     configurable: true,
     value: { ...window.location, reload },
   });
-  api.calendarMarks.mockResolvedValue({ written: new Set(), open: new Set() });
   api.indexProgress.mockResolvedValue(null);
   api.folderList.mockResolvedValue(["读书"]);
   api.treeFiles.mockResolvedValue([]);
@@ -88,38 +115,38 @@ afterEach(() => {
 });
 
 describe("switchLayout", () => {
-  it("turns the journal on in place and keeps the open note by its path", async () => {
-    // 一个 Obsidian 库：Daily 里的日记现在还是笔记，正在看「读书/摘抄」
+  it("turns a plugin on in place and keeps the open note by its path", async () => {
+    // 一个 Obsidian 库：Daily 里的文件现在还是笔记，正在看「读书/摘抄」
     useData.setState({
       layout: OPENED,
       notes: [summary("old-a", "Daily/2026-10-27.md"), summary("old-b", "读书/摘抄.md")],
       archived: [],
       bodies: { "old-b": "摘抄的正文" },
-      dayDocs: [],
-      goals: {},
     });
     useApp.setState({ workspace: "notes", selectedNoteId: "old-b" });
 
-    const journalOn = { ...OPENED, journal: true, daysDir: "Daily", hiddenDirs: ["Daily"] };
-    api.vaultSetJournal.mockResolvedValue(info(journalOn));
-    // 重新认过以后日记不再是笔记，「摘抄」没在属性块里记 id，换了一个
+    api.vaultSetPlugin.mockResolvedValue(info(PAGES_ON));
+    // 重新认过以后 Daily 里的不再是笔记，「摘抄」没在属性块里记 id，换了一个
     api.noteList.mockImplementation(async (archived: boolean) =>
       archived ? [] : [summary("new-b", "读书/摘抄.md")],
     );
     api.noteGet.mockResolvedValue({ ...summary("new-b", "读书/摘抄.md"), contentMd: "摘抄的正文" });
 
-    await useData.getState().setJournal(true);
+    await useData.getState().setPlugin(PAGES, true);
 
     expect(reload).not.toHaveBeenCalled();
-    expect(api.vaultSetJournal).toHaveBeenCalledWith(true);
-    // 没跳到今日TODO：还在文件，还是那一篇（新 id），正文已经取回来，不先闪「载入中…」
+    expect(api.vaultSetPlugin).toHaveBeenCalledWith(PAGES, true);
+    // 没跳到插件的页：还在文件，还是那一篇（新 id），正文已经取回来，不先闪「载入中…」
     expect(useApp.getState().workspace).toBe("notes");
     expect(useApp.getState().selectedNoteId).toBe("new-b");
     expect(useData.getState().bodies["new-b"]).toBe("摘抄的正文");
-    expect(useData.getState().layout.journal).toBe(true);
+    expect(useData.getState().layout.plugins).toEqual([PAGES]);
     expect(useData.getState().notes.map((note) => note.id)).toEqual(["new-b"]);
     expect(useData.getState().folders).toEqual(["读书"]);
     expect(useData.getState().error).toBeNull();
+    // 刚开的插件缓存作废（它挂上来的副作用会去取）
+    expect(reset).toHaveBeenCalledOnce();
+    expect(reindexed).not.toHaveBeenCalled();
   });
 
   it("finds the open tabs again by their paths (docs/标签页与分屏.md §6)", async () => {
@@ -132,8 +159,6 @@ describe("switchLayout", () => {
       ],
       archived: [],
       bodies: { "old-b": "摘抄的正文", "old-c": "书单" },
-      dayDocs: [],
-      goals: {},
     });
     const tab = (id: string, noteId: string) => ({ id, noteId, back: [], forward: [] });
     useApp.setState({
@@ -149,63 +174,83 @@ describe("switchLayout", () => {
       activePane: "p1",
       selectedNoteId: "old-c",
     });
-    const journalOn = { ...OPENED, journal: true, daysDir: "Daily", hiddenDirs: ["Daily"] };
-    api.vaultSetJournal.mockResolvedValue(info(journalOn));
+    api.vaultSetPlugin.mockResolvedValue(info(PAGES_ON));
     api.noteList.mockImplementation(async (archived: boolean) =>
       archived ? [] : [summary("new-b", "读书/摘抄.md"), summary("new-c", "读书/书单.md")],
     );
     api.noteGet.mockResolvedValue({ ...summary("new-c", "读书/书单.md"), contentMd: "书单" });
 
-    await useData.getState().setJournal(true);
+    await useData.getState().setPlugin(PAGES, true);
 
-    // 日记不再是笔记：它的标签关掉；另外两个换成新 id，当前的还是「书单」
+    // Daily 里那篇不再是笔记：它的标签关掉；另外两个换成新 id，当前的还是「书单」
     const [pane] = useApp.getState().notePanes;
     expect(pane!.tabs.map((tab) => tab.noteId)).toEqual(["new-b", "new-c"]);
     expect(pane!.activeTab).toBe("t3");
     expect(useApp.getState().selectedNoteId).toBe("new-c");
   });
 
-  it("leaves the journal pages and drops their caches when the journal is turned off", async () => {
+  it("leaves the plugin's page and drops its caches when it is turned off", async () => {
     useData.setState({
-      layout: ODEA_LAYOUT,
+      layout: { ...ODEA_LAYOUT, plugins: [PAGES] },
       notes: [summary("n", "笔记/一篇.md")],
       archived: [],
       bodies: { n: "正文" },
-      dayDocs: [
-        {
-          date: "2026-10-28",
-          title: "",
-          tasks: [],
-          noteMd: "今天",
-          updatedAt: 1,
-          carriedFrom: null,
-          relPath: "日记/2026/2026-10-28.md",
-        },
-      ],
     });
-    useApp.setState({ workspace: "today", selectedNoteId: "n" });
-    api.vaultSetJournal.mockResolvedValue(info({ ...ODEA_LAYOUT, journal: false }));
+    useApp.setState({ workspace: "pages", selectedNoteId: "n" });
+    api.vaultSetPlugin.mockResolvedValue(info(ODEA_LAYOUT));
     api.noteList.mockImplementation(async (archived: boolean) =>
-      archived ? [] : [summary("n", "笔记/一篇.md"), summary("d", "日记/2026/2026-10-28.md")],
+      archived ? [] : [summary("n", "笔记/一篇.md"), summary("d", "Daily/2026-10-28.md")],
     );
 
-    await useData.getState().setJournal(false);
+    await useData.getState().setPlugin(PAGES, false);
 
     expect(reload).not.toHaveBeenCalled();
-    // 今日TODO 没了：回到文件；那一篇 id 没变，不用重取正文
+    // 插件的页没了：回到文件；那一篇 id 没变，不用重取正文
     expect(useApp.getState().workspace).toBe("notes");
     expect(useApp.getState().selectedNoteId).toBe("n");
     expect(api.noteGet).not.toHaveBeenCalled();
-    expect(useData.getState().dayDocs).toEqual([]);
+    expect(reset).toHaveBeenCalledOnce();
+    // 关掉以后它的文档就是普通笔记
     expect(useData.getState().notes.map((note) => note.id)).toEqual(["n", "d"]);
+  });
+
+  it("refetches what a plugin that stays on has cached when only the archive changes", async () => {
+    useData.setState({
+      layout: { ...ODEA_LAYOUT, plugins: [PAGES] },
+      notes: [],
+      archived: [],
+      bodies: {},
+    });
+    useApp.setState({ workspace: "pages" });
+    api.vaultSetArchive.mockResolvedValue(
+      info({ ...ODEA_LAYOUT, plugins: [PAGES], archive: false, hiddenDirs: [] }),
+    );
+    api.noteList.mockResolvedValue([]);
+
+    await useData.getState().setArchive(false);
+
+    expect(useApp.getState().workspace).toBe("pages");
+    expect(reset).not.toHaveBeenCalled();
+    expect(reindexed).toHaveBeenCalledOnce();
+  });
+
+  it("stays on the extensions page", async () => {
+    useData.setState({ layout: OPENED, notes: [], archived: [], bodies: {} });
+    useApp.setState({ workspace: "extensions" });
+    api.vaultSetPlugin.mockResolvedValue(info(PAGES_ON));
+    api.noteList.mockResolvedValue([]);
+
+    await useData.getState().setPlugin(PAGES, true);
+
+    expect(useApp.getState().workspace).toBe("extensions");
   });
 
   it("still reloads the window while hosting a collaboration (sessions know notes by id)", async () => {
     useData.setState({ layout: OPENED, notes: [], archived: [], bodies: {} });
     hosted.hostedDocs = { n: {} };
-    api.vaultSetJournal.mockResolvedValue(info({ ...OPENED, journal: true }));
+    api.vaultSetPlugin.mockResolvedValue(info(PAGES_ON));
 
-    await useData.getState().setJournal(true);
+    await useData.getState().setPlugin(PAGES, true);
 
     expect(reload).toHaveBeenCalledOnce();
     expect(api.noteList).not.toHaveBeenCalled();

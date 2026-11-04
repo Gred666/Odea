@@ -109,7 +109,7 @@ describe("带字的元素不缩放", () => {
     "components/UndoToast.tsx",
     "components/ErrorToast.tsx",
     "components/ListColumn.tsx",
-    "views/CalendarView.tsx",
+    "plugins/journal/CalendarView.tsx",
   ]) {
     it(`${path} never animates scale`, () => {
       expect(src(path)).not.toMatch(/scale:\s*0?\.\d/);

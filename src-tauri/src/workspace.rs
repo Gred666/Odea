@@ -21,7 +21,7 @@ use tauri_specta::Event;
 use crate::boot::{self, SavedVault};
 use crate::commands::{self, CollabLink, Indexing};
 use crate::error::{AppError, Result};
-use crate::domain::model::JournalVault;
+use crate::domain::model::PluginVault;
 use crate::state::{AppState, Caller, Workspace};
 use crate::sync::engine::SyncHub;
 use crate::sync::repo::{Net, SyncRepo};
@@ -926,19 +926,21 @@ pub async fn launcher_show<R: Runtime>(app: AppHandle<R>) -> Result<()> {
     show_launcher(&app)
 }
 
-/* ---------------- 日程切换器（docs/协同编辑.md §22.6） ----------------
+/* ---------------- 跳到别的仓库的同一页（日程切换器，docs/协同编辑.md §22.6） ----------------
 团队仓库的日程是团队的，个人的日程在个人仓库：今日TODO、目标、日历那一行日期后面能在这台电脑上
-开着日程的几个仓库之间跳。一个窗口一个仓库，跳 = 那个仓库的窗口提到前面、停在同一页同一天；
-它摆在当前窗口的位置和大小上，看着就像同一个窗口里换了内容 */
+开着日程的几个仓库之间跳。一个窗口一个仓库，跳 = 那个仓库的窗口提到前面、停在同一页（同一天）；
+它摆在当前窗口的位置和大小上，看着就像同一个窗口里换了内容。
+这里不认识日程：哪些仓库开着某个插件（plugin_vaults）、跳过去停在哪一页（导航项的 id）、
+带一个那一页自己认的参数（日程是日历选中的那一天）—— 都是插件说了算（src/plugins/journal） */
 
-/// 跳过去之后那个窗口停在哪一页（前端收到 JournalGoto 再翻过去）
+/// 跳过去之后那个窗口停在哪一页（前端收到 VaultGoto 再翻过去）
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
 #[serde(rename_all = "camelCase")]
-pub struct JournalGoto {
-    /// `today` / `goal` / `calendar`
+pub struct VaultGoto {
+    /// 导航项的 id：日程的是 `today` / `goal` / `calendar`
     pub page: String,
-    /// 日历选中的那一天（YYYY-MM-DD）
-    pub date: String,
+    /// 那一页自己认的参数：日程是日历选中的那一天（YYYY-MM-DD）
+    pub arg: String,
 }
 
 /// 窗口的位置和大小
@@ -952,7 +954,7 @@ pub struct Place {
 /// 刚打开、前端还没起来的窗口：起来以后（ready）摆到这里、翻到这一页
 pub struct Jump {
     place: Option<Place>,
-    goto: JournalGoto,
+    goto: VaultGoto,
 }
 
 fn place_of<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Option<Place> {
@@ -973,11 +975,11 @@ fn apply_place<R: Runtime>(window: &tauri::WebviewWindow<R>, place: Place) {
     let _ = window.set_position(tauri::Position::Physical(place.position));
 }
 
-/// lib.rs 的 ready 在显示窗口之前调：日程切换器打开的窗口先摆好位置。摆了返回 true
+/// lib.rs 的 ready 在显示窗口之前调：跳过去时打开的窗口先摆好位置。摆了返回 true
 pub fn place_pending<R: Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
     let state = window.state::<AppState>();
     let place = state
-        .journal_jumps
+        .goto_jumps
         .lock()
         .ok()
         .and_then(|jumps| jumps.get(window.label()).and_then(|jump| jump.place));
@@ -987,10 +989,10 @@ pub fn place_pending<R: Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
     place.is_some()
 }
 
-/// 窗口起来了：日程切换器在等它的话，翻到那一页
+/// 窗口起来了：有人在等它翻到某一页（日程切换器）的话，翻过去
 fn deliver_jump<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let state = app.state::<AppState>();
-    let jump = state.journal_jumps.lock().ok().and_then(|mut jumps| jumps.remove(label));
+    let jump = state.goto_jumps.lock().ok().and_then(|mut jumps| jumps.remove(label));
     if let Some(jump) = jump {
         if let Err(error) = jump.goto.emit_to(app, label) {
             eprintln!("通知前端失败: {error}");
@@ -998,10 +1000,10 @@ fn deliver_jump<R: Runtime>(app: &AppHandle<R>, label: &str) {
     }
 }
 
-/// 这台电脑上开着日程的仓库：个人的在前，再按名字
+/// 这台电脑上开着这个插件（`odea.journal` ……）的仓库：个人的在前，再按名字
 #[tauri::command]
 #[specta::specta]
-pub async fn journal_vaults(caller: Caller, state: State<'_, AppState>) -> Result<Vec<JournalVault>> {
+pub async fn plugin_vaults(caller: Caller, state: State<'_, AppState>, plugin: String) -> Result<Vec<PluginVault>> {
     let current = caller.workspace.map(|workspace| workspace.root());
     // 开着窗口的仓库也算（ODEA_VAULT 打开的、刚打开还没记进列表的）
     let open: Vec<PathBuf> = state.all_workspaces().iter().map(|workspace| workspace.root()).collect();
@@ -1017,10 +1019,10 @@ pub async fn journal_vaults(caller: Caller, state: State<'_, AppState>) -> Resul
                 paths.push(root);
             }
         }
-        let mut vaults: Vec<JournalVault> = paths
+        let mut vaults: Vec<PluginVault> = paths
             .into_iter()
-            .filter(|path| path.is_dir() && layout::Layout::load(path).journal)
-            .map(|path| JournalVault {
+            .filter(|path| path.is_dir() && layout::Layout::load(path).has_plugin(&plugin))
+            .map(|path| PluginVault {
                 name: path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
@@ -1036,22 +1038,23 @@ pub async fn journal_vaults(caller: Caller, state: State<'_, AppState>) -> Resul
     .await
 }
 
-/// 跳到另一个仓库的日程：它的窗口提到前面（没开着就打开），摆在当前窗口的位置和大小上，停在同一页
+/// 跳到另一个仓库的某一页：它的窗口提到前面（没开着就打开），摆在当前窗口的位置和大小上，
+/// 停在 page 那一页（带着 arg）
 #[tauri::command]
 #[specta::specta]
-pub async fn journal_switch<R: Runtime>(
+pub async fn vault_goto<R: Runtime>(
     app: AppHandle<R>,
     window: tauri::WebviewWindow<R>,
     path: String,
     page: String,
-    date: String,
+    arg: String,
 ) -> Result<()> {
     let root = PathBuf::from(&path);
     if !root.is_dir() {
         return Err(AppError::Invalid("找不到这个仓库的文件夹了（移动硬盘没插、被改名了）".into()));
     }
     let place = place_of(&window);
-    let goto = JournalGoto { page, date };
+    let goto = VaultGoto { page, arg };
     let handle = app.clone();
     let (label, existed) = blocking(move || {
         open_vault(&handle, &root, Open { seed: false, remember: true, quiet: true, logical: false })
@@ -1064,7 +1067,7 @@ pub async fn journal_switch<R: Runtime>(
         if let Err(error) = goto.emit_to(&app, label.as_str()) {
             eprintln!("通知前端失败: {error}");
         }
-    } else if let Ok(mut jumps) = app.state::<AppState>().journal_jumps.lock() {
+    } else if let Ok(mut jumps) = app.state::<AppState>().goto_jumps.lock() {
         jumps.insert(label, Jump { place, goto });
     }
     Ok(())

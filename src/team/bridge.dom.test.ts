@@ -4,7 +4,7 @@ import { type MockNet, createMockNet } from "@/collab/mockNet";
 import type { CollabScheduler } from "@/collab/session";
 import { handleControl, resetCollabForTest, useCollab } from "@/collab/store";
 import { useData } from "@/data/store";
-import type { NoteSummary } from "@/data/types";
+import { NOTE, type NoteSummary, noteRef } from "@/data/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TeamController } from "./controller";
 import { createMockTeamHub } from "./mockNet";
@@ -47,9 +47,9 @@ beforeEach(() => {
     externalRevisions: {},
     loadBody: vi.fn(async (id: string) => useData.getState().bodies[id]),
     saveDocument: vi.fn(async (target, text) => {
-      if (target.kind !== "note") return;
+      if (target.type !== NOTE) return;
       saved.push(text);
-      useData.setState((state) => ({ bodies: { ...state.bodies, [target.id]: text } }));
+      useData.setState((state) => ({ bodies: { ...state.bodies, [target.key]: text } }));
     }),
     saveTitle: vi.fn(async () => {}),
   });
@@ -84,12 +84,12 @@ describe("一份文档两条链路", () => {
     );
     void zhang.net.openPipe((frame) => host.receive(frame));
     void zhang.net.onControl((control) => host.control(control));
-    host.view({ doc: DOC, target: { kind: "note", id: "n1" } });
+    host.view({ doc: DOC, target: noteRef("n1") });
 
     // 这个窗口：团队里做客
     const mine = hub.device("b2", "李四");
     await initTeam(mine.net);
-    setTeamView({ doc: DOC, target: { kind: "note", id: "n1" } });
+    setTeamView({ doc: DOC, target: noteRef("n1") });
     await until("加入了张三的会话", () => useTeam.getState().sessions[DOC]?.remote === true);
     const teamSession = useTeam.getState().sessions[DOC]!.session;
 

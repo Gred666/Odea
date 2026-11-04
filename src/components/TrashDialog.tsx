@@ -2,12 +2,12 @@ import { openDocument } from "@/app/navigate";
 import { useApp } from "@/app/store";
 import { type GuestCopy, dropGuestCopy, listGuestCopies } from "@/collab/keep";
 import { backend } from "@/data/backend";
-import { conflictOriginalContent } from "@/data/conflicts";
 import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, messageOf, useData } from "@/data/store";
-import type { DocumentSaveTarget, TrashedNote } from "@/data/types";
+import { type DocumentRef, NOTE, type TrashedNote, noteRef } from "@/data/types";
 import { formatRelativeTime } from "@/lib/date";
 import { popoverCard, tween } from "@/lib/motion";
+import { documentType } from "@/plugins/registry";
 import { LoaderCircle, Trash2, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
@@ -36,12 +36,13 @@ interface Loaded {
 }
 
 /** 团队仓库里的一篇：这个仓库里它现在的正文（取不到是 undefined） */
-async function currentBody(target: DocumentSaveTarget): Promise<string | undefined> {
-  const data = useData.getState();
-  if (target.kind === "note") return data.loadBody(target.id);
-  if (target.kind === "day") await data.loadDay(target.id);
-  if (target.kind === "goal") await data.loadGoal(target.horizon, target.periodStart);
-  return conflictOriginalContent(target, useData.getState());
+async function currentBody(target: DocumentRef): Promise<string | undefined> {
+  if (target.type === NOTE) return useData.getState().loadBody(target.key);
+  // 插件的一篇（某一天、目标）：在插件的缓存里，按需取
+  const type = documentType(target.type);
+  if (!type) return undefined;
+  await type.load(target.key);
+  return type.body(target.key);
 }
 
 /** 这个窗口该列的几份：邀请做客的（不属于哪个仓库）和这个仓库的。已经和仓库里一样了的删掉 */
@@ -53,8 +54,8 @@ async function copiesHere(): Promise<GuestCopy[]> {
   const kept: GuestCopy[] = [];
   for (const copy of mine) {
     if (copy.target && copy.vault === vault) {
-      // Rust 的 DocTarget 和 DocumentSaveTarget 同形，只是周期写成了 string（keep.ts 存进去的就是后者）
-      const target = copy.target as DocumentSaveTarget;
+      // Rust 的 DocRef 和 DocumentRef 同形（0.7.0 及以前存的 `{ kind, id }`，Rust 读的时候已经认成了这个）
+      const target = copy.target as DocumentRef;
       const body = await currentBody(target).catch(() => undefined);
       if (body === copy.text) {
         await dropGuestCopy(copy.key).catch(() => {});
@@ -191,7 +192,7 @@ function TrashBody({ onDone }: { onDone: () => void }) {
   );
 
   const open = (id: string) => {
-    openDocument({ kind: "note", id });
+    openDocument(noteRef(id));
     onDone();
   };
 

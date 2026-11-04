@@ -1,29 +1,24 @@
 import { events, type Result as IpcResult, commands } from "@/lib/bindings";
 import { isTauri, thisWindow } from "@/lib/tauri";
+import { installedPlugins } from "@/plugins/registry";
 import type {
   AppUpgrade,
   Attachment,
   Backlink,
-  CalendarMarks,
   ChangeRootMode,
-  DayDoc,
   DocHistory,
-  DocumentSaveTarget,
+  DocumentRef,
   FindOptions,
   FindResult,
   FolderDeletion,
-  Goal,
-  GoalHorizon,
   GuideName,
   GuideUpdate,
   ImportReport,
   IndexProgress,
-  JournalDoc,
-  JournalPage,
-  JournalVault,
   LinkRewrite,
   Note,
   NoteSummary,
+  PluginVault,
   Relink,
   SyncAccount,
   SyncDeviceCode,
@@ -32,13 +27,13 @@ import type {
   SyncProxy,
   SyncRemoteRepo,
   SyncStatus,
-  Task,
   TeamInfo,
   TeamInvite,
   TextSearch,
   TrashedNote,
   TreeFile,
   TreeNode,
+  TypedDoc,
   UpdateInfo,
   VaultChange,
   VaultInfo,
@@ -81,7 +76,7 @@ export interface Backend {
   /** 撤销 noteRelink：改完之后又被改过的那篇不动。返回换回了几篇 */
   noteRelinkUndo(rewrites: LinkRewrite[]): Promise<number>;
   /** 一篇文档的历史版本（同步用的 git 仓库里每次改过它的提交），新的在前 */
-  docHistory(target: DocumentSaveTarget): Promise<DocHistory>;
+  docHistory(target: DocumentRef): Promise<DocHistory>;
   /** 某一版的正文 */
   docVersionText(blob: string): Promise<string>;
   /** 在文件夹里新建一篇空笔记（folder 相对「笔记」，空串是「笔记」本身），返回新 id */
@@ -127,38 +122,17 @@ export interface Backend {
   /** 导出成真实文件夹：弹选位置的对话框、拷完在文件管理器里打开。取消了返回 null */
   treeExport(): Promise<string | null>;
   /**
-   * 搜正文：大小写不敏感的子串，笔记和日记、目标各自最多 limit 条；archivedOnly 只搜归档里的笔记
+   * 搜正文：大小写不敏感的子串，笔记和插件的文档（日记、目标）各自最多 limit 条；archivedOnly 只搜归档里的笔记
    * （归档的搜索框）。被同一处后来的一次顶掉的会返回空结果，调用方只认最后一次的
    */
   searchText(query: string, limit: number, archivedOnly: boolean): Promise<TextSearch>;
   /**
-   * 全局搜索（Ctrl+Shift+F）：笔记（含归档）、日记、目标的正文里每一处命中，可以区分大小写、全词匹配、
+   * 全局搜索（Ctrl+Shift+F）：笔记（含归档）、插件的文档的正文里每一处命中，可以区分大小写、全词匹配、
    * 用正则（含义同编辑器里的查找面板）。正则写错了放在结果的 error 里。被后来的一次顶掉的会返回空结果
    */
   findInVault(query: string, options: FindOptions): Promise<FindResult>;
-  taskToggle(id: string): Promise<Task>;
-  /** 某个周期的目标；没写过的周期返回空文档（id 为空） */
-  goalGet(horizon: GoalHorizon, periodStart: string): Promise<Goal>;
-  /** base 同 noteSave */
-  goalSave(
-    horizon: GoalHorizon,
-    periodStart: string,
-    contentMd: string,
-    base: string | null,
-  ): Promise<Goal>;
-  /** carryOver 只在请求「今天」时传 true：今天还没写过就延续之前最近的一天 */
-  calendarDay(date: string, carryOver: boolean): Promise<DayDoc>;
-  /** base 同 noteSave */
-  calendarDaySave(
-    date: string,
-    title: string,
-    noteMd: string,
-    base: string | null,
-  ): Promise<DayDoc>;
-  /** 月网格上的记号：写过记录 / 做过事的日子，和还有待办的日子 */
-  calendarMarks(from: string, to: string): Promise<CalendarMarks>;
-  /** 所有写过的某一天、某个周期的目标（不带正文，命令面板按标题搜它们），最近改过的在前 */
-  journalList(): Promise<JournalDoc[]>;
+  /** 所有写过东西的插件文档（某一天、某个周期的目标……，不带正文，命令面板按标题搜它们），最近改过的在前 */
+  docList(): Promise<TypedDoc[]>;
   /** 用户改过、而这个版本带着新版的使用指南（在那一篇上问换不换） */
   guidePending(): Promise<GuideUpdate[]>;
   /** 用户看过新版了（换上了，或者留着自己的）：到下一次升级前不再问 */
@@ -166,14 +140,14 @@ export interface Backend {
   /** 命令面板「使用指南」：那一篇的 id，删掉了就照这个版本重新放一篇 */
   guideOpen(name: GuideName): Promise<string>;
   vaultInfo(): Promise<VaultInfo>;
-  /** 开 / 关日程：改仓库标记、每个文件按新的摆法重新认一遍（文件不动）。之后整页重载 */
-  vaultSetJournal(on: boolean): Promise<VaultInfo>;
-  /** 开 / 关归档（和日程分开）：改仓库标记、重新认一遍文件。之后整页重载 */
+  /** 开 / 关一个插件（日程是 odea.journal）：改仓库标记、每个文件按新的摆法重新认一遍（文件不动） */
+  vaultSetPlugin(plugin: string, on: boolean): Promise<VaultInfo>;
+  /** 开 / 关归档（和日程分开）：改仓库标记、重新认一遍文件 */
   vaultSetArchive(on: boolean): Promise<VaultInfo>;
-  /** 别的设备开关了日程、转成了逻辑目录（VaultChange.layout）：按磁盘上的仓库标记重新摆 */
+  /** 别的设备开关了插件、转成了逻辑目录（VaultChange.layout）：按磁盘上的仓库标记重新摆 */
   vaultRelayout(): Promise<VaultInfo>;
   /** 在系统的文件管理器里定位这篇文档的文件 */
-  vaultReveal(target: DocumentSaveTarget): Promise<void>;
+  vaultReveal(target: DocumentRef): Promise<void>;
   /** 打开整个笔记文件夹 */
   vaultOpenFolder(): Promise<void>;
   /**
@@ -184,9 +158,9 @@ export interface Backend {
   /** 弹启动器（docs/仓库与启动器.md §3）：打开别的仓库、新建、加入协同编辑 */
   showLauncher(): Promise<void>;
   /** 粘贴进来的文件存进「附件」文件夹（内容是 base64），返回从这篇文档引用它的路径 */
-  vaultAttach(target: DocumentSaveTarget, name: string, dataBase64: string): Promise<Attachment>;
+  vaultAttach(target: DocumentRef, name: string, dataBase64: string): Promise<Attachment>;
   /** 拖进窗口的文件（桌面端拿到的是路径）存进「附件」文件夹 */
-  vaultAttachPath(target: DocumentSaveTarget, path: string): Promise<Attachment>;
+  vaultAttachPath(target: DocumentRef, path: string): Promise<Attachment>;
   /** 订阅仓库里别处发生的变化，返回取消订阅的函数 */
   onVaultChanged(listener: (change: VaultChange) => void): Promise<() => void>;
   /** 正在后台读文件进索引的话读到哪了，没在读是 null（先订阅 onIndexProgress 再问） */
@@ -232,13 +206,13 @@ export interface Backend {
   teamRemove(login: string): Promise<void>;
   /** 点开的团队仓库链接（odea://vault/）交给启动器：在那里拉一份 */
   openVaultLink(link: string): Promise<void>;
-  /* ---- 日程切换器（§22.6） ---- */
-  /** 这台电脑上开着日程的仓库：个人的在前 */
-  journalVaults(): Promise<JournalVault[]>;
-  /** 跳到那个仓库的日程：它的窗口摆在这个窗口的位置上、停在同一页同一天 */
-  journalSwitch(path: string, page: JournalPage, date: string): Promise<void>;
-  /** 订阅「跳过来了，翻到这一页」（日程切换器从别的窗口跳过来时） */
-  onJournalGoto(listener: (page: JournalPage, date: string) => void): Promise<() => void>;
+  /* ---- 跳到别的仓库的同一页（日程切换器，§22.6） ---- */
+  /** 这台电脑上开着这个插件的仓库：个人的在前 */
+  pluginVaults(plugin: string): Promise<PluginVault[]>;
+  /** 跳到那个仓库的 page 那一页（带着 arg）：它的窗口摆在这个窗口的位置上 */
+  vaultGoto(path: string, page: string, arg: string): Promise<void>;
+  /** 订阅「跳过来了，翻到这一页」（从别的窗口跳过来时） */
+  onVaultGoto(listener: (page: string, arg: string) => void): Promise<() => void>;
   /** 下好了、等着装的新版本；没有为 null */
   updateStatus(): Promise<UpdateInfo | null>;
   /** 现在就查一次；有新版的话下好再返回，已经是最新的返回 null */
@@ -323,27 +297,14 @@ const tauriBackend: Backend = {
     unwrap(commands.searchText(query, limit, archivedOnly)) as Promise<TextSearch>,
   findInVault: (query, options) =>
     unwrap(commands.findInVault(query, options)) as Promise<FindResult>,
-  taskToggle: (id) => unwrap(commands.taskToggle(id)) as Promise<Task>,
-  goalGet: (horizon, periodStart) =>
-    unwrap(commands.goalGet(horizon, periodStart)) as Promise<Goal>,
-  goalSave: (horizon, periodStart, contentMd, base) =>
-    unwrap(commands.goalSave(horizon, periodStart, contentMd, base)) as Promise<Goal>,
-  calendarDay: (date, carryOver) =>
-    unwrap(commands.calendarDay(date, carryOver)) as Promise<DayDoc>,
-  calendarDaySave: (date, title, noteMd, base) =>
-    unwrap(commands.calendarDaySave(date, title, noteMd, base)) as Promise<DayDoc>,
-  calendarMarks: async (from, to) => {
-    const marks = await unwrap(commands.calendarMarks(from, to));
-    return { written: new Set(marks.written), open: new Set(marks.open) };
-  },
-  journalList: () => unwrap(commands.journalList()) as Promise<JournalDoc[]>,
+  docList: () => unwrap(commands.docList()),
   guidePending: () => unwrap(commands.guidePending()),
   guideSettle: async (id) => {
     await unwrap(commands.guideSettle(id));
   },
   guideOpen: (name) => unwrap(commands.guideOpen(name)),
   vaultInfo: () => unwrap(commands.vaultInfo()),
-  vaultSetJournal: (on) => unwrap(commands.vaultSetJournal(on)),
+  vaultSetPlugin: (plugin, on) => unwrap(commands.vaultSetPlugin(plugin, on)),
   vaultSetArchive: (on) => unwrap(commands.vaultSetArchive(on)),
   vaultRelayout: () => unwrap(commands.vaultRelayout()),
   vaultReveal: async (target) => {
@@ -395,14 +356,14 @@ const tauriBackend: Backend = {
   openVaultLink: async (link) => {
     await unwrap(commands.launcherOpenLink(link));
   },
-  journalVaults: () => unwrap(commands.journalVaults()),
-  journalSwitch: async (path, page, date) => {
-    await unwrap(commands.journalSwitch(path, page, date));
+  pluginVaults: (plugin) => unwrap(commands.pluginVaults(plugin)),
+  vaultGoto: async (path, page, arg) => {
+    await unwrap(commands.vaultGoto(path, page, arg));
   },
-  onJournalGoto: (listener) =>
+  onVaultGoto: (listener) =>
     events
-      .journalGoto(thisWindow())
-      .listen((event) => listener(event.payload.page as JournalPage, event.payload.date)),
+      .vaultGoto(thisWindow())
+      .listen((event) => listener(event.payload.page, event.payload.arg)),
   updateStatus: () => unwrap(commands.updateStatus()),
   updateCheck: () => unwrap(commands.updateCheck()),
   updateInstall: async () => {
@@ -418,6 +379,8 @@ const tauriBackend: Backend = {
 // 动态引入：打包进桌面版时这段会被 tree-shake 掉
 async function mock(): Promise<Backend> {
   const { mockBackend } = await import("./mock");
+  // 插件在预览里的那一份（plugins/<id>/mock.ts）：它们的文档要进搜索、反链、历史版本
+  await Promise.all(installedPlugins().map((plugin) => plugin.loadMock?.()));
   return mockBackend;
 }
 

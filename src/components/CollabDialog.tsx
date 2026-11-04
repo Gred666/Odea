@@ -23,6 +23,7 @@ import {
   useCollab,
 } from "@/collab/store";
 import { useData } from "@/data/store";
+import { noteRef } from "@/data/types";
 import type { Diagnosis, MemberInfo, Permission, Reach, Scope } from "@/lib/bindings";
 import { cn } from "@/lib/cn";
 import { popoverCard, tween } from "@/lib/motion";
@@ -1364,7 +1365,7 @@ function SaveCopyButton({ id }: { id: number }) {
           if (note) {
             useCollab.getState().setShowShared(false);
             useCollab.getState().closeDialog();
-            openDocument({ kind: "note", id: note });
+            openDocument(noteRef(note));
           }
         } finally {
           setBusy(false);
@@ -1598,7 +1599,7 @@ export function CollabPresence({ docKey }: { docKey: string }) {
       return;
     }
     // 只有一次：回到协作的那篇（主持一篇的、做客开着一篇的），不然打开它
-    if (only.role === "host" && only.noteId) openDocument({ kind: "note", id: only.noteId });
+    if (only.role === "host" && only.noteId) openDocument(noteRef(only.noteId));
     else if (only.role === "guest" && only.current) collab.setShowShared(true, only.id);
     else collab.openSession(only.id);
   };

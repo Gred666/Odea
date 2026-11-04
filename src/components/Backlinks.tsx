@@ -1,11 +1,12 @@
 import { openDocument } from "@/app/navigate";
 import { backend } from "@/data/backend";
 import { useData } from "@/data/store";
-import type { Backlink } from "@/data/types";
+import { type Backlink, NOTE } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { tween } from "@/lib/motion";
 import { sameTitle, splitWikiSegments, wikiDisplayText, wikiTargetTitle } from "@/lib/wikilinks";
-import { CalendarDays, FileText, Link2, Target } from "lucide-react";
+import { documentType } from "@/plugins/registry";
+import { FileText, Link2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
@@ -13,13 +14,11 @@ import { useEffect, useRef, useState } from "react";
    反向链接：别的文档里写了 `[[这篇的标题]]` 的地方，列在正文后面。
 
    在后端算（Rust 的 Vault::backlinks，扫的是索引里所有文档的正文，没打开过的
-   某一天、目标也算）。任何一篇存了（笔记 / 某一天 / 目标在 store 里换了一份），
+   插件文档 —— 某一天、目标 —— 也算）。任何一篇存了（笔记在 store 里换了一份，插件的文档 typedTick 加一），
    半秒后重取一次 —— 刚在别的文档里写下的链接，切回来就能看到。
 
    点标题打开那一篇，点某一行打开并滚到那一行。
    ============================================================ */
-
-const ICONS = { note: FileText, day: CalendarDays, goal: Target } as const;
 
 export function Backlinks({ noteId, title }: { noteId: string; title: string }) {
   const [links, setLinks] = useState<Backlink[] | null>(null);
@@ -27,8 +26,7 @@ export function Backlinks({ noteId, title }: { noteId: string; title: string }) 
   // 任何文档存了都会换掉这几样中的一个：拿它们当「仓库里的正文变了」的信号
   const notes = useData((s) => s.notes);
   const archived = useData((s) => s.archived);
-  const dayDocs = useData((s) => s.dayDocs);
-  const goals = useData((s) => s.goals);
+  const typedTick = useData((s) => s.typedTick);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 那几样只是重取的信号
   useEffect(() => {
@@ -50,7 +48,7 @@ export function Backlinks({ noteId, title }: { noteId: string; title: string }) 
       alive = false;
       clearTimeout(timer);
     };
-  }, [noteId, title, notes, archived, dayDocs, goals]);
+  }, [noteId, title, notes, archived, typedTick]);
 
   // 第一次还没取回来、或者没有别的文档链过来：什么都不画。以前没有时也画一块
   // 「还没有别的文档链接到这里…」，每篇笔记底下都挂着同一段说明，只是噪音
@@ -82,7 +80,9 @@ export function Backlinks({ noteId, title }: { noteId: string; title: string }) 
 }
 
 function BacklinkCard({ link, title }: { link: Backlink; title: string }) {
-  const Icon = ICONS[link.kind];
+  // 笔记是文件，插件的文档用它的类型的图标（某一天是日历，目标是靶心）
+  const Icon =
+    link.target.type === NOTE ? FileText : (documentType(link.target.type)?.icon ?? FileText);
   const open = (line?: number) => openDocument(link.target, line ? { line } : undefined);
 
   return (
@@ -150,8 +150,5 @@ function LineText({ text, title }: { text: string; title: string }) {
 }
 
 function keyOf(link: Backlink): string {
-  const target = link.target;
-  return target.kind === "goal"
-    ? `goal:${target.horizon}:${target.periodStart}`
-    : `${target.kind}:${target.id}`;
+  return `${link.target.type}:${link.target.key}`;
 }

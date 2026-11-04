@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(marker["kind"], "logical");
         assert_eq!(marker["features"]["journal"], true);
         // 日程、摆法照旧
-        assert!(layout::Layout::load(root).journal);
+        assert!(layout::Layout::load(root).has_plugin(crate::plugins::journal::ID));
         assert_eq!(split_account("github:Gred666"), Some(("github", "Gred666")));
         assert_eq!(split_account("Gred666"), None);
     }
