@@ -1,0 +1,20 @@
+{
+  "productName": "odea-cef-shell",
+  "version": "0.0.0",
+  "identifier": "dev.odea.cef-shell",
+  "build": {
+    "devUrl": "http://127.0.0.1:4173",
+    "frontendDist": "../../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"]
+  }
+}

@@ -48,6 +48,27 @@ export async function launch(port) {
   return page;
 }
 
+/**
+ * 接到一个已经开着 DevTools 协议端口的页面上（CEF 试验的外壳、带调试端口的 WebView2，
+ * docs/插件与跨端.md §7.4）：不起 Chrome，关的时候只断开连接。等它起来最多 30 秒
+ */
+export async function attach(port) {
+  let target;
+  for (let i = 0; i < 300 && !target; i++) {
+    try {
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      target = list.find((t) => t.type === "page" && t.url.startsWith("http"));
+    } catch {
+      // 还没起来
+    }
+    if (!target) await sleep(100);
+  }
+  if (!target) throw new Error(`127.0.0.1:${port} 上没有页面`);
+  const page = await connect(target.webSocketDebuggerUrl);
+  page.close = async () => page.ws.close();
+  return page;
+}
+
 async function connect(url) {
   const ws = new WebSocket(url);
   await new Promise((resolve, reject) => {

@@ -8,8 +8,15 @@ import type { PopoutOp } from "./bindings";
    这样同一份代码既能在浏览器里快速调 UI，也能跑在桌面壳里。
    ============================================================ */
 
-/** 使用官方检测逻辑；Tauri 2.11 暴露 globalThis.isTauri，不再依赖旧内部字段。 */
-export const isTauri = detectTauri();
+/** 地址上的参数（node 里跑的单测没有 location） */
+const search = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
+
+/**
+ * 使用官方检测逻辑；Tauri 2.11 暴露 globalThis.isTauri，不再依赖旧内部字段。
+ * 地址带 `?mock` 时当成浏览器预览、走演示数据：CEF 试验的外壳（spikes/cef-shell）把同一个前端
+ * 分别放进 WebView2 和 CEF 里对照，外壳里没有 Odea 的后端（docs/插件与跨端.md §7）
+ */
+export const isTauri = detectTauri() && !search.has("mock");
 
 /**
  * 这个窗口。订阅后端事件一律经它（`events.x(thisWindow()).listen`）：一个窗口一个仓库，
@@ -20,9 +27,6 @@ export const isTauri = detectTauri();
 export function thisWindow(): WebviewWindow {
   return getCurrentWebviewWindow();
 }
-
-/** 地址上的参数（node 里跑的单测没有 location） */
-const search = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
 
 /**
  * 这是哪种窗口：启动器的地址带 `?launcher`；协作的访客窗口（不开仓库）带 `?guest`；

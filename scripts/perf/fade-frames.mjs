@@ -10,7 +10,8 @@
 // 要查别的控件，在 SCENES 里加一个：放进去的正文、要截的选择器和鼠标移到哪。
 // 不是鼠标移上去触发的（协作时别人的名字标签），场景可以自己给打开哪一页（page）、
 // 准备（setup）、触发（trigger，页面里跑的 JS），以及截多久（capture）、最终帧再等多久（settle）。
-import { launch, sleep } from "./cdp.mjs";
+// 环境变量 CDP_ATTACH=端口：不起无头 Chrome，接到开着的外壳上（CEF 试验，docs/插件与跨端.md §7.4）
+import { attach, launch, sleep } from "./cdp.mjs";
 
 const URL = process.argv[2] ?? "http://localhost:1420/";
 const SCENES = {
@@ -196,7 +197,9 @@ if (!SCENE) {
   throw new Error(`没有这个场景：${process.argv[3]}（有 ${Object.keys(SCENES).join(" / ")}）`);
 }
 
-const page = await launch(9345);
+const page = process.env.CDP_ATTACH
+  ? await attach(Number(process.env.CDP_ATTACH))
+  : await launch(9345);
 const { send, evaluate } = page;
 try {
   await send("Page.enable");

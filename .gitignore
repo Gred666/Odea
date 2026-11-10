@@ -15,3 +15,7 @@ src-tauri/backups/
 Thumbs.db
 *.log
 .vite/
+
+# CEF 试验（spike/cef）：外壳的编译产物、下载的 CEF 发行包
+spikes/cef-shell/target/
+.cef/

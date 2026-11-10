@@ -1,0 +1,20 @@
+# CEF 试验的外壳（docs/插件与跨端.md §7、§10 P14.4）：同一个前端分别放进 WebView2（wry）和 CEF，
+# 量内存、跑 scripts/perf。Tauri 3 的 Builder 默认是类型擦除的 DynRuntime，一个二进制里两个运行时都带着，
+# 启动时用 ODEA_RUNTIME 选（src/main.rs）。只在 spike/cef 分支上，不进主线
+[package]
+name = "odea-cef-shell"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tauri = { version = "=3.0.0-alpha.6", features = [] }
+tauri-runtime-wry = "=3.0.0-alpha.6"
+tauri-runtime-cef = "=3.0.0-alpha.7"
+
+[build-dependencies]
+tauri-build = { version = "=3.0.0-alpha.4", features = [] }
+
+[profile.release]
+# 量内存用 release；留一点调试信息，崩了能看栈
+debug = 1

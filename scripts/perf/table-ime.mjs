@@ -14,7 +14,9 @@
 // 2. 访客那边的正文从头到尾没出现过拼音字母串（组字时子编辑器不写回正文）
 // 3. 停下以后两边逐字一致，表格还是那张表（行数、列数没乱）
 // 4. 一直在那一格里编辑（没有被打断退回正文），光标在刚打的字后面
-import { launch, sleep } from "./cdp.mjs";
+// 环境变量 CDP_ATTACH=端口：不起无头 Chrome，接到开着的外壳上（CEF 试验，docs/插件与跨端.md §7.4），
+// 地址上带 `mock`，外壳里的前端才走浏览器预览那条路
+import { attach, launch, sleep } from "./cdp.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:1420/";
 const ROUNDS = Number(process.argv[3] ?? 30);
@@ -28,7 +30,8 @@ const WORDS = [
 ];
 const DOC = "# 表格组字\n\n| 名字 | 备注 |\n|---|---|\n| 甲 | 写在这里： |\n| 乙 | 另一格 |\n\n后面一行。\n";
 
-const page = await launch(9347);
+const ATTACH = process.env.CDP_ATTACH;
+const page = ATTACH ? await attach(Number(ATTACH)) : await launch(9347);
 const { send, evaluate } = page;
 let failed = false;
 try {
@@ -39,7 +42,9 @@ try {
     deviceScaleFactor: 1.5,
     mobile: false,
   });
-  await send("Page.navigate", { url: new URL("?lab=collab&latency=20", BASE).href });
+  await send("Page.navigate", {
+    url: new URL(`?lab=collab&latency=20${ATTACH ? "&mock" : ""}`, BASE).href,
+  });
   for (let i = 0; i < 150 && !(await evaluate("!!window.__collabLab")); i++) await sleep(100);
   await sleep(800);
 
