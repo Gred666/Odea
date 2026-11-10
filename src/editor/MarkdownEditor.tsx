@@ -2,6 +2,7 @@ import { collab as collabBinding } from "@/collab/binding";
 import type { CollabSession } from "@/collab/session";
 import type { Attachment, MatchAnchor, OutlineItem } from "@/data/types";
 import { registerEditorCommands } from "@/lib/editorCommands";
+import { registerLiveEditor, touched } from "@/lib/liveDocuments";
 import { usePaneWindow } from "@/lib/paneWindow";
 import { MOD_KEY } from "@/lib/platform";
 import { rememberSpot, spotOf } from "@/lib/viewMemory";
@@ -34,7 +35,7 @@ import {
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { Link2, Plus } from "lucide-react";
 import { AnimatePresence } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { EmojiPicker, type EmojiPickerAnchor } from "./EmojiPicker";
 import { SuggestMenu, type SuggestMenuHandle, type SuggestRow } from "./SuggestMenu";
@@ -46,7 +47,7 @@ import {
   primeIntro,
 } from "./animatedEmoji";
 import { type AttachHooks, attachmentHandlers, watchDesktopFileDrops } from "./attachments";
-import { type CalloutHead, parseCalloutHead } from "./callout";
+import { type CalloutHead, calloutsVersion, onCalloutsChange, parseCalloutHead } from "./callout";
 import { cellEditorExtensions } from "./cellEditor";
 import { codeHighlight } from "./codeHighlight";
 import { type DebouncedSaver, createDebouncedSaver } from "./debouncedSave";
@@ -104,6 +105,7 @@ import {
 } from "./markdownStyleRegistry";
 import { type MarkdownTableModel, parseDelimitedTable, parseMarkdownTable } from "./markdownTable";
 import { MathWidget } from "./math";
+import { createRevisionLog, rebaseEdit, recordRevision, revisionOf } from "./pluginEdits";
 import { revealField, revealIdle, revealRanges, trackEditing } from "./reveal";
 import { registerEditorFlush } from "./saveBus";
 import { createSearchPanel, matchOnLine, queryOfAnchor, scrollToMatch } from "./searchPanel";
@@ -125,13 +127,16 @@ import { tablePasteHandler } from "./tableClipboard";
 import { TableWidget, insertEmptyTable } from "./tableWidget";
 import {
   type DocTemplate,
+  NOTE_PLACEHOLDER,
   type TemplateContext,
   type TemplateMode,
   applyTemplate,
   carriedTasks,
   hasOtherContent,
+  onTemplatesChange,
   templateTrigger,
   templatesFor,
+  templatesRevisionOf,
 } from "./templates";
 import {
   AnimatedEmojiWidget,
@@ -227,8 +232,6 @@ const wikiKey = (title: string) => title.trim().toLowerCase();
 /** 一个都不认识：双链全按「不存在」画（做客的那一篇） */
 const NO_TITLES: ReadonlySet<string> = new Set();
 
-/** 笔记的空白正文里显示的提示（填了模板槽位的文档 —— 某一天、某个周期 —— 用槽位里的 placeholder） */
-const NOTE_PLACEHOLDER = "写点什么…　输入 / 插入标题、待办、表格，[[ 链接到别的笔记";
 /** 最近切走的这么多篇留着。大文档一篇的状态有几 MB，不能无限留 */
 const STATE_CACHE_LIMIT = 12;
 /** 开着的标签那几篇另算（editor/statePins.ts），连它们在内总数到这么多再按最久没用的挤 */
@@ -404,6 +407,8 @@ export function MarkdownEditor({
   const savedSelectionRef = useRef<EditorSelection | null>(null);
   const templateContextRef = useRef(templateContext);
   templateContextRef.current = templateContext;
+  /** 这篇现在有没有能用的模板（下面按 templates 算了填进来）：打字弹模板菜单、`/` 菜单要不要列「模板」看它 */
+  const hasTemplatesRef = useRef(false);
   /** 模板选择器：开着时是触发词那一行的视口坐标（见 TemplatePicker） */
   const [templateMenu, setTemplateMenu] = useState<TemplateMenu | null>(null);
   /** 给按键和 updateListener 同步读的「开着没有」，不用等 React 提交 */
@@ -516,7 +521,8 @@ export function MarkdownEditor({
           };
         },
         write: (measured) => {
-          if (!measured || !templateContextRef.current) return;
+          // 这篇能用的模板一个都没有（笔记、没开带模板的插件）：不弹
+          if (!measured || !templateContextRef.current || !hasTemplatesRef.current) return;
           templateOpenRef.current = true;
           templateSessionRef.current += 1;
           setTemplateMenu({ ...measured, session: templateSessionRef.current });
@@ -626,7 +632,7 @@ export function MarkdownEditor({
     const hasSuggestions = (trigger: SuggestTrigger) =>
       trigger.kind === "wiki"
         ? !!linkTargetsRef.current
-        : slashItems(trigger.query, !!templateContextRef.current).length > 0;
+        : slashItems(trigger.query, hasTemplatesRef.current).length > 0;
     /** 菜单开着时，把方向键 / 回车 / Tab / Esc 转给它；输入法组字时的按键是给候选框的 */
     const forwardToSuggest =
       (action: (menu: SuggestMenuHandle) => boolean) => (view: EditorView) => {
@@ -749,9 +755,18 @@ export function MarkdownEditor({
       ),
     ];
 
+    // 插件（L1）改正文按修订号来（editor/pluginEdits.ts）：这个编辑器里每改一笔都记下来，
+    // 谁改的都算（打字、撤销、另一个窗格转过来的、协作别人的、外部回填的）
+    const revisions = createRevisionLog();
+
     // 这个编辑器实例自己的那一截：闭包里握着这次的保存器和 React 状态。
     // 复用缓存的状态时，换掉的就是这一截（见文件开头的说明）。
     const sessionExtensions: Extension[] = [
+      EditorView.updateListener.of((update) => {
+        if (!update.docChanged) return;
+        recordRevision(revisions, update.changes);
+        if (key) touched(key);
+      }),
       ...templateExtensions,
       // 笔记的空白正文：告诉人 `/` 和 `[[` 能做什么（某一天 / 某个周期的提示在 templateExtensions 里）
       ...(templateContextRef.current ? [] : [placeholder(NOTE_PLACEHOLDER)]),
@@ -935,9 +950,34 @@ export function MarkdownEditor({
     // 它返回的闭包握着 view（同上），停掉后就扔掉
     let stopFileDrops: (() => void) | null = watchDesktopFileDrops(view, () => attachRef.current);
 
+    // 插件（L1）够到这一篇的地方（lib/liveDocuments.ts）：实时正文、修订号、改它的入口。
+    // 插件的改动和打字走同一条路：进撤销历史、转给另一个窗格、经协作发给别人、自动存盘
+    const unregisterLive = key
+      ? registerLiveEditor(key, {
+          text: () => live.view?.state.doc.toString() ?? "",
+          revision: () => revisionOf(revisions),
+          edit(base, changes) {
+            const view = live.view;
+            if (!view) return { ok: false, code: "stale", message: "这篇已经关了" };
+            if (view.state.readOnly) {
+              return { ok: false, code: "readonly", message: "这篇现在只读" };
+            }
+            // 输入法正在组字时改正文会打断它（候选框里的字没了）
+            if (view.composing) {
+              return { ok: false, code: "busy", message: "正在用输入法打字，等一下再改" };
+            }
+            const rebased = rebaseEdit(revisions, base, changes, view.state.doc.length);
+            if (!rebased.ok) return rebased;
+            view.dispatch({ changes: rebased.changes, userEvent: "plugin.edit" });
+            return { ok: true, revision: revisionOf(revisions) };
+          },
+        })
+      : null;
+
     return () => {
       const view = live.view;
       if (!view) return;
+      unregisterLive?.();
       stopFileDrops?.();
       stopFileDrops = null;
       scroller?.removeEventListener("scroll", recordScroll);
@@ -992,6 +1032,9 @@ export function MarkdownEditor({
       effects: readOnlySlot.reconfigure(EditorState.readOnly.of(readOnly)),
     });
   }, [readOnly]);
+
+  // 开关了带提示块的插件（L0，plugins/declared.ts）：空跑一笔事务，两层装饰看到版本变了整篇重画
+  useEffect(() => onCalloutsChange(() => viewRef.current?.dispatch({})), []);
 
   // 笔记新建、改名、删掉了：链到不存在的笔记的双链重新标
   useEffect(() => {
@@ -1069,13 +1112,18 @@ export function MarkdownEditor({
     [closeTemplateMenu],
   );
   const templateScope = templateContext?.scope;
+  // 开关了带模板的插件（L0）：模板换了，重取
+  const templatesRevision = useSyncExternalStore(onTemplatesChange, templatesRevisionOf);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: templatesRevision 变了就是模板换了
   const templates = useMemo(
     () => (templateScope ? templatesFor(templateScope) : []),
-    [templateScope],
+    [templateScope, templatesRevision],
   );
+  hasTemplatesRef.current = templates.length > 0;
 
-  // `/` 菜单、`[[` 菜单里现在列着的项（和按键 pick 时取的是同一份）
-  const withTemplates = !!templateContext;
+  // `/` 菜单、`[[` 菜单里现在列着的项（和按键 pick 时取的是同一份）。
+  // 「模板」那一项只在这篇有模板可用时列出来（笔记要开了带模板的插件才有）
+  const withTemplates = templates.length > 0;
   const suggestItems = useMemo((): SuggestEntry[] => {
     if (!suggest) return [];
     if (suggest.kind === "slash") {
@@ -1566,6 +1614,8 @@ export interface TyporaBlockState {
   probes: number[];
   /** 文档里有 `[TOC]`：标题的文字变了它也得跟着变（见 mapBlockState） */
   toc: boolean;
+  /** 构建时插件登记的提示块是哪一版（callout.ts 的 calloutsVersion）：换了就整篇重建 */
+  callouts: number;
 }
 
 /** 块级构造只可能藏在这些容器里，浅层遍历仅下探它们。 */
@@ -1935,6 +1985,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
     footnotes,
     probes,
     toc,
+    callouts: calloutsVersion(),
   };
 }
 
@@ -2060,8 +2111,8 @@ export const typoraBlockDecorations = StateField.define<TyporaBlockState>({
   // 初次构建（刚打开这篇）没有 changes：替身全都算新出现，照常播入场动画
   create: (state) => buildBlockDecorations(state, null),
   update(value, transaction) {
-    // 收起 / 展开了标题（不只是跟着改动平移）：整篇重建
-    if (!foldsOnlyMoved(transaction)) {
+    // 收起 / 展开了标题（不只是跟着改动平移）、插件登记的提示块换了（开关了插件）：整篇重建
+    if (!foldsOnlyMoved(transaction) || value.callouts !== calloutsVersion()) {
       return buildBlockDecorations(transaction.state, transaction.changes);
     }
     // 折叠与否取决于光标在不在块里，所以选区变化也要重算；
@@ -2980,6 +3031,8 @@ const inlineDecorationsPlugin = (fresh: boolean) =>
     class {
       decorations: DecorationSet;
       atomic: DecorationSet;
+      /** 插件登记的提示块是哪一版（徽章的配色、图标跟着它） */
+      callouts = calloutsVersion();
 
       constructor(view: EditorView) {
         const built = buildInlineDecorations(
@@ -3001,8 +3054,10 @@ const inlineDecorationsPlugin = (fresh: boolean) =>
           update.startState.field(headingFolds, false) !==
             update.state.field(headingFolds, false) ||
           update.startState.facet(imageBaseDir) !== update.state.facet(imageBaseDir) ||
-          update.startState.facet(knownWikiTitles) !== update.state.facet(knownWikiTitles)
+          update.startState.facet(knownWikiTitles) !== update.state.facet(knownWikiTitles) ||
+          this.callouts !== calloutsVersion()
         ) {
+          this.callouts = calloutsVersion();
           // 只动了光标 / 视口时 changes 是空的：这时重建出来的替身不再重放入场动画
           const built = buildInlineDecorations(update.view, update.changes);
           this.decorations = built.decorations;

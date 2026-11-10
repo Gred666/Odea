@@ -6,6 +6,7 @@ import type {
   VaultLayout,
 } from "@/data/types";
 import { NOTE, ODEA_LAYOUT } from "@/data/types";
+import { toISODate } from "@/lib/date";
 import type { LucideIcon } from "lucide-react";
 import type { TargetAndTransition } from "motion/react";
 import type { ComponentType } from "react";
@@ -22,7 +23,10 @@ import type { ComponentType } from "react";
    - templates：带逻辑的模板（日程那几套）
 
    插件关着的时候核心里没有它的一行代码在跑：它的导航项不出现、它的文档类型 Rust 那边不认（文件当笔记）。
-   清单（schemaVersion 2）、L0 声明、L1 沙箱留给 P14.2、P14.3
+
+   P14.2 起还有 L0（纯声明的插件，清单在 extensions/manifest.ts，plugins/declared.ts 把开着的那几个的声明交到这里）：
+   模板（setDeclaredTemplates）、导航顺序（setDeclaredNavOrder）；提示块在 editor/callout.ts，主题直接落在样式上。
+   L1 沙箱留给 P14.3
    ============================================================ */
 
 /** 插件声明的一种文档（贡献点 documentTypes，§5.3、§6.1） */
@@ -128,6 +132,11 @@ export interface Plugin {
   reindexed?(): Promise<void>;
   /** 浏览器预览（data/mock.ts）里它的那一份：搜索、反链、历史版本都要看到它的文档 */
   loadMock?(): Promise<void>;
+  /**
+   * 它的文档填的模板槽位（DocumentModel.templates 的 scope：日程的 day / week / month / year）。
+   * L0 插件的模板可以指定用在这几种上（清单的 templates[].scope），校验清单时认它
+   */
+  templateScopes?: readonly string[];
 }
 
 const plugins: Plugin[] = [];
@@ -157,6 +166,39 @@ export function documentType(type: string): DocumentType | undefined {
 /** 所有插件的导航项，按 order 排 */
 export function pluginNavItems(): NavItem[] {
   return plugins.flatMap((plugin) => plugin.nav).sort((a, b) => a.order - b.order);
+}
+
+/* ---------------- 导航顺序 ---------------- */
+
+/** 核心的导航项：「文件」在最前；归档、扩展页在最后 */
+const CORE_NAV_FIRST = ["notes"];
+const CORE_NAV_LAST = ["archive", "extensions"];
+
+/** 开着的 L0 插件调过的顺序（清单的 navOrder）：排在前面的先出现，没列的照原来的先后跟在后面 */
+let declaredNavOrder: readonly string[] = [];
+
+export function setDeclaredNavOrder(order: readonly string[]): void {
+  declaredNavOrder = order;
+}
+
+/** 窄栏上每一项（不管插件开没开）原来的先后：文件、插件的按 order、归档、扩展页 */
+export function defaultNavIds(): string[] {
+  return [...CORE_NAV_FIRST, ...pluginNavItems().map((item) => item.id), ...CORE_NAV_LAST];
+}
+
+/** 窄栏上的先后（插件调过的）：切换时主内容往哪个方向挪也按它（app/store 的 navOrder） */
+export function navIds(): string[] {
+  const all = defaultNavIds();
+  const first = declaredNavOrder.filter((id) => all.includes(id));
+  return [...first, ...all.filter((id) => !first.includes(id))];
+}
+
+/** 校验 L0 插件的清单时要知道的：有哪些导航项、哪些模板槽位（extensions/manifest.ts 的 ManifestContext） */
+export function manifestContext(): { navIds: string[]; templateScopes: string[] } {
+  return {
+    navIds: defaultNavIds(),
+    templateScopes: [NOTE, ...plugins.flatMap((plugin) => plugin.templateScopes ?? [])],
+  };
 }
 
 export function navItemOf(id: string): NavItem | undefined {
@@ -191,7 +233,8 @@ export function defaultLayout(): VaultLayout {
 
 /* ---------------- 模板（贡献点 templates） ----------------
    L2 的模板带逻辑（按日期现算），由插件交来；编辑器在一行里只写 `/模板` 时按 DocumentModel.templates 的 scope
-   列出来（editor/templates.ts 管触发、插入）。这里只有登记，模板本身不进编辑器分包 */
+   列出来（editor/templates.ts 管触发、插入）。这里只有登记，模板本身不进编辑器分包。
+   L0 的模板是 Markdown 加占位符（plugins/declared.ts 换成 DocTemplate 交来），排在 L2 的后面；笔记的 scope 是 `note` */
 
 /** 插入后光标停在这里。只出现在模板源文里，插入前会去掉 */
 export const CARET = "‸";
@@ -216,6 +259,41 @@ export function registerTemplates(list: readonly DocTemplate[]): void {
   }
 }
 
+/** 笔记的空白正文里显示的提示（笔记的模板槽位用它；某一天、某个周期的用插件自己的） */
+export const NOTE_PLACEHOLDER = "写点什么…　输入 / 插入标题、待办、表格，[[ 链接到别的笔记";
+
+/**
+ * 笔记的模板槽位：开着的 L0 插件里 scope 是 `note` 的模板，在笔记里一行只写 `/模板` 插入。
+ * 一个都没有时编辑器不弹、`/` 菜单里也不列「模板」
+ */
+export function noteTemplateContext(title: string): TemplateContext {
+  const day = toISODate(new Date());
+  return { scope: NOTE, date: day, today: day, label: title, placeholder: NOTE_PLACEHOLDER, title };
+}
+
+/** 开着的 L0 插件的模板（插件开关了整个换掉） */
+let declaredTemplates: readonly DocTemplate[] = [];
+let templatesRevision = 0;
+const templateListeners = new Set<() => void>();
+
+export function setDeclaredTemplates(list: readonly DocTemplate[]): void {
+  declaredTemplates = list;
+  templatesRevision += 1;
+  for (const listener of templateListeners) listener();
+}
+
+/** 模板换过几次：编辑器的模板菜单据此重取（useSyncExternalStore） */
+export function templatesRevisionOf(): number {
+  return templatesRevision;
+}
+
+export function onTemplatesChange(listener: () => void): () => void {
+  templateListeners.add(listener);
+  return () => {
+    templateListeners.delete(listener);
+  };
+}
+
 export function templatesFor(scope: string): DocTemplate[] {
-  return templates.filter((template) => template.scope === scope);
+  return [...templates, ...declaredTemplates].filter((template) => template.scope === scope);
 }

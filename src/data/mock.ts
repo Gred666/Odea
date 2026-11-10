@@ -370,6 +370,8 @@ function matchesQuery(query: string, note: MockNote, folder: string, now: number
 /** 开关过的插件：{ 插件 id: 开着没有 }。没开关过的照插件说的（Odea 的仓库默认开着日程） */
 const PLUGINS_KEY = "odea.mock.plugins";
 const ARCHIVE_KEY = "odea.mock.archive";
+/** 第三方插件（L0）在这个「仓库」里开没开：相当于仓库标记 plugins 里内置开关以外的那几项 */
+const EXTENSIONS_KEY = "odea.mock.extensions";
 
 /* ---------------- 团队仓库 ----------------
    浏览器预览里：邀请过谁就算团队仓库，邀请的人是「等他接受」。
@@ -412,6 +414,15 @@ function pluginSwitches(): Record<string, boolean> {
   }
 }
 
+function extensionSwitches(): Record<string, { enabled: boolean; version: string | null }> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(EXTENSIONS_KEY) ?? "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch {
+    return {};
+  }
+}
+
 function mockLayout() {
   let archive = true;
   try {
@@ -427,7 +438,10 @@ function mockLayout() {
     ...pluginDocs.filter((docs) => plugins.includes(docs.plugin)).flatMap((docs) => docs.dirs),
     ...(archive ? [ODEA_LAYOUT.archiveDir] : []),
   ];
-  return { ...ODEA_LAYOUT, plugins, archive, hiddenDirs };
+  const extensions = Object.entries(extensionSwitches())
+    .filter(([, entry]) => entry?.enabled === true)
+    .map(([id, entry]) => ({ id, version: entry.version ?? null }));
+  return { ...ODEA_LAYOUT, plugins, extensions, archive, hiddenDirs };
 }
 
 function setMockSwitch(key: string, on: boolean) {
@@ -1352,6 +1366,18 @@ export const mockBackend: Backend = {
   async vaultSetPlugin(plugin: string, on: boolean): Promise<VaultInfo> {
     await tick();
     setPluginSwitch(plugin, on);
+    return mockBackend.vaultInfo();
+  },
+
+  async vaultSetExtension(id: string, on: boolean, version: string | null): Promise<VaultInfo> {
+    await tick();
+    const switches = extensionSwitches();
+    switches[id] = { enabled: on, version: version ?? switches[id]?.version ?? null };
+    try {
+      localStorage.setItem(EXTENSIONS_KEY, JSON.stringify(switches));
+    } catch {
+      /* 忽略：刷新后照旧 */
+    }
     return mockBackend.vaultInfo();
   },
 

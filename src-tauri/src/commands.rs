@@ -630,6 +630,18 @@ pub async fn vault_set_plugin<R: Runtime>(app: AppHandle<R>, ws: Ws, plugin: Str
     with_vault(&ws, |v| v.info()).await
 }
 
+/// 开 / 关一个第三方插件（L0 声明，docs/插件与跨端.md §6.3）：只改仓库标记里它那一项（version：仓库要的
+/// 版本范围，`^0.1`；不给就留着原来的）。文件不用重新认，前端也不用重载
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_set_extension(ws: Ws, id: String, on: bool, version: Option<String>) -> Result<VaultInfo> {
+    with_vault(&ws, move |v| {
+        v.set_extension(&id, on, version.as_deref())?;
+        v.info()
+    })
+    .await
+}
+
 /// 开 / 关归档：和开关日程一样，改标记、重新认文件，前端整页重载
 #[tauri::command]
 #[specta::specta]

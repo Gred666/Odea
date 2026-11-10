@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:">
+<title>Odea 插件沙箱</title>
+<script>
+/*
+  插件沙箱的外壳（docs/插件与跨端.md §5.5）。iframe 带 sandbox="allow-scripts"、不给 allow-same-origin，
+  origin 是 opaque 的：碰不到应用的存储、父页面。CSP 把网络全关了（IPC 的 ipc.localhost 也在内），只许内联脚本和
+  blob 起的 Worker。插件的代码不在这一页上跑，在中转另起的 Worker 里。
+
+  桌面端由 Rust 从 odea-plugin:// 发出来（src-tauri/src/plugins/sandbox.rs，响应头里还有一份同样的 CSP，
+  外加 sandbox）；浏览器预览里是 iframe 的 srcdoc。这里只做一件事：等父页面发来中转的源码和一个
+  MessagePort，跑起来。之后只认那个 MessagePort，不再收 window 上的消息。
+*/
+(function () {
+  "use strict";
+  var booted = false;
+  addEventListener("message", function (event) {
+    var data = event.data;
+    if (booted || event.source !== parent || !data || data.odeaSandbox !== "boot") return;
+    if (typeof data.relay !== "string" || !event.ports || !event.ports[0]) return;
+    booted = true;
+    var script = document.createElement("script");
+    script.textContent = data.relay;
+    document.head.appendChild(script);
+    self.__odeaRelay(data, event.ports[0]);
+  });
+  parent.postMessage({ odeaSandbox: "ready" }, "*");
+})();
+</script>
+</head>
+<body></body>
+</html>

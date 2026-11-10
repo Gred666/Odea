@@ -94,6 +94,12 @@ interface DataState {
   /** 开 / 关归档（和日程分开，只写笔记的人也能归档旧资料）：和 setPlugin 一样存掉、重认、换上 */
   setArchive: (on: boolean) => Promise<void>;
   /**
+   * 在这个仓库里开 / 关一个第三方插件（L0，docs/插件与跨端.md §6.3）：只改仓库标记里它那一项，
+   * 换上新的摆法（plugins/declared.ts 跟着换提示块、模板、主题）。文件不用重新认，编辑器里的不用先存。
+   * version 是仓库要的版本范围（`^0.1`），不给就留着原来的。失败了抛出去，扩展页自己说
+   */
+  setExtension: (id: string, on: boolean, version?: string) => Promise<void>;
+  /**
    * 别的设备开关了日程、转成了逻辑目录（同步过来，VaultChange.layout）：提示条问一句「切换过去」。
    * 没点之前照旧按原来的摆法（用户可能正在打字）
    */
@@ -701,6 +707,10 @@ export const useData = create<DataState>((set, get) => ({
     } catch (error) {
       set({ error: messageOf(error) });
     }
+  },
+  setExtension: async (id, on, version) => {
+    const info = await (await backend()).vaultSetExtension(id, on, version ?? null);
+    applyLayout(info.layout);
   },
   layoutChanged: false,
   dismissLayoutChange: () => set({ layoutChanged: false }),

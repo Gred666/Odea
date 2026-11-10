@@ -48,7 +48,7 @@ export async function launch(port) {
   return page;
 }
 
-async function connect(url) {
+export async function connect(url) {
   const ws = new WebSocket(url);
   await new Promise((resolve, reject) => {
     ws.onopen = resolve;

@@ -3,7 +3,14 @@ import { EditorSelection, type EditorState, type TransactionSpec } from "@codemi
 import { frontMatterRange } from "./frontMatter";
 
 export type { TemplateContext } from "@/data/types";
-export { CARET, type DocTemplate, templatesFor } from "@/plugins/registry";
+export {
+  CARET,
+  type DocTemplate,
+  NOTE_PLACEHOLDER,
+  onTemplatesChange,
+  templatesFor,
+  templatesRevisionOf,
+} from "@/plugins/registry";
 
 /* ============================================================
    文档模板的触发和插入。模板本身由插件交来（贡献点 templates，plugins/registry.ts；

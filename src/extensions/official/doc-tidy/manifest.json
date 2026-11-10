@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "id": "odea.doc-tidy",
+  "name": "文档整理",
+  "version": "1.0.0",
+  "author": "Odea",
+  "summary": "在正文后面列出这篇可以整理的地方：行尾多余的空格、连着的空行、跳级的标题，点一下改好。",
+  "description": "带脚本的插件，跑在隔离的沙箱里，只读、只改你正在看的那几篇。没什么可整理时那一段不出现；代码块、属性块里的不动，行尾正好两个空格（Markdown 的换行）也不动。",
+  "category": "editor",
+  "api": "^1.1",
+  "platforms": ["desktop"],
+  "main": "main.js",
+  "activation": ["slot:tidy", "command:tidy.all"],
+  "capabilities": [
+    {
+      "name": "documents.read",
+      "scope": "current",
+      "reason": "看正在看的那几篇里有没有可以整理的地方"
+    },
+    {
+      "name": "documents.edit",
+      "scope": "current",
+      "reason": "点了「整理」时改那一篇；能撤销"
+    }
+  ],
+  "contributes": {
+    "documentSlots": [{ "id": "tidy", "slot": "afterBody", "title": "可以整理的地方" }],
+    "commands": [
+      {
+        "id": "tidy.all",
+        "title": "整理这篇文档",
+        "keywords": "tidy 整理 行尾空格 空行 标题 格式"
+      }
+    ]
+  }
+}

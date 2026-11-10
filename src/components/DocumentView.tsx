@@ -19,6 +19,7 @@ import type { WikiCandidate } from "@/editor/suggest";
 import { cn } from "@/lib/cn";
 import { snapToDevicePixels } from "@/lib/devicePixels";
 import { useLingering } from "@/lib/lingering";
+import { registerVisibleDocument } from "@/lib/liveDocuments";
 import { hasLongRun } from "@/lib/longRun";
 import { buildOutline, renderMarkdown } from "@/lib/markdown";
 import { spring, tween } from "@/lib/motion";
@@ -46,6 +47,7 @@ import { GuideUpdateBanner } from "./GuideUpdateBanner";
 import { NotePath } from "./NotePath";
 import { Outline } from "./Outline";
 import { OverlayScrollbar } from "./OverlayScrollbar";
+import { PluginSlots } from "./PluginSlots";
 import { Segmented } from "./Segmented";
 import { SwapFade } from "./SwapFade";
 import { TeamPresence } from "./TeamPresence";
@@ -255,8 +257,32 @@ export function DocumentView({
   const editorTarget = doc.editor?.target;
   const target = vaultRef(editorTarget);
   const shared = !!editorTarget && isShared(editorTarget);
-  // 插件填了模板槽位的文档（某一天、某个周期）能用 `/模板`（editor/templates.ts）；笔记不接
+  // 填了模板槽位的文档能用 `/模板`（editor/templates.ts）：某一天、某个周期用日程的模板；
+  // 笔记用开着的 L0 插件的模板（scope 是 note），一个都没有就和没有槽位一样
   const templateContext = doc.templates;
+  // 带脚本的插件（L1）看得见的文档（lib/liveDocuments.ts）：能力 documents.*: current 的范围就是这几篇，
+  // 正文后面的槽位也只画在它们上面。做客的那一篇（别人的文档）不登记
+  const visibleKey = target && !doc.empty ? saveKey(doc) : "";
+  const visibleRef = useRef<ReturnType<typeof registerVisibleDocument> | null>(null);
+  const visibleEntry = target
+    ? { ref: target, key: visibleKey, title: doc.title, focused, bodyMd: doc.bodyMd }
+    : null;
+  const visibleEntryRef = useRef(visibleEntry);
+  visibleEntryRef.current = visibleEntry;
+  useEffect(() => {
+    const entry = visibleEntryRef.current;
+    if (!visibleKey || !entry) return;
+    const handle = registerVisibleDocument(entry);
+    visibleRef.current = handle;
+    return () => {
+      handle.dispose();
+      if (visibleRef.current === handle) visibleRef.current = null;
+    };
+  }, [visibleKey]);
+  useEffect(() => {
+    if (visibleEntry && visibleKey) visibleRef.current?.update(visibleEntry);
+  });
+
   const handleExternalConflict = useCallback(() => {
     if (target) useData.getState().markConflict(target);
   }, [target]);
@@ -554,6 +580,9 @@ export function DocumentView({
 
                       {/* 正文后面的一段（槽位）：日历某一天的当日安排 */}
                       {doc.afterBody}
+
+                      {/* 带脚本的插件（L1）填在正文后面的几段：插件交声明，这里画（plugins/scripted.ts） */}
+                      {visibleKey && <PluginSlots docKey={visibleKey} />}
 
                       {/* ---------- 反向链接：别的文档里写了 [[这篇]] 的地方 ---------- */}
                       {noteId && <Backlinks key={noteId} noteId={noteId} title={doc.title} />}

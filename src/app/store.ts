@@ -2,7 +2,7 @@ import { within } from "@/data/folders";
 import type { DocumentAnchor, DocumentRef, VaultLayout, WorkspaceId } from "@/data/types";
 import { isTauri } from "@/lib/tauri";
 import { transitionTheme } from "@/lib/themeTransition";
-import { navItemOf, pluginNavItems } from "@/plugins/registry";
+import { navIds, navItemOf } from "@/plugins/registry";
 import { create } from "zustand";
 import * as panes from "./panes";
 import type { NotePane, PaneLayout, StoredLayout } from "./panes";
@@ -207,10 +207,11 @@ interface AppState {
 }
 
 /**
- * 导航顺序 —— 决定切换时主内容往哪个方向位移：文件在最前，插件的那几项按它们的 order，归档、扩展页在最后
+ * 导航顺序 —— 决定切换时主内容往哪个方向位移：文件在最前，插件的那几项按它们的 order，归档、扩展页在最后；
+ * 开着的 L0 插件能调（清单的 navOrder，plugins/registry.ts 的 navIds）
  */
 export function navOrder(): WorkspaceId[] {
-  return ["notes", ...pluginNavItems().map((item) => item.id), "archive", "extensions"];
+  return navIds();
 }
 
 const LS_KEY = "odea.prefs";
@@ -297,9 +298,9 @@ function loadSession(): Session {
   const session: Session = { workspace: "notes", noteId: "", archiveId: "", noteFolder: "" };
   try {
     const p = JSON.parse(readStored(SESSION_KEY) ?? "{}");
-    // 扩展页还没有运行时，从导航里拿掉了：停在那儿的回到笔记。插件的页（今日TODO ……）这时还认不出来
-    // （插件在这之后才装上）：先照记的放着，取到仓库的摆法时 fitLayout 再核对
-    if (typeof p.workspace === "string" && p.workspace && p.workspace !== "extensions") {
+    // 插件的页（今日TODO ……）这时还认不出来（插件在这之后才装上）：先照记的放着，
+    // 取到仓库的摆法时 fitLayout 再核对。扩展页 P14.2 起回到了窄栏上，停在那儿的照旧回到那儿
+    if (typeof p.workspace === "string" && p.workspace) {
       session.workspace = p.workspace;
     }
     if (typeof p.noteId === "string") session.noteId = p.noteId;

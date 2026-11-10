@@ -564,6 +564,18 @@ async vaultSetPlugin(plugin: string, on: boolean) : Promise<Result<VaultInfo, Ap
 }
 },
 /**
+ * 开 / 关一个第三方插件（L0 声明，docs/插件与跨端.md §6.3）：只改仓库标记里它那一项（version：仓库要的
+ * 版本范围，`^0.1`；不给就留着原来的）。文件不用重新认，前端也不用重载
+ */
+async vaultSetExtension(id: string, on: boolean, version: string | null) : Promise<Result<VaultInfo, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_set_extension", { id, on, version }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 开 / 关归档：和开关日程一样，改标记、重新认文件，前端整页重载
  */
 async vaultSetArchive(on: boolean) : Promise<Result<VaultInfo, AppError>> {
@@ -2218,7 +2230,7 @@ key: string; title: string;
 vault: string | null; 
 /**
  * 团队仓库里的哪一篇：那个仓库里它的正文和这份一样了（git 拉来了主持人存的那一版），这份就可以删了。
- * 0.7.0 及以前存的是老格式（`{ kind: "day", id }`），DocRef 读的时候认得
+ * 文件里照老格式写（`{ kind: "day", id }`，见 on_disk），DocRef 读的时候两种都认
  */
 target: DocRef | null; 
 /**
@@ -3070,6 +3082,10 @@ logical: boolean;
  */
 plugins: string[]; 
 /**
+ * 仓库标记里开着的第三方插件（L0，docs/插件与跨端.md §6.3）。清单装在每台设备上，这台装没装由前端看
+ */
+extensions: WantedExtension[]; 
+/**
  * 开没开归档。和日程分开（只写笔记的人也要归档旧资料）；老仓库的标记里没写的跟着日程
  */
 archive: boolean; 
@@ -3081,6 +3097,10 @@ notesDir: string; archiveDir: string;
  * 不在树上的文件夹（插件放文档的文件夹，归档开着时的归档）：里面的笔记算在树根这一层
  */
 hiddenDirs: string[] }
+/**
+ * 仓库标记里开着的一个第三方插件：id，和仓库要的版本范围（`^0.1`，没写是 null）
+ */
+export type WantedExtension = { id: string; version: string | null }
 
 /** tauri-specta globals **/
 

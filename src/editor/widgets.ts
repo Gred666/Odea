@@ -843,7 +843,7 @@ export function toggleCalloutFold(view: EditorView, foldPosition: number): void 
  */
 export class CalloutBadgeWidget extends OtwWidget {
   constructor(
-    private readonly head: Pick<CalloutHead, "label" | "kind" | "fold">,
+    private readonly head: Pick<CalloutHead, "label" | "kind" | "fold" | "icon">,
     /** 折叠符离替身开头几个字符；不可折叠时是 null */
     private readonly foldOffset: number | null,
   ) {
@@ -854,6 +854,7 @@ export class CalloutBadgeWidget extends OtwWidget {
     return (
       other.head.label === this.head.label &&
       other.head.kind === this.head.kind &&
+      other.head.icon === this.head.icon &&
       other.head.fold === this.head.fold &&
       other.foldOffset === this.foldOffset
     );
@@ -864,7 +865,7 @@ export class CalloutBadgeWidget extends OtwWidget {
     badge.className = `cm-odea-callout-badge is-${this.head.kind}`;
     const text = document.createElement("span");
     text.textContent = this.head.label;
-    badge.append(calloutIcon(this.head.kind), text);
+    badge.append(calloutIcon(this.head.kind, this.head.icon), text);
     const foldOffset = this.foldOffset;
     if (this.head.fold && foldOffset !== null) {
       badge.classList.add(this.head.fold === "-" ? "is-collapsed" : "is-expanded");

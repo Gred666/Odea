@@ -6,7 +6,8 @@ import { snapToDevicePixels } from "@/lib/devicePixels";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { shortcut } from "@/lib/platform";
 import { describeSync } from "@/lib/syncText";
-import { pluginNavItems } from "@/plugins/registry";
+import { useDeclared } from "@/plugins/declared";
+import { navIds, pluginNavItems } from "@/plugins/registry";
 import { useTeam } from "@/team/store";
 import {
   Archive,
@@ -17,6 +18,7 @@ import {
   FolderTree,
   KeyRound,
   LoaderCircle,
+  Puzzle,
   RefreshCw,
   Search,
 } from "lucide-react";
@@ -36,13 +38,18 @@ interface NavItem {
 }
 
 // 「文件」一直在；归档单独一个开关；中间是开着的插件的导航项（日程的今日 / 目标 / 日历，
-// 导航贡献点，plugins/registry.ts）。扩展页还没有运行时（下载下来的只是一份清单），先不进导航；页面本身留着
+// 导航贡献点，plugins/registry.ts）。扩展页 P14.2 起能装、停用、卸载插件了，放回窄栏的最后一项
+// （2026-10-07 到 P14.2 之间没有运行时、只是一份清单的目录，不在导航里）
 const NOTES_ITEM: NavItem = { id: "notes", label: "文件", icon: FolderTree };
 const ARCHIVE_ITEM: NavItem = { id: "archive", label: "归档", icon: Archive };
+const EXTENSIONS_ITEM: NavItem = { id: "extensions", label: "扩展", icon: Puzzle };
 
-/** 窄栏上可能出现的每一项，按顺序 */
+/** 窄栏上可能出现的每一项，按顺序（开着的 L0 插件能调先后，registry 的 navIds） */
 function allNav(): NavItem[] {
-  return [NOTES_ITEM, ...pluginNavItems(), ARCHIVE_ITEM];
+  const order = navIds();
+  return [NOTES_ITEM, ...pluginNavItems(), ARCHIVE_ITEM, EXTENSIONS_ITEM].sort(
+    (a, b) => order.indexOf(a.id) - order.indexOf(b.id),
+  );
 }
 
 /**
@@ -78,6 +85,8 @@ export function Sidebar() {
   const setPanelCollapsed = useApp((s) => s.setPanelCollapsed);
   const plugins = useData((s) => s.layout.plugins);
   const archive = useData((s) => s.layout.archive);
+  // 开着的 L0 插件调了先后：跟着重排（allNav 读的是 registry 里的那一份）
+  useDeclared((s) => s.navOrder);
   const appReduce = useApp((s) => s.reduceMotion);
   const systemReduce = usePrefersReducedMotion();
   const reduce = appReduce || systemReduce;

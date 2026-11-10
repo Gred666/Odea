@@ -8,6 +8,7 @@ import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
 import { useTabKeys } from "@/components/NoteTabs";
+import { PluginConsent } from "@/components/PluginConsent";
 import { Popouts } from "@/components/Popouts";
 import { RelayDialog } from "@/components/RelayDialog";
 import { Sidebar } from "@/components/Sidebar";
@@ -279,6 +280,8 @@ export function Shell() {
         <HistoryDialog />
         <TrashDialog />
         <UpdateDialog />
+        {/* 带脚本的插件（L1）要的权限：扩展页装之前、授权时弹（plugins/scripted.ts 的 askConsent） */}
+        <PluginConsent />
         {/* 弹出窗口（docs/标签页与分屏.md §16）：每个 portal 进它自己的窗口，这里不占地方 */}
         <Popouts onSaveDocument={saveDocument} onSaveTitle={saveTitle} />
         {/* 开着的插件跟着主窗口挂着的副作用（plugins/registry.ts 的 Effects） */}

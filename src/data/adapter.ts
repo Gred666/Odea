@@ -1,7 +1,7 @@
 import { useApp } from "@/app/store";
 import { useCollab } from "@/collab/store";
 import { formatFullCN, formatRelativeTime, formatTimestampFull, toISODate } from "@/lib/date";
-import { installedPlugins } from "@/plugins/registry";
+import { installedPlugins, noteTemplateContext } from "@/plugins/registry";
 import { teamDocId, useTeam } from "@/team/store";
 import { useEffect, useRef } from "react";
 import { conflictOriginalTitle, conflictTarget } from "./conflicts";
@@ -194,6 +194,8 @@ function useNoteDocument(noteId: string, active: boolean): DocumentModel {
     statusParts: body === undefined ? ["载入中…"] : noteStatus(note, "上次更新"),
     deletable: true,
     collab: hostedCollab(note.id),
+    // 开了带模板的插件（L0）时 `/模板` 能用；没有就和以前一样
+    templates: noteTemplateContext(note.title),
     // 正文取回来之前不给编辑器：空着挂上的话，一输入就把原来的正文整篇覆盖了
     editor: body === undefined ? undefined : { target: noteRef(note.id), titleEditable: true },
   };

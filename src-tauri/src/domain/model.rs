@@ -406,6 +406,8 @@ pub struct VaultLayout {
     pub logical: bool,
     /// 开着的插件（`odea.journal` ……，plugins/）：仓库标记里想用、这个版本也带着的那几个
     pub plugins: Vec<String>,
+    /// 仓库标记里开着的第三方插件（L0，docs/插件与跨端.md §6.3）。清单装在每台设备上，这台装没装由前端看
+    pub extensions: Vec<WantedExtension>,
     /// 开没开归档。和日程分开（只写笔记的人也要归档旧资料）；老仓库的标记里没写的跟着日程
     pub archive: bool,
     /// 文件树的根：「笔记」，或者整个仓库（空串）
@@ -413,6 +415,13 @@ pub struct VaultLayout {
     pub archive_dir: String,
     /// 不在树上的文件夹（插件放文档的文件夹，归档开着时的归档）：里面的笔记算在树根这一层
     pub hidden_dirs: Vec<String>,
+}
+
+/// 仓库标记里开着的一个第三方插件：id，和仓库要的版本范围（`^0.1`，没写是 null）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct WantedExtension {
+    pub id: String,
+    pub version: Option<String>,
 }
 
 /* ---------------- 同步（技术方案 §5.9） ---------------- */

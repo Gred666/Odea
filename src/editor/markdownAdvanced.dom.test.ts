@@ -4,6 +4,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { typoraDecorations } from "./MarkdownEditor";
+import { setDeclaredCallouts } from "./callout";
 import { diagramEngine } from "./diagram";
 import { hoverCard } from "./hoverCard";
 import { resolveImageSource, safeImageSource, sanitizeHtml, sanitizeStyle } from "./html";
@@ -152,6 +153,36 @@ describe("块级 HTML", () => {
 });
 
 describe("Callout 变体", () => {
+  it("插件登记的标签换配色、图标；开着的编辑器跟着重画，停用后回到中性的样子，正文不动", () => {
+    const source = "> [!灵感] 标题\n> 正文\n\n> [!灵感]-\n> 收着\n\n后";
+    const { parent, view } = mount(source, source.length);
+    /** 每个徽章是哪种配色（is-tip …）；重画出来的替身还带着 is-settled（不再播入场） */
+    const badges = () =>
+      [...parent.querySelectorAll(".cm-odea-callout-badge")].map((badge) =>
+        [...badge.classList].find((name) =>
+          /^is-(?:note|tip|important|warning|caution|generic)$/.test(name),
+        ),
+      );
+    expect(badges()).toEqual(["is-generic", "is-generic"]);
+    expect(parent.querySelector(".cm-odea-callout-fold.is-generic")).not.toBeNull();
+
+    setDeclaredCallouts([{ label: "灵感", kind: "tip", icon: "sparkles" }]);
+    // MarkdownEditor 收到 onCalloutsChange 时空跑一笔事务；这里直接空跑
+    view.dispatch({});
+    expect(badges()).toEqual(["is-tip", "is-tip"]);
+    expect(parent.querySelector(".cm-odea-callout.is-tip")).not.toBeNull();
+    // 收起的那一块（块级装饰层）也跟着换了
+    expect(parent.querySelector(".cm-odea-callout-fold.is-tip")).not.toBeNull();
+    // 图标是插件挑的那一个（sparkles 有 5 笔），不是 tip 默认的灯泡（1 笔）
+    expect(parent.querySelector(".cm-odea-callout-badge svg")?.childElementCount).toBe(5);
+
+    setDeclaredCallouts([]);
+    view.dispatch({});
+    expect(badges()).toEqual(["is-generic", "is-generic"]);
+    expect(parent.querySelector(".cm-odea-callout-badge svg")?.childElementCount).toBe(1);
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
   it("shows the custom title next to the badge", () => {
     const { parent } = mount("> [!tip] 自定义标题\n> 正文\n\n后", 999);
     expect(parent.querySelector(".cm-odea-callout-badge.is-tip")?.textContent).toBe("tip");

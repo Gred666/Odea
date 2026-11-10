@@ -1,205 +1,113 @@
-export type ExtensionCategory = "editor" | "appearance" | "productivity" | "integration";
+import type { PluginManifest } from "./manifest";
+import docTidyCode from "./official/doc-tidy/main.js?raw";
+import docTidyManifest from "./official/doc-tidy/manifest.json";
 
-export interface ExtensionManifest {
-  schemaVersion: 1;
-  id: string;
-  name: string;
-  version: string;
-  author: string;
-  summary: string;
-  description?: string;
-  category: ExtensionCategory;
-  icon?: string;
-  homepage?: string;
-  permissions?: string[];
-  verified?: boolean;
-  downloads?: number;
-  updatedAt?: string;
-}
+/* ============================================================
+   官方目录：跟着应用一起发的插件（docs/插件与跨端.md §5.1）。还没有网上的目录服务，
+   「安装」就是把这份清单（带脚本的连同脚本）拷进这台设备（extensions/installed.ts），再在当前仓库里开上。
+   带脚本的（L1）照样跑在沙箱里、装之前照样问权限：官方的只是不用自己去找文件。
 
-export interface CatalogExtension extends ExtensionManifest {
-  source: "official" | "local";
-  packageText?: string;
-}
+   以前这里还列着「数学公式」「Mermaid 图表」两项、能「下载」一份清单：那两样是跟着编辑器一起编译的
+   内置功能（L2），一直开着，不是能装的插件，P14.2 拿掉了。
+   ============================================================ */
 
 /**
- * 扩展目录边界。以后接上传审核服务/CDN时实现同一接口，页面无需改动。
+ * 增强 Callout：多认九种提示块。标签和 Obsidian 的类型对得上（`> [!summary]`、`> [!todo]`……），
+ * 从 Obsidian 搬过来的笔记不再都是中性的灰色。停用后正文一个字不改，这些标签回到中性的样子
  */
-export interface ExtensionCatalogProvider {
-  list(): Promise<CatalogExtension[]>;
-  importPackage(file: File): Promise<CatalogExtension>;
-  removeLocal(id: string): Promise<void>;
-  download(extension: CatalogExtension): Promise<void>;
-}
-
-const STORAGE_KEY = "odea.extension-catalog.v1";
-const MAX_PACKAGE_BYTES = 2 * 1024 * 1024;
-const ID_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
-
-const officialExtensions: CatalogExtension[] = [
-  {
-    schemaVersion: 1,
-    id: "official.math",
-    name: "数学公式",
-    version: "0.1.0",
-    author: "Odea",
-    summary: "在 Markdown 中渲染行内公式与公式块。",
-    description: "计划支持 $...$ 与 $$...$$，并提供可替换的公式渲染器。",
-    category: "editor",
-    permissions: [],
-    verified: true,
-    downloads: 0,
-    updatedAt: "2026-09-02",
-    source: "official",
-  },
-  {
-    schemaVersion: 1,
-    id: "official.mermaid",
-    name: "Mermaid 图表",
-    version: "0.1.0",
-    author: "Odea",
-    summary: "把 Mermaid 代码块渲染为流程图、时序图与关系图。",
-    category: "editor",
-    permissions: [],
-    verified: true,
-    downloads: 0,
-    updatedAt: "2026-09-02",
-    source: "official",
-  },
-  {
-    schemaVersion: 1,
-    id: "official.callouts",
-    name: "增强 Callout",
-    version: "0.1.0",
-    author: "Odea",
-    summary: "注册自定义提示块类型、图标和配色。",
-    category: "appearance",
-    permissions: [],
-    verified: true,
-    downloads: 0,
-    updatedAt: "2026-09-02",
-    source: "official",
-  },
-];
-
-const CATEGORIES: readonly ExtensionCategory[] = [
-  "editor",
-  "appearance",
-  "productivity",
-  "integration",
-];
-
-/**
- * 校验导入的清单。清单是用户选的任意 JSON 文件，每个字段都要先看类型：
- * 以前 `name: 5` 会在 `.trim()` 上抛出一个看不懂的 TypeError，`id: 7` 被正则
- * 转成字符串后直接通过、以数字存了下来，`permissions` 里什么都能塞。
- */
-export function validateExtensionManifest(value: unknown): ExtensionManifest {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("扩展包必须是 JSON 对象");
-  }
-  const manifest = value as Record<string, unknown>;
-  /** 必填 / 选填的字符串字段：类型不对就报出字段名；选填的空串当作没填 */
-  const text = (field: string, required: boolean): string | undefined => {
-    const raw = manifest[field];
-    if (raw === undefined || raw === null) {
-      if (required) throw new Error(`扩展缺少 ${field}`);
-      return undefined;
-    }
-    if (typeof raw !== "string") throw new Error(`扩展的 ${field} 必须是字符串`);
-    const trimmed = raw.trim();
-    if (required && !trimmed) throw new Error(`扩展缺少 ${field}`);
-    return trimmed || undefined;
-  };
-
-  if (manifest.schemaVersion !== 1) throw new Error("暂不支持此扩展清单版本");
-  if (typeof manifest.id !== "string" || !ID_PATTERN.test(manifest.id)) {
-    throw new Error("扩展 id 格式不正确");
-  }
-  const name = text("name", true)!;
-  const version = text("version", true)!;
-  const author = text("author", true)!;
-  const summary = text("summary", true)!;
-  const description = text("description", false);
-  const icon = text("icon", false);
-  const homepage = text("homepage", false);
-  if (homepage && !/^https?:\/\//i.test(homepage)) {
-    throw new Error("扩展 homepage 只能是 http(s) 地址");
-  }
-  if (!CATEGORIES.includes(manifest.category as ExtensionCategory)) {
-    throw new Error("扩展 category 不受支持");
-  }
-  const permissions = manifest.permissions ?? [];
-  if (!Array.isArray(permissions) || !permissions.every((item) => typeof item === "string")) {
-    throw new Error("扩展 permissions 必须是字符串数组");
-  }
-
-  return {
-    schemaVersion: 1,
-    id: manifest.id,
-    name,
-    version,
-    author,
-    summary,
-    description,
-    category: manifest.category as ExtensionCategory,
-    icon,
-    homepage,
-    permissions,
-  };
-}
-
-export function serializeExtensionPackage(extension: CatalogExtension): string {
-  const { source: _source, packageText: _packageText, ...manifest } = extension;
-  return JSON.stringify(manifest, null, 2);
-}
-
-function loadLocal(): CatalogExtension[] {
-  try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]") as CatalogExtension[];
-    return Array.isArray(value) ? value.filter((item) => item.source === "local") : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocal(items: CatalogExtension[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-}
-
-function downloadText(filename: string, text: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
-export const localExtensionCatalog: ExtensionCatalogProvider = {
-  async list() {
-    return [...officialExtensions, ...loadLocal()];
-  },
-
-  async importPackage(file) {
-    if (file.size > MAX_PACKAGE_BYTES) throw new Error("扩展清单不能超过 2 MB");
-    const packageText = await file.text();
-    const manifest = validateExtensionManifest(JSON.parse(packageText));
-    if (officialExtensions.some((item) => item.id === manifest.id)) {
-      throw new Error("不能覆盖官方扩展");
-    }
-    const extension: CatalogExtension = { ...manifest, source: "local", packageText };
-    const local = loadLocal();
-    saveLocal([extension, ...local.filter((item) => item.id !== extension.id)]);
-    return extension;
-  },
-
-  async removeLocal(id) {
-    saveLocal(loadLocal().filter((item) => item.id !== id));
-  },
-
-  async download(extension) {
-    const text = extension.packageText ?? serializeExtensionPackage(extension);
-    downloadText(`${extension.id}-${extension.version}.odeax.json`, text);
+const callouts: PluginManifest = {
+  schemaVersion: 2,
+  id: "odea.callouts",
+  name: "增强 Callout",
+  version: "1.0.0",
+  author: "Odea",
+  summary: "多认九种提示块：摘要、待办、完成、问题、失败、缺陷、例子、引用、灵感，各有图标和配色。",
+  description:
+    "中英文标签都认，和 Obsidian 的提示块类型对得上：`> [!summary]`、`> [!todo]`、`> [!question]` 这些不再都是灰的。停用后正文一个字不改，这些标签回到中性的样子。",
+  category: "appearance",
+  api: "^1.0",
+  platforms: ["desktop", "mobile"],
+  contributes: {
+    callouts: [
+      {
+        label: "摘要",
+        aliases: ["abstract", "summary", "tldr", "总结", "概要"],
+        kind: "note",
+        icon: "clipboard-list",
+      },
+      { label: "待办", aliases: ["todo"], kind: "note", icon: "circle-check" },
+      { label: "完成", aliases: ["success", "check", "done", "成功"], kind: "tip", icon: "check" },
+      {
+        label: "问题",
+        aliases: ["question", "help", "faq", "疑问"],
+        kind: "warning",
+        icon: "circle-help",
+      },
+      { label: "失败", aliases: ["failure", "fail", "missing"], kind: "caution", icon: "x" },
+      { label: "缺陷", aliases: ["bug"], kind: "caution", icon: "bug" },
+      { label: "例子", aliases: ["example", "示例", "举例"], kind: "important", icon: "list" },
+      { label: "引用", aliases: ["quote", "cite", "引文"], kind: "generic", icon: "quote" },
+      { label: "灵感", aliases: ["idea", "想法"], kind: "tip", icon: "sparkles" },
+    ],
   },
 };
+
+/** 笔记模板：在笔记里一行只写 `/模板`，插入会议记录、读书笔记、复盘 */
+const noteTemplates: PluginManifest = {
+  schemaVersion: 2,
+  id: "odea.note-templates",
+  name: "笔记模板",
+  version: "1.0.0",
+  author: "Odea",
+  summary: "在笔记里输入 /模板，插入会议记录、读书笔记、复盘。",
+  description:
+    "模板是 Markdown 加占位符：{{date}}、{{time}}、{{weekday}} 插入时换成当时的日期、时间、星期，{{cursor}} 是插入后光标停的地方。",
+  category: "productivity",
+  api: "^1.0",
+  contributes: {
+    templates: [
+      {
+        name: "会议记录",
+        scope: "note",
+        description: "时间、参会、议题、结论、待办",
+        body: "**时间**：{{date:YYYY年M月D日}} {{weekday}} {{time}}\n**参会**：{{cursor}}\n\n## 议题\n\n## 结论\n\n## 待办\n\n- [ ] ",
+      },
+      {
+        name: "读书笔记",
+        scope: "note",
+        description: "书名、一句话、摘抄、想法",
+        body: "**书名**：{{cursor}}\n**作者**：\n**读完**：{{date}}\n\n## 一句话\n\n## 摘抄\n\n> \n\n## 想法\n",
+      },
+      {
+        name: "复盘",
+        scope: "note",
+        description: "发生了什么、做得好的、可以更好的、下一步",
+        body: "## 发生了什么\n\n{{cursor}}\n\n## 做得好的\n\n## 可以更好的\n\n## 下一步\n\n- [ ] ",
+      },
+    ],
+  },
+};
+
+/**
+ * 文档整理（L1）：正文后面列出行尾空格、多余的空行、跳级的标题，点一下改好。
+ * 清单和脚本就是 official/doc-tidy/ 里那两个文件，拿去「从文件安装」也一样
+ */
+const docTidy = docTidyManifest as unknown as PluginManifest;
+
+export const OFFICIAL_PLUGINS: readonly PluginManifest[] = [callouts, noteTemplates, docTidy];
+
+/** 官方插件的脚本（带脚本的才有） */
+const OFFICIAL_CODE: Readonly<Record<string, string>> = { [docTidy.id]: docTidyCode };
+
+export function officialPlugin(id: string): PluginManifest | undefined {
+  return OFFICIAL_PLUGINS.find((manifest) => manifest.id === id);
+}
+
+export function officialCode(id: string): string | undefined {
+  return OFFICIAL_CODE[id];
+}
+
+/** 清单文件最大多少：L0 只是一份 JSON，模板再多也到不了这么大 */
+export const MAX_MANIFEST_BYTES = 1024 * 1024;
+/** 脚本最大多少：存在 localStorage 里，几个插件加起来也不能把它撑满 */
+export const MAX_CODE_BYTES = 1024 * 1024;

@@ -532,11 +532,22 @@ export interface VaultInfo {
  * 这个仓库怎么摆（docs/仓库与启动器.md §6，Rust 的 vault/layout.rs）：开着哪些插件、文件树的根在哪。
  * 窄栏上有哪几项、一篇笔记在树上哪个文件夹（data/folders.ts）都看它
  */
+/** 仓库标记里开着的一个第三方插件：id，和仓库要的版本范围（`^0.1`，没写是 null） */
+export interface WantedExtension {
+  id: string;
+  version: string | null;
+}
+
 export interface VaultLayout {
   /** 逻辑目录（§7）：文件树是清单里摆的那一棵（treeView），文件夹不在硬盘上 */
   logical: boolean;
   /** 开着的插件（`odea.journal` ……，src/plugins/）：仓库标记里想用、这个版本也带着的那几个 */
   plugins: string[];
+  /**
+   * 仓库标记里开着的第三方插件（L0，docs/插件与跨端.md §6.3）和仓库要的版本范围。
+   * 清单装在每台设备上（extensions/installed.ts），两边都有的才生效（plugins/declared.ts）
+   */
+  extensions: WantedExtension[];
   /** 开没开归档：和日程分开，只写笔记的人也能归档旧资料 */
   archive: boolean;
   /** 文件树的根：「笔记」，或者整个仓库（空串） */
@@ -553,6 +564,7 @@ export interface VaultLayout {
 export const ODEA_LAYOUT: VaultLayout = {
   logical: false,
   plugins: [],
+  extensions: [],
   archive: true,
   notesDir: "笔记",
   archiveDir: "归档",
@@ -600,6 +612,8 @@ export interface TemplateContext {
   label: string;
   /** 空文档里的占位提示：告诉人可以从模板开始 */
   placeholder: string;
+  /** 这篇的标题（L0 模板的 `{{title}}`）；某一天、周期的文档不给 */
+  title?: string;
 }
 
 export interface DocumentModel {

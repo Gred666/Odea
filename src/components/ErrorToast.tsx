@@ -158,7 +158,7 @@ export function LayoutChangeToast() {
         >
           <RefreshCw size={14} strokeWidth={2} className="shrink-0 text-accent" />
           <span className="min-w-0 truncate">
-            这个仓库的设置在别的设备上改了（日程、目录的样子）
+            这个仓库的设置在别的设备上改了（开了哪些插件、目录的样子）
           </span>
           <button
             type="button"

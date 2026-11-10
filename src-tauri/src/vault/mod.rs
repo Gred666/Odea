@@ -44,7 +44,7 @@ use crate::db::now_ms;
 use crate::domain::model::{
     Attachment, Backlink, BacklinkLine, DocRef, FindFile, FindMatch, FindOptions, FindResult,
     FolderDeletion, LinkRewrite, Note, NoteSummary, Relink, TextHit, TextSearch, TrashedNote, TreeFile,
-    TypedDoc, VaultChange, VaultInfo, VaultLayout, NOTE,
+    TypedDoc, VaultChange, VaultInfo, VaultLayout, WantedExtension, NOTE,
 };
 use crate::domain::search;
 use crate::error::{AppError, Result};
@@ -268,6 +268,27 @@ impl Vault {
         Ok(backlog)
     }
 
+    /// 开 / 关一个第三方插件（L0 声明，docs/插件与跨端.md §6.3）：只改仓库标记里它那一项。L0 不认文档类型，
+    /// 文件怎么认不变，不用重新认、不用重载。插件的清单装在每台设备上，这台装没装由前端看
+    pub fn set_extension(&mut self, id: &str, on: bool, version: Option<&str>) -> Result<()> {
+        if !layout::extension_id_ok(id) || plugins::find(id).is_some() || id == layout::ARCHIVE_SWITCH {
+            return Err(AppError::Invalid(format!("插件 id 不对: {id}")));
+        }
+        if version.is_some_and(|range| !layout::version_range_ok(range)) {
+            return Err(AppError::Invalid(format!("版本范围不对: {}", version.unwrap_or_default())));
+        }
+        let path = fsio::abs(&self.root, layout::VAULT_MARKER);
+        let marker = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok());
+        let marker = layout::marker_with_extension(marker, id, on, version);
+        fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker)?)?;
+        // 自己改的：换上新的这一份，文件监听再看到标记变了就不当成是别处改的（check_layout）
+        self.layout.extensions = layout::Layout::load(&self.root).extensions;
+        self.log.record("vault", id, if on { "enabled" } else { "disabled" });
+        Ok(())
+    }
+
     /// 开 / 关归档：和开关日程一样改标记、重新认一遍文件（「归档」文件夹里的是归档的笔记，还是普通笔记）。
     /// 文件一个都不动
     pub fn set_archive(&mut self, on: bool) -> Result<Backlog> {
@@ -311,7 +332,15 @@ impl Vault {
     /// 用户可能正在打字，先告诉前端（VaultChange.layout），等用户点了再换（relayout）。同一次变化只报一回
     fn check_layout(&mut self) -> bool {
         let fresh = layout::Layout::load(&self.root);
-        let shape = |of: &layout::Layout| format!("{}|{}", of.fingerprint(), of.logical);
+        // 别的设备开关了第三方插件（L0）也算：前端要照新的那几个插件画
+        let shape = |of: &layout::Layout| {
+            let extensions: Vec<String> = of
+                .extensions
+                .iter()
+                .map(|wanted| format!("{}@{}", wanted.id, wanted.version.as_deref().unwrap_or("")))
+                .collect();
+            format!("{}|{}|{}", of.fingerprint(), of.logical, extensions.join(","))
+        };
         if shape(&fresh) == shape(&self.layout) {
             self.layout.attachments = fresh.attachments;
             self.layout_pending = None;
@@ -1745,6 +1774,12 @@ impl Vault {
             layout: VaultLayout {
                 logical: self.tree.is_some(),
                 plugins: self.layout.plugins.iter().map(|id| id.to_string()).collect(),
+                extensions: self
+                    .layout
+                    .extensions
+                    .iter()
+                    .map(|wanted| WantedExtension { id: wanted.id.clone(), version: wanted.version.clone() })
+                    .collect(),
                 archive: self.layout.archiving,
                 notes_dir: self.layout.notes.clone(),
                 archive_dir: self.layout.archive.clone(),

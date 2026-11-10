@@ -41,6 +41,14 @@ pub const UNTITLED: &str = "无标题笔记";
 /// 归档开关在仓库标记 plugins 里的键。P14.1 归档还在核心里，开关照插件的规矩记（docs/插件与跨端.md §6.3）
 pub const ARCHIVE_SWITCH: &str = "odea.archive";
 
+/// 仓库标记 plugins 里开着的一个第三方插件（L0 声明；以后的 L1）。它的清单装在每台设备上，
+/// 这里只是「这个仓库想用它」（docs/插件与跨端.md §6.3）。version 是仓库要的版本范围（`^0.1`）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wanted {
+    pub id: String,
+    pub version: Option<String>,
+}
+
 /// 一个 .md 文件按它的位置是哪种文档
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Slot {
@@ -67,7 +75,9 @@ pub enum Slot {
      归档关着时「归档」也是
    - 插件自己的文件夹（folders.days、folders.goals）、别的工具的设置（Obsidian 的日记）由插件读（plugins/journal）
    - `kind: "logical"`（或者有 .odea/tree）是逻辑目录（docs/仓库与启动器.md §7）：树是清单里摆的那一棵，
-     和文件在哪无关；新建的笔记平放在 notes（新建的逻辑目录是仓库根）。启动器「新建」建的就是它 */
+     和文件在哪无关；新建的笔记平放在 notes（新建的逻辑目录是仓库根）。启动器「新建」建的就是它
+   - plugins 里内置开关以外的键是第三方插件（P14.2 起，L0）：`{ "enabled": true, "version": "^0.1" }`。
+     不认文档类型、不影响文件怎么认，只报给前端（Layout::extensions）；老版本不认识，原样留着 */
 
 /// 一个仓库的文件摆法。打开仓库时读一次（Vault::bare），开关插件时换一份（Vault::set_plugin）
 #[derive(Clone)]
@@ -85,6 +95,8 @@ pub struct Layout {
     pub plugins: Vec<&'static str>,
     /// 开着的插件声明的文档类型：classify 按它们的路径规则认文件
     pub types: Vec<Arc<dyn DocType>>,
+    /// 开着的第三方插件（L0）：只报给前端，和文件怎么认无关，所以不进 fingerprint（不用重建索引）
+    pub extensions: Vec<Wanted>,
 }
 
 impl PartialEq for Layout {
@@ -92,6 +104,7 @@ impl PartialEq for Layout {
         self.logical == other.logical
             && self.attachments == other.attachments
             && self.plugins == other.plugins
+            && self.extensions == other.extensions
             && self.fingerprint() == other.fingerprint()
     }
 }
@@ -108,6 +121,7 @@ impl std::fmt::Debug for Layout {
             .field("attachments", &self.attachments)
             .field("plugins", &self.plugins)
             .field("types", &self.types.iter().map(|ty| ty.fingerprint()).collect::<Vec<_>>())
+            .field("extensions", &self.extensions)
             .finish()
     }
 }
@@ -141,6 +155,7 @@ impl Layout {
             attachments: AttachDir::Fixed(ATTACHMENTS_DIR.into()),
             plugins: on.iter().map(|plugin| plugin.id()).collect(),
             types: on.iter().flat_map(|plugin| plugin.doc_types(None, None)).collect(),
+            extensions: Vec::new(),
         }
     }
 
@@ -198,6 +213,7 @@ impl Layout {
             attachments: AttachDir::Fixed(ATTACHMENTS_DIR.into()),
             plugins: on.iter().map(|plugin| plugin.id()).collect(),
             types: on.iter().flat_map(|plugin| plugin.doc_types(root, Some(marker))).collect(),
+            extensions: wanted_extensions(marker),
         }
     }
 
@@ -468,6 +484,54 @@ pub fn marker_with_switch(marker: Option<Value>, id: &str, on: bool) -> Value {
     let mut marker = marker_written(marker);
     let legacy = switches().into_iter().find(|(switch, _)| *switch == id).and_then(|(_, legacy)| legacy);
     write_switch(&mut marker, id, legacy, on);
+    marker
+}
+
+/// 第三方插件的 id 写法，和前端 extensions/manifest.ts 的 ID_PATTERN 一致：小写字母、数字，
+/// 段之间用一个 `.` `_` `-` 隔开（`someone.callouts-cn`）
+pub fn extension_id_ok(id: &str) -> bool {
+    id.len() <= 64
+        && id
+            .split(['.', '_', '-'])
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()))
+}
+
+/// 仓库标记里记的版本范围：`^0.1`、`~1.2.3`、`1.0`（可选的 ^ / ~，后面一到三段数字）
+pub fn version_range_ok(range: &str) -> bool {
+    let digits = range.strip_prefix(['^', '~']).unwrap_or(range);
+    let parts: Vec<&str> = digits.split('.').collect();
+    (1..=3).contains(&parts.len())
+        && parts.iter().all(|part| !part.is_empty() && part.len() <= 9 && part.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// 标记的 plugins 里开着的第三方插件：内置开关（内置插件、归档）以外、enabled 是 true 的那几项
+fn wanted_extensions(marker: &Value) -> Vec<Wanted> {
+    let Some(map) = marker.get("plugins").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let builtin = switches();
+    map.iter()
+        .filter(|(id, _)| extension_id_ok(id) && !builtin.iter().any(|(switch, _)| switch == id))
+        .filter(|(_, entry)| entry.get("enabled").and_then(Value::as_bool) == Some(true))
+        .map(|(id, entry)| Wanted {
+            id: id.clone(),
+            version: entry
+                .get("version")
+                .and_then(Value::as_str)
+                .filter(|range| version_range_ok(range))
+                .map(str::to_string),
+        })
+        .collect()
+}
+
+/// 开 / 关一个第三方插件（L0）：只改 plugins 里它那一项的 enabled，给了 version 就一起写上，这一项里别的键原样留着。
+/// 内置的开关先照现在的样子写实：老标记两样都没有，只多出一个 plugins 的话，日程、归档就成了「没写 = 关着」
+pub fn marker_with_extension(marker: Option<Value>, id: &str, on: bool, version: Option<&str>) -> Value {
+    let mut marker = marker_written(marker);
+    write_switch(&mut marker, id, None, on);
+    if let Some(version) = version {
+        marker["plugins"][id]["version"] = version.into();
+    }
     marker
 }
 
@@ -917,6 +981,54 @@ mod tests {
         let tree = layout_of(opened);
         assert!(tree.has_plugin(journal::ID));
         assert_eq!(tree.notes, "");
+    }
+
+    #[test]
+    fn extensions_are_wanted_by_the_vault() {
+        // 老标记（两样都没有）开一个 L0 插件：日程、归档照旧开着，别的键原样留着
+        let legacy = json!({ "app": "Odea", "version": 1, "别的": 1 });
+        let marker = marker_with_extension(Some(legacy), "someone.callouts-cn", true, Some("^0.1"));
+        assert_eq!(marker["别的"], 1);
+        assert_eq!(marker["plugins"]["someone.callouts-cn"], json!({ "enabled": true, "version": "^0.1" }));
+        let layout = layout_of(marker.clone());
+        assert!(layout.has_plugin(journal::ID) && layout.archiving);
+        assert_eq!(
+            layout.extensions,
+            vec![Wanted { id: "someone.callouts-cn".into(), version: Some("^0.1".into()) }]
+        );
+        // 内置开关、关着的、id 写得不对的都不算；版本范围写坏了当没写
+        let mut other = marker.clone();
+        other["plugins"]["Bad ID"] = json!({ "enabled": true });
+        other["plugins"]["someone.off"] = json!({ "enabled": false });
+        other["plugins"]["someone.loose"] = json!({ "enabled": true, "version": "latest" });
+        let ids: Vec<_> = layout_of(other).extensions.into_iter().map(|w| (w.id, w.version)).collect();
+        assert_eq!(
+            ids,
+            vec![("someone.callouts-cn".into(), Some("^0.1".into())), ("someone.loose".into(), None)]
+        );
+        // 关掉：只改 enabled，版本留着；不再算开着。不给版本时原来的留着
+        let off = marker_with_extension(Some(marker), "someone.callouts-cn", false, None);
+        assert_eq!(off["plugins"]["someone.callouts-cn"], json!({ "enabled": false, "version": "^0.1" }));
+        assert!(layout_of(off.clone()).extensions.is_empty());
+        // 开关内置插件不碰第三方的那几项
+        let journal_off = marker_with_switch(Some(off), journal::ID, false);
+        assert_eq!(journal_off["plugins"]["someone.callouts-cn"]["version"], "^0.1");
+    }
+
+    #[test]
+    fn extension_ids_and_versions() {
+        for ok in ["a", "someone.callouts-cn", "a_b.c-d", "x1.y2"] {
+            assert!(extension_id_ok(ok), "{ok}");
+        }
+        for bad in ["", "A.b", "a..b", ".a", "a.", "a b", "中文", &"a".repeat(65)] {
+            assert!(!extension_id_ok(bad), "{bad}");
+        }
+        for ok in ["^0.1", "~1.2.3", "1.0", "^2"] {
+            assert!(version_range_ok(ok), "{ok}");
+        }
+        for bad in ["", "^", "latest", "^1.x", ">=1.0", "1.2.3.4", "^1..2"] {
+            assert!(!version_range_ok(bad), "{bad}");
+        }
     }
 
     #[test]

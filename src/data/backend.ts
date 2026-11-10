@@ -142,6 +142,8 @@ export interface Backend {
   vaultInfo(): Promise<VaultInfo>;
   /** 开 / 关一个插件（日程是 odea.journal）：改仓库标记、每个文件按新的摆法重新认一遍（文件不动） */
   vaultSetPlugin(plugin: string, on: boolean): Promise<VaultInfo>;
+  /** 开 / 关一个第三方插件（L0）：只改仓库标记里它那一项，文件不用重新认 */
+  vaultSetExtension(id: string, on: boolean, version: string | null): Promise<VaultInfo>;
   /** 开 / 关归档（和日程分开）：改仓库标记、重新认一遍文件 */
   vaultSetArchive(on: boolean): Promise<VaultInfo>;
   /** 别的设备开关了插件、转成了逻辑目录（VaultChange.layout）：按磁盘上的仓库标记重新摆 */
@@ -305,6 +307,7 @@ const tauriBackend: Backend = {
   guideOpen: (name) => unwrap(commands.guideOpen(name)),
   vaultInfo: () => unwrap(commands.vaultInfo()),
   vaultSetPlugin: (plugin, on) => unwrap(commands.vaultSetPlugin(plugin, on)),
+  vaultSetExtension: (id, on, version) => unwrap(commands.vaultSetExtension(id, on, version)),
   vaultSetArchive: (on) => unwrap(commands.vaultSetArchive(on)),
   vaultRelayout: () => unwrap(commands.vaultRelayout()),
   vaultReveal: async (target) => {

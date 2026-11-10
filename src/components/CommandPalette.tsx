@@ -17,6 +17,7 @@ import {
   type WorkspaceId,
   noteRef,
 } from "@/data/types";
+import { useInstalled } from "@/extensions/installed";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
 import { runEditorCommand } from "@/lib/editorCommands";
@@ -29,6 +30,7 @@ import {
   installedPlugins,
   pluginNavItems,
 } from "@/plugins/registry";
+import { runScriptedCommand, scriptedCommands } from "@/plugins/scripted";
 import {
   Archive,
   ArchiveX,
@@ -56,6 +58,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  Puzzle,
   RefreshCw,
   ScrollText,
   Search,
@@ -167,6 +170,23 @@ export function CommandPalette({
   const plugins = useData((s) => s.layout.plugins);
   const setPlugin = useData((s) => s.setPlugin);
   const pluginCommands = usePluginCommands(plugins);
+  // 带脚本的插件（L1）声明的命令：还没启动的也列，点了才起（plugins/scripted.ts）
+  const installedExtensions = useInstalled((s) => s.plugins);
+  const wantedExtensions = useData((s) => s.layout.extensions);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 两个都是 scriptedCommands 读的来源
+  const scriptedItems = useMemo<Item[]>(
+    () =>
+      scriptedCommands().map(({ plugin, pluginName, command }) => ({
+        id: `scripted-${plugin}-${command.id}`,
+        group: "插件",
+        icon: Puzzle,
+        label: command.title,
+        hint: pluginName,
+        keywords: `${command.keywords ?? ""} ${pluginName} plugin 插件`,
+        run: () => void runScriptedCommand(plugin, command.id),
+      })),
+    [installedExtensions, wantedExtensions],
+  );
   const archiveOn = useData((s) => s.layout.archive);
   const setArchive = useData((s) => s.setArchive);
   const setTrashOpen = useApp((s) => s.setTrashOpen);
@@ -325,7 +345,14 @@ export function CommandPalette({
         .filter((item) => plugins.includes(item.plugin))
         .map((item) => nav(item.id, item.label, item.icon, item.keywords)),
       ...pluginCommands.map((command) => ({ ...command }) satisfies Item),
+      ...scriptedItems,
       ...(archiveOn ? [nav("archive", "归档", Archive, "archive 存档")] : []),
+      nav(
+        "extensions",
+        "扩展",
+        Puzzle,
+        "extensions plugins 扩展 插件 kuozhan chajian 提示块 模板 主题",
+      ),
 
       themeItem("light", "切换到亮色", Sun, "light 浅色 白天 日间 亮"),
       themeItem("dark", "切换到暗色", Moon, "dark 深色 夜间 黑 暗"),
@@ -704,6 +731,7 @@ export function CommandPalette({
     plugins,
     setPlugin,
     pluginCommands,
+    scriptedItems,
     archiveOn,
     setArchive,
     setTrashOpen,

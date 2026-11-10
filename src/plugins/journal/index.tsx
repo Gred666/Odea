@@ -95,6 +95,8 @@ export const journalPlugin: Plugin = {
   onByDefault: true,
   defaultDirs: ["日记", "目标"],
   documentTypes: [dayType, goalType],
+  // 某一天、周 / 月 / 年的目标填的模板槽位（templates.ts）：L0 插件的模板能指定用在这几种上
+  templateScopes: ["day", "week", "month", "year"],
   // 每个图标的「签名动作」跟图标画的那个物件对得上（components/Sidebar.tsx 的说明）
   nav: [
     {

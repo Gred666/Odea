@@ -13,6 +13,7 @@
 ============================================================ */
 
 pub mod journal;
+pub mod sandbox;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

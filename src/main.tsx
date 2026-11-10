@@ -11,6 +11,8 @@ import { backend } from "@/data/backend";
 import { useData } from "@/data/store";
 import { installCloseGuard } from "@/editor/saveBus";
 import { isTauri, signalReady, thisWindow, windowKind } from "@/lib/tauri";
+import { initDeclaredPlugins } from "@/plugins/declared";
+import { initScriptedPlugins } from "@/plugins/scripted";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@/styles/globals.css";
@@ -61,6 +63,11 @@ async function bootstrap() {
   }
   // 这一次要不要播开场（冷启动、没开减少动效）。要在第一帧之前定：盖着的那层纸得出现在第一帧里
   armIntro();
+  // 纯声明的插件（L0：提示块、模板、主题、导航顺序）：读这台设备装着的，取到仓库的摆法时就换上，
+  // 主题色、提示块第一帧就是对的
+  initDeclaredPlugins();
+  // 带脚本的插件（L1）：跑在沙箱里，用到时才起（plugins/scripted.ts）。要等清单读好、仓库的摆法取到
+  initScriptedPlugins();
   // 编辑器分包与数据初始化并行加载，挂载 React 之前一起等。
   // 首屏默认工作区就要用编辑器渲染正文，不预载的话 Suspense 会先渲染一次
   // 排版不同的只读预览、再换成编辑器，整篇重排一次（见 DocumentView）。
