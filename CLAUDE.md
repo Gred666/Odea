@@ -20,7 +20,18 @@ P12.3 弹出窗口（`window.open` 的子窗口和主窗口同一个 JS 环境�
 第三方代码跑在 opaque origin 的 sandboxed iframe 里；继续用 Tauri、按平台选引擎（Linux 换 CEF，macOS 实测再定），手机用系统 WebView；
 GPUI、Electron、把正文搬进 Rust 这一轮都不做，§9 有为什么。P14.1 日程变成内置插件做完了，§13 是实现记录：
 核心只认笔记，日程在 `src/plugins/journal`、`src-tauri/src/plugins/journal`，核心代码里别再按某一天 / 目标分支；
-落盘和上网的 id（`day:…`、`day-…`、`goal-week-…`、区名 `today` / `goal` / `calendar`）一个都不能改，§13.2 有每一条怎么守住的）。
+落盘和上网的 id（`day:…`、`day-…`、`goal-week-…`、区名 `today` / `goal` / `calendar`）一个都不能改，§13.2 有每一条怎么守住的；
+P14.2 纯声明的插件（L0）做完了，§14 是实现记录：清单 schemaVersion 2 在 `src/extensions/`，提示块、模板、主题 token、导航顺序四个贡献点由 `src/plugins/declared.ts` 交出去，
+插件装在设备上（localStorage）、开在仓库里（`.odea/vault.json` 的 `plugins`），两边都有才生效；
+P14.3 带脚本的插件（L1）做完了，§15 是实现记录：脚本跑在主窗口上隐藏的 `<iframe sandbox="allow-scripts">` 里另起的 Worker 中（`src/plugins/sandbox/`），
+桌面端 iframe 的文档由 Rust 的 `odea-plugin://` 发（不能用 srcdoc：继承应用的 CSP），插件只经宿主做授了权的事，改正文按修订号、和打字走同一条路；
+拒绝测试用 `scripts/perf/plugin-sandbox.mjs` 在真 Chrome / WebView2 里跑；
+P14.4 CEF 试验（分支 `spike/cef`）Windows 那一半做完了，§7.6、§7.7：Windows 继续用 WebView2 —— 换 CEF 启动一样快、内存多 4–5%，
+但安装包 130 MB、Tauri 的 CEF 运行时在 Windows 上不开进程沙箱、会装注册表里登记给 Chrome 的扩展、`Intl` 默认 en-US；Linux 那一半要真机。
+在这台机器上量启动、内存，内核的配置目录要放 `%TEMP%`：`%LOCALAPPDATA%` 被 Claude 的 MSIX 容器重定向，拖慢 1–2 秒）、
+`1110审查与研究.md`（2026-11-10 把整个项目过了一遍、对照别家：§5 是四个还没修的问题 ——
+不是 UTF-8 的文件会被写坏、目录树不跟随滚动、入口包 1.29 MB、KaTeX 打了两份；§3.3 是包体的实测；
+§9 对照别家的不足（没有 MCP / CLI、复盘只有模板且正文里勾的任务不进行为日志、属性和视图文件），§10 新的思路，§11 不跟的）。
 改动之前先看相关的那几节，那里的规矩都是实测踩出来的。
 
 - 回复、注释、文档一律用中文
