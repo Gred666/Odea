@@ -69,6 +69,11 @@ export function cancelGlide(view: EditorView): void {
   active.get(view)?.cancel();
 }
 
+/** 这个编辑器正在滑（目录树跟随滚动时，滑的路上不算读到了哪，见 Outline.tsx） */
+export function isGliding(view: EditorView): boolean {
+  return active.has(view);
+}
+
 class Glide {
   private readonly scroller: HTMLElement | null;
   private readonly win: Window;

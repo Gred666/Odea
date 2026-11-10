@@ -126,6 +126,14 @@ describe("主持人", () => {
     expect(store().dialogOpen).toBe(false);
   });
 
+  it("文件不是 UTF-8 的笔记不开始协作，说为什么（docs/1110审查与研究.md §5.1）", async () => {
+    useData.setState({ notes: [{ id: "n1", title: "老笔记", notUtf8: true } as NoteSummary] });
+    await store().startHosting("n1", "老笔记");
+    expect(phase()).toBe("idle");
+    expect(store().error).toMatch(/「老笔记」不是 UTF-8 编码/);
+    expect(store().hostedDocs.n1).toBeUndefined();
+  });
+
   it("协作中改名字：成员表里自己那一行跟着换", async () => {
     await net.onControl(handleControl);
     await store().startHosting("n1", "周会");

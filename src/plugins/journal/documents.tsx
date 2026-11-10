@@ -144,7 +144,9 @@ function dayDocument(
     afterBody: tasks.length ? <DayTasks tasks={tasks} /> : undefined,
     templates: templatesOf("day", date, todayDate),
     statusParts,
-    editor: day ? { target, titleEditable: true } : undefined,
+    // 文件不是 UTF-8：只能看，横幅里能转（EncodingBanner）
+    notUtf8: day?.notUtf8,
+    editor: day ? { target, titleEditable: !day.notUtf8 } : undefined,
   };
 }
 
@@ -175,6 +177,7 @@ function goalDocument(
     relPath: goal?.relPath,
     templates: templatesOf(horizon, periodStart, todayDate),
     statusParts,
+    notUtf8: goal?.notUtf8,
     editor: goal ? { target } : undefined,
   };
 }

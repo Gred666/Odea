@@ -622,6 +622,28 @@ async vaultReveal(target: DocRef) : Promise<Result<null, AppError>> {
 }
 },
 /**
+ * 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（转之前给用户看，docs/1110审查与研究.md §5.1）
+ */
+async docLegacyText(target: DocRef) : Promise<Result<LegacyText, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("doc_legacy_text", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 转成 UTF-8，原文按原字节另存在旁边。fingerprint 是 doc_legacy_text 给的那一版，文件之后被改过就不转
+ */
+async docConvertUtf8(target: DocRef, fingerprint: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("doc_convert_utf8", { target, fingerprint }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 打开整个笔记文件夹
  */
 async vaultOpenFolder() : Promise<Result<null, AppError>> {
@@ -2007,7 +2029,11 @@ carriedFrom: string | null;
 /**
  * 在仓库里的相对路径；还没写过的日子是它将来的位置
  */
-relPath: string }
+relPath: string; 
+/**
+ * 文件不是 UTF-8：只能看（同 Note.not_utf8）
+ */
+notUtf8: boolean }
 export type Diagnosis = { 
 /**
  * 链接里主持人的路
@@ -2215,7 +2241,11 @@ periodStart: string; contentMd: string; createdAt: number; updatedAt: number;
 /**
  * 在仓库里的相对路径；还没写过的周期是它将来的位置
  */
-relPath: string }
+relPath: string; 
+/**
+ * 文件不是 UTF-8：只能看（同 Note.not_utf8）
+ */
+notUtf8: boolean }
 /**
  * 做客时本机留的一份
  */
@@ -2311,6 +2341,27 @@ relay: string | null }
  * 启动器收到一个团队仓库的链接（它已经开着时）
  */
 export type LauncherLink = string
+/**
+ * 一篇不是 UTF-8 的文档按什么编码认出来、转成 UTF-8 会是什么样（Vault::legacy_text）。
+ * 转之前给用户看一眼，认错了（满屏乱码）就别转
+ */
+export type LegacyText = { 
+/**
+ * 「GBK」「UTF-16」；认不出是 None
+ */
+encoding: string | null; 
+/**
+ * 解出来的开头一段（认不出是空串）
+ */
+preview: string; 
+/**
+ * 原文另存成的文件名（放在同一个文件夹里）；认不出是空串
+ */
+backup: string; 
+/**
+ * 原样字节的指纹：转的时候核对还是这一版（fsio::fingerprint_bytes）
+ */
+fingerprint: string }
 export type LinkRewrite = { relPath: string; before: string; after: string }
 /**
  * 一个成员（给界面看）
@@ -2349,7 +2400,13 @@ conflictOf: string | null;
  * id 写在这个文件的属性块里（不是索引临时给的）：换台设备、重建索引都还是它。
  * 团队协作按它认同一篇（docs/协同编辑.md §22.4），没写的按相对路径
  */
-idInFile: boolean }
+idInFile: boolean; 
+/**
+ * 文件不是 UTF-8（GBK、UTF-16 这些）：content_md 里认不出的字换成了 U+FFFD。
+ * 只能看 —— 保存、改名、置顶、移动、归档、删除后端都拒绝，不然原文就被写坏了
+ * （docs/1110审查与研究.md §5.1）
+ */
+notUtf8: boolean }
 /**
  * 列表里的一篇：Note 去掉正文。仓库里有多少篇列表就给多少篇，正文打开时再取（note_get）、
  * 搜正文走 search_text —— 前端不留每篇的全文，篇数再多常驻内存也只多一点摘要（技术方案 §13.2）
@@ -2358,7 +2415,11 @@ export type NoteSummary = { id: string; title: string; excerpt: string; wordCoun
 /**
  * 同 Note.id_in_file
  */
-idInFile: boolean }
+idInFile: boolean; 
+/**
+ * 同 Note.not_utf8
+ */
+notUtf8: boolean }
 /**
  * 权限：能改，或者只读（主持人随时能改）
  */

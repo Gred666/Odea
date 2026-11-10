@@ -219,7 +219,10 @@ impl Vault {
         for archived in [false, true] {
             for row in index::notes(&self.db, archived)? {
                 let Some(guide) = guide_of(&row) else { continue };
-                let Some(text) = self.read(&row.rel_path)? else { continue };
+                // 被别的程序存成了别的编码的指南不动（换新版要写回）
+                let Some(text) = self.read_lossy(&row.rel_path)?.filter(|file| file.utf8).map(|file| file.text) else {
+                    continue;
+                };
                 let (meta, body) = frontmatter::split(&text);
                 let Some(mark) = parse_mark(&meta).filter(|mark| mark.name == guide.name) else {
                     continue;

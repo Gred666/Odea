@@ -2181,3 +2181,230 @@ fn a_retired_share_folder_goes_to_the_trash_and_the_notes_stay() {
     assert!(root.join(".odea/trash").join(&trashed[0]).join("share.json").exists());
     assert_eq!(vault.note_list(false).unwrap().len(), 1);
 }
+
+/* ---------------- 不是 UTF-8 的文件（docs/1110审查与研究.md §5.1） ---------------- */
+
+/// GBK 编码的「你好，世界」：旧的记事本、不少国内的工具默认这样存。按 UTF-8 解不开
+const GBK: &[u8] = b"\xc4\xe3\xba\xc3\xa3\xac\xca\xc0\xbd\xe7";
+
+impl Fixture {
+    /// 别的程序按别的编码写的文件：原样的字节
+    fn write_bytes_externally(&self, rel: &str, bytes: &[u8]) {
+        let path = fsio::abs(&self.root, rel);
+        let before = fsio::stat(&path).map_or(0, |(mtime, _)| mtime);
+        fsio::write_atomic_bytes(&path, bytes).unwrap();
+        fsio::set_mtime(&path, before + 1000).unwrap();
+    }
+
+    fn bytes(&self, rel: &str) -> Vec<u8> {
+        std::fs::read(fsio::abs(&self.root, rel)).unwrap()
+    }
+}
+
+type Attempt<'a> = (&'static str, Box<dyn Fn(&mut Vault) -> Result<()> + 'a>);
+
+#[test]
+fn a_note_that_is_not_utf8_is_never_written_back() {
+    let mut f = fixture();
+    f.vault.folder_create("", "工作").unwrap();
+    let rel = "笔记/老笔记.md";
+    let original = [GBK, b"\n\n- [ ] ok @2026-09-04".as_slice()].concat();
+    f.write_bytes_externally(rel, &original);
+    f.vault.rescan().unwrap();
+
+    let summary = f.vault.note_list(false).unwrap().remove(0);
+    assert!(summary.not_utf8, "列表上就标着，前端据此只读打开");
+    let id = summary.id;
+    let note = f.vault.note_get(&id).unwrap();
+    assert!(note.not_utf8);
+    assert!(note.content_md.contains('\u{FFFD}'), "认不出的字换成 U+FFFD，能看");
+    let base = fsio::fingerprint(&note.content_md);
+    let task = f.vault.day("2026-09-04", false).unwrap().tasks.remove(0).id;
+
+    let attempts: Vec<Attempt> = vec![
+        ("置顶", Box::new(|v: &mut Vault| v.note_set_pinned(&id, true))),
+        ("改名", Box::new(|v: &mut Vault| v.note_rename(&id, "新名字").map(drop))),
+        ("保存", Box::new(|v: &mut Vault| v.note_save(&id, "改了", Some(&base)).map(drop))),
+        ("没给 base 的保存", Box::new(|v: &mut Vault| v.note_save(&id, "改了", None).map(drop))),
+        ("移动", Box::new(|v: &mut Vault| v.note_move(&id, "工作").map(drop))),
+        ("归档", Box::new(|v: &mut Vault| v.note_archive(&id, None))),
+        ("删除", Box::new(|v: &mut Vault| v.note_delete(&id))),
+        ("勾任务", Box::new(|v: &mut Vault| v.toggle_task(&task).map(drop))),
+    ];
+    for (what, attempt) in attempts {
+        let result = attempt(&mut f.vault);
+        assert_eq!(f.bytes(rel), original, "{what}之后原文一个字节都没变");
+        let error = result.expect_err(what);
+        assert!(error.to_string().contains("UTF-8"), "{what}：拒绝时要说为什么：{error}");
+    }
+    assert_eq!(f.files(), vec![rel], "没有挪走，也没另存冲突副本");
+    assert!(!f.exists(&format!(".odea/trash/{id}.md")));
+
+    // 用别的编辑器另存成 UTF-8 以后：认出来，能改了
+    f.write_externally(rel, "你好，世界");
+    f.vault.rescan().unwrap();
+    assert!(!f.vault.note_get(&id).unwrap().not_utf8);
+    f.vault.note_set_pinned(&id, true).unwrap();
+    assert!(f.read(rel).ends_with("你好，世界"));
+}
+
+#[test]
+fn utf8_with_a_bom_is_still_utf8() {
+    let mut f = fixture();
+    f.write_bytes_externally("笔记/带 BOM.md", "\u{FEFF}你好".as_bytes());
+    f.vault.rescan().unwrap();
+    let note = f.vault.note_list(false).unwrap().remove(0);
+    assert!(!note.not_utf8);
+    f.vault.note_set_pinned(&note.id, true).unwrap();
+}
+
+#[test]
+fn archived_notes_and_days_that_are_not_utf8_are_not_written_back_either() {
+    let mut f = fixture();
+    f.write_bytes_externally("归档/旧的.md", GBK);
+    f.write_bytes_externally("日记/2026/2026-09-26.md", GBK);
+    f.vault.rescan().unwrap();
+    let archived = f.vault.note_list(true).unwrap().remove(0).id;
+
+    let restored = f.vault.note_restore(&archived);
+    assert_eq!(f.bytes("归档/旧的.md"), GBK, "恢复");
+    assert!(restored.is_err());
+    let saved = f.vault.save_day("2026-09-26", "", "改了");
+    assert_eq!(f.bytes("日记/2026/2026-09-26.md"), GBK, "存某一天");
+    assert!(saved.is_err());
+}
+
+#[test]
+fn renaming_leaves_links_in_files_that_are_not_utf8_alone() {
+    let mut f = fixture();
+    let target = f.vault.note_create("weekly", "").unwrap();
+    let review = f.vault.note_create("复盘", "[[weekly]]").unwrap();
+    let mixed = [GBK, b" [[weekly]]".as_slice()].concat();
+    f.write_bytes_externally("笔记/老笔记.md", &mixed);
+    f.vault.rescan().unwrap();
+
+    let result = rename(&mut f, &target, "monthly");
+    assert_eq!(f.bytes("笔记/老笔记.md"), mixed);
+    assert_eq!(f.vault.note_get(&review).unwrap().content_md, "[[monthly]]", "别的照常改");
+    assert_eq!(result.links, 1);
+}
+
+#[test]
+fn a_merged_version_that_is_not_utf8_is_kept_byte_for_byte() {
+    let mut f = fixture();
+    f.vault.note_create("周报", "本机的").unwrap();
+    let copies = f.vault.absorb_merge(&[("笔记/周报.md".into(), GBK.to_vec())]).unwrap();
+    assert_eq!(copies.len(), 1);
+    let copy = f.files().into_iter().find(|rel| rel.contains("冲突")).unwrap();
+    assert_eq!(f.bytes(&copy), GBK, "对方那一版原样另存，不换成 U+FFFD");
+}
+
+/* ---------- 转成 UTF-8：认出编码、给人看一眼、原文留一份 ---------- */
+
+/// UTF-16 小端带 BOM（Windows 记事本的「Unicode」）
+fn utf16le(text: &str, bom: bool) -> Vec<u8> {
+    let mut bytes = if bom { vec![0xFF, 0xFE] } else { Vec::new() };
+    bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    bytes
+}
+
+#[test]
+fn legacy_encodings_are_recognised() {
+    assert_eq!(fsio::decode_legacy(GBK), Some(("GBK", "你好，世界".to_string())));
+    for bytes in [utf16le("# 周报\n\n- [ ] ok", true), utf16le("# 周报\n\n- [ ] ok", false)] {
+        assert_eq!(fsio::decode_legacy(&bytes), Some(("UTF-16", "# 周报\n\n- [ ] ok".to_string())));
+    }
+    let mut big = vec![0xFE, 0xFF];
+    big.extend("周报".encode_utf16().flat_map(u16::to_be_bytes));
+    assert_eq!(fsio::decode_legacy(&big), Some(("UTF-16", "周报".to_string())));
+    // GB 18030 里也解不开的字节：不认
+    assert_eq!(fsio::decode_legacy(b"abc\xff"), None);
+}
+
+#[test]
+fn converting_shows_a_preview_first_and_keeps_the_original_bytes() {
+    let mut f = fixture();
+    let rel = "笔记/老笔记.md";
+    let original = [GBK, b"\r\n\r\n- [ ] ok".as_slice()].concat();
+    f.write_bytes_externally(rel, &original);
+    f.vault.rescan().unwrap();
+    let id = f.vault.note_list(false).unwrap().remove(0).id;
+    let target = DocRef::note(&id);
+
+    let legacy = f.vault.legacy_text(&target).unwrap();
+    assert_eq!(legacy.encoding.as_deref(), Some("GBK"));
+    assert!(legacy.preview.starts_with("你好，世界"), "{}", legacy.preview);
+    assert_eq!(legacy.backup, "老笔记 (GBK 原文).txt");
+
+    // 预览之后文件又被改过：不转
+    let stale = fsio::fingerprint_bytes(b"x");
+    assert!(f.vault.convert_to_utf8(&target, &stale).is_err());
+    assert_eq!(f.bytes(rel), original);
+    f.take_announced();
+
+    f.vault.convert_to_utf8(&target, &legacy.fingerprint).unwrap();
+    assert_eq!(f.read(rel), "你好，世界\r\n\r\n- [ ] ok", "换行照原样");
+    assert_eq!(f.bytes("笔记/老笔记 (GBK 原文).txt"), original, "原文按原字节留着");
+    assert_eq!(f.files(), vec![rel], "原文不是 .md，不进列表");
+    let note = f.vault.note_get(&id).unwrap();
+    assert!(!note.not_utf8);
+    assert_eq!(note.title, "老笔记");
+    assert!(note.content_md.contains("你好"));
+    assert!(f.take_announced().iter().any(|change| change.notes.contains(&id)), "开着的编辑器要换上新的");
+
+    // 转完能改了；再转一次说已经是 UTF-8
+    f.vault.note_set_pinned(&id, true).unwrap();
+    assert!(f.vault.legacy_text(&target).is_err());
+}
+
+#[test]
+fn converting_twice_keeps_both_originals() {
+    let mut f = fixture();
+    let rel = "笔记/老笔记.md";
+    for round in 0..2 {
+        f.write_bytes_externally(rel, &utf16le("第几轮", true));
+        f.vault.rescan().unwrap();
+        let id = f.vault.note_list(false).unwrap().remove(0).id;
+        let target = DocRef::note(&id);
+        let legacy = f.vault.legacy_text(&target).unwrap();
+        let expected = if round == 0 { "老笔记 (UTF-16 原文).txt" } else { "老笔记 (UTF-16 原文) 2.txt" };
+        assert_eq!(legacy.backup, expected);
+        f.vault.convert_to_utf8(&target, &legacy.fingerprint).unwrap();
+    }
+    assert!(f.exists("笔记/老笔记 (UTF-16 原文).txt"));
+    assert!(f.exists("笔记/老笔记 (UTF-16 原文) 2.txt"));
+}
+
+#[test]
+fn unrecognised_bytes_are_left_alone() {
+    let mut f = fixture();
+    f.write_bytes_externally("笔记/坏的.md", b"abc\xff");
+    f.vault.rescan().unwrap();
+    let target = DocRef::note(&f.vault.note_list(false).unwrap().remove(0).id);
+    let legacy = f.vault.legacy_text(&target).unwrap();
+    assert_eq!(legacy.encoding, None);
+    assert!(f.vault.convert_to_utf8(&target, &legacy.fingerprint).is_err());
+    assert_eq!(f.bytes("笔记/坏的.md"), b"abc\xff");
+}
+
+#[test]
+fn days_that_are_not_utf8_say_so_are_not_carried_and_convert_too() {
+    let mut f = fixture();
+    f.write_bytes_externally("日记/2026/2026-09-25.md", GBK);
+    f.vault.rescan().unwrap();
+    let day = f.vault.day("2026-09-25", false).unwrap();
+    assert!(day.not_utf8);
+    // 今天还没写：不从换过字的那天延续
+    let today = f.vault.day("2026-09-26", true).unwrap();
+    assert_eq!(today.carried_from, None);
+    assert!(today.note_md.is_empty());
+
+    let target = DocRef::new(journal::DAY, "2026-09-25");
+    let legacy = f.vault.legacy_text(&target).unwrap();
+    f.vault.convert_to_utf8(&target, &legacy.fingerprint).unwrap();
+    let day = f.vault.day("2026-09-25", false).unwrap();
+    assert!(!day.not_utf8);
+    assert_eq!(day.note_md, "你好，世界");
+    assert!(f.exists("日记/2026/2026-09-25 (GBK 原文).txt"));
+    assert_eq!(f.vault.day("2026-09-26", true).unwrap().carried_from.as_deref(), Some("2026-09-25"));
+}

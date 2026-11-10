@@ -39,6 +39,7 @@ import {
   type GuideName,
   type GuideUpdate,
   type IndexProgress,
+  type LegacyText,
   NOTE,
   type Note,
   type NoteSummary,
@@ -151,6 +152,16 @@ interface DataState {
   installUpdate: () => Promise<string>;
   /** 在系统的文件管理器里定位这篇文档的文件 */
   revealDocument: (target: DocumentRef) => Promise<void>;
+  /**
+   * 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（docs/1110审查与研究.md §5.1）。
+   * 取不到是 null，原因放进 error
+   */
+  legacyText: (target: DocumentRef) => Promise<LegacyText | null>;
+  /**
+   * 转成 UTF-8，原文另存在旁边。后端通知这一篇变了，列表、正文、编辑器跟着换（applyVaultChange）。
+   * 失败返回 false，原因放进 error
+   */
+  convertToUtf8: (target: DocumentRef, fingerprint: string) => Promise<boolean>;
   openVaultFolder: () => Promise<void>;
   /**
    * 换一个文件夹当仓库。先把编辑器里的都存掉；换成功就整页重载。`move`：不问，现在的笔记直接
@@ -832,6 +843,25 @@ export const useData = create<DataState>((set, get) => ({
       await (await backend()).vaultReveal(target);
     } catch (error) {
       set({ error: messageOf(error) });
+    }
+  },
+
+  legacyText: async (target) => {
+    try {
+      return await (await backend()).docLegacyText(target);
+    } catch (error) {
+      set({ error: messageOf(error) });
+      return null;
+    }
+  },
+
+  convertToUtf8: async (target, fingerprint) => {
+    try {
+      await (await backend()).docConvertUtf8(target, fingerprint);
+      return true;
+    } catch (error) {
+      set({ error: messageOf(error) });
+      return false;
     }
   },
 

@@ -55,7 +55,7 @@ import { DiagramWidget } from "./diagram";
 import { emojiFor } from "./emoji";
 import { decodeEntity } from "./entities";
 import { type FrontMatterRange, frontMatterRange } from "./frontMatter";
-import { glideTo } from "./glide";
+import { glideTo, isGliding } from "./glide";
 import {
   FoldedSectionWidget,
   HeadingGutterWidget,
@@ -106,6 +106,7 @@ import {
 import { type MarkdownTableModel, parseDelimitedTable, parseMarkdownTable } from "./markdownTable";
 import { MathWidget } from "./math";
 import { createRevisionLog, rebaseEdit, recordRevision, revisionOf } from "./pluginEdits";
+import { readingLine, sectionAt } from "./readingLine";
 import { revealField, revealIdle, revealRanges, trackEditing } from "./reveal";
 import { registerEditorFlush } from "./saveBus";
 import { createSearchPanel, matchOnLine, queryOfAnchor, scrollToMatch } from "./searchPanel";
@@ -205,8 +206,23 @@ const imageBaseSlot = new Compartment();
 const wikiTitlesSlot = new Compartment();
 /** 协作会话（collab/binding.ts）：编辑器挂着时开始、结束协作，单独换上、换下 */
 const collabSlot = new Compartment();
-/** 只读（协作时主持人给的权限是「只读」）：能选、能复制，不能改 */
+/** 只读（协作时主持人给的权限是「只读」；文件不是 UTF-8）：能选、能复制，不能改 */
 const readOnlySlot = new Compartment();
+/**
+ * 只读时谁也不能改正文。EditorState.readOnly 只拦得住键盘输入，点一下就改源码的那些
+ * （勾任务的方框、提示块的折叠箭头、加粗这类快捷键）照样 dispatch —— 改了又存不进去：
+ * 不是 UTF-8 的文件后端拒绝写回（docs/1110审查与研究.md §5.1），协作的只读访客改了也传不出去。
+ * 别处同步过来的（协作的对方、外部改动回填、另一个窗格转过来的）照常进来
+ */
+const readOnlyGuard = EditorState.transactionFilter.of((tr) =>
+  tr.docChanged &&
+  tr.startState.readOnly &&
+  !tr.annotation(Transaction.remote) &&
+  !tr.annotation(externalSync) &&
+  !tr.annotation(mirrorSync)
+    ? []
+    : tr,
+);
 /**
  * 撤销历史。同一篇在另一个窗格里再开一个编辑器（向右拆分）时沿用那边的状态 —— 解析好的语法树、
  * 装饰都不用重来，长文省下二三十毫秒（docs/标签页与分屏.md §15.6）—— 历史要换成空的：
@@ -774,6 +790,7 @@ export function MarkdownEditor({
       imageBaseSlot.of(imageBaseDir.of(imageBaseRef.current)),
       collabSlot.of(collabRef.current ? collabBinding(collabRef.current) : []),
       readOnlySlot.of(EditorState.readOnly.of(readOnlyRef.current)),
+      readOnlyGuard,
       wikiTitlesSlot.of(knownWikiTitles.of(knownTitlesRef.current)),
       // 整个剪贴板就是一张表（Excel、网页、从表格里复制的一片）：变成 Markdown 表格
       tablePasteHandler,
@@ -1354,7 +1371,15 @@ interface TemplateMenu {
 export interface EditorOutlineHandle {
   /** 滚到某个目录条目；编辑器已卸载或条目不存在时返回 false */
   scrollTo: (id: string) => boolean;
+  /** 光标进了哪一节（光标一动就通知，订阅时先给一次） */
   subscribe: (listener: (id: string) => void) => () => void;
+  /**
+   * 跟着滚动：可视区（窗口坐标的上下边）里现在读到哪一节，规则见 readingLine。
+   * atEnd：滚动容器已经滚到底了。编辑器已卸载、没有目录时返回 null
+   */
+  readingAt: (band: { top: number; bottom: number }, atEnd: boolean) => string | null;
+  /** 正在滑过去（点了目录、查找跳转、脚注）：滑的路上不算读到了哪 */
+  gliding: () => boolean;
   /**
    * 滚到第几行（从 1 开始）并把光标放在行尾；带着全局搜索的命中时改成选中它，篇内查找换成同一个条件。
    * 行号不存在或编辑器已卸载时返回 false
@@ -1381,12 +1406,34 @@ function createOutlineHandle(
 ) {
   const notifyActive = (state: EditorState) => {
     const line = state.doc.lineAt(state.selection.main.head).number;
-    const active =
-      [...outlineItemsRef.current].filter((item) => item.line <= line).at(-1) ??
-      outlineItemsRef.current[0];
+    const active = sectionAt(outlineItemsRef.current, line);
     if (active) for (const listener of listeners) listener(active.id);
   };
   const handle: EditorOutlineHandle = {
+    readingAt(band, atEnd) {
+      const view = live.view;
+      if (!view || outlineItemsRef.current.length === 0) return null;
+      const { state } = view;
+      const head = state.selection.main.head;
+      // 光标那一处在窗口里的位置；不在画出来的范围里（滚远了）是 null，当它不在屏幕上
+      const caret = view.coordsAtPos(head);
+      const documentTop = view.documentTop;
+      const line = readingLine({
+        caret: caret && {
+          line: state.doc.lineAt(head).number,
+          top: caret.top,
+          bottom: caret.bottom,
+        },
+        band,
+        atEnd,
+        lineAtY: (y) =>
+          state.doc.lineAt(view.lineBlockAtHeight(Math.max(0, y - documentTop)).from).number,
+      });
+      return sectionAt(outlineItemsRef.current, line)?.id ?? null;
+    },
+    gliding() {
+      return !!live.view && isGliding(live.view);
+    },
     scrollTo(id) {
       // 编辑器已经卸载（切换文档的那一帧上层还握着旧句柄）就当没这回事
       const view = live.view;

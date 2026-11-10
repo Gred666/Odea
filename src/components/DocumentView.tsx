@@ -43,6 +43,7 @@ import { Backlinks } from "./Backlinks";
 import { CollabBanner, CollabPresence } from "./CollabDialog";
 import { ConflictBanner } from "./ConflictBanner";
 import { EmptyState } from "./EmptyArt";
+import { EncodingBanner } from "./EncodingBanner";
 import { GuideUpdateBanner } from "./GuideUpdateBanner";
 import { NotePath } from "./NotePath";
 import { Outline } from "./Outline";
@@ -430,6 +431,12 @@ export function DocumentView({
                       )}
                     </AnimatePresence>
 
+                    {/* ---------- 文件不是 UTF-8：只能看，能转（docs/1110审查与研究.md §5.1） ----------
+                  不做进出动画：只跟着某一篇出现，换篇时随整块正文一起换。key：换篇时预览收起 */}
+                    {doc.notUtf8 && (
+                      <EncodingBanner key={doc.key} target={vaultRef(doc.editor?.target)} />
+                    )}
+
                     {/* ---------- 标题行 ---------- */}
                     <header id="doc-top" data-outline-id="doc-top">
                       {/* 标题上方那一行：左边是小字（日历某天的日期、笔记的文件夹），右边是分段控件。
@@ -570,7 +577,7 @@ export function DocumentView({
                           // 双链指向的是主持人的笔记，这边没有：一律按「不存在」画
                           linksMissing={shared}
                           collab={doc.collab?.session ?? null}
-                          readOnly={doc.collab?.readOnly ?? false}
+                          readOnly={!!doc.notUtf8 || (doc.collab?.readOnly ?? false)}
                           linkSelf={noteId ?? undefined}
                           onExitTop={doc.editor?.titleEditable ? exitToTitle : undefined}
                         />

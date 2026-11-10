@@ -780,10 +780,21 @@ function noteTitleOf(noteId: string): string {
 }
 
 /** 主持人：这一篇在不在这个会话的范围里。在的话返回 null，不在的话是给访客看的一句话 */
+/**
+ * 这一篇的文件不是 UTF-8（docs/1110审查与研究.md §5.1）：给它的标题，不是给 null。
+ * 这样的笔记只能看、存不进去，不进协作 —— 别人改的都会存盘失败
+ */
+function notUtf8Title(doc: string): string | null {
+  const { notes, archived } = useData.getState();
+  const note = notes.find((item) => item.id === doc) ?? archived.find((item) => item.id === doc);
+  return note?.notUtf8 ? note.title : null;
+}
+
 function refusalOf(id: number, doc: string): string | null {
   const session = sessionOf(id);
   const scope = session?.scope;
   if (!session || !scope) return "协作已经停了";
+  if (notUtf8Title(doc) !== null) return "这一篇不是 UTF-8 编码，主持人那边只能看，一起改不了";
   const elsewhere = useCollab.getState().hostedIn[doc];
   if (elsewhere !== undefined && elsewhere !== id) return "这一篇正在另一个协作里";
   if (scope.kind === "doc") return doc === session.noteId ? null : "这一篇不在共享的范围里";
@@ -1102,6 +1113,15 @@ export const useCollab = create<CollabState>((set, get) => ({
   setDirectOnly: (directOnly) => set({ directOnly }),
 
   startHosting: async (noteId, title, resume) => {
+    const legacy = notUtf8Title(noteId);
+    if (legacy !== null) {
+      set({
+        dialogOpen: true,
+        focus: null,
+        error: `开始不了协作：「${legacy}」不是 UTF-8 编码，只能看。先在正文上方把它转成 UTF-8`,
+      });
+      return;
+    }
     const target: HostTarget = { kind: "doc", noteId, title };
     const overlap = overlapOf(target);
     if (overlap !== null) {

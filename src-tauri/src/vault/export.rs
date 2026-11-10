@@ -53,8 +53,19 @@ impl Vault {
         for row in index::note_summaries(&self.db, false)? {
             let folder = folder_of.get(&row.id).cloned().unwrap_or_else(|| unsorted.clone());
             let target = fsio::unique_rel(dest, &folder, layout::stem_of(&row.rel_path), None);
-            let Some(text) = self.read(&row.rel_path)? else { continue };
-            let (meta, body) = frontmatter::split(&text);
+            let Some(file) = self.read_lossy(&row.rel_path)? else { continue };
+            if !file.utf8 {
+                // 不是 UTF-8 的按原字节拷：改链接就得写换过字的一份
+                let to = fsio::abs(dest, &target);
+                if let Some(parent) = to.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(fsio::abs(&self.root, &row.rel_path), to)?;
+                moved.insert(row.rel_path);
+                report.notes += 1;
+                continue;
+            }
+            let (meta, body) = frontmatter::split(&file.text);
             let body = folders::relink(&body, layout::dir_of(&row.rel_path), layout::dir_of(&target), |rel| {
                 fsio::abs(&self.root, rel).exists()
             });
@@ -132,11 +143,16 @@ mod tests {
         let id = vault.note_create_in("交易/学习", "流程", "![图](附件/图.png)").unwrap();
         vault.note_create_in(super::super::tree::UNSORTED, "随手", "没放进树里").unwrap();
         vault.save_day("2026-10-20", "", "今天").unwrap();
+        // GBK 存的一篇（docs/1110审查与研究.md §5.1）
+        let gbk: &[u8] = b"\xc4\xe3\xba\xc3 [[x]](a.png)";
+        std::fs::write(root.join("老笔记.md"), gbk).unwrap();
+        vault.rescan().unwrap();
         let before = std::fs::read_to_string(root.join("流程.md")).unwrap();
 
         let out = dir.path().join("导出");
         let report = vault.export_tree(&out).unwrap();
-        assert_eq!(report.notes, 4, "两篇指南、流程、随手");
+        assert_eq!(report.notes, 5, "两篇指南、流程、随手、老笔记");
+        assert_eq!(std::fs::read(out.join("未整理/老笔记.md")).unwrap(), gbk, "不是 UTF-8 的原样拷");
         let exported = std::fs::read_to_string(out.join("交易/学习/流程.md")).unwrap();
         assert!(exported.contains("![图](../../附件/图.png)"), "{exported}");
         assert!(exported.contains(&id), "属性块原样带着");

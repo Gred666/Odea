@@ -43,6 +43,7 @@ const day = (noteMd: string, extra: Partial<DayDoc> = {}): DayDoc => ({
   updatedAt: 1,
   carriedFrom: null,
   relPath: "日记/2026/2026-08-29.md",
+  notUtf8: false,
   ...extra,
 });
 
@@ -61,6 +62,7 @@ const note = (contentMd: string): Note => ({
   relPath: "笔记/笔记.md",
   conflictOf: null,
   idInFile: true,
+  notUtf8: false,
 });
 
 const today = { type: DAY, key: "2026-08-29" };
@@ -127,6 +129,8 @@ describe("落在盘上、发给别的设备的 id 和老版本一字不差（doc
     expect(teamDocId(model({ type: GOAL, key: "week:2026-10-19" }))).toBe("goal-week-2026-10-19");
     expect(teamDocId(model({ type: GOAL, key: "month:2026-10-01" }))).toBe("goal-month-2026-10-01");
     expect(teamDocId(model({ type: GOAL, key: "year:2026-01-01" }))).toBe("goal-year-2026-01-01");
+    // 文件不是 UTF-8 的只能看，不进团队的会话（docs/1110审查与研究.md §5.1）
+    expect(teamDocId({ ...model({ type: DAY, key: "2026-10-23" }), notUtf8: true })).toBeNull();
   });
 
   it("冲突横幅里原文的名字：某一天按日期，目标按周期（和反向链接的出处一样）", async () => {
@@ -202,6 +206,7 @@ describe("存某一天、目标", () => {
       createdAt: 0,
       updatedAt: 0,
       relPath: "目标/2026/2026-W35.md",
+      notUtf8: false,
     };
     useJournal.setState({ goals: { "week:2026-08-24": empty } });
     journal.goalSave.mockResolvedValue({ ...empty, id: "g1", contentMd: "本周", updatedAt: 5 });

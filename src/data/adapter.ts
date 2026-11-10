@@ -133,8 +133,12 @@ function useVaultDocument(): DocumentModel {
         bodyMd: draftOr(noteRef(note.id), body ?? ""),
         statusParts: body === undefined ? ["载入中…"] : noteStatus(note, "最后编辑于"),
         // 归档里的也能直接删（进回收站，可以撤销），不用先恢复出来
-        deletable: true,
-        editor: body === undefined ? undefined : { target: noteRef(note.id), titleEditable: true },
+        deletable: !note.notUtf8,
+        notUtf8: note.notUtf8,
+        editor:
+          body === undefined
+            ? undefined
+            : { target: noteRef(note.id), titleEditable: !note.notUtf8 },
       };
     }
 
@@ -192,12 +196,14 @@ function useNoteDocument(noteId: string, active: boolean): DocumentModel {
     folder: folderOf(note),
     bodyMd: draftOr(noteRef(note.id), body ?? ""),
     statusParts: body === undefined ? ["载入中…"] : noteStatus(note, "上次更新"),
-    deletable: true,
+    deletable: !note.notUtf8,
+    notUtf8: note.notUtf8,
     collab: hostedCollab(note.id),
     // 开了带模板的插件（L0）时 `/模板` 能用；没有就和以前一样
     templates: noteTemplateContext(note.title),
     // 正文取回来之前不给编辑器：空着挂上的话，一输入就把原来的正文整篇覆盖了
-    editor: body === undefined ? undefined : { target: noteRef(note.id), titleEditable: true },
+    editor:
+      body === undefined ? undefined : { target: noteRef(note.id), titleEditable: !note.notUtf8 },
   };
 }
 

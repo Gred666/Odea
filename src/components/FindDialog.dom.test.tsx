@@ -61,6 +61,7 @@ const noteA: NoteSummary = {
   relPath: "笔记/工作/周报.md",
   conflictOf: null,
   idInFile: true,
+  notUtf8: false,
 };
 
 let container: HTMLDivElement;

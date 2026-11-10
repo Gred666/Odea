@@ -72,6 +72,26 @@ export interface NoteSummary {
    * 团队协作按它认同一篇（team/store.ts 的 teamDocId），没写的按相对路径
    */
   idInFile: boolean;
+  /**
+   * 文件不是 UTF-8（GBK、UTF-16 这些）：正文里认不出的字换成了 U+FFFD。只能看 ——
+   * 后端拒绝一切写回（保存、改名、置顶、移动、归档、删除），不然原文就被写坏了（docs/1110审查与研究.md §5.1）
+   */
+  notUtf8: boolean;
+}
+
+/**
+ * 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（Rust 的 LegacyText）。转之前给用户看一眼：
+ * 认错了是满屏乱码，就别转
+ */
+export interface LegacyText {
+  /** 「GBK」「UTF-16」；认不出是 null */
+  encoding: string | null;
+  /** 解出来的开头一段 */
+  preview: string;
+  /** 原文另存成的文件名（同一个文件夹里） */
+  backup: string;
+  /** 原样字节的指纹，转的时候交回去核对 */
+  fingerprint: string;
 }
 
 /** 完整笔记（含正文）。对应 Rust 的 domain::model::Note：noteGet 取一篇时才有 */
@@ -661,6 +681,12 @@ export interface DocumentModel {
   statusParts: string[];
   /** 是否显示删除按钮（原型里笔记视图右下角有个红色垃圾桶） */
   deletable?: boolean;
+  /**
+   * 文件不是 UTF-8（NoteSummary.notUtf8，日程的某一天、目标也一样）：只能看。标题上方的横幅说为什么、
+   * 能转成 UTF-8（EncodingBanner），编辑器只读；标题能不能改、有没有删除按钮由 editor.titleEditable、
+   * deletable 管。也不进协作（团队仓库的会话、发起协作）
+   */
+  notUtf8?: boolean;
   /**
    * 正在协作（docs/协同编辑.md）：编辑器接到这个会话上，正文以会话为准。
    * 主持人那篇是普通的笔记带上它；访客那篇的保存目标是 shared

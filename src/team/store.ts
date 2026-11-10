@@ -109,7 +109,8 @@ let viewing: { key: string; doc: string } | null = null;
  */
 export function teamDocId(doc: DocumentModel): string | null {
   const target = doc.editor?.target;
-  if (!target || isShared(target)) return null;
+  // 文件不是 UTF-8 的只能看（docs/1110审查与研究.md §5.1）：不进团队的会话，别人改的存不进去
+  if (!target || isShared(target) || doc.notUtf8) return null;
   const key = keyOf(target);
   if (viewing?.key === key) return viewing.doc;
   const id = teamIdOf(target, doc.relPath, doc.idInFile ?? false);

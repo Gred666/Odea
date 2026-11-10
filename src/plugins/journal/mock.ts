@@ -52,6 +52,7 @@ const emptyGoal = (horizon: GoalHorizon, periodStart: string): Goal => ({
   createdAt: 0,
   updatedAt: 0,
   relPath: goalRelPath(periodStart),
+  notUtf8: false,
 });
 
 /** 写过的某一天和目标，交给核心的预览仓库（搜索、反链、历史版本、改写双链都看它们） */
@@ -137,7 +138,8 @@ export const journalMock: JournalApi = {
     const tasks = Object.values(data.tasks).filter((task) => task.dueDate === date);
     const own = data.days[date];
     const relPath = dayRelPath(date);
-    if (own) return { date, tasks, ...own, carriedFrom: null, relPath };
+    // 浏览器预览里的日子都是 UTF-8 的
+    if (own) return { date, tasks, ...own, carriedFrom: null, relPath, notUtf8: false };
 
     const previous = carryOver
       ? Object.keys(data.days)
@@ -146,7 +148,14 @@ export const journalMock: JournalApi = {
           .pop()
       : undefined;
     if (previous) {
-      return { date, tasks, ...data.days[previous]!, carriedFrom: previous, relPath };
+      return {
+        date,
+        tasks,
+        ...data.days[previous]!,
+        carriedFrom: previous,
+        relPath,
+        notUtf8: false,
+      };
     }
     return {
       date,
@@ -156,6 +165,7 @@ export const journalMock: JournalApi = {
       updatedAt: Date.now(),
       carriedFrom: null,
       relPath,
+      notUtf8: false,
     };
   },
 

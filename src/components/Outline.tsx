@@ -11,12 +11,19 @@ import { OverlayScrollbar } from "./OverlayScrollbar";
 import { SwapFade } from "./SwapFade";
 import { type OutlineNode, foldableUnder, outlineTree, visibleId } from "./outlineTree";
 
+/** 跟着滚动最多隔多久算一次（ms）。算一次要量一下光标和正文的位置，不每帧都量 */
+const FOLLOW_EVERY = 100;
+/** 滚动停下这么久再补算一次：停在哪就是哪，不会停在半路算的那一节上 */
+const FOLLOW_IDLE = 120;
+
 /**
  * 右侧目录树。
- * 活动项跟随正文滚动联动，指示条用 layoutId 在条目间滑动。
+ * 活动项跟随正文滚动联动（读到哪一节高亮跟到哪一节），指示条用 layoutId 在条目间滑动。
  *
- * 用 IntersectionObserver 而不是 scroll 事件 —— 后者每帧都要 getBoundingClientRect，
- * 是典型的强制同步布局，正文一长就掉帧。
+ * 只读的预览用 IntersectionObserver 看标题露没露出来。编辑器里的标题不一定画出来了
+ * （CodeMirror 只画视口附近），按编辑器的行号算：光标动了听光标的（句柄的 subscribe），
+ * 滚动时按可视区算（readingAt，规则见 editor/readingLine.ts）。以前有编辑器时只听光标，
+ * 只滚不点，高亮一直停在原地（docs/1110审查与研究.md §5.2）
  */
 export function Outline({
   items,
@@ -51,6 +58,53 @@ export function Outline({
   }, [resetKey, items[0]?.id]);
 
   useEffect(() => editorHandle?.subscribe(setActiveId), [editorHandle]);
+
+  // 有编辑器时跟着滚动走。最多 FOLLOW_EVERY 算一次，停下来再补一次；正在滑过去（点了目录、
+  // 查找跳转）时不算 —— 路上经过的那几节不该一节节亮过去，滑到了再算
+  const hasItems = items.length > 0;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resetKey：换了文档重新挂、先按可视区算一次
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !editorHandle || !hasItems) return;
+    // 弹出窗口里的窗格（docs/标签页与分屏.md §16）：计时、窗口高度都看它自己那个窗口
+    const win = root.ownerDocument.defaultView ?? window;
+    let frame = 0;
+    let idle = 0;
+    let last = Number.NEGATIVE_INFINITY;
+    const follow = () => {
+      if (editorHandle.gliding()) {
+        idle = win.setTimeout(follow, FOLLOW_IDLE);
+        return;
+      }
+      last = win.performance.now();
+      const box = root.getBoundingClientRect();
+      const band = { top: Math.max(box.top, 0), bottom: Math.min(box.bottom, win.innerHeight) };
+      const atEnd =
+        root.scrollTop > 0 && root.scrollTop + root.clientHeight >= root.scrollHeight - 2;
+      const id = editorHandle.readingAt(band, atEnd);
+      if (id) setActiveId(id);
+    };
+    const onScroll = () => {
+      win.clearTimeout(idle);
+      idle = win.setTimeout(follow, FOLLOW_IDLE);
+      if (frame || win.performance.now() - last < FOLLOW_EVERY) return;
+      frame = win.requestAnimationFrame(() => {
+        frame = 0;
+        follow();
+      });
+    };
+    root.addEventListener("scroll", onScroll, { passive: true });
+    // 打开时先算一次：滚动位置可能是上次记住的地方，光标却在开头
+    frame = win.requestAnimationFrame(() => {
+      frame = 0;
+      follow();
+    });
+    return () => {
+      root.removeEventListener("scroll", onScroll);
+      win.cancelAnimationFrame(frame);
+      win.clearTimeout(idle);
+    };
+  }, [editorHandle, scrollRef, resetKey, hasItems]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: resetKey 用于强制重建 observer
   useEffect(() => {

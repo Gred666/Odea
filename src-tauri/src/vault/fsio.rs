@@ -24,12 +24,69 @@ pub fn abs(root: &Path, rel: &str) -> PathBuf {
 }
 
 pub fn fingerprint(text: &str) -> String {
+    fingerprint_bytes(text.as_bytes())
+}
+
+/// 同 fingerprint，算的是原样的字节（不是 UTF-8 的文件：转换前核对还是预览的那一版）
+pub fn fingerprint_bytes(bytes: &[u8]) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.as_bytes() {
+    for byte in bytes {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{hash:016x}")
+}
+
+/// 认出一个不是 UTF-8 的文件原来是什么编码、解成文字：返回（给人看的编码名，文字）。认不出是 None。
+///
+/// - 开头有 BOM 的 UTF-16（Windows 记事本的「Unicode」）
+/// - 没有 BOM 的 UTF-16：文字里不会有 0 字节，有的话多半是 UTF-16 里 ASCII 那一半；0 落在奇数位是小端
+/// - 都不是就按 GB 18030 解（GBK 的超集，旧的记事本、国内不少工具默认存它），有解不开的字节就不认
+///
+/// 认对没认对靠人看：转之前把解出来的样子给用户看一眼（Vault::legacy_text）。UTF-8 被当成 GBK 也解得开，
+/// 只是满屏乱码，所以这一步不能省
+pub fn decode_legacy(bytes: &[u8]) -> Option<(&'static str, String)> {
+    let utf16 = |rest: &[u8], little: bool| -> Option<String> {
+        if rest.len() % 2 != 0 {
+            return None;
+        }
+        let units: Vec<u16> = rest
+            .chunks_exact(2)
+            .map(|pair| if little { u16::from_le_bytes([pair[0], pair[1]]) } else { u16::from_be_bytes([pair[0], pair[1]]) })
+            .collect();
+        String::from_utf16(&units).ok()
+    };
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return utf16(rest, true).map(|text| ("UTF-16", text));
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return utf16(rest, false).map(|text| ("UTF-16", text));
+    }
+    if bytes.contains(&0) {
+        let odd = bytes.iter().skip(1).step_by(2).filter(|byte| **byte == 0).count();
+        let even = bytes.iter().step_by(2).filter(|byte| **byte == 0).count();
+        return utf16(bytes, odd >= even).map(|text| ("UTF-16", text));
+    }
+    let (text, had_errors) = encoding_rs::GB18030.decode_without_bom_handling(bytes);
+    (!had_errors).then(|| ("GBK", text.into_owned()))
+}
+
+/// 按 UTF-8 解出来的一个文件
+pub struct Decoded {
+    pub text: String,
+    /// false：不是 UTF-8（GBK、UTF-16 这些），认不出的字节换成了 U+FFFD。这样的字只能拿来显示、
+    /// 建索引，改了写回去原文就没了（docs/1110审查与研究.md §5.1）
+    pub utf8: bool,
+}
+
+pub fn decode(bytes: Vec<u8>) -> Decoded {
+    match String::from_utf8(bytes) {
+        Ok(text) => Decoded { text, utf8: true },
+        Err(error) => Decoded {
+            text: String::from_utf8_lossy(error.as_bytes()).into_owned(),
+            utf8: false,
+        },
+    }
 }
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);

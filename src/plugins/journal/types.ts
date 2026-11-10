@@ -81,6 +81,8 @@ export interface Goal {
   updatedAt: number;
   /** 在仓库里的相对路径；还没写过的周期是它将来的位置 */
   relPath: string;
+  /** 文件不是 UTF-8：只能看（同 NoteSummary.notUtf8） */
+  notUtf8: boolean;
 }
 
 /** 目标的 key：`week:2026-09-21`。goals 缓存的键、DocumentRef 的 key 都是它 */
@@ -127,6 +129,8 @@ export interface DayDoc {
   carriedFrom: ISODate | null;
   /** 在仓库里的相对路径；还没写过的日子是它将来的位置 */
   relPath: string;
+  /** 文件不是 UTF-8：只能看（同 NoteSummary.notUtf8） */
+  notUtf8: boolean;
 }
 
 /** 日历右侧的分段：日TODO / 周·月·年 GOAL */

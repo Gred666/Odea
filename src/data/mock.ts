@@ -93,9 +93,15 @@ const LS_KEY = "odea.mock.v5";
  * 使用指南那几篇多一个记号（桌面版写在文件的属性块里）：上一次给它的是哪个版本带的指南、
  * 那一版正文的指纹
  */
-/** 预览里的笔记都是 Odea 建的，id 都写在属性块里（idInFile 不写就是 true） */
-type MockNote = Omit<Note, "idInFile"> & {
+/**
+ * 预览里的笔记都是 Odea 建的，id 都写在属性块里（idInFile 不写就是 true）、都是 UTF-8
+ * （notUtf8 不写就是 false；调界面时在 localStorage 里给某一篇写上 true，legacy 写上「认出来」的样子）
+ */
+type MockNote = Omit<Note, "idInFile" | "notUtf8"> & {
   idInFile?: boolean;
+  notUtf8?: boolean;
+  /** 不是 UTF-8 的那一篇按什么编码认出来、转过去是什么（桌面版是从原样的字节解出来的） */
+  legacy?: { encoding: string; text: string };
   guide?: { name: GuideName; version: string; hash: string };
 };
 
@@ -192,7 +198,7 @@ function conflictOriginalTitle(title: string): string | null {
 }
 
 /** 给前端的那一份：算上它是不是谁的冲突副本 */
-function present({ guide: _mark, ...note }: MockNote): Note {
+function present({ guide: _mark, legacy: _legacy, ...note }: MockNote): Note {
   const originalTitle = conflictOriginalTitle(note.title);
   const original = originalTitle
     ? state.notes.find((other) => other.id !== note.id && other.title === originalTitle)
@@ -202,6 +208,7 @@ function present({ guide: _mark, ...note }: MockNote): Note {
     relPath: note.relPath ?? `${note.isArchived ? "归档" : "笔记"}/${fileStemFor(note.title)}.md`,
     conflictOf: original?.id ?? null,
     idInFile: note.idInFile ?? true,
+    notUtf8: note.notUtf8 ?? false,
   };
 }
 
@@ -491,9 +498,30 @@ function notFound(what: string): never {
   throw { kind: "NotFound", message: what };
 }
 
+/** 要转成 UTF-8 的那一篇：只有笔记，还得真的不是 UTF-8 */
+function legacyNote(target: DocumentRef): MockNote {
+  const note = target.type === NOTE ? state.notes.find((x) => x.id === target.key) : undefined;
+  if (!note) notFound(`${target.type} ${target.key}`);
+  if (!note.notUtf8) throw { kind: "Invalid", message: "这篇已经是 UTF-8 了" };
+  return note;
+}
+
+/** 桌面版是原样字节的指纹；预览里没有字节，用改动时间代替（之间改过就对不上） */
+const mockFingerprint = (note: MockNote) => `mock-${note.updatedAt}`;
+
 /** 浏览器预览里没有仓库文件夹：跟文件打交道的操作只在桌面版里有 */
 function syncDesktopOnly(): never {
   throw { kind: "Invalid", message: "浏览器预览里没有笔记文件夹，桌面版里才能开启同步" };
+}
+
+/** 和 Rust 侧 Vault::read 一样：不是 UTF-8 的那篇不改（docs/1110审查与研究.md §5.1） */
+function writable(note: MockNote): MockNote {
+  if (!note.notUtf8) return note;
+  const name = note.relPath.slice(note.relPath.lastIndexOf("/") + 1);
+  throw {
+    kind: "Invalid",
+    message: `「${name}」不是 UTF-8 编码，Odea 只显示、不改它：改了会把原文写坏。在正文上方转成 UTF-8 以后就能改了`,
+  };
 }
 
 function desktopOnly(): never {
@@ -760,6 +788,7 @@ export const mockBackend: Backend = {
     await tick();
     const current = state.notes.find((x) => x.id === id);
     if (!current) notFound(`note ${id}`);
+    writable(current);
     current.contentMd = contentMd;
     current.excerpt = makeExcerpt(contentMd, 60);
     current.wordCount = countWords(contentMd);
@@ -773,6 +802,7 @@ export const mockBackend: Backend = {
     await tick();
     const current = state.notes.find((x) => x.id === id);
     if (!current) notFound(`note ${id}`);
+    writable(current);
     const clean = title.trim();
     if (!clean) throw { kind: "Invalid", message: "标题不能是空的" };
     if (current.title !== clean) {
@@ -791,6 +821,7 @@ export const mockBackend: Backend = {
     await tick();
     const n = state.notes.find((x) => x.id === id);
     if (!n) notFound(`note ${id}`);
+    writable(n);
     n.isPinned = pinned;
     n.updatedAt = Date.now();
     save(state);
@@ -800,6 +831,7 @@ export const mockBackend: Backend = {
     await tick();
     const n = state.notes.find((x) => x.id === id);
     if (!n) notFound(`note ${id}`);
+    writable(n);
     n.isArchived = true;
     n.isPinned = false; // 归档清除置顶，和 Rust 侧一致
     n.archivedAt = Date.now();
@@ -812,6 +844,7 @@ export const mockBackend: Backend = {
     await tick();
     const n = state.notes.find((x) => x.id === id);
     if (!n) notFound(`note ${id}`);
+    writable(n);
     // relPath 归档时没动：恢复回原来的文件夹，文件夹没了就建上（和 Rust 侧一样）。逻辑目录的节点一直留着
     if (!state.tree) ensureFolder(folderOf(n));
     n.isArchived = false;
@@ -824,6 +857,7 @@ export const mockBackend: Backend = {
     await tick();
     const i = state.notes.findIndex((x) => x.id === id);
     if (i < 0) notFound(`note ${id}`);
+    writable(state.notes[i]!);
     const [removed] = state.notes.splice(i, 1);
     state.trash = [...(state.trash ?? []), { ...removed!, updatedAt: Date.now() }];
     save(state);
@@ -894,6 +928,8 @@ export const mockBackend: Backend = {
       return present(n);
     }
     if (!hasFolder(folder)) notFound(`文件夹「${folder}」不在了`);
+    // 逻辑目录挪的只是清单，文件不动；本地目录要改文件
+    writable(n);
     n.relPath = relPathIn(n, folder);
     save(state);
     return present(n);
@@ -1396,6 +1432,38 @@ export const mockBackend: Backend = {
   async vaultReveal() {
     await tick();
     desktopOnly();
+  },
+
+  // 不是 UTF-8 的笔记（docs/1110审查与研究.md §5.1）。浏览器预览里只有笔记会是这样（调界面时手动标的）
+  async docLegacyText(target) {
+    await tick();
+    const note = legacyNote(target);
+    const stem = fileStemFor(note.title);
+    const legacy = note.legacy;
+    return {
+      encoding: legacy?.encoding ?? null,
+      preview: legacy?.text.split("\n").slice(0, 30).join("\n") ?? "",
+      backup: legacy ? `${stem} (${legacy.encoding} 原文).txt` : "",
+      fingerprint: mockFingerprint(note),
+    };
+  },
+
+  async docConvertUtf8(target, fingerprint) {
+    await tick();
+    const note = legacyNote(target);
+    if (fingerprint !== mockFingerprint(note)) {
+      throw { kind: "Invalid", message: "这篇刚被改过，再看一眼认出来的样子" };
+    }
+    if (!note.legacy)
+      throw { kind: "Invalid", message: "认不出这篇是什么编码（试过 GBK、UTF-16）" };
+    note.contentMd = note.legacy.text;
+    note.excerpt = makeExcerpt(note.contentMd, 60);
+    note.wordCount = countWords(note.contentMd);
+    note.updatedAt = Date.now();
+    note.notUtf8 = false;
+    note.legacy = undefined;
+    save(state);
+    announce({ notes: [note.id] });
   },
 
   async vaultOpenFolder() {

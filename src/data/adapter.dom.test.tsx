@@ -44,6 +44,7 @@ function note(id: string, contentMd: string): Note {
     relPath: `笔记/${id}.md`,
     conflictOf: null,
     idInFile: true,
+    notUtf8: false,
   };
 }
 const summary = ({ contentMd: _body, ...rest }: Note): NoteSummary => rest;
@@ -92,5 +93,36 @@ describe("useCurrentDocument：正文还没取回来", () => {
     expect(shown.at(-1)).toMatchObject({ key: "note-b", bodyMd: "b 的正文" });
     // 中间每一帧都有编辑器、有正文：没有闪过空白的那一篇
     expect(shown.every((doc) => doc.editor && doc.bodyMd)).toBe(true);
+  });
+});
+
+describe("useCurrentDocument：文件不是 UTF-8（docs/1110审查与研究.md §5.1）", () => {
+  it("opens it read-only and offers no rename or delete", () => {
+    const old = { ...summary(note("a", "")), notUtf8: true };
+    useData.setState({
+      notes: [old],
+      archived: [{ ...old, id: "z", isArchived: true }],
+      bodies: { a: "x", z: "y" },
+    });
+    act(() => root.render(<Probe />));
+    const doc = shown.at(-1)!;
+    expect(doc.notUtf8).toBe(true);
+    expect(doc.deletable).toBe(false);
+    expect(doc.editor?.titleEditable).toBe(false);
+
+    act(() => useApp.setState({ workspace: "archive", selectedArchiveId: "z" }));
+    const archived = shown.at(-1)!;
+    expect(archived.key).toBe("archive-z");
+    expect(archived.notUtf8).toBe(true);
+    expect(archived.deletable).toBe(false);
+    expect(archived.editor?.titleEditable).toBe(false);
+  });
+
+  it("leaves ordinary notes editable", () => {
+    act(() => root.render(<Probe />));
+    const doc = shown.at(-1)!;
+    expect(doc.notUtf8).toBe(false);
+    expect(doc.deletable).toBe(true);
+    expect(doc.editor?.titleEditable).toBe(true);
   });
 });

@@ -15,6 +15,7 @@ import type {
   GuideUpdate,
   ImportReport,
   IndexProgress,
+  LegacyText,
   LinkRewrite,
   Note,
   NoteSummary,
@@ -150,6 +151,10 @@ export interface Backend {
   vaultRelayout(): Promise<VaultInfo>;
   /** 在系统的文件管理器里定位这篇文档的文件 */
   vaultReveal(target: DocumentRef): Promise<void>;
+  /** 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（转之前给用户看） */
+  docLegacyText(target: DocumentRef): Promise<LegacyText>;
+  /** 转成 UTF-8，原文另存在旁边。fingerprint 是 docLegacyText 给的，文件之后被改过就不转 */
+  docConvertUtf8(target: DocumentRef, fingerprint: string): Promise<void>;
   /** 打开整个笔记文件夹 */
   vaultOpenFolder(): Promise<void>;
   /**
@@ -312,6 +317,10 @@ const tauriBackend: Backend = {
   vaultRelayout: () => unwrap(commands.vaultRelayout()),
   vaultReveal: async (target) => {
     await unwrap(commands.vaultReveal(target));
+  },
+  docLegacyText: (target) => unwrap(commands.docLegacyText(target)),
+  docConvertUtf8: async (target, fingerprint) => {
+    await unwrap(commands.docConvertUtf8(target, fingerprint));
   },
   vaultOpenFolder: async () => {
     await unwrap(commands.vaultOpenFolder());

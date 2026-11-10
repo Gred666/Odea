@@ -60,11 +60,11 @@ fn require(vault: &Vault) -> Result<()> {
     }
 }
 
-/// 之前最近一天写过东西的（今日TODO 的延续）
+/// 之前最近一天写过东西的（今日TODO 的延续）。不是 UTF-8 的那天不算：延续过来的是换过字的乱码
 fn latest_day_before(vault: &Vault, date: &str) -> Result<Option<DocRow>> {
     index::one(
         vault.db(),
-        "kind = ?1 AND key < ?2 AND (title != '' OR content_md != '')
+        "kind = ?1 AND key < ?2 AND (title != '' OR content_md != '') AND not_utf8 = 0
          ORDER BY key DESC LIMIT 1",
         rusqlite::params![DAY, date],
     )
@@ -85,6 +85,7 @@ impl JournalVault for Vault {
                 updated_at: row.updated_at,
                 carried_from: None,
                 rel_path: row.rel_path,
+                not_utf8: row.not_utf8,
             });
         }
         // 还没写过：给它将来的位置（延续来的内容也是以今天的身份写到这里）
@@ -99,6 +100,7 @@ impl JournalVault for Vault {
                     updated_at: previous.updated_at,
                     carried_from: previous.key,
                     rel_path,
+                    not_utf8: false,
                 });
             }
         }
@@ -110,6 +112,7 @@ impl JournalVault for Vault {
             updated_at: now_ms(),
             carried_from: None,
             rel_path,
+            not_utf8: false,
         })
     }
 
@@ -135,6 +138,7 @@ impl JournalVault for Vault {
                 created_at: row.created_at,
                 updated_at: row.updated_at,
                 rel_path: row.rel_path,
+                not_utf8: row.not_utf8,
             },
             None => Goal {
                 id: String::new(),
@@ -145,6 +149,7 @@ impl JournalVault for Vault {
                 created_at: 0,
                 updated_at: 0,
                 rel_path: self.typed_path(&doc)?,
+                not_utf8: false,
             },
         })
     }

@@ -22,6 +22,7 @@ const note = (id: string, title: string, contentMd: string): Note => ({
   relPath: `笔记/${title}.md`,
   conflictOf: null,
   idInFile: true,
+  notUtf8: false,
 });
 
 const pages: Record<string, string> = { "7": "第七页的正文" };

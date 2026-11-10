@@ -43,7 +43,7 @@ use rusqlite::Connection;
 use crate::db::now_ms;
 use crate::domain::model::{
     Attachment, Backlink, BacklinkLine, DocRef, FindFile, FindMatch, FindOptions, FindResult,
-    FolderDeletion, LinkRewrite, Note, NoteSummary, Relink, TextHit, TextSearch, TrashedNote, TreeFile,
+    FolderDeletion, LegacyText, LinkRewrite, Note, NoteSummary, Relink, TextHit, TextSearch, TrashedNote, TreeFile,
     TypedDoc, VaultChange, VaultInfo, VaultLayout, WantedExtension, NOTE,
 };
 use crate::domain::search;
@@ -374,10 +374,10 @@ impl Vault {
     pub fn rescan(&mut self) -> Result<VaultChange> {
         let (mut change, stale) = self.plan_rescan()?;
         for file in &stale {
-            let Some(text) = self.read(&file.rel)? else {
+            let Some(decoded) = self.read_lossy(&file.rel)? else {
                 continue;
             };
-            self.index_text(&file.rel, &text, file.mtime, file.size, &mut change)?;
+            self.index_text(&file.rel, &decoded.text, decoded.utf8, file.mtime, file.size, &mut change)?;
         }
         Ok(change)
     }
@@ -487,8 +487,8 @@ impl Vault {
         if indexed.is_some_and(|row| row.mtime == mtime && row.size == size) {
             return Ok(());
         }
-        if let Some(text) = self.read(rel)? {
-            self.index_text(rel, &text, mtime, size, change)?;
+        if let Some(decoded) = self.read_lossy(rel)? {
+            self.index_text(rel, &decoded.text, decoded.utf8, mtime, size, change)?;
         }
         Ok(())
     }
@@ -530,10 +530,10 @@ impl Vault {
             if index::by_path(&self.db, rel)?.is_some_and(|row| row.mtime == mtime && row.size == size) {
                 continue;
             }
-            let Some(text) = self.read(rel)? else {
+            let Some(decoded) = self.read_lossy(rel)? else {
                 continue;
             };
-            self.index_text(rel, &text, mtime, size, &mut change)?;
+            self.index_text(rel, &decoded.text, decoded.utf8, mtime, size, &mut change)?;
         }
         self.announce(change);
         Ok(())
@@ -552,23 +552,34 @@ impl Vault {
         self.layout.plugins.iter().filter_map(|id| plugins::find(id)?.index_part()).collect()
     }
 
-    /// 读仓库里的一个文件（不在了是 None）
+    /// 读仓库里的一个文件（不在了是 None），拿来改了再写回去的都用这个。
+    /// 不是 UTF-8 的报错、不给字：解出来的已经不是原文，写回去原文就没了 ——
+    /// 置顶、改名、保存、删除进回收站都是「读出来、改、写回」（docs/1110审查与研究.md §5.1）。
+    /// 只看不写的（建索引、导出时判断要不要原样拷）用 read_lossy
     pub fn read(&self, rel: &str) -> Result<Option<String>> {
+        match self.read_lossy(rel)? {
+            Some(file) if file.utf8 => Ok(Some(file.text)),
+            Some(_) => Err(not_utf8(rel)),
+            None => Ok(None),
+        }
+    }
+
+    /// 同 read，不是 UTF-8 的也给：认不出的字换成 U+FFFD，`utf8` 是 false。只能拿来看
+    pub fn read_lossy(&self, rel: &str) -> Result<Option<fsio::Decoded>> {
         match std::fs::read(fsio::abs(&self.root, rel)) {
-            Ok(bytes) => Ok(Some(match String::from_utf8(bytes) {
-                Ok(text) => text,
-                Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
-            })),
+            Ok(bytes) => Ok(Some(fsio::decode(bytes))),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
 
     /// 按一个文件的内容更新索引。内容指纹没变时只更新文件状态。
+    /// utf8 = false：文件不是 UTF-8，text 是换过字的（fsio::decode），这一篇只能看
     fn index_text(
         &mut self,
         rel: &str,
         text: &str,
+        utf8: bool,
         mtime: i64,
         size: i64,
         change: &mut VaultChange,
@@ -576,7 +587,8 @@ impl Vault {
         let hash = fsio::fingerprint(text);
         let previous = index::by_path(&self.db, rel)?;
         if let Some(previous) = &previous {
-            if previous.hash == hash {
+            // 换过字的两份可能解出同样的字（不同的 GBK 字都成了 U+FFFD）：编码变了也得重新认
+            if previous.hash == hash && previous.not_utf8 == !utf8 {
                 if previous.mtime != mtime || previous.size != size {
                     index::touch(&self.db, &previous.id, mtime, size)?;
                 }
@@ -621,6 +633,7 @@ impl Vault {
             size,
             hash,
             file_id: meta.id.clone(),
+            not_utf8: !utf8,
         };
         match slot {
             Slot::Note { archived } => {
@@ -712,13 +725,13 @@ impl Vault {
         Ok(crate::db::new_id())
     }
 
-    /// 写一个文件（原子替换）再读进索引
+    /// 写一个文件（原子替换）再读进索引。写下去的总是 UTF-8
     pub fn write_and_index(&mut self, rel: &str, text: &str, change: &mut VaultChange) -> Result<DocRow> {
         let path = fsio::abs(&self.root, rel);
         fsio::write_atomic(&path, text)?;
         let (mtime, size) = fsio::stat(&path)
             .ok_or_else(|| AppError::Io(format!("写完读不到文件: {rel}")))?;
-        self.index_text(rel, text, mtime, size, change)
+        self.index_text(rel, text, true, mtime, size, change)
     }
 
     fn remove_doc(&mut self, row: &DocRow, change: &mut VaultChange) -> Result<()> {
@@ -1469,9 +1482,14 @@ impl Vault {
             if rel.split('/').any(fsio::is_hidden_name) {
                 continue;
             }
-            if fsio::is_markdown(rel) {
-                let text = String::from_utf8_lossy(bytes);
-                copies.push(self.write_conflict_copy(rel, &text, &mut change)?.title);
+            let text = fsio::is_markdown(rel).then(|| std::str::from_utf8(bytes).ok()).flatten();
+            if let Some(text) = text {
+                copies.push(self.write_conflict_copy(rel, text, &mut change)?.title);
+            } else if fsio::is_markdown(rel) {
+                // 不是 UTF-8 的笔记改不了属性块（改了就是换过字的一份）：和附件一样按原字节另存
+                let copy = self.conflict_copy_rel(rel);
+                fsio::write_atomic_bytes(&fsio::abs(&self.root, &copy), bytes)?;
+                copies.push(layout::stem_of(&copy).to_string());
             } else {
                 let copy = self.conflict_copy_rel(rel);
                 fsio::write_atomic_bytes(&fsio::abs(&self.root, &copy), bytes)?;
@@ -1484,6 +1502,79 @@ impl Vault {
         scanned.absorb(change);
         self.announce(scanned);
         Ok(copies)
+    }
+
+    /* ---------------- 不是 UTF-8 的文件（docs/1110审查与研究.md §5.1） ---------------- */
+
+    /// 这一篇按什么编码认出来、转过去是什么样（转之前给用户看一眼）
+    pub fn legacy_text(&self, target: &DocRef) -> Result<LegacyText> {
+        let rel = self.target_rel(target)?;
+        let bytes = self.legacy_bytes(&rel)?;
+        let fingerprint = fsio::fingerprint_bytes(&bytes);
+        Ok(match fsio::decode_legacy(&bytes) {
+            Some((encoding, text)) => LegacyText {
+                encoding: Some(encoding.to_string()),
+                preview: legacy_preview(&text),
+                backup: self.legacy_backup_rel(&rel, encoding).rsplit('/').next().unwrap_or_default().to_string(),
+                fingerprint,
+            },
+            None => LegacyText {
+                encoding: None,
+                preview: String::new(),
+                backup: String::new(),
+                fingerprint,
+            },
+        })
+    }
+
+    /// 转成 UTF-8：原文按原字节另存在旁边（`周报 (GBK 原文).txt`，不是 .md、不进列表），再写转好的。
+    /// fingerprint 是预览时那一版原文的（legacy_text），文件在这之间被改过就不转
+    pub fn convert_to_utf8(&mut self, target: &DocRef, fingerprint: &str) -> Result<()> {
+        let rel = self.target_rel(target)?;
+        let bytes = self.legacy_bytes(&rel)?;
+        if fsio::fingerprint_bytes(&bytes) != fingerprint {
+            return Err(AppError::Invalid("这篇刚被改过，再看一眼认出来的样子".into()));
+        }
+        let (encoding, text) = fsio::decode_legacy(&bytes)
+            .ok_or_else(|| AppError::Invalid("认不出这篇是什么编码（试过 GBK、UTF-16）".into()))?;
+        // 先留原文，再写新的：中途出错原文也还在
+        let backup = self.legacy_backup_rel(&rel, encoding);
+        fsio::write_atomic_bytes(&fsio::abs(&self.root, &backup), &bytes)?;
+        let mut change = VaultChange::default();
+        let saved = self.write_and_index(&rel, &text, &mut change)?;
+        self.log.record(self.entity_of(&saved), &saved.id, "updated");
+        // 正开着的编辑器换上转好的正文、能编辑了：这一篇也要通知（不像保存那样 without）
+        self.announce(change);
+        Ok(())
+    }
+
+    /// 要转的那个文件原样的字节。已经是 UTF-8 的（别处刚转过、本来就是）不用转
+    fn legacy_bytes(&self, rel: &str) -> Result<Vec<u8>> {
+        let bytes = std::fs::read(fsio::abs(&self.root, rel)).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound(format!("文件不在了: {rel}")),
+            _ => error.into(),
+        })?;
+        if std::str::from_utf8(&bytes).is_ok() {
+            return Err(AppError::Invalid("这篇已经是 UTF-8 了".into()));
+        }
+        Ok(bytes)
+    }
+
+    /// 原文另存在哪：同一个文件夹里的「周报 (GBK 原文).txt」，重名加序号
+    fn legacy_backup_rel(&self, rel: &str, encoding: &str) -> String {
+        let dir = layout::dir_of(rel);
+        let stem = layout::stem_of(rel);
+        (1..)
+            .map(|n| {
+                let name = if n == 1 {
+                    format!("{stem} ({encoding} 原文).txt")
+                } else {
+                    format!("{stem} ({encoding} 原文) {n}.txt")
+                };
+                layout::join(dir, &name)
+            })
+            .find(|candidate| !fsio::abs(&self.root, candidate).exists())
+            .expect("总有一个没被占的")
     }
 
     /// 附件的冲突副本放在哪：「附件/图.png」→「附件/图 (冲突 2026-10-07 1030).png」，重名加序号
@@ -1605,7 +1696,8 @@ impl Vault {
 
         let mut change = VaultChange::default();
         for row in &sources {
-            let Some(before) = self.read(&row.rel_path)? else {
+            // 不是 UTF-8 的那篇不改：改了就把它整篇写坏了，那里的旧链接留着（它在 Odea 里本来就只能看）
+            let Some(before) = self.read_lossy(&row.rel_path)?.filter(|file| file.utf8).map(|file| file.text) else {
                 continue;
             };
             let (meta, body) = frontmatter::split(&before);
@@ -1637,7 +1729,9 @@ impl Vault {
             if index::by_path(&self.db, &rewrite.rel_path)?.is_none() {
                 continue;
             }
-            if self.read(&rewrite.rel_path)?.as_deref() != Some(rewrite.after.as_str()) {
+            // 后来被换成了别的编码的也算「又被改过」（after 总是 UTF-8 的，对不上）
+            let now = self.read_lossy(&rewrite.rel_path)?;
+            if !now.is_some_and(|file| file.utf8 && file.text == rewrite.after) {
                 continue;
             }
             let saved = self.write_and_index(&rewrite.rel_path, &rewrite.before, &mut change)?;
@@ -2028,7 +2122,23 @@ fn summary_from_row(row: &DocRow, conflict_of: Option<String>) -> NoteSummary {
         rel_path: row.rel_path.clone(),
         conflict_of,
         id_in_file: id_in_file(row),
+        not_utf8: row.not_utf8,
     }
+}
+
+/// 转之前给人看的那一段：开头三十行、两千字以内
+fn legacy_preview(text: &str) -> String {
+    let head: String = text.split('\n').take(30).collect::<Vec<_>>().join("\n");
+    head.chars().take(2000).collect()
+}
+
+/// 要改一个不是 UTF-8 的文件时报的错（Vault::read）。前端原样显示这句话
+fn not_utf8(rel: &str) -> AppError {
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    // 提示条一行只放得下三十来个字（ErrorToast），要紧的放前面
+    AppError::Invalid(format!(
+        "「{name}」不是 UTF-8 编码，Odea 只显示、不改它：改了会把原文写坏。在正文上方转成 UTF-8 以后就能改了"
+    ))
 }
 
 /// 属性块里写着的 id 就是这一篇的（不是索引临时给的，也不是从别的文件拷过来的冲突副本）
@@ -2052,6 +2162,7 @@ fn note_from_row(row: &DocRow, conflict_of: Option<String>) -> Note {
         rel_path: row.rel_path.clone(),
         conflict_of,
         id_in_file: id_in_file(row),
+        not_utf8: row.not_utf8,
     }
 }
 

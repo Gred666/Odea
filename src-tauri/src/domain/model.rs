@@ -27,6 +27,10 @@ pub struct Note {
     /// id 写在这个文件的属性块里（不是索引临时给的）：换台设备、重建索引都还是它。
     /// 团队协作按它认同一篇（docs/协同编辑.md §22.4），没写的按相对路径
     pub id_in_file: bool,
+    /// 文件不是 UTF-8（GBK、UTF-16 这些）：content_md 里认不出的字换成了 U+FFFD。
+    /// 只能看 —— 保存、改名、置顶、移动、归档、删除后端都拒绝，不然原文就被写坏了
+    /// （docs/1110审查与研究.md §5.1）
+    pub not_utf8: bool,
 }
 
 /// 列表里的一篇：Note 去掉正文。仓库里有多少篇列表就给多少篇，正文打开时再取（note_get）、
@@ -48,6 +52,23 @@ pub struct NoteSummary {
     pub conflict_of: Option<String>,
     /// 同 Note.id_in_file
     pub id_in_file: bool,
+    /// 同 Note.not_utf8
+    pub not_utf8: bool,
+}
+
+/// 一篇不是 UTF-8 的文档按什么编码认出来、转成 UTF-8 会是什么样（Vault::legacy_text）。
+/// 转之前给用户看一眼，认错了（满屏乱码）就别转
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyText {
+    /// 「GBK」「UTF-16」；认不出是 None
+    pub encoding: Option<String>,
+    /// 解出来的开头一段（认不出是空串）
+    pub preview: String,
+    /// 原文另存成的文件名（放在同一个文件夹里）；认不出是空串
+    pub backup: String,
+    /// 原样字节的指纹：转的时候核对还是这一版（fsio::fingerprint_bytes）
+    pub fingerprint: String,
 }
 
 /// 回收站里的一篇（`.odea/trash/<id>.md`）：回收站对话框列它们，恢复走 note_undelete

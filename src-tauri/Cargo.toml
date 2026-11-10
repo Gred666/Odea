@@ -76,6 +76,9 @@ rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 notify = "8"
 # 搬旧数据时把文件的修改时间设回原来的「上次更新」
 filetime = "0.2"
+# 不是 UTF-8 的旧文件（docs/1110审查与研究.md §5.1）按 GB 18030（GBK 的超集）认出来、转成 UTF-8。
+# UTF-16 用标准库就够
+encoding_rs = "0.8"
 
 # --- 搜正文 ---
 # 全局搜索（commands::find_in_vault）的正则、大小写不敏感的匹配。依赖树里本来就有（tauri-utils 等），

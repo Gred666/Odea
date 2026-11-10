@@ -126,6 +126,8 @@ describe("目录树收起", () => {
       },
       scrollToLine: () => true,
       focusStart: () => true,
+      readingAt: () => null,
+      gliding: () => false,
     };
     act(() =>
       root.render(
@@ -168,6 +170,89 @@ describe("目录树收起", () => {
     expect(visible()).toEqual(["概览", "第一节", "第二节"]);
     click(rail().querySelector<HTMLButtonElement>('[aria-label="全部展开"]')!);
     expect(visible()).toHaveLength(items.length);
+  });
+});
+
+describe("跟着滚动（docs/1110审查与研究.md §5.2）", () => {
+  // 以前有编辑器时只听光标：只滚不点，高亮一直停在原地。几何（光标在不在屏幕上、哪一行在
+  // 那条线上）在 editor/readingLine.test.ts 和浏览器里验，这里只管什么时候算、算出来用不用
+  function mountWithEditor(handle: {
+    reading: string | null;
+    gliding: boolean;
+    asked: number;
+    caret?: (id: string) => void;
+  }) {
+    const scroller = document.createElement("div");
+    container.append(scroller);
+    const ref = { current: scroller };
+    const editorHandle = {
+      scrollTo: () => true,
+      subscribe: (listener: (id: string) => void) => {
+        handle.caret = listener;
+        return () => {};
+      },
+      scrollToLine: () => true,
+      focusStart: () => true,
+      readingAt: () => {
+        handle.asked += 1;
+        return handle.reading;
+      },
+      gliding: () => handle.gliding,
+    };
+    act(() =>
+      root.render(
+        <Outline items={items} scrollRef={ref} resetKey="note-1" editorHandle={editorHandle} />,
+      ),
+    );
+    const scroll = () => act(() => scroller.dispatchEvent(new Event("scroll")));
+    return { scroll };
+  }
+
+  const settle = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+
+  it("follows what is on screen when the page scrolls, without the caret moving", async () => {
+    const handle = { reading: null as string | null, gliding: false, asked: 0 };
+    const { scroll } = mountWithEditor(handle);
+    await settle();
+    expect(highlighted()).toBe("概览");
+
+    handle.reading = idOf("第二节");
+    scroll();
+    await settle();
+    expect(highlighted()).toBe("第二节");
+
+    // 光标动了还是听光标的
+    act(() => (handle as { caret?: (id: string) => void }).caret?.(idOf("小节 A")));
+    expect(highlighted()).toBe("小节 A");
+  });
+
+  it("asks at most every so often while scrolling, and once more after it stops", async () => {
+    const handle = { reading: idOf("第一节") as string | null, gliding: false, asked: 0 };
+    const { scroll } = mountWithEditor(handle);
+    await settle();
+    handle.asked = 0;
+    for (let i = 0; i < 30; i += 1) scroll();
+    await settle();
+    // 一连串的滚动事件：头一下（下一帧）算一次、停下来补一次
+    expect(handle.asked).toBeLessThanOrEqual(3);
+    expect(handle.asked).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not follow the sections passed on the way while gliding, and settles after", async () => {
+    const handle = { reading: idOf("小节 C") as string | null, gliding: true, asked: 0 };
+    const { scroll } = mountWithEditor(handle);
+    act(() => (handle as { caret?: (id: string) => void }).caret?.(idOf("第一节")));
+    scroll();
+    await settle();
+    expect(highlighted()).toBe("第一节");
+    expect(handle.asked).toBe(0);
+
+    handle.gliding = false;
+    await settle();
+    expect(highlighted()).toBe("小节 C");
   });
 });
 

@@ -763,6 +763,20 @@ pub fn spawn_backlog<R: Runtime>(
     });
 }
 
+/// 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（转之前给用户看，docs/1110审查与研究.md §5.1）
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_legacy_text(ws: Ws, target: DocRef) -> Result<LegacyText> {
+    with_vault(&ws, move |v| v.legacy_text(&target)).await
+}
+
+/// 转成 UTF-8，原文按原字节另存在旁边。fingerprint 是 doc_legacy_text 给的那一版，文件之后被改过就不转
+#[tauri::command]
+#[specta::specta]
+pub async fn doc_convert_utf8(ws: Ws, target: DocRef, fingerprint: String) -> Result<()> {
+    with_vault(&ws, move |v| v.convert_to_utf8(&target, &fingerprint)).await
+}
+
 /// 在系统的文件管理器里定位这篇文档的文件（选中它）。还没写过的插件文档（某一天、
 /// 某个周期）没有文件，打开它将来所在的文件夹。
 #[tauri::command]

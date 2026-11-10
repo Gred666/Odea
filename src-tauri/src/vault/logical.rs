@@ -243,9 +243,10 @@ impl Vault {
             notes.push((folder_of(layout::dir_of(&row.rel_path)), note_item(&row)));
         }
         for row in index::note_summaries(&self.db, true)? {
+            // 只看属性块、不写回：不是 UTF-8 的也照样读（read 会拒绝，整个转换就失败了）
             let from = self
-                .read(&row.rel_path)?
-                .and_then(|text| frontmatter::split(&text).0.archived_from)
+                .read_lossy(&row.rel_path)?
+                .and_then(|file| frontmatter::split(&file.text).0.archived_from)
                 .unwrap_or_default();
             notes.push((folder_of(&from), note_item(&row)));
         }

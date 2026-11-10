@@ -73,6 +73,7 @@ const note = (contentMd: string): Note => ({
   relPath: "笔记/笔记.md",
   conflictOf: null,
   idInFile: true,
+  notUtf8: false,
 });
 
 const initial = useData.getState();

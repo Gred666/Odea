@@ -20,7 +20,8 @@ use crate::plugins::{self, IndexPart};
 
 /// 3：去掉了全文索引表 doc_fts（2026-10-16，jieba 分词不要了，技术方案 §6）
 /// 4：日程变成插件（P14.1，2026-11-04）：day / horizon / period_start 三列换成通用的 key，kind 是文档类型 id
-const VERSION: i64 = 4;
+/// 5：加 not_utf8（2026-11-10，docs/1110审查与研究.md §5.1）
+const VERSION: i64 = 5;
 
 const SCHEMA: &str = "
 CREATE TABLE doc (
@@ -41,7 +42,8 @@ CREATE TABLE doc (
   mtime          INTEGER NOT NULL,
   size           INTEGER NOT NULL,
   hash           TEXT    NOT NULL,          -- 文件内容指纹：磁盘上的是不是索引里这一版
-  file_id        TEXT                       -- 文件属性块里写的 id。和 id 不一样 = 这是别的文件的拷贝（网盘冲突副本）
+  file_id        TEXT,                      -- 文件属性块里写的 id。和 id 不一样 = 这是别的文件的拷贝（网盘冲突副本）
+  not_utf8       INTEGER NOT NULL           -- 文件不是 UTF-8：content_md 是换过字的，只能看、不能写回
 );
 CREATE UNIQUE INDEX doc_key ON doc(kind, key) WHERE kind != 'note';
 ";
@@ -136,11 +138,14 @@ pub struct DocRow {
     /// 文件属性块里写着的 id（没有就是 None）。和 `id` 不同说明这个 id 已经被
     /// 另一个文件占着，这一份多半是拷贝出来的（网盘的冲突副本）
     pub file_id: Option<String>,
+    /// 文件不是 UTF-8（GBK、UTF-16 这些）：content_md 里认不出的字换成了 U+FFFD。
+    /// 只能看，所有会写回这个文件的操作都拒绝（Vault::read），不然原文就没了
+    pub not_utf8: bool,
 }
 
 const COLUMNS: &str = "id, kind, rel_path, key, title, content_md, excerpt,
     word_count, is_pinned, is_archived, archive_category, archived_at, created_at, updated_at,
-    mtime, size, hash, file_id";
+    mtime, size, hash, file_id, not_utf8";
 
 fn row(r: &Row) -> rusqlite::Result<DocRow> {
     Ok(DocRow {
@@ -162,6 +167,7 @@ fn row(r: &Row) -> rusqlite::Result<DocRow> {
         size: r.get("size")?,
         hash: r.get("hash")?,
         file_id: r.get("file_id")?,
+        not_utf8: r.get::<_, i64>("not_utf8")? != 0,
     })
 }
 
@@ -358,7 +364,7 @@ pub fn put(conn: &Connection, doc: &DocRow, parts: &[&'static dyn IndexPart]) ->
         tx.execute("DELETE FROM doc WHERE id = ?1", params![id])?;
     }
     tx.execute(
-        &format!("INSERT INTO doc ({COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"),
+        &format!("INSERT INTO doc ({COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"),
         params![
             doc.id,
             doc.kind,
@@ -378,6 +384,7 @@ pub fn put(conn: &Connection, doc: &DocRow, parts: &[&'static dyn IndexPart]) ->
             doc.size,
             doc.hash,
             doc.file_id,
+            doc.not_utf8 as i64,
         ],
     )?;
     tx.commit()?;

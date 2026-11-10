@@ -73,6 +73,7 @@ const summary = (id: string, relPath: string): NoteSummary => ({
   relPath,
   conflictOf: null,
   idInFile: false,
+  notUtf8: false,
 });
 
 const OPENED: VaultLayout = {

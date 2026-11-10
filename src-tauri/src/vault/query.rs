@@ -222,6 +222,7 @@ mod tests {
             size: 0,
             hash: String::new(),
             file_id: None,
+            not_utf8: false,
         }
     }
 

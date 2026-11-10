@@ -52,6 +52,8 @@ pub struct Goal {
     pub updated_at: i64,
     /// 在仓库里的相对路径；还没写过的周期是它将来的位置
     pub rel_path: String,
+    /// 文件不是 UTF-8：只能看（同 Note.not_utf8）
+    pub not_utf8: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -67,4 +69,6 @@ pub struct DayDoc {
     pub carried_from: Option<String>,
     /// 在仓库里的相对路径；还没写过的日子是它将来的位置
     pub rel_path: String,
+    /// 文件不是 UTF-8：只能看（同 Note.not_utf8）
+    pub not_utf8: bool,
 }
