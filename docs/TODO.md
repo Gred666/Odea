@@ -458,7 +458,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - [ ] 在 Windows 上真的升级一次：装 0.2.0、登录同步 → 自动更新到 0.3.0 → 开始菜单 / 桌面只剩 Odea，「应用和功能」里没有 OnTheWay；主题、侧栏收起这些设置还在，同步不用重新登录，笔记文件夹还是原来那个
   - [ ] 所有设备都升级上来以后（0.4 前后）：删 `old_name.rs` 和各处引用它的地方、`lib/legacyStorage.ts`、`index.html` 里的 `otw.theme`、`.gitignore` / `.gitattributes` 那一段里的 `.ontheway` 两行、`hooks.nsh` 里清旧安装的那一段（补快捷方式的那段留到 0.3.0、0.4.0 的人都更新过以后）
   - [x] 内部前缀 `otw` 换成 `odea`（CSS 类名、`data-` 属性、存储键、表情短码、扩展文件后缀）：存储键启动时搬（`lib/legacyStorage.ts`），旧短码 `:otw_fire:` 和旧的 `.otwx` 扩展文件照样认
-  - [ ] 本机的项目文件夹 `D:\OnTheWay` 要不要跟着改名（`.claude/launch.json` 里有一条绝对路径）
+  - [ ] 本机的项目文件夹 `D:\OnTheWay` 改名成 `D:\Odea`（2026-11-13 定了要改）。仓库里已经没有写死这个路径的地方（`.claude/launch.json` 改成了相对路径，`PITFALLS/桌面端实测.md` 那一处不写盘符了）。在 Claude 的会话里改不了，`ren` 报「另一个程序正在使用此文件」：会话自己的进程和终端面板的 shell 都拿它当工作目录。怎么改、改完要接回来的三样在 `PITFALLS/环境.md`「项目文件夹改名」
 
 ## P10 多人协同编辑
 
