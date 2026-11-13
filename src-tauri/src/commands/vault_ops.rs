@@ -189,7 +189,7 @@ pub async fn vault_set_property_type(
     with_vault(&ws, move |v| v.set_property_type(&key, kind.as_deref())).await
 }
 
-/// 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（转之前给用户看，docs/1110审查与研究.md §5.1）
+/// 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（转之前给用户看，docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）
 #[tauri::command]
 #[specta::specta]
 pub async fn doc_legacy_text(ws: Ws, target: DocRef) -> Result<LegacyText> {

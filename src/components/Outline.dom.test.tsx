@@ -173,7 +173,7 @@ describe("目录树收起", () => {
   });
 });
 
-describe("跟着滚动（docs/1110审查与研究.md §5.2）", () => {
+describe("跟着滚动（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.2）", () => {
   // 以前有编辑器时只听光标：只滚不点，高亮一直停在原地。几何（光标在不在屏幕上、哪一行在
   // 那条线上）在 editor/readingLine.test.ts 和浏览器里验，这里只管什么时候算、算出来用不用
   function mountWithEditor(handle: {

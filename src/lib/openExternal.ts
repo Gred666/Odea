@@ -1,7 +1,7 @@
 import { isTauri } from "@/lib/tauri";
 
 /* 从 editor/links.ts 挪出来：启动器、同步 / 中继 / 更新对话框也要开网址，
-   留在那边的话为了这一个函数要把 CodeMirror 整个带进来（docs/1110审查与研究.md §5.3.1） */
+   留在那边的话为了这一个函数要把 CodeMirror 整个带进来（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.3.1） */
 
 /** 只放行 http(s) / mailto / tel；本地路径和 javascript: 一律不开。 */
 export function isOpenableUrl(url: string): boolean {

@@ -1,4 +1,4 @@
-// 各种窗口打开时要加载多少 JS、主线程忙多久、多久画出第一屏（docs/1110审查与研究.md §5.3）。
+// 各种窗口打开时要加载多少 JS、主线程忙多久、多久画出第一屏（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.3）。
 //
 //   pnpm exec vite build --outDir <目录>
 //   node scripts/perf/entry.mjs <目录> [--cpu 4] [--runs 5] [--only launcher,capture,guest,vault] [--out x.json]

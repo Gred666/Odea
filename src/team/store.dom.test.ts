@@ -64,7 +64,7 @@ afterEach(async () => {
 
 describe("团队仓库的窗口", () => {
   it("文档 id：笔记是属性块里的 id（没写的按相对路径），插件的文档照插件说的；做客的那篇没有", () => {
-    // 某一天、目标的 id（day-…、goal-week-…）在 plugins/journal/store.test.ts
+    // 某一天、目标的 id（day-…、goal-week-…）在 plugins/journal/store.dom.test.ts
     const base = { key: "k", title: "", bodyMd: "", statusParts: [] } as unknown as DocumentModel;
     const note = (id: string, relPath: string, idInFile: boolean): DocumentModel => ({
       ...base,

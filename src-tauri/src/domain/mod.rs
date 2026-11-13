@@ -1,4 +1,4 @@
-//! 跨 IPC 的类型（model）、中文分词与摘要（search）、参数校验。
+//! 跨 IPC 的类型（model）、全局搜索的匹配器和摘要、字数（search）、参数校验。
 //! 文档的读写都在 vault/：文件是真相，这里不碰存储。
 
 pub mod model;

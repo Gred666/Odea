@@ -126,7 +126,7 @@ describe("主持人", () => {
     expect(store().dialogOpen).toBe(false);
   });
 
-  it("文件不是 UTF-8 的笔记不开始协作，说为什么（docs/1110审查与研究.md §5.1）", async () => {
+  it("文件不是 UTF-8 的笔记不开始协作，说为什么（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）", async () => {
     useData.setState({ notes: [{ id: "n1", title: "老笔记", notUtf8: true } as NoteSummary] });
     await store().startHosting("n1", "老笔记");
     expect(phase()).toBe("idle");

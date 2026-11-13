@@ -12,7 +12,7 @@ import { MarkdownEditor, clearEditorStateCache } from "./MarkdownEditor";
 MotionGlobalConfig.skipAnimations = true;
 
 /*
- * 只读的编辑器（文件不是 UTF-8，docs/1110审查与研究.md §5.1；协作的只读访客）：
+ * 只读的编辑器（文件不是 UTF-8，docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1；协作的只读访客）：
  * EditorState.readOnly 只拦键盘，点一下就改源码的小部件（勾任务、折叠提示块）、快捷键是直接 dispatch 的，
  * 要另外拦。别处同步过来的（Transaction.remote）照常进来
  */

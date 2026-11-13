@@ -2,7 +2,7 @@ import { buildOutline } from "@/lib/markdown";
 import { describe, expect, it } from "vitest";
 import { READING_LINE, readingLine, sectionAt } from "./readingLine";
 
-/* 目录树跟着滚动时按哪一行算（docs/1110审查与研究.md §5.2） */
+/* 目录树跟着滚动时按哪一行算（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.2） */
 
 const band = { top: 100, bottom: 900 };
 /** 一行 20px，从窗口坐标 0 开始（第 1 行在 0–20） */

@@ -522,7 +522,7 @@ function syncDesktopOnly(): never {
   throw { kind: "Invalid", message: "浏览器预览里没有笔记文件夹，桌面版里才能开启同步" };
 }
 
-/** 和 Rust 侧 Vault::read 一样：不是 UTF-8 的那篇不改（docs/1110审查与研究.md §5.1） */
+/** 和 Rust 侧 Vault::read 一样：不是 UTF-8 的那篇不改（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1） */
 function writable(note: MockNote): MockNote {
   if (!note.notUtf8) return note;
   const name = note.relPath.slice(note.relPath.lastIndexOf("/") + 1);
@@ -1562,7 +1562,7 @@ export const mockBackend: Backend = {
     return { ...types };
   },
 
-  // 不是 UTF-8 的笔记（docs/1110审查与研究.md §5.1）。浏览器预览里只有笔记会是这样（调界面时手动标的）
+  // 不是 UTF-8 的笔记（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）。浏览器预览里只有笔记会是这样（调界面时手动标的）
   async docLegacyText(target) {
     await tick();
     const note = legacyNote(target);

@@ -5,7 +5,7 @@ import { conflictOriginalContent, conflictOriginalTitle, conflictTarget } from "
 import { type Note, noteRef } from "./types";
 
 /* 冲突副本的原文：笔记核心自己认，插件的文档交给插件声明的类型认（DocumentType.keyOf / title / body）。
-   这里装一个假的插件测这套机制；日程那两种（day:… / goal:…）在 plugins/journal/store.test.ts */
+   这里装一个假的插件测这套机制；日程那两种（day:… / goal:…）在 plugins/journal/store.dom.test.ts */
 
 const note = (id: string, title: string, contentMd: string): Note => ({
   id,

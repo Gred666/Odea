@@ -153,7 +153,7 @@ interface DataState {
   /** 在系统的文件管理器里定位这篇文档的文件 */
   revealDocument: (target: DocumentRef) => Promise<void>;
   /**
-   * 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（docs/1110审查与研究.md §5.1）。
+   * 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）。
    * 取不到是 null，原因放进 error
    */
   legacyText: (target: DocumentRef) => Promise<LegacyText | null>;

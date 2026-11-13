@@ -3,7 +3,7 @@ import { CALLOUT_ICONS } from "@/editor/callout";
 /* ============================================================
    插件交来的声明式视图（docs/插件与跨端.md §5.6「不是文档的，交声明」）。
 
-   插件不碰 DOM：它交一棵组件树（纯数据），宿主用 Odea 自己的组件画出来（SlotView.tsx）。
+   插件不碰 DOM：它交一棵组件树（纯数据），宿主用 Odea 自己的组件画出来（components/PluginSlots.tsx）。
    动效、描边、像素对齐都在宿主的组件里，插件碰不到；样式也只有几档可选（tone、primary），
    写不进任意的 CSS、HTML。第一批组件是设计稿里列的那几样：列表、树、表单、空状态、按钮条，
    外加排版用的 stack、text、heading、stats、divider。

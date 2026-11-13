@@ -844,7 +844,7 @@ async vaultReveal(target: DocRef) : Promise<Result<null, AppError>> {
 }
 },
 /**
- * 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（转之前给用户看，docs/1110审查与研究.md §5.1）
+ * 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（转之前给用户看，docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）
  */
 async docLegacyText(target: DocRef) : Promise<Result<LegacyText, AppError>> {
     try {
@@ -2724,7 +2724,7 @@ idInFile: boolean;
 /**
  * 文件不是 UTF-8（GBK、UTF-16 这些）：content_md 里认不出的字换成了 U+FFFD。
  * 只能看 —— 保存、改名、置顶、移动、归档、删除后端都拒绝，不然原文就被写坏了
- * （docs/1110审查与研究.md §5.1）
+ * （docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）
  */
 notUtf8: boolean; 
 /**

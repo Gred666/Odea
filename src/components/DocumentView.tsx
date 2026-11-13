@@ -492,7 +492,7 @@ export function DocumentView({
                       )}
                     </AnimatePresence>
 
-                    {/* ---------- 文件不是 UTF-8：只能看，能转（docs/1110审查与研究.md §5.1） ----------
+                    {/* ---------- 文件不是 UTF-8：只能看，能转（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1） ----------
                   不做进出动画：只跟着某一篇出现，换篇时随整块正文一起换。key：换篇时预览收起 */}
                     {doc.notUtf8 && (
                       <EncodingBanner key={doc.key} target={vaultRef(doc.editor?.target)} />

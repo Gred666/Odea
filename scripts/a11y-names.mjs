@@ -1,5 +1,5 @@
 // 找没有可读名字的按钮：<button> / <motion.button> / role="button" 的元素，里面只有图标（或者什么都没有），
-// 又没写 aria-label、aria-labelledby、title。读屏软件读到它们只会说「按钮」（docs/1110审查与研究.md §6）。
+// 又没写 aria-label、aria-labelledby、title。读屏软件读到它们只会说「按钮」（docs/REVIEWS/2026-11-10-审查与竞品调研.md §6）。
 //
 //   node scripts/a11y-names.mjs            列出来
 //   node scripts/a11y-names.mjs --check    有的话退出码 1（CI 里用）

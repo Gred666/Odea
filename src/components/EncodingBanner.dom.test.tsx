@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /*
- * 文件不是 UTF-8 时的横幅（docs/1110审查与研究.md §5.1）：先给人看认出来的样子，字对了才转；
+ * 文件不是 UTF-8 时的横幅（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）：先给人看认出来的样子，字对了才转；
  * 转的时候带上预览那一版的指纹；认不出编码就不给转
  */
 

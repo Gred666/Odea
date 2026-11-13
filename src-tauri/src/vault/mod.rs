@@ -581,7 +581,7 @@ impl Vault {
 
     /// 读仓库里的一个文件（不在了是 None），拿来改了再写回去的都用这个。
     /// 不是 UTF-8 的报错、不给字：解出来的已经不是原文，写回去原文就没了 ——
-    /// 置顶、改名、保存、删除进回收站都是「读出来、改、写回」（docs/1110审查与研究.md §5.1）。
+    /// 置顶、改名、保存、删除进回收站都是「读出来、改、写回」（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）。
     /// 只看不写的（建索引、导出时判断要不要原样拷）用 read_lossy
     pub fn read(&self, rel: &str) -> Result<Option<String>> {
         match self.read_lossy(rel)? {
@@ -1533,7 +1533,7 @@ impl Vault {
         Ok(copies)
     }
 
-    /* ---------------- 不是 UTF-8 的文件（docs/1110审查与研究.md §5.1） ---------------- */
+    /* ---------------- 不是 UTF-8 的文件（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1） ---------------- */
 
     /// 这一篇按什么编码认出来、转过去是什么样（转之前给用户看一眼）
     pub fn legacy_text(&self, target: &DocRef) -> Result<LegacyText> {

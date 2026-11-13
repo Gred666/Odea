@@ -796,7 +796,7 @@ function noteTitleOf(noteId: string): string {
 
 /** 主持人：这一篇在不在这个会话的范围里。在的话返回 null，不在的话是给访客看的一句话 */
 /**
- * 这一篇的文件不是 UTF-8（docs/1110审查与研究.md §5.1）：给它的标题，不是给 null。
+ * 这一篇的文件不是 UTF-8（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）：给它的标题，不是给 null。
  * 这样的笔记只能看、存不进去，不进协作 —— 别人改的都会存盘失败
  */
 function notUtf8Title(doc: string): string | null {

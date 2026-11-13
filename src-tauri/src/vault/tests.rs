@@ -2246,7 +2246,7 @@ fn a_retired_share_folder_goes_to_the_trash_and_the_notes_stay() {
     assert_eq!(vault.note_list(false).unwrap().len(), 1);
 }
 
-/* ---------------- 不是 UTF-8 的文件（docs/1110审查与研究.md §5.1） ---------------- */
+/* ---------------- 不是 UTF-8 的文件（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1） ---------------- */
 
 /// GBK 编码的「你好，世界」：旧的记事本、不少国内的工具默认这样存。按 UTF-8 解不开
 const GBK: &[u8] = b"\xc4\xe3\xba\xc3\xa3\xac\xca\xc0\xbd\xe7";

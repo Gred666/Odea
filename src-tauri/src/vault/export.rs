@@ -143,7 +143,7 @@ mod tests {
         let id = vault.note_create_in("交易/学习", "流程", "![图](附件/图.png)").unwrap();
         vault.note_create_in(super::super::tree::UNSORTED, "随手", "没放进树里").unwrap();
         vault.save_day("2026-10-20", "", "今天").unwrap();
-        // GBK 存的一篇（docs/1110审查与研究.md §5.1）
+        // GBK 存的一篇（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）
         let gbk: &[u8] = b"\xc4\xe3\xba\xc3 [[x]](a.png)";
         std::fs::write(root.join("老笔记.md"), gbk).unwrap();
         vault.rescan().unwrap();

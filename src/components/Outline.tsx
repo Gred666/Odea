@@ -23,7 +23,7 @@ const FOLLOW_IDLE = 120;
  * 只读的预览用 IntersectionObserver 看标题露没露出来。编辑器里的标题不一定画出来了
  * （CodeMirror 只画视口附近），按编辑器的行号算：光标动了听光标的（句柄的 subscribe），
  * 滚动时按可视区算（readingAt，规则见 editor/readingLine.ts）。以前有编辑器时只听光标，
- * 只滚不点，高亮一直停在原地（docs/1110审查与研究.md §5.2）
+ * 只滚不点，高亮一直停在原地（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.2）
  */
 export function Outline({
   items,

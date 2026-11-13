@@ -75,7 +75,7 @@ pub fn decode_legacy(bytes: &[u8]) -> Option<(&'static str, String)> {
 pub struct Decoded {
     pub text: String,
     /// false：不是 UTF-8（GBK、UTF-16 这些），认不出的字节换成了 U+FFFD。这样的字只能拿来显示、
-    /// 建索引，改了写回去原文就没了（docs/1110审查与研究.md §5.1）
+    /// 建索引，改了写回去原文就没了（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）
     pub utf8: bool,
 }
 

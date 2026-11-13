@@ -96,7 +96,7 @@ describe("useCurrentDocument：正文还没取回来", () => {
   });
 });
 
-describe("useCurrentDocument：文件不是 UTF-8（docs/1110审查与研究.md §5.1）", () => {
+describe("useCurrentDocument：文件不是 UTF-8（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）", () => {
   it("opens it read-only and offers no rename or delete", () => {
     const old = { ...summary(note("a", "")), notUtf8: true };
     useData.setState({

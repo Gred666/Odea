@@ -129,7 +129,7 @@ describe("落在盘上、发给别的设备的 id 和老版本一字不差（doc
     expect(teamDocId(model({ type: GOAL, key: "week:2026-10-19" }))).toBe("goal-week-2026-10-19");
     expect(teamDocId(model({ type: GOAL, key: "month:2026-10-01" }))).toBe("goal-month-2026-10-01");
     expect(teamDocId(model({ type: GOAL, key: "year:2026-01-01" }))).toBe("goal-year-2026-01-01");
-    // 文件不是 UTF-8 的只能看，不进团队的会话（docs/1110审查与研究.md §5.1）
+    // 文件不是 UTF-8 的只能看，不进团队的会话（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）
     expect(teamDocId({ ...model({ type: DAY, key: "2026-10-23" }), notUtf8: true })).toBeNull();
   });
 

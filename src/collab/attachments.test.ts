@@ -13,7 +13,7 @@ import {
 } from "./attachments";
 
 /* 协作里的附件（attachments.ts）：主持人给 Rust 的引用表、访客要图片和给编辑器的解析器。
-   Rust 那边「只给引用了的、落在附件/ 里的」在 src-tauri/src/collab/tests.rs 和 commands.rs */
+   Rust 那边「只给引用了的、落在附件/ 里的」在 src-tauri/src/collab/tests.rs 和 commands/collaboration/attachments.rs */
 
 afterEach(() => {
   vi.useRealTimers();

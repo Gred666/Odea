@@ -36,7 +36,7 @@ import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
    界面在浏览器里也能走通、也能写测试。
    ============================================================ */
 
-/** 帧类型（和 commands.rs 的 PIPE_* 一致） */
+/** 帧类型（和 src-tauri/src/commands/collaboration/mod.rs 的 PIPE_* 一致） */
 export const PIPE = {
   /** 文档更新（别人的 Update / Sync2；自己发出去的 Update） */
   update: 1,

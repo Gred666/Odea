@@ -29,7 +29,7 @@ pub struct Note {
     pub id_in_file: bool,
     /// 文件不是 UTF-8（GBK、UTF-16 这些）：content_md 里认不出的字换成了 U+FFFD。
     /// 只能看 —— 保存、改名、置顶、移动、归档、删除后端都拒绝，不然原文就被写坏了
-    /// （docs/1110审查与研究.md §5.1）
+    /// （docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）
     pub not_utf8: bool,
     /// 属性块里用户自己的那几行（应用的 id、created 这些不在里面）：和正文一起到，属性面板在第一帧就画得出来，
     /// 正文不会等它到了再往下跳（docs/提醒与属性.md §3）

@@ -82,7 +82,7 @@ import {
   TaskWidget,
 } from "./widgets";
 
-/* 行内装饰层（从 MarkdownEditor.tsx 挪出来，docs/1110审查与研究.md §6.2） */
+/* 行内装饰层（从 MarkdownEditor.tsx 挪出来，docs/REVIEWS/2026-11-10-审查与竞品调研.md §6.2） */
 
 export interface TyporaInlineState {
   decorations: DecorationSet;

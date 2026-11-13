@@ -74,7 +74,7 @@ export interface NoteSummary {
   idInFile: boolean;
   /**
    * 文件不是 UTF-8（GBK、UTF-16 这些）：正文里认不出的字换成了 U+FFFD。只能看 ——
-   * 后端拒绝一切写回（保存、改名、置顶、移动、归档、删除），不然原文就被写坏了（docs/1110审查与研究.md §5.1）
+   * 后端拒绝一切写回（保存、改名、置顶、移动、归档、删除），不然原文就被写坏了（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）
    */
   notUtf8: boolean;
 }

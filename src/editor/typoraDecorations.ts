@@ -8,7 +8,7 @@ import { cellInlineDecorations, typoraInlineDecorations } from "./inlineDecorati
 import { longRuns } from "./longRuns";
 import { revealField } from "./reveal";
 
-/* 编辑器要的完整装饰扩展（从 MarkdownEditor.tsx 挪出来，docs/1110审查与研究.md §6.2） */
+/* 编辑器要的完整装饰扩展（从 MarkdownEditor.tsx 挪出来，docs/REVIEWS/2026-11-10-审查与竞品调研.md §6.2） */
 
 /**
  * 编辑器要的完整装饰扩展：块级 StateField + 行内 ViewPlugin，外加两层共用的「算数的选区」

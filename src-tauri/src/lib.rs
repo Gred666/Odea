@@ -721,7 +721,7 @@ pub fn run() {
         // 带脚本的插件（L1）的沙箱页：iframe 从这里打开，带它自己的 CSP（plugins/sandbox.rs）
         .register_uri_scheme_protocol(plugins::sandbox::SCHEME, plugins::sandbox::handler)
         .invoke_handler({
-            // 协作的两个收发字节的命令不经 tauri-specta（原始请求体 / 二进制 Channel，见 commands.rs「协作」）
+            // 协作的两个收发字节的命令不经 tauri-specta（原始请求体 / 二进制 Channel，见 commands/collaboration/mod.rs）
             let typed = specta_builder.invoke_handler();
             let raw = collab_raw_handler();
             move |invoke: tauri::ipc::Invoke<tauri::Wry>| match invoke.message.command() {

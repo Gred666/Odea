@@ -1,7 +1,7 @@
 # Odea 开发进度
 
 > 每次开工先看这里，收工更新这里。
-> 技术基准见 [技术方案.md](./技术方案.md)（v2.0，已按代码现状重写）。
+> 技术基准见 [技术方案.md](./技术方案.md)（和代码同步）。
 
 ---
 
@@ -44,7 +44,7 @@ pnpm tauri dev
 类型检查 / lint / 前端测试：
 
 ```bash
-npx tsc --noEmit
+pnpm exec tsc --noEmit
 ```
 
 ```bash
@@ -65,13 +65,13 @@ node scripts/perf/perf.mjs http://localhost:1432 --out after.json
 node scripts/perf/compare.mjs before.json after.json
 ```
 
-每种窗口（启动器、速记小窗、访客、仓库）打开要加载多少 JS、多久画出来（不用起服务，给它构建目录；`docs/1110审查与研究.md` §5.3.1）：
+每种窗口（启动器、速记小窗、访客、仓库）打开要加载多少 JS、多久画出来（不用起服务，给它构建目录；`docs/REVIEWS/2026-11-10-审查与竞品调研.md` §5.3.1）：
 
 ```bash
 node scripts/perf/entry.mjs dist --out after.json
 ```
 
-Rust 测试（`--no-default-features` 下 `main.rs` 编不过，必须加 `--lib`；装了 WebView 依赖的机器上 `cargo test --lib` 会连 `commands.rs` 一起测）：
+Rust 测试（`--no-default-features` 下 `main.rs` 编不过，必须加 `--lib`；装了 WebView 依赖的机器上 `cargo test --lib` 会连 `commands/` 一起测）：
 
 ```bash
 cd src-tauri; cargo test --no-default-features --lib
@@ -91,7 +91,7 @@ cd src-tauri; cargo run --example export_bindings --features typegen
 
 ---
 
-## 设计基准（从 Prototype/ 提炼）
+## 设计基准（从最初的原型图提炼）
 
 **核心抽象：一切皆文档。** 笔记、今日TODO、GOAL、日历的某一天、归档项 —— 全部是同一种结构：
 
@@ -129,11 +129,14 @@ cd src-tauri; cargo run --example export_bindings --features typegen
 - [x] **P6 编辑器**（Milkdown 接入 → 实机不行 → 换成 CodeMirror 6）
 - [x] **P6.5 文档模型收口**（行动项迁回 Markdown、今日TODO = 某一天、GOAL 一周期一篇）
 - [ ] **P7 打磨与性能**
-- [ ] **P8 多设备同步（内置 git）** ← 现在（2026-10-07 设计定稿，见技术方案 §5.9）
-- [ ] **P10 多人协同编辑**（2026-10-18 设计定稿，见 [协同编辑.md](./协同编辑.md)；P10.0 编辑器绑定做完了，P10.1 局域网、P10.2 互联网 + 自配中继接上了，两期的遗留也补上了；P10.3（换 Loro、组字、访客转发、共享仓库、历史版本）2026-10-21 做了；P10.4 团队仓库 2026-10-22 设计定稿，共享仓库退役；两台实机、真实网络还没测）← 现在
+- [ ] **P8 多设备同步（内置 git）**（2026-10-07 设计定稿，见技术方案 §5.9；做完了，剩用真实账号登录、推拉、第二台设备接入的验证）
+- [ ] **P9 改名 Odea**（2026-10-17，技术方案 §5.10；剩在 Windows 上真的升级一次，所有设备都升上来以后删认旧名的那些代码）
+- [ ] **P10 多人协同编辑**（2026-10-18 设计定稿，见 [协同编辑.md](./协同编辑.md)；P10.0 编辑器绑定做完了，P10.1 局域网、P10.2 互联网 + 自配中继接上了，两期的遗留也补上了；P10.3（换 Loro、组字、访客转发、共享仓库、历史版本）2026-10-21 做了；P10.4 团队仓库 2026-10-22 设计定稿，共享仓库退役；两台实机、真实网络还没测）
 - [ ] **P11 多仓库与逻辑目录**（2026-10-20 设计定稿，见 [仓库与启动器.md](./仓库与启动器.md)；P11.1–P11.4 和遗留都做完了，剩真设备、真账号上的验证）
+- [ ] **P12 标签页与分屏**（2026-10-29 设计定稿，见 [标签页与分屏.md](./标签页与分屏.md)；只有笔记有标签；P12.1–P12.3 做完了，剩桌面端的实测、macOS）
+- [ ] **P13 表格**（见 [表格.md](./表格.md)；P13.1–P13.4 做完了，剩桌面端、真的输入法上的实测，表格.md §11.4、§12.5）
+- [ ] **P14 插件与跨端**（见 [插件与跨端.md](./插件与跨端.md)；P14.1 日程变成内置插件、P14.2 纯声明的插件、P14.3 带脚本的插件做完了；P14.4 CEF 试验 Windows 那一半做完了（继续用 WebView2），Linux 那一半要真机；手机那两期（P14.5、P14.6）还没做）
 - [ ] **P15 补全功能** ← 现在（2026-11-11 定的：属性块 tags、字号行宽、`![[ ]]` 嵌入、导出、全局速记、提醒、属性和视图文件，然后修 KaTeX 两份；KaTeX 2026-11-12 修了）
-- [ ] **P12 标签页与分屏**（2026-10-29 设计定稿，见 [标签页与分屏.md](./标签页与分屏.md)；只有笔记有标签；P12.1–P12.3 做完了，剩桌面端的实测、macOS）← 现在
 
 ---
 
@@ -236,7 +239,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - 链接：Mod + 点击打开（`@tauri-apps/plugin-opener`，只放行 http(s) / mailto / tel），按住 Mod 变手形，悬停 tooltip 显示地址
 - 表格单元格 / 目录条目用 `editor/inlineDom.ts` 渲染行内格式，真实 DOM 不走 innerHTML
 - widget 全部搬到 `editor/widgets.ts`；`MarkdownEditor.tsx` 只剩两层装饰的编排
-- 测试：`markdownSyntax.dom.test.ts`（21 个 DOM 用例）+ `markdownExtras.test.ts`（纯函数）
+- 测试：`markdownSyntax.dom.test.ts`（21 个 DOM 用例）+ `markdownExtras.dom.test.ts`
 
 ### P6.5 文档模型收口 ✅
 
@@ -334,7 +337,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - [x] **需要你**：删掉 Gitee 上 `hyxzs111111/on-the-way` 的 `updater` 发行版（或它里面的 latest.json，或者把仓库设为私有 / 删掉）。0.1.0 先问 Gitee、Gitee 说「已经最新」就停，不删的话装着 0.1.0 的人永远收不到下一版（技术方案 §14.4）
   - [x] **需要你**：GitHub 仓库 Settings → Secrets 里的 `GITEE_TOKEN` 用不上了，可以删（2026-10-21 删了）
   - [ ] 代码签名（Windows Authenticode、macOS 公证），以后再说
-- [x] 每次推送都跑的检查（2026-11-10，`docs/1110审查与研究.md` §6.1）：`.github/workflows/ci.yml`，推到任何分支都跑，Ubuntu 上前端 lint、tsc、vitest 和 Rust 的 `cargo test --no-default-features --lib` 两个任务并行。上之前在 WSL 里照着跑，Linux 上挂了一条网盘检测的测试（写死了反斜杠路径），改成反斜杠的只在 Windows 上查
+- [x] 每次推送都跑的检查（2026-11-10，`docs/REVIEWS/2026-11-10-审查与竞品调研.md` §6.1）：`.github/workflows/ci.yml`，推到任何分支都跑，Ubuntu 上前端 lint、tsc、vitest 和 Rust 的 `cargo test --no-default-features --lib` 两个任务并行。上之前在 WSL 里照着跑，Linux 上挂了一条网盘检测的测试（写死了反斜杠路径），改成反斜杠的只在 Windows 上查
   - [ ] 推上去看第一次在 GitHub 上跑的结果
 - [x] 清理旧代码：没用的依赖（`@dnd-kit/*`、`fractional-indexing`、`marked`、Radix dialog / popover / tooltip，Rust 的 `r2d2`、`rrule`、`chrono-tz`）；旧数据模型留下的字段（笔记的 `icon`、恒为空的 `actionGroup`、任务的 `priority` / `goalId` / `sortKey` / `completedAt`）、没人调的 `note_list`、用不上的 `NoteIcon` 组件；日历当日安排从 `ActionGroup` 简化成 `DayTasks`
 - [x] 标题收起（2026-10-17 用户要的，像 Obsidian：悬停标题出箭头，点了这一节收成一行；技术方案 §11.4.5）
@@ -649,7 +652,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 
 ## P15 补全功能
 
-2026-11-11 定的（`docs/1110审查与研究.md` §12 末尾）：应用里的复盘不做，MCP / CLI 往后放，先补全笔记应用常有的这几样，做完再修 §5.4（KaTeX 打了两份）。
+2026-11-11 定的（`docs/REVIEWS/2026-11-10-审查与竞品调研.md` §12 末尾）：应用里的复盘不做，MCP / CLI 往后放，先补全笔记应用常有的这几样，做完再修 §5.4（KaTeX 打了两份）。
 从审查 §7、§9.3–§9.5 列的里挑的；没挑的：未链接的提及、重复任务、订阅日历（ICS）、界面多语言。按工作量从小到大做：
 
 - [x] 属性块里的 `tags`（2026-11-11）：智能文件夹的 `#标签` 也认属性块里写的。`FrontMatter::tags` 认 Obsidian 的几种写法（`tags: [a, b]`、`tags: a, b`、`tags: a b`、下面一行一条的 `- a`、老写法 `tag:`），去引号和开头的 `#`、转小写；索引升到第 6 版加一列 `tags`（升级后第一次打开整个索引重建一遍）；`#工作` 也算 `工作/周报`。搜索（命令面板、全局搜索）是搜字的，没改；没有标签列表。Rust 单测 3 条；浏览器预览窗格隐藏着没点到智能文件夹编辑框（只改了一行说明文字），桌面端没走
@@ -703,12 +706,20 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - [x] 入口包拆分（审查 §5.3，2026-11-12）：入口 `main.tsx` 只分流，每种窗口的启动模块在 `src/boot/`（动态加载），入口包 1.39 MB → 26 KB。顺带查出 `DocumentView` 模块顶层的 `import(MarkdownEditor)` 让启动器、速记小窗也拉了编辑器那一串；启动器的「克隆」面板为了 `openExternal` 带上了 CodeMirror（挪到 `lib/openExternal.ts`）。坑：分流写成一串三元表达式的 `import()`，压缩后折成一个调用、预载清单成了所有窗口的并集。量的脚本 `scripts/perf/entry.mjs`（见「常用命令」）：无头 Chrome 4 倍降速，启动器 JS 2190 → 554 KB、`ready` 155 → 89ms，速记小窗 2173 → 306 KB、156 → 79ms，仓库窗口慢了 10ms（多一跳）；桌面端（WebView2，release、单独 identifier）启动器 77–82 → 37–40ms，仓库窗口反而 126 → 108ms（Tauri 给一个大文件是一整块，拆开后并行取）。对话框用到再加载、在 index.html 里按窗口预载都试了 / 量了，不值，没留。桌面端的速记小窗、访客窗口没量，macOS / Linux 没走
 - [x] 审查 §6 工程上的几条（2026-11-13，记录在审查 §6.2）：`commands.rs` 拆成 `commands/`（最大 943 行，`lib.rs` 不用改）、`MarkdownEditor.tsx` 的装饰层挪出去（剩 1515 行）；技术方案 §2.1 / §14.1 / §14.2 / §15 对上了代码；按钮名字的检查脚本 `scripts/a11y-names.mjs`（现在一个都没有缺的）、`useKeyWithClickEvents` 打开；clippy 清到 0 条，CI 加了 clippy、按钮名字、Windows 上比对 `bindings.ts`。发现 `ci.yml` 一直没提交，GitHub 上从没跑过。`cargo fmt`：拷贝上试过，不会写坏（测试全过、还是 LF），只是一次要改 800 多处，等定
   - [ ] `cargo fmt`：提交手上的改动以后单独一个提交格式化（`max_width = 120` + `use_small_heuristics = "Max"`，改动最少）、记进 `.git-blame-ignore-revs`、CI 加 `cargo fmt --check`
+- [x] 照新的工作流（`CLAUDE.md`、`ENGINEERING.md`、Verifier）把项目对了一遍（2026-11-13）：
+    - 文档：2026-11-10 的审查挪进 `docs/REVIEWS/`（43 个文件里 63 处引用跟着改）；技术方案 §4 的目录树照现在的代码重写（以前缺 `collab/`、`team/`、`launcher/`、`capture/`、`export/`、`render/`、`properties/` 和 Rust 那边一半的模块，还列着早就不在的 `Prototype/`）；附录 A 的命令只留本文件开头这一份，附录 B 不再抄一遍 `vite.config.ts`；阶段划分按编号排，补上没列的 P9、P13、P14
+    - 代码：只动了注释和文件名。指着已经拆掉的 `commands.rs` 的 7 处注释、`domain/mod.rs` 开头还写着「中文分词」的那句改了；6 个用了 happy-dom 却没叫 `*.dom.test.ts` 的测试改了名（`ENGINEERING.md`「测试」）
+    - 配置：`.claude/launch.json` 从 19 条清到 9 条（指着早没了的临时文件的、某一期专用的、`spike/cef` 工作树的去掉），exe 的绝对路径改成相对的
+    - 查过、没问题的：前端没有没人引用的文件（从 `main.tsx` 走一遍 import）；没有调试输出、`any`、`@ts-ignore`，压掉 lint 的每一条都写了原因；Rust 没有编译警告
+    - 验证：`pnpm lint`、`tsc`、前端 108 个文件 1518 个用例、`a11y-names`、Rust 350 个、clippy 两遍、重新导出 `bindings.ts` 和提交的一样
+    - 出的事：注销旧的临时工作树时删坏了 `node_modules`，按锁文件重装了，见 `PITFALLS/工程.md`
+    - 没动、等定的：`components/` 里各功能的对话框（协作、团队、同步、导出……）没挪进各自的功能目录；`extensions/`（清单、目录）和 `plugins/`（运行时）是两个目录；Rust 的导出模块叫 `print.rs`。都要跟着改一大片引用和文档，收益不大
 
 ---
 
 ## 决策记录
 
-- **应用里不做复盘，MCP / CLI 往后放，先补全功能**（2026-11-11）：以后做 MCP 时给 AI 一个技能（skill），让它读仓库里的数据复盘，应用里不再另做一套（聚合行为日志、生成复盘文档）。为复盘攒数据的「正文里勾的任务进行为日志」做过一版（存一篇时比前后两版的任务行），没提交就撤了。顺序改成：先补全笔记应用常有的功能，再修 KaTeX 打两份（`docs/1110审查与研究.md` §5.4），MCP 和 CLI 以后再做（§12）
+- **应用里不做复盘，MCP / CLI 往后放，先补全功能**（2026-11-11）：以后做 MCP 时给 AI 一个技能（skill），让它读仓库里的数据复盘，应用里不再另做一套（聚合行为日志、生成复盘文档）。为复盘攒数据的「正文里勾的任务进行为日志」做过一版（存一篇时比前后两版的任务行），没提交就撤了。顺序改成：先补全笔记应用常有的功能，再修 KaTeX 打两份（`docs/REVIEWS/2026-11-10-审查与竞品调研.md` §5.4），MCP 和 CLI 以后再做（§12）
 - **团队仓库：git 管持久、会话管实时，共享仓库退役**（2026-10-22）：共享仓库没有一直在线的一份（两台设备得同时开着才同步）、和 git 二选一、成员按设备算没有「人」，日程跟着整个仓库共享（每一天全体共用一篇、开关一起、干脆不延续）。改成团队仓库 = 一个几个账号都有权限的 git 仓库：不同时在线靠 git，同时在线靠会话（一篇在会话里只有主持人写盘、提交，接手前先同步 git）；成员 = 仓库里 `.odea/devices` 名单上的设备，不用邀请自动连上；外人照旧发邀请链接，范围扩到文件夹；团队仓库的日程是团队的，个人日程在个人仓库，用日程切换器跳。详见 [协同编辑.md](./协同编辑.md) §22
 - **共享仓库 + 换 Loro**（2026-10-21）：逻辑目录让「共享文件夹」最难的一半（两台设备上文件路径怎么对上）没了，共享的单位直接是一个仓库。每台设备上的 .md 仍是这台设备的真相，设备之间靠 CRDT 合并：CRDT 存在 Rust（`.odea/share/`），正文只由 Rust 写，别的程序改了文件照外部改动的办法合进来；网状、没有谁必须一直在线；和 git 同步二选一。持久共享里两边的 CRDT 分叉了就永远分叉，所以前后端要是同一份实现：Loro 的前端就是它 Rust 核心编的 wasm（yrs 是 Yjs 的移植，还在修和 Yjs 不一致的地方），历史版本也是自带的。代价是 wasm 1.1MB（gzip），只在用到时加载。详见 [协同编辑.md](./协同编辑.md) §20
 - **多人协同：会话式 + Yjs + iroh，默认不连任何服务器**（2026-10-18）：主持人那台的 .md 仍是唯一真相，CRDT 只在会话期间存在，和「文件是真相」不冲突（持久共享要和 .md、别的编辑器、git 同步三方对账，不做）。Yjs 13 是实测下来更新包最小、合并最快、体积最小的；Automerge 3.5 的访客每收一次按键要 16–37ms，排除。我们不提供中继：没有第三台机器时，两边都在 NAT 后面就连不上，这一点在界面上说清楚；有条件的用户自己配中继（官方 iroh-relay 就能用），主持人配了、访客零配置。详见 [协同编辑.md](./协同编辑.md)
@@ -744,7 +755,3 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - **同步冲突一律变成冲突副本，本机优先**（2026-10-07）：笔记应用里不能出现 `<<<<<<<` 冲突标记，也不做手动解决冲突的界面。原文留本机的版本，对方的版本存成副本，沿用已有的冲突横幅（查看差异 / 用这一版替换）。一边删一边改时留改过的那版。
 - **超过上限的文件不同步，不从索引里删**（2026-10-07）：GitHub 100 MB、Gitee 50 MB（免费版单文件上限，超了整个推送都会被拒）。已经同步过、后来变大的文件停在旧版本：从索引里删掉，等于在别的设备上把它删了。
 - **拖动用指针事件自己做**：窗口开着 `dragDropEnabled`（拖文件进来当附件），Windows 上 WebView 里的 HTML5 拖放会被它吃掉。
-
-## 坑记录
-
-在 [PITFALLS/](./PITFALLS/)，按模块一份。

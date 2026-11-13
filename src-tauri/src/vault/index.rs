@@ -20,7 +20,7 @@ use crate::plugins::{self, IndexPart};
 
 /// 3：去掉了全文索引表 doc_fts（2026-10-16，jieba 分词不要了，技术方案 §6）
 /// 4：日程变成插件（P14.1，2026-11-04）：day / horizon / period_start 三列换成通用的 key，kind 是文档类型 id
-/// 5：加 not_utf8（2026-11-10，docs/1110审查与研究.md §5.1）
+/// 5：加 not_utf8（2026-11-10，docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）
 /// 6：加 tags（2026-11-11，属性块里写的标签，智能文件夹的 #标签 认它们，TODO.md P15）
 /// 7：日程的 task 表加 remind_at（任务后面的 ⏰）、doc 加 props（属性块里用户自己的键，属性面板的提示从这里算），
 ///    2026-11-12，docs/提醒与属性.md

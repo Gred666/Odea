@@ -40,7 +40,7 @@ import {
   TocWidget,
 } from "./widgets";
 
-/* 块级装饰层（从 MarkdownEditor.tsx 挪出来，docs/1110审查与研究.md §6.2） */
+/* 块级装饰层（从 MarkdownEditor.tsx 挪出来，docs/REVIEWS/2026-11-10-审查与竞品调研.md §6.2） */
 
 /* ============================================================
    装饰分成两层，因为两层的成本量级完全不同。

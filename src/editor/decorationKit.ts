@@ -4,7 +4,7 @@ import { selectionTouchesRange } from "./markdownStyleRegistry";
 import { revealRanges } from "./reveal";
 import { OtwWidget } from "./widgets";
 
-/* 两层装饰共用的小件（从 MarkdownEditor.tsx 挪出来，docs/1110审查与研究.md §6.2） */
+/* 两层装饰共用的小件（从 MarkdownEditor.tsx 挪出来，docs/REVIEWS/2026-11-10-审查与竞品调研.md §6.2） */
 
 /**
  * 所有笔记的标题（trim + 小写，和 lib/wikilinks 的 sameTitle 同一个口径）。

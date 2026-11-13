@@ -72,7 +72,7 @@ where
     .await
 }
 
-// 按分节拆成几个文件（docs/1110审查与研究.md §6.2）。命令都在这里转出去：lib.rs、别的模块照旧写
+// 按分节拆成几个文件（docs/REVIEWS/2026-11-10-审查与竞品调研.md §6.2）。命令都在这里转出去：lib.rs、别的模块照旧写
 // commands::xxx（Tauri 和 specta 的宏会在定义命令的模块里 pub use 它们生成的隐藏宏，跟着一起转出）。
 // 子模块之间要用的私有项写成 pub(in crate::commands)，出了 commands 还是看不见
 mod collaboration;

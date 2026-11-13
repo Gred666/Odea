@@ -1,6 +1,6 @@
 /* ============================================================
 多人协同的网络这一半（docs/协同编辑.md §5、§7、§8）。照 vault/、sync/ 的规矩不依赖 tauri，
-命令在 commands.rs 的「协作」一节。
+命令在 commands/collaboration/。
 
 CRDT 在前端（collab/session.ts），这里只搬字节、管成员和权限：
 - Node：端点（node.rs）。一个应用一个，几个会话共用；接进来的连接按 Hello 里的会话 id 分给会话（§25.1）
@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 pub use diagnose::Diagnosis;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 pub use endpoint::id_text;
-// 命令层（commands.rs）和测试用；不带 Tauri 编库时没人用，不加条件 clippy 会报没用到
+// 命令层（commands/）和测试用；不带 Tauri 编库时没人用，不加条件 clippy 会报没用到
 #[cfg(any(feature = "desktop-runtime", feature = "typegen", test))]
 pub use guest::{Guest, GuestOptions};
 #[cfg(any(feature = "desktop-runtime", feature = "typegen", test))]

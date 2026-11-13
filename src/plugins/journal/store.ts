@@ -22,7 +22,7 @@ import {
    日程的状态：今天、日历选中的那一天和分段、目标看哪个尺度（以前在 app/store），
    某一天 / 目标 / 带日期的任务 / 日历记号的缓存（以前在 data/store）。
    存正文的那条队、保存中、保存失败留下的草稿、外部改动的计数照旧在 data/store：
-   它按 DocumentType 调这里的 saveDay / saveGoal（plugins/journal/index.ts）
+   它按 DocumentType 调这里的 saveDay / saveGoal（plugins/journal/index.tsx）
    ============================================================ */
 
 interface JournalState {

@@ -137,7 +137,7 @@ const readOnlySlot = new Compartment();
 /**
  * 只读时谁也不能改正文。EditorState.readOnly 只拦得住键盘输入，点一下就改源码的那些
  * （勾任务的方框、提示块的折叠箭头、加粗这类快捷键）照样 dispatch —— 改了又存不进去：
- * 不是 UTF-8 的文件后端拒绝写回（docs/1110审查与研究.md §5.1），协作的只读访客改了也传不出去。
+ * 不是 UTF-8 的文件后端拒绝写回（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1），协作的只读访客改了也传不出去。
  * 别处同步过来的（协作的对方、外部改动回填、另一个窗格转过来的）照常进来
  */
 const readOnlyGuard = EditorState.transactionFilter.of((tr) =>
