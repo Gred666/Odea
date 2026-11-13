@@ -420,7 +420,7 @@ pub fn close_launcher<R: Runtime>(app: &AppHandle<R>) {
 /// 从启动器打开的窗口显示出来了（新开的画好了第一帧、已经开着的提到了前面）：它在上面淡入的时候
 /// 启动器不动、垫在底下，等它整个盖上了再藏。
 ///
-/// 以前是同时：新窗口淡入、启动器在它底下淡出，两个各淡各的（CLAUDE.md 规矩 8 的窗口版）——
+/// 以前是同时：新窗口淡入、启动器在它底下淡出，两个各淡各的（docs/PITFALLS/动效.md 规矩 8 的窗口版）——
 /// 中间一段两个都只剩一半，后面的桌面透出来，启动器那一块先亮、再暗、再亮；新窗口淡入的头几帧
 /// 也一顿一顿的（2026-10-29 逐帧抓屏：每帧亮度涨 10、14、6、0、18，后面才匀成 8、9）
 fn close_launcher_behind<R: Runtime>(app: &AppHandle<R>) {
@@ -455,7 +455,7 @@ const LAUNCHER_FADE: Duration = Duration::from_millis(150);
 /// 以前交给系统的关窗动画，那是「缩到约 0.95 + 淡出」：缩放把整窗当位图拉，字发虚；缩放到最后一段
 /// 猛地加速，一帧收 11px 然后停住、只剩淡 —— 用户说的「关启动器那个小窗口时掉了几帧」
 /// （2026-10-29 逐帧抓屏，180Hz 下三次都是：每帧收 2–3px，到 772 一帧跳到 761，之后不动；
-/// 普通的 Win32 窗口也是这个套路，只是那一跳分在三帧里）。CLAUDE.md 规矩 1：消失只淡 opacity。
+/// 普通的 Win32 窗口也是这个套路，只是那一跳分在三帧里）。docs/PITFALLS/动效.md 规矩 1：消失只淡 opacity。
 ///
 /// 做法：关掉这个窗口的系统过渡（DWMWA_TRANSITIONS_FORCEDISABLED），改成分层窗口，按合成器的
 /// 节奏（DwmFlush 每次等到下一次合成，60Hz、180Hz 都是一帧一步）把整窗透明度从 255 降到 0。
@@ -529,7 +529,7 @@ fn restore_opacity<R: Runtime>(window: &tauri::WebviewWindow<R>) {
 
 /// 这个窗口显示、隐藏时要不要系统的过渡动画
 #[cfg(windows)]
-fn set_transitions(hwnd: windows::Win32::Foundation::HWND, on: bool) {
+pub(crate) fn set_transitions(hwnd: windows::Win32::Foundation::HWND, on: bool) {
     use windows::core::BOOL;
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
     let disabled = BOOL::from(!on);

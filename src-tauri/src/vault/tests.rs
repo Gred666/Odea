@@ -527,6 +527,8 @@ fn note_lists_carry_everything_but_the_body() {
         for (summary, note) in light.iter().zip(&full) {
             let mut json = serde_json::to_value(note).unwrap();
             json.as_object_mut().unwrap().remove("contentMd");
+            // 属性跟着正文一起到（属性面板第一帧就画得出来），列表里不带
+            json.as_object_mut().unwrap().remove("properties");
             assert_eq!(serde_json::to_value(summary).unwrap(), json);
         }
     }
@@ -1252,6 +1254,39 @@ fn the_tree_lists_images_and_pdfs_of_a_plain_folder() {
     let mut f = fixture();
     fsio::write_atomic_bytes(&fsio::abs(&f.root, "附件/图.png"), b"png").unwrap();
     assert!(f.vault.tree_files().is_empty());
+}
+
+#[test]
+fn the_vault_keeps_a_list_of_every_attachment_for_wiki_embeds() {
+    // `![[图.png]]`、`![[说明书.pdf]]` 只写名字：整个仓库里的附件都要在清单里，「附件」、日程的文件夹也算，
+    // 隐藏的不算；能执行的、不认识的扩展名不算
+    let mut f = fixture();
+    fsio::write_atomic_bytes(&fsio::abs(&f.root, "附件/图.PNG"), b"png").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&f.root, "笔记/工作/流程.svg"), b"svg").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&f.root, "笔记/工作/数据.xlsx"), b"xlsx").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&f.root, "附件/说明书.PDF"), b"pdf").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&f.root, "附件/安装.exe"), b"exe").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&f.root, "附件/快捷方式.lnk"), b"lnk").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&f.root, "附件/没有扩展名"), b"?").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(&f.root, ".odea/图.png"), b"png").unwrap();
+    let change = f.vault.rescan().unwrap();
+    assert!(change.attachments);
+    // 按路径（字节）排好：「笔」在「附」前面
+    assert_eq!(
+        f.vault.attachments(),
+        vec!["笔记/工作/数据.xlsx", "笔记/工作/流程.svg", "附件/图.PNG", "附件/说明书.PDF"]
+    );
+    assert!(!f.vault.rescan().unwrap().attachments, "没再变就不报");
+    std::fs::remove_file(fsio::abs(&f.root, "附件/图.PNG")).unwrap();
+    assert!(f.vault.rescan().unwrap().attachments);
+    assert_eq!(f.vault.attachments(), vec!["笔记/工作/数据.xlsx", "笔记/工作/流程.svg", "附件/说明书.PDF"]);
+    // 笔记不在清单里
+    assert!(f.vault.attachments().iter().all(|rel| !rel.ends_with(".md")));
+    // 卡片上的「打开」只认清单里的
+    assert!(f.vault.attachment_path("附件/说明书.PDF").unwrap().is_file());
+    assert!(f.vault.attachment_path("附件/安装.exe").is_err());
+    assert!(f.vault.attachment_path("../外面/说明书.pdf").is_err());
+    assert!(f.vault.attachment_path(".odea/图.png").is_err());
 }
 
 #[test]
@@ -2064,6 +2099,35 @@ fn smart_folders_filter_notes_by_their_condition() {
     assert!(vault.note_get(&a).is_ok());
 }
 
+#[test]
+fn smart_folders_see_tags_written_in_front_matter() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    // 别的工具（Obsidian）写的属性块
+    let path = root.join("京都.md");
+    fsio::write_atomic(&path, "---\ntags:\n  - 旅行/日本\n  - 书店\n---\n\n去了几家书店").unwrap();
+    vault.rescan().unwrap();
+    let id = vault.note_list(false).unwrap().into_iter().find(|note| note.title == "京都").unwrap().id;
+    let found = |vault: &Vault, query: &str| vault.tree_queries(&[query.to_string()]).unwrap().remove(0);
+    assert_eq!(found(&vault, "#旅行"), vec![id.clone()], "旅行/日本 算 #旅行");
+    assert_eq!(found(&vault, "#书店"), vec![id.clone()]);
+
+    // 在 Odea 里改了正文：属性块照旧留着，照旧认得
+    vault.note_save(&id, "又去了一家", None).unwrap();
+    assert_eq!(found(&vault, "#书店"), vec![id.clone()]);
+
+    // 外部把「书店」删了：重新扫到以后就不算了
+    let (mtime, _) = fsio::stat(&path).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap().replace("  - 书店\n", "");
+    fsio::write_atomic(&path, &text).unwrap();
+    fsio::set_mtime(&path, mtime + 1000).unwrap();
+    vault.rescan().unwrap();
+    assert!(found(&vault, "#书店").is_empty());
+    assert_eq!(found(&vault, "#旅行"), vec![id]);
+}
+
 /* ---------------- 快捷方式、导入（docs/仓库与启动器.md §7.5、§7.6） ---------------- */
 
 #[test]
@@ -2407,4 +2471,54 @@ fn days_that_are_not_utf8_say_so_are_not_carried_and_convert_too() {
     assert_eq!(day.note_md, "你好，世界");
     assert!(f.exists("日记/2026/2026-09-25 (GBK 原文).txt"));
     assert_eq!(f.vault.day("2026-09-26", true).unwrap().carried_from.as_deref(), Some("2026-09-25"));
+}
+
+#[test]
+fn properties_change_only_their_own_lines() {
+    let mut f = fixture();
+    let id = f.vault.note_create("发版", "## 要做的\n- [ ] 打包").unwrap();
+    let rel = f.vault.note_row(&id).unwrap().rel_path;
+    let target = DocRef::note(&id);
+    assert_eq!(f.vault.doc_properties(&target).unwrap().text, "");
+
+    let saved = f.vault.set_doc_properties(&target, "status: 进行中\ntags:\n  - 项目\n").unwrap();
+    assert_eq!(saved.text, "status: 进行中\ntags:\n  - 项目");
+    let text = f.read(&rel);
+    // 应用的键还在、在前面；正文一个字不动
+    assert!(text.starts_with(&format!("---\nid: {id}\ncreated: ")));
+    assert!(text.contains("status: 进行中\ntags:\n  - 项目\n---\n\n## 要做的\n- [ ] 打包"));
+    assert_eq!(f.vault.note_get(&id).unwrap().content_md, "## 要做的\n- [ ] 打包");
+
+    // 整个仓库的一览里有它
+    let catalog = f.vault.property_catalog().unwrap();
+    assert!(catalog.keys.iter().any(|key| key.key == "status" && key.values == vec!["进行中".to_string()]));
+
+    // 冒充应用的键、弄坏属性块的不收
+    assert!(f.vault.set_doc_properties(&target, "id: 别的").is_err());
+    assert!(f.vault.set_doc_properties(&target, "a: 1\n---").is_err());
+
+    // 清空：只剩应用的键
+    f.vault.set_doc_properties(&target, "").unwrap();
+    assert!(!f.read(&rel).contains("status"));
+    assert_eq!(f.vault.note_get(&id).unwrap().content_md, "## 要做的\n- [ ] 打包");
+}
+
+#[test]
+fn property_types_live_with_obsidian_when_it_is_there() {
+    let mut f = fixture();
+    assert!(f.vault.property_types().is_empty());
+    f.vault.set_property_type("截止", Some("date")).unwrap();
+    assert!(f.exists(".odea/types.json"));
+    assert_eq!(f.vault.property_types().get("截止").map(String::as_str), Some("date"));
+    assert!(f.vault.set_property_type("截止", Some("color")).is_err());
+
+    // 有 .obsidian：读写它的 types.json，别的键原样留着
+    std::fs::create_dir_all(f.root.join(".obsidian")).unwrap();
+    std::fs::write(f.root.join(".obsidian/types.json"), r#"{"types":{"pages":"number"},"other":1}"#).unwrap();
+    assert_eq!(f.vault.property_types().get("pages").map(String::as_str), Some("number"));
+    f.vault.set_property_type("截止", Some("datetime")).unwrap();
+    let written = f.read(".obsidian/types.json");
+    assert!(written.contains("\"other\": 1") && written.contains("\"截止\": \"datetime\""));
+    f.vault.set_property_type("pages", None).unwrap();
+    assert!(!f.vault.property_types().contains_key("pages"));
 }

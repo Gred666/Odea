@@ -384,8 +384,8 @@ export interface ImageSpec {
   height: number | null;
 }
 
-/** 图片在源码里怎么写的：改尺寸时按它写回去 */
-export type ImageSyntax = "markdown" | "html";
+/** 图片在源码里怎么写的：改尺寸时按它写回去。wiki 是 Obsidian 的 `![[图.png|300]]` */
+export type ImageSyntax = "markdown" | "html" | "wiki";
 
 /** 拖着改宽度时最窄到这么多 */
 const IMAGE_MIN_WIDTH = 48;
@@ -407,6 +407,11 @@ export function resizedImageSource(
   syntax: ImageSyntax,
   width: number | null,
 ): string | null {
+  if (syntax === "wiki") {
+    // `|300`、`|300x200` 换成新的宽度；写的是图注（`|流程图`）也换掉 —— Obsidian 里两样只能写一样
+    const name = /^!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/.exec(raw)?.[1];
+    return name === undefined ? null : `![[${name}${width ? `|${width}` : ""}]]`;
+  }
   if (syntax === "markdown") {
     const head = /^!\[([^\]]*)\]/.exec(raw);
     if (!head) return null;

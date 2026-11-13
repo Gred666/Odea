@@ -14,8 +14,12 @@ import { describe, expect, it } from "vitest";
 const TEXT_SIZES = new Set([11, 12, 13, 14, 15, 17, 19, 24, 30, 38]);
 /** 图标档位：12 是最小的（Fluent 2：12px 的图标太小，不该用来点）；28 以上是空状态的插画 */
 const ICON_SIZES = new Set([12, 14, 16, 18, 20, 24, 28, 32]);
-/** 不是字的「字号」：表情选择器里一格一个 emoji 的大小。键是相对 src/ 的路径 */
-const TEXT_EXEMPT: Record<string, number[]> = { "editor/EmojiPicker.tsx": [23] };
+/** 不是界面字的「字号」：表情选择器里一格一个 emoji 的大小、缩小画的纸样。键是相对 src/ 的路径 */
+const TEXT_EXEMPT: Record<string, number[]> = {
+  "editor/EmojiPicker.tsx": [23],
+  // PDF 页面设置里的小样张：纸缩小了画，页眉页脚的字跟着缩成 7px
+  "components/ExportDialog.tsx": [7],
+};
 
 const SRC = join(__dirname, "..");
 

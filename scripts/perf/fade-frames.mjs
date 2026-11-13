@@ -1,4 +1,4 @@
-// 淡入有没有「结束那一帧闪一下」：逐帧截图和最终帧比（CLAUDE.md「动效：先对齐再动」）
+// 淡入有没有「结束那一帧闪一下」：逐帧截图和最终帧比（docs/PITFALLS/动效.md「先对齐再动」）
 //
 //   pnpm dev                                          # 先把开发服务器开着
 //   node scripts/perf/fade-frames.mjs [地址] [场景]   # 默认 http://localhost:1420/、image

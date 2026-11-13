@@ -13,12 +13,15 @@ mod db;
 mod domain;
 mod error;
 mod keep;
+mod notify;
 #[cfg(feature = "desktop-runtime")]
 mod memory;
 mod old_name;
 mod plugins;
 #[cfg(feature = "desktop-runtime")]
 mod popout;
+mod print;
+mod quick_capture;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod state;
 mod sync;
@@ -260,6 +263,8 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::folder_undelete,
         commands::folder_reveal,
         commands::tree_files,
+        commands::vault_attachments,
+        commands::vault_attachment_open,
         commands::tree_file_open,
         commands::tree_view,
         commands::tree_place,
@@ -271,10 +276,28 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::tree_queries,
         commands::vault_make_logical::<tauri::Wry>,
         commands::tree_export::<tauri::Wry>,
+        print::export_pick::<tauri::Wry>,
+        quick_capture::capture_submit::<tauri::Wry>,
+        quick_capture::capture_hide::<tauri::Wry>,
+        plugins::journal::reminders::reminder_test::<tauri::Wry>,
+        quick_capture::capture_configure::<tauri::Wry>,
+        print::export_folder_pick::<tauri::Wry>,
+        print::export_html,
+        print::export_pdf::<tauri::Wry>,
+        print::export_image,
+        quick_capture::capture_target,
+        quick_capture::capture_answer,
+        quick_capture::capture_settings,
+        print::export_folder_write,
+        print::export_folder_done,
         commands::vault_import::<tauri::Wry>,
         commands::search_text,
         commands::find_in_vault,
         plugins::journal::commands::task_toggle,
+        plugins::journal::commands::task_complete,
+        plugins::journal::reminders::reminder_settings,
+        plugins::journal::reminders::reminder_configure,
+        plugins::journal::reminders::reminder_preview,
         plugins::journal::commands::goal_get,
         plugins::journal::commands::goal_save,
         plugins::journal::commands::calendar_day,
@@ -292,6 +315,10 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::index_progress,
         commands::vault_reveal,
         commands::doc_legacy_text,
+        commands::doc_properties,
+        commands::doc_set_properties,
+        commands::vault_property_catalog,
+        commands::vault_set_property_type,
         commands::doc_convert_utf8,
         commands::vault_open_folder,
         commands::note_backlinks,
@@ -393,6 +420,7 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::team_relay_answer,
         commands::team_relay_share,
         commands::collab_fetch_attachment,
+        commands::collab_open_attachment,
         commands::collab_put_attachment,
         commands::collab_put_attachment_path,
     ])
@@ -406,6 +434,9 @@ fn command_builder() -> Builder<tauri::Wry> {
         commands::CollabLink,
         workspace::VaultGoto,
         workspace::LauncherLink,
+        quick_capture::CaptureRequest,
+        quick_capture::CaptureShown,
+        plugins::journal::reminders::ReminderAction,
         commands::CollabCopyReady,
         update::UpdateReady
     ])
@@ -441,6 +472,8 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::folder_undelete,
         commands::folder_reveal,
         commands::tree_files,
+        commands::vault_attachments,
+        commands::vault_attachment_open,
         commands::tree_file_open,
         commands::tree_view,
         commands::tree_place,
@@ -452,10 +485,28 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::tree_queries,
         commands::vault_make_logical::<tauri::test::MockRuntime>,
         commands::tree_export::<tauri::test::MockRuntime>,
+        print::export_pick::<tauri::test::MockRuntime>,
+        quick_capture::capture_submit::<tauri::test::MockRuntime>,
+        quick_capture::capture_hide::<tauri::test::MockRuntime>,
+        plugins::journal::reminders::reminder_test::<tauri::test::MockRuntime>,
+        quick_capture::capture_configure::<tauri::test::MockRuntime>,
+        print::export_folder_pick::<tauri::test::MockRuntime>,
+        print::export_html,
+        print::export_pdf::<tauri::test::MockRuntime>,
+        print::export_image,
+        quick_capture::capture_target,
+        quick_capture::capture_answer,
+        quick_capture::capture_settings,
+        print::export_folder_write,
+        print::export_folder_done,
         commands::vault_import::<tauri::test::MockRuntime>,
         commands::search_text,
         commands::find_in_vault,
         plugins::journal::commands::task_toggle,
+        plugins::journal::commands::task_complete,
+        plugins::journal::reminders::reminder_settings,
+        plugins::journal::reminders::reminder_configure,
+        plugins::journal::reminders::reminder_preview,
         plugins::journal::commands::goal_get,
         plugins::journal::commands::goal_save,
         plugins::journal::commands::calendar_day,
@@ -473,6 +524,10 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::index_progress,
         commands::vault_reveal,
         commands::doc_legacy_text,
+        commands::doc_properties,
+        commands::doc_set_properties,
+        commands::vault_property_catalog,
+        commands::vault_set_property_type,
         commands::doc_convert_utf8,
         commands::vault_open_folder,
         commands::note_backlinks,
@@ -574,6 +629,7 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::team_relay_answer,
         commands::team_relay_share,
         commands::collab_fetch_attachment,
+        commands::collab_open_attachment,
         commands::collab_put_attachment,
         commands::collab_put_attachment_path,
     ])
@@ -587,6 +643,9 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         commands::CollabLink,
         workspace::VaultGoto,
         workspace::LauncherLink,
+        quick_capture::CaptureRequest,
+        quick_capture::CaptureShown,
+        plugins::journal::reminders::ReminderAction,
         commands::CollabCopyReady,
         update::UpdateReady
     ]);
@@ -644,14 +703,16 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // 全局快捷键速记（quick_capture.rs）：快捷键在 setup 里按设置注册
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // 每个仓库窗口记着自己的位置（标签按仓库定）；启动器每次都在屏幕中间
         // 启动器每次都在屏幕中间；仓库窗口自己记（workspace::place_hidden，插件只在正常退出时写盘、
         // 还原最大化会提前把藏着的窗口显示出来）。剩下的访客窗口只记位置大小，不还原「可见」「最大化」
         .plugin({
             use tauri_plugin_window_state::StateFlags;
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&[workspace::LAUNCHER])
-                .with_filter(|label| !boot::is_vault_label(label) && !popout::is_popout(label))
+                .with_denylist(&[workspace::LAUNCHER, quick_capture::LABEL])
+                .with_filter(|label| !boot::is_vault_label(label) && !popout::is_popout(label) && !print::is_print(label))
                 .with_state_flags(StateFlags::SIZE | StateFlags::POSITION)
                 .build()
         })
@@ -740,6 +801,10 @@ pub fn run() {
             });
             // 上次开着的仓库各开一个窗口；一个都打不开（新装、文件夹都找不到了）弹启动器
             workspace::startup(app.handle(), plan);
+            // 全局快捷键速记（quick_capture.rs）：按设置注册快捷键
+            quick_capture::start(app.handle());
+            // 到点提醒（plugins/journal/reminders.rs）：起计时线程
+            plugins::journal::reminders::start(app.handle());
             Ok(())
         })
         .build(context)
@@ -750,6 +815,10 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
             workspace::reopen(handle);
+        }
+        // 要退出了：挂着的通知全收掉（应用不在了，按钮点了没人接，docs/提醒与属性.md §1.2）
+        if let tauri::RunEvent::Exit = event {
+            notify::clear(&handle.config().identifier);
         }
         let _ = (handle, event);
     });

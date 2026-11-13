@@ -3,12 +3,14 @@ import { backend } from "@/data/backend";
 import { periodStartOf } from "@/lib/date";
 import { useEffect } from "react";
 import { journalSwitchNext } from "./JournalSwitcher";
+import { ReminderSettingsDialog } from "./ReminderSettings";
+import { listenReminders } from "./reminders";
 import { startTodayTicker, useJournal } from "./store";
 import { PAGES } from "./types";
 
 /**
  * 日程开着时跟着主窗口挂着的那几件事（以前在 app/Shell.tsx 里）：零点翻页、按需取某一天和目标、
- * 日历记号、从别的仓库的窗口跳过来（日程切换器）、Ctrl+Alt+J
+ * 日历记号、从别的仓库的窗口跳过来（日程切换器）、Ctrl+Alt+J、到点提醒（点通知上的按钮、设置对话框）
  */
 export function JournalEffects() {
   const workspace = useApp((s) => s.workspace);
@@ -19,6 +21,9 @@ export function JournalEffects() {
 
   // 零点翻页
   useEffect(() => startTodayTicker(), []);
+
+  // 到点提醒：通知上点了「完成」「打开」（Rust 交过来，reminders.ts）
+  useEffect(() => listenReminders(), []);
 
   // 日历上的记号：开着日程就取一次（之后勾任务、别处改了带日期的任务时再取）
   useEffect(() => {
@@ -70,5 +75,5 @@ export function JournalEffects() {
     };
   }, []);
 
-  return null;
+  return <ReminderSettingsDialog />;
 }

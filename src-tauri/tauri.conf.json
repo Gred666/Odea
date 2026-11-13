@@ -11,7 +11,7 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https: http: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost; frame-src odea-plugin: http://odea-plugin.localhost https://odea-plugin.localhost",
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https: http: data:; media-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost; frame-src odea-plugin: http://odea-plugin.localhost https://odea-plugin.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": [
@@ -23,7 +23,19 @@
           "**/*.[aA][vV][iI][fF]",
           "**/*.[sS][vV][gG]",
           "**/*.[bB][mM][pP]",
-          "**/*.[iI][cC][oO]"
+          "**/*.[iI][cC][oO]",
+          "**/*.[mM][pP]3",
+          "**/*.[wW][aA][vV]",
+          "**/*.[mM]4[aA]",
+          "**/*.[oO][gG][gG]",
+          "**/*.[oO][gG][aA]",
+          "**/*.[fF][lL][aA][cC]",
+          "**/*.[aA][aA][cC]",
+          "**/*.[oO][pP][uU][sS]",
+          "**/*.[mM][pP]4",
+          "**/*.[mM]4[vV]",
+          "**/*.[wW][eE][bB][mM]",
+          "**/*.[mM][oO][vV]"
         ]
       }
     }

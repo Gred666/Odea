@@ -138,6 +138,8 @@ const SCHEME_RE = /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|#)/;
 export interface ImageResolver {
   /** 正文里写的地址 → <img> 用的；空串 = 还没有（显示占位） */
   resolve(source: string): string;
+  /** Obsidian 的 `![[图.png]]`：写的名字 → <img> 用的；空串 = 还没有。没有这一项的不认这种写法 */
+  wiki?(name: string): string;
 }
 
 /** 文件夹（绝对路径），或者自己解析的 */
@@ -149,6 +151,23 @@ export type ImageBase = string | ImageResolver | null;
  * 由 MarkdownEditor 按文档配置；浏览器预览里没有仓库文件夹，是 null。做客的那一篇是解析器
  */
 export const imageBaseDir = Facet.define<ImageBase, ImageBase>({
+  combine: (values) => values[0] ?? null,
+});
+
+/** `![[图.png]]` 配上的文件：仓库里的相对路径，和 <img> 用的地址 */
+export interface VaultFile {
+  rel: string;
+  src: string;
+}
+
+/** 写的名字 → 仓库里的哪个文件（lib/wikiFiles.ts 的 resolveVaultFile）；找不到 null */
+export type WikiImageResolver = (name: string) => VaultFile | null;
+
+/**
+ * Obsidian 的 `![[图.png]]` 怎么找文件。由 MarkdownEditor 按文档配置（仓库里有哪些图片、这一篇在哪）；
+ * 浏览器的实验台、做客的那一篇没有，`![[图.png]]` 画成找不到
+ */
+export const wikiImages = Facet.define<WikiImageResolver | null, WikiImageResolver | null>({
   combine: (values) => values[0] ?? null,
 });
 
@@ -167,6 +186,18 @@ export function resolveImageSource(source: string, base: ImageBase = null): stri
   }
   if (!isTauri) return trimmed;
   return convertFileSrc(fileUrl ? filePathOf(trimmed) : trimmed);
+}
+
+/**
+ * 正文里写的图片地址 → 本机的绝对路径（相对路径按 base 拼）；网址、data:、没有基准的相对路径返回 null。
+ * 导出时拿它去读文件（export/document.ts）
+ */
+export function localImagePath(source: string, base: string | null): string | null {
+  const trimmed = source.trim();
+  if (/^file:\/\//i.test(trimmed)) return filePathOf(trimmed);
+  if (LOCAL_PATH_RE.test(trimmed)) return trimmed;
+  if (!base || !trimmed || SCHEME_RE.test(trimmed)) return null;
+  return joinPath(base, decodeFilePath(trimmed));
 }
 
 /**

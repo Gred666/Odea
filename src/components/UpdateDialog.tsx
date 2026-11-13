@@ -3,10 +3,10 @@ import { useApp } from "@/app/store";
 import { type Release, releaseOf, releasesBetween } from "@/content/changelog";
 import { useData } from "@/data/store";
 import type { UpdateInfo } from "@/data/types";
-import { openExternal } from "@/editor/links";
 import { formatMonthDayCN } from "@/lib/date";
 import { renderMarkdown } from "@/lib/markdown";
 import { popoverCard, tween } from "@/lib/motion";
+import { openExternal } from "@/lib/openExternal";
 import { CircleFadingArrowUp, LoaderCircle, ScrollText, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useState } from "react";
@@ -294,6 +294,7 @@ function Notes({ markdown, ns }: { markdown: string; ns: string }) {
   };
   // 只是拦下正文里链接的点击，链接自己能用键盘触发
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: 链接聚焦时按回车也是一次 click，冒泡到这里一样拦下
     <div className="prose-doc prose-notes mt-3.5" onClick={onClick}>
       {body}
     </div>

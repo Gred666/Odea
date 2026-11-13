@@ -10,9 +10,11 @@
 - 日期：`@YYYY-MM-DD`，或 Obsidian Tasks 的写法 `📅 YYYY-MM-DD`
 - 时间（可选，紧跟在日期后面）：`HH:MM`，或 上午 / 中午 / 下午 / 晚上 / 全天
 - 分类（可选）：第一个 `#标签`（纯数字的 `#1` 不算）
+- 提醒的时刻（可选，docs/提醒与属性.md §1.2）：`⏰ YYYY-MM-DD HH:MM`（obsidian-reminder 的写法），或者 `⏰ HH:MM`
+  （任务那一天的几点）。只有 ⏰ 没写日期的任务，⏰ 那一天就是它的日期、那个时刻就是它的时间
 - 围栏代码块里的不算
 
-在日历里勾选，改的是原文件里的那一行。
+在日历里勾选，改的是原文件里的那一行。到点弹提醒的是 reminders.rs。
 
 这是日程插件的 Rust 那一半（docs/插件与跨端.md §5.1 的 L2）：扫正文、记进索引里另存的 task 表都在这里，
 核心的索引只在写入、删除一篇时叫它一声（plugins::IndexPart）。
@@ -36,6 +38,8 @@ pub struct ScheduledTask {
     pub due_date: String,
     pub time_label: Option<String>,
     pub category: Option<String>,
+    /// 写了 ⏰ 的：提醒的时刻 `YYYY-MM-DD HH:MM`。没写的按日期、几点和提前量算（reminders.rs）
+    pub remind_at: Option<String>,
 }
 
 const TIME_WORDS: [&str; 5] = ["上午", "中午", "下午", "晚上", "全天"];
@@ -113,6 +117,7 @@ fn parse_line(line: usize, raw: &str) -> Option<ScheduledTask> {
     let mut due_date = None;
     let mut time_label = None;
     let mut category = None;
+    let mut remind: Option<(Option<&str>, &str)> = None;
     let mut words: Vec<&str> = Vec::new();
 
     let tokens: Vec<&str> = text.split_whitespace().collect();
@@ -120,6 +125,37 @@ fn parse_line(line: usize, raw: &str) -> Option<ScheduledTask> {
     while index < tokens.len() {
         let token = tokens[index];
         index += 1;
+
+        // ⏰ 2026-11-12 15:20、⏰ 15:20（⏰ 和后面可以连着写）。认不出的照原样当字
+        if let Some(rest) = token.strip_prefix('⏰') {
+            let (first, glued) = if rest.is_empty() {
+                (tokens.get(index).copied(), false)
+            } else {
+                (Some(rest), true)
+            };
+            let skip = usize::from(!glued);
+            match first {
+                Some(date) if is_date(date) => {
+                    if let Some(time) = tokens.get(index + skip).copied().filter(|time| clock(time).is_some()) {
+                        if remind.is_none() {
+                            remind = Some((Some(date), time));
+                        }
+                        index += skip + 1;
+                        continue;
+                    }
+                }
+                Some(time) if clock(time).is_some() => {
+                    if remind.is_none() {
+                        remind = Some((None, time));
+                    }
+                    index += skip;
+                    continue;
+                }
+                _ => {}
+            }
+            words.push(token);
+            continue;
+        }
 
         // 📅 和日期之间可以有空格
         let date = if let Some(rest) = token.strip_prefix('@') {
@@ -166,6 +202,19 @@ fn parse_line(line: usize, raw: &str) -> Option<ScheduledTask> {
         return None;
     }
 
+    // ⏰ 只写了几点：任务那一天的几点（没写日期就不算）；只有 ⏰ 的任务，⏰ 那一天就是它的日期
+    let remind_at = match remind {
+        Some((Some(date), time)) => {
+            if due_date.is_none() {
+                due_date = Some(date.to_string());
+                time_label = Some(time.to_string());
+            }
+            Some(format!("{date} {}", clock(time)?))
+        }
+        Some((None, time)) => due_date.as_ref().and_then(|date| Some(format!("{date} {}", clock(time)?))),
+        None => None,
+    };
+
     Some(ScheduledTask {
         line,
         raw: raw.to_string(),
@@ -174,11 +223,20 @@ fn parse_line(line: usize, raw: &str) -> Option<ScheduledTask> {
         due_date: due_date?,
         time_label,
         category,
+        remind_at,
     })
 }
 
 fn is_date(s: &str) -> bool {
     s.len() == 10 && NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
+}
+
+/// `9:30`、`18:00` → `09:30`、`18:00`（排序、拼时刻用）。上午、下午这种不是钟点，返回 None
+pub fn clock(s: &str) -> Option<String> {
+    let (hour, minute) = s.split_once(':')?;
+    let hour_ok = (1..=2).contains(&hour.len()) && hour.parse::<u32>().is_ok_and(|hour| hour < 24);
+    let minute_ok = minute.len() == 2 && minute.parse::<u32>().is_ok_and(|minute| minute < 60);
+    (hour_ok && minute_ok).then(|| format!("{hour:0>2}:{minute}"))
 }
 
 pub fn is_time(s: &str) -> bool {
@@ -205,6 +263,12 @@ pub fn toggle_line(raw: &str) -> Option<String> {
     Some(out)
 }
 
+/// 勾上这一行（提醒的「完成」）：已经勾着的、不是任务行返回 None —— 只勾不取消，点晚了也不会把做完的翻回去
+pub fn complete_line(raw: &str) -> Option<String> {
+    let (_, mark) = checkbox(raw)?;
+    (raw.as_bytes()[mark] == b' ').then(|| toggle_line(raw)).flatten()
+}
+
 /* ---------------- 在索引里另存的那一张表（plugins::IndexPart） ----------------
    每篇文档（笔记、某一天、目标都算）读进索引时扫一遍正文，带日期的任务记进 task 表，和文档同一个事务。
    日历的当日安排、月网格上的记号都从这里查 */
@@ -219,7 +283,8 @@ CREATE TABLE task (
   done       INTEGER NOT NULL,
   due_date   TEXT    NOT NULL,
   time_label TEXT,
-  category   TEXT
+  category   TEXT,
+  remind_at  TEXT                            -- 写了 ⏰ 的：YYYY-MM-DD HH:MM
 );
 CREATE INDEX task_doc ON task(doc_id);
 CREATE INDEX task_due ON task(due_date);
@@ -259,8 +324,8 @@ impl IndexPart for Tasks {
         }
         for task in &scheduled {
             conn.execute(
-                "INSERT INTO task (id, doc_id, line, raw, title, done, due_date, time_label, category)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                "INSERT INTO task (id, doc_id, line, raw, title, done, due_date, time_label, category, remind_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
                 params![
                     task_id(&doc.id, task.line),
                     doc.id,
@@ -271,6 +336,7 @@ impl IndexPart for Tasks {
                     task.due_date,
                     task.time_label,
                     task.category,
+                    task.remind_at,
                 ],
             )?;
         }
@@ -289,7 +355,7 @@ pub fn task_id(doc_id: &str, line: usize) -> String {
 /// 一篇文档当前索引里的任务，用来判断这次写入有没有改到日历
 fn doc_tasks(conn: &Connection, doc_id: &str) -> Result<Vec<ScheduledTask>> {
     let mut stmt = conn.prepare(
-        "SELECT line, raw, title, done, due_date, time_label, category
+        "SELECT line, raw, title, done, due_date, time_label, category, remind_at
          FROM task WHERE doc_id = ?1 ORDER BY line",
     )?;
     let rows = stmt.query_map(params![doc_id], |r| {
@@ -301,6 +367,7 @@ fn doc_tasks(conn: &Connection, doc_id: &str) -> Result<Vec<ScheduledTask>> {
             due_date: r.get(4)?,
             time_label: r.get(5)?,
             category: r.get(6)?,
+            remind_at: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -318,16 +385,17 @@ pub struct TaskRow {
     pub due_date: String,
     pub time_label: Option<String>,
     pub category: Option<String>,
+    pub remind_at: Option<String>,
     /// 所在文档的类型（note，或者插件的文档类型）、key、标题
     pub doc_kind: String,
     pub doc_key: Option<String>,
     pub doc_title: String,
 }
 
-const TASK_COLUMNS: &str = "t.id, t.doc_id, t.line, t.raw, t.title, t.done, t.due_date,
-    t.time_label, t.category, d.kind, d.key, d.title AS doc_title";
+pub(super) const TASK_COLUMNS: &str = "t.id, t.doc_id, t.line, t.raw, t.title, t.done, t.due_date,
+    t.time_label, t.category, t.remind_at, d.kind, d.key, d.title AS doc_title";
 
-fn task_row(r: &Row) -> rusqlite::Result<TaskRow> {
+pub(super) fn task_row(r: &Row) -> rusqlite::Result<TaskRow> {
     Ok(TaskRow {
         id: r.get("id")?,
         doc_id: r.get("doc_id")?,
@@ -338,6 +406,7 @@ fn task_row(r: &Row) -> rusqlite::Result<TaskRow> {
         due_date: r.get("due_date")?,
         time_label: r.get("time_label")?,
         category: r.get("category")?,
+        remind_at: r.get("remind_at")?,
         doc_kind: r.get("kind")?,
         doc_key: r.get("key")?,
         doc_title: r.get("doc_title")?,
@@ -479,5 +548,39 @@ mod tests {
         );
         assert_eq!(toggle_line("1) [X] 完成").as_deref(), Some("1) [ ] 完成"));
         assert!(toggle_line("- 普通列表").is_none());
+    }
+
+    #[test]
+    fn completing_never_unchecks() {
+        assert_eq!(complete_line("- [ ] 交周报").as_deref(), Some("- [x] 交周报"));
+        assert!(complete_line("- [x] 交周报").is_none());
+        assert!(complete_line("- 普通列表").is_none());
+    }
+
+    #[test]
+    fn reads_reminder_times() {
+        // ⏰ 带日期：就这个时刻；不进标题
+        let task = one("- [ ] 交周报 @2026-11-13 ⏰ 2026-11-12 17:30 #工作").unwrap();
+        assert_eq!(task.title, "交周报");
+        assert_eq!(task.due_date, "2026-11-13");
+        assert_eq!(task.remind_at.as_deref(), Some("2026-11-12 17:30"));
+        assert_eq!(task.category.as_deref(), Some("工作"));
+
+        // ⏰ 只写几点：任务那一天；钟点补成两位
+        let short = one("- [ ] 交周报 @2026-11-12 18:00 ⏰9:45").unwrap();
+        assert_eq!(short.remind_at.as_deref(), Some("2026-11-12 09:45"));
+        assert_eq!(short.time_label.as_deref(), Some("18:00"));
+
+        // 只有 ⏰：⏰ 那一天、那个时刻就是它的日期和时间
+        let only = one("- [ ] 打电话 ⏰ 2026-11-12 15:20").unwrap();
+        assert_eq!(only.due_date, "2026-11-12");
+        assert_eq!(only.time_label.as_deref(), Some("15:20"));
+        assert_eq!(only.remind_at.as_deref(), Some("2026-11-12 15:20"));
+
+        // 没有日期的 ⏰ 15:20 不算；认不出的 ⏰ 照原样当字
+        assert!(one("- [ ] 打电话 ⏰ 15:20").is_none());
+        let odd = one("- [ ] 闹钟 ⏰ 坏了 @2026-11-12").unwrap();
+        assert_eq!(odd.title, "闹钟 ⏰ 坏了");
+        assert_eq!(odd.remind_at, None);
     }
 }

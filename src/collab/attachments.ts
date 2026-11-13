@@ -1,5 +1,6 @@
 import type { Attachment } from "@/data/types";
 import type { ImageResolver } from "@/editor/html";
+import { wikiFileTarget, wikiImageTarget } from "@/lib/wikiFiles";
 import type { FetchedAttachment } from "./net";
 
 /* ============================================================
@@ -11,6 +12,9 @@ import type { FetchedAttachment } from "./net";
    - 访客：正文里相对路径的图片向主持人要，缓存在本机，编辑器按 GuestImages 给的解析器显示。
      还没要到的先是空的（图片显示占位），要到了换一个新的解析器，编辑器重画那几张图。
      正文里的本机绝对路径（C:\…\a.png）是主持人电脑上的，不显示；网络图片访客自己加载
+   - Obsidian 的 `![[图.png]]`、`![[说明书.pdf]]` 只写名字：主持人按名字在自己的仓库里找（lib/wikiFiles.ts），
+     引用表里记成 `wiki:/名字`（wikiRef；带协议的写法不会和正文里的相对路径撞上）。图片访客一打开就要，
+     别的附件点「打开」时才要（可能很大）。找到的也照样要在这篇的附件文件夹里才给
    - 访客「存一份到我的笔记」（§3）：缓存里的图片存进自己的「附件」，正文里的路径换成新的
      （copyImages）。还没要到的留着原来的路径
    ============================================================ */
@@ -21,6 +25,32 @@ const INLINE_IMAGE = /!\[[^\]]*\]\((\S+?)(?:\s+["'][^"']*["'])?\)/g;
 const DEFINITION = /^[ \t]{0,3}\[[^\]]+\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm;
 /** `<img src="…">` */
 const HTML_IMAGE = /<img\b[^>]*?\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+/** Obsidian 的 `![[名字]]`、`![[名字|300]]`：第 1 组是 `[[` 和 `]]` 之间那一段 */
+const WIKI_EMBED = /!\[\[([^\]\n]+)\]\]/g;
+
+/** `![[名字]]` 在引用表里的键：`wiki:/名字`（反斜杠换成斜杠）。最后一段还是文件名，Rust 缓存时照它起名 */
+export function wikiRef(name: string): string {
+  return `wiki:/${name.trim().replace(/\\/g, "/")}`;
+}
+
+/** wikiRef 的键 → 写的名字；不是这种键返回 null */
+export function wikiRefName(ref: string): string | null {
+  return ref.startsWith("wiki:/") ? ref.slice(6) : null;
+}
+
+/**
+ * 正文里 `![[名字]]` 嵌的附件写的名字（去重、按出现顺序）。onlyImages：只要图片（访客一打开就要的那些）；
+ * 不然连 PDF 这些一起（主持人的引用表）
+ */
+export function wikiEmbeds(markdown: string, onlyImages: boolean): string[] {
+  const found: string[] = [];
+  for (const match of markdown.matchAll(WIKI_EMBED)) {
+    const inner = match[1]!;
+    const name = (wikiImageTarget(inner) ?? (onlyImages ? null : wikiFileTarget(inner)))?.name;
+    if (name && !found.includes(name)) found.push(name);
+  }
+  return found;
+}
 
 /** 带协议的（http:、data:、asset:、file:……）、锚点、本机绝对路径：不是相对路径 */
 const NOT_RELATIVE = /^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|#|\/|\\)/;
@@ -30,7 +60,10 @@ export function isRelativeRef(source: string): boolean {
   return !!trimmed && !NOT_RELATIVE.test(trimmed);
 }
 
-/** 正文里相对路径的图片地址（写的样子，去重、按出现顺序） */
+/**
+ * 正文里要向主持人要的图片：相对路径的地址（写的样子）；`![[图.png]]` 的是 wikiRef（`wiki:/图.png`）。
+ * 去重、按出现顺序
+ */
 export function imageRefs(markdown: string): string[] {
   const found: string[] = [];
   const add = (source: string | undefined) => {
@@ -40,6 +73,10 @@ export function imageRefs(markdown: string): string[] {
   for (const match of markdown.matchAll(INLINE_IMAGE)) add(match[1]);
   for (const match of markdown.matchAll(DEFINITION)) add(match[1] ?? match[2]);
   for (const match of markdown.matchAll(HTML_IMAGE)) add(match[1] ?? match[2] ?? match[3]);
+  for (const name of wikiEmbeds(markdown, true)) {
+    const ref = wikiRef(name);
+    if (!found.includes(ref)) found.push(ref);
+  }
   return found;
 }
 
@@ -67,6 +104,16 @@ export function rewriteImageRefs(markdown: string, links: ReadonlyMap<string, st
   collect(INLINE_IMAGE);
   collect(DEFINITION);
   collect(HTML_IMAGE);
+  // `![[图.png|300]]`：换的是 `|` 前面的名字（键是 wikiRef），尺寸、图注留着
+  for (const match of markdown.matchAll(WIKI_EMBED)) {
+    const inner = match[1]!;
+    const pipe = inner.indexOf("|");
+    const name = pipe >= 0 ? inner.slice(0, pipe) : inner;
+    const link = name.trim() ? links.get(wikiRef(name)) : undefined;
+    if (link === undefined) continue;
+    const start = match.index! + 3 + (name.length - name.trimStart().length);
+    edits.push({ from: start, to: start + name.trim().length, insert: link });
+  }
   edits.sort((a, b) => b.from - a.from);
   let out = markdown;
   for (const edit of edits) out = out.slice(0, edit.from) + edit.insert + out.slice(edit.to);
@@ -75,7 +122,11 @@ export function rewriteImageRefs(markdown: string, links: ReadonlyMap<string, st
 
 /** 正文里写的文件名（最后一段，解开 %xx）：浏览器预览里按名字存的时候用 */
 function fileNameOf(ref: string): string {
-  return decode(ref.trim()).split(/[\\/]/).pop() || "图片.png";
+  return (
+    decode((wikiRefName(ref) ?? ref).trim())
+      .split(/[\\/]/)
+      .pop() || "图片.png"
+  );
 }
 
 /** data: 地址里的内容，转成 base64（浏览器预览里要来的图片是 data: 地址） */
@@ -225,6 +276,7 @@ export class GuestImages {
         // 主持人电脑上的绝对路径、还没要到的：先空着（显示占位）
         return isRelativeRef(trimmed) ? (urls.get(trimmed)?.url ?? "") : "";
       },
+      wiki: (name) => urls.get(wikiRef(name))?.url ?? "",
     };
   }
 

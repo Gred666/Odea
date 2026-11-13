@@ -65,6 +65,12 @@ node scripts/perf/perf.mjs http://localhost:1432 --out after.json
 node scripts/perf/compare.mjs before.json after.json
 ```
 
+每种窗口（启动器、速记小窗、访客、仓库）打开要加载多少 JS、多久画出来（不用起服务，给它构建目录；`docs/1110审查与研究.md` §5.3.1）：
+
+```bash
+node scripts/perf/entry.mjs dist --out after.json
+```
+
 Rust 测试（`--no-default-features` 下 `main.rs` 编不过，必须加 `--lib`；装了 WebView 依赖的机器上 `cargo test --lib` 会连 `commands.rs` 一起测）：
 
 ```bash
@@ -77,10 +83,10 @@ cd src-tauri; cargo test --no-default-features --lib
 $env:ODEA_DATA_DIR="D:\tmp\odea-data"; $env:ODEA_VAULT="D:\tmp\odea-vault"; pnpm tauri dev
 ```
 
-不起 app 重新生成 `src/lib/bindings.ts`（debug 启动也会自动生成）。注意这条命令导出的文件里没有 `ready` / `win_*` 这几个窗口命令（它们只在 desktop-runtime 下注册），提交前以 debug 启动生成的为准：
+不起 app 重新生成 `src/lib/bindings.ts`（debug 启动也会自动生成）。带着默认的 feature 跑，和 debug 启动写的是同一份；加了 `--no-default-features` 导出的文件里没有 `ready` / `win_*` 这几个窗口命令（它们只在 desktop-runtime 下注册，技术方案 §7.1）：
 
 ```bash
-cd src-tauri; cargo run --example export_bindings --features typegen --no-default-features
+cd src-tauri; cargo run --example export_bindings --features typegen
 ```
 
 ---
@@ -126,6 +132,7 @@ cd src-tauri; cargo run --example export_bindings --features typegen --no-defaul
 - [ ] **P8 多设备同步（内置 git）** ← 现在（2026-10-07 设计定稿，见技术方案 §5.9）
 - [ ] **P10 多人协同编辑**（2026-10-18 设计定稿，见 [协同编辑.md](./协同编辑.md)；P10.0 编辑器绑定做完了，P10.1 局域网、P10.2 互联网 + 自配中继接上了，两期的遗留也补上了；P10.3（换 Loro、组字、访客转发、共享仓库、历史版本）2026-10-21 做了；P10.4 团队仓库 2026-10-22 设计定稿，共享仓库退役；两台实机、真实网络还没测）← 现在
 - [ ] **P11 多仓库与逻辑目录**（2026-10-20 设计定稿，见 [仓库与启动器.md](./仓库与启动器.md)；P11.1–P11.4 和遗留都做完了，剩真设备、真账号上的验证）
+- [ ] **P15 补全功能** ← 现在（2026-11-11 定的：属性块 tags、字号行宽、`![[ ]]` 嵌入、导出、全局速记、提醒、属性和视图文件，然后修 KaTeX 两份；KaTeX 2026-11-12 修了）
 - [ ] **P12 标签页与分屏**（2026-10-29 设计定稿，见 [标签页与分屏.md](./标签页与分屏.md)；只有笔记有标签；P12.1–P12.3 做完了，剩桌面端的实测、macOS）← 现在
 
 ---
@@ -148,7 +155,7 @@ cd src-tauri; cargo run --example export_bindings --features typegen --no-defaul
 | Logo | SVG 九段笔画 `stroke-dashoffset` 依序描出、停一拍、再收回，无限循环 |
 | 导航活动项 | `layoutId` 指示块滑动 |
 | 导航项入场 | stagger |
-| 中列表栏出现/消失 | 整块 `x: -300 → 0` 从导航栏底下抽出，**220ms tween**；布局只在挂载那一帧变一次（见坑记录） |
+| 中列表栏出现/消失 | 整块 `x: -300 → 0` 从导航栏底下抽出，**220ms tween**；布局只在挂载那一帧变一次（见 PITFALLS/动效.md） |
 | 主内容切换 | `popLayout` 冻结退场屏交叉淡出，退场方向感知横移；**进场纯 opacity**（编辑器才能第一帧挂上） |
 | 切换文档（笔记 / 日历某天 / GOAL 周期） | `SwapFade`：旧内容的静态快照原地淡出上飘 4px（140ms），新内容纯 opacity 淡入（220ms）；标题、正文、状态栏、目录树整块一起换 |
 | 标题下分隔线 | `scaleX` 从 0 展开（进工作区时一次，换篇不重播） |
@@ -327,6 +334,8 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - [x] **需要你**：删掉 Gitee 上 `hyxzs111111/on-the-way` 的 `updater` 发行版（或它里面的 latest.json，或者把仓库设为私有 / 删掉）。0.1.0 先问 Gitee、Gitee 说「已经最新」就停，不删的话装着 0.1.0 的人永远收不到下一版（技术方案 §14.4）
   - [x] **需要你**：GitHub 仓库 Settings → Secrets 里的 `GITEE_TOKEN` 用不上了，可以删（2026-10-21 删了）
   - [ ] 代码签名（Windows Authenticode、macOS 公证），以后再说
+- [x] 每次推送都跑的检查（2026-11-10，`docs/1110审查与研究.md` §6.1）：`.github/workflows/ci.yml`，推到任何分支都跑，Ubuntu 上前端 lint、tsc、vitest 和 Rust 的 `cargo test --no-default-features --lib` 两个任务并行。上之前在 WSL 里照着跑，Linux 上挂了一条网盘检测的测试（写死了反斜杠路径），改成反斜杠的只在 Windows 上查
+  - [ ] 推上去看第一次在 GitHub 上跑的结果
 - [x] 清理旧代码：没用的依赖（`@dnd-kit/*`、`fractional-indexing`、`marked`、Radix dialog / popover / tooltip，Rust 的 `r2d2`、`rrule`、`chrono-tz`）；旧数据模型留下的字段（笔记的 `icon`、恒为空的 `actionGroup`、任务的 `priority` / `goalId` / `sortKey` / `completedAt`）、没人调的 `note_list`、用不上的 `NoteIcon` 组件；日历当日安排从 `ActionGroup` 简化成 `DayTasks`
 - [x] 标题收起（2026-10-17 用户要的，像 Obsidian：悬停标题出箭头，点了这一节收成一行；技术方案 §11.4.5）
   - [x] `editor/headingFold.ts`：`headingFolds` 状态（收起的标题 + 按语法树算的每一节范围）、改动时映射、自动展开、跨过收起的一节的光标规则（`transactionFilter`）
@@ -638,8 +647,68 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 
 ---
 
+## P15 补全功能
+
+2026-11-11 定的（`docs/1110审查与研究.md` §12 末尾）：应用里的复盘不做，MCP / CLI 往后放，先补全笔记应用常有的这几样，做完再修 §5.4（KaTeX 打了两份）。
+从审查 §7、§9.3–§9.5 列的里挑的；没挑的：未链接的提及、重复任务、订阅日历（ICS）、界面多语言。按工作量从小到大做：
+
+- [x] 属性块里的 `tags`（2026-11-11）：智能文件夹的 `#标签` 也认属性块里写的。`FrontMatter::tags` 认 Obsidian 的几种写法（`tags: [a, b]`、`tags: a, b`、`tags: a b`、下面一行一条的 `- a`、老写法 `tag:`），去引号和开头的 `#`、转小写；索引升到第 6 版加一列 `tags`（升级后第一次打开整个索引重建一遍）；`#工作` 也算 `工作/周报`。搜索（命令面板、全局搜索）是搜字的，没改；没有标签列表。Rust 单测 3 条；浏览器预览窗格隐藏着没点到智能文件夹编辑框（只改了一行说明文字），桌面端没走
+- [x] 正文字号、行宽（2026-11-11）：命令面板「外观」里「正文字号大一号 / 小一号 / 恢复默认」（15–20px 六档）、「行宽：窄 / 标准 / 宽 / 铺满」（每行最多 36 / 44 / 52 字 / 不限），记在本机（`odea.prefs`）。写成 `<html>` 上的 `--odea-body-size`、`--odea-measure`（`app/typography.ts`），弹出窗口照着同步；正文那一列按「字数 × 字号 + 112px」定宽，标准档 17px 时正好是以前写死的 860px；表格跟着正文小 2px、表头小 4px。Ctrl+= / Ctrl+- 是标题升降级，没给快捷键。测试 `app/typography.dom.test.ts` 5 条；浏览器预览里量过（18px、窄档 760px、刷新后还在、换字号后点哪一行落在哪一行）；桌面端、弹出窗口没走
+- [x] `![[笔记]]` 嵌入（含 `![[笔记#小节]]`，2026-11-11）：单独占一行时嵌成一张只读卡片（`editor/embed.ts`；认目标、取一节在 `lib/embeds.ts`）。和图片一样，卡片插在源码前面、光标碰到时源码露出来；点卡片把光标放进 `![[` 里（括号跟着露出来），Mod + 点击打开那一篇（带 `#小节` 的滚到那一节）。卡片订阅数据层：正文缓存换了、列表里的「上次更新」变了就重画，在这里存的、外部改的、同步来的都跟得上。用只读的轻量渲染器画，嵌进来的那一篇里的 `![[…]]` 不展开（不会一层套一层），图片、公式、图表显示成源码。夹在字里的、`![[图.png]]` 这种附件、`^块` 引用、做客的那一篇都不嵌。顺手修了只读渲染器：任务列表的 li 是 flex，勾选框后面的字和行内代码各成一个子项，`/`、`[[` 这种行内代码被挤成单独一列（编辑器加载时的占位、模板预览里一直是这样）。测试 `lib/embeds.test.ts` 4 条、`editor/embed.dom.test.ts` 5 条；浏览器预览里看过（嵌一节、还没有的那篇、点卡片露出源码、Ctrl+点打开并滚到那一节）；桌面端没走
+  - [x] `![[图.png]]` 这种 Obsidian 写法的图片、卡片里画图片和公式（2026-11-11）：
+    - 按名字找（2026-11-12 起清单扩成附件，`images` 都改叫 `attachments`，见下面「非图片附件」那一条）：Rust 扫描时顺带记下整个仓库的图片（`fsio::walk` 一遍走完，`Vault::images`，隐藏目录不算，日程、附件文件夹里的都算；命令 `vault_images`；多了少了 vault-changed 带 `images`，前端 store 的 `images` 重取）。前端 `lib/wikiFiles.ts` 配名字：先当从仓库根起的路径、再当相对这一篇的，都不是就按结尾那几段配，同名的挑同一个文件夹的、再挑最短的，不分大小写。编辑器里经 `wikiImages` facet（`DocumentView` 按仓库根、这一篇的位置、图片清单造），画法和普通图片同一个替身，拖柄改宽度写回 `![[图.png|宽]]`（`ImageSyntax` 加了 `wiki`）；找不到的画成空图、悬停说「仓库里找不到」。`resolveImage` 挪进了轻的 `editor/images.ts`
+    - `[[图.png]]`、`[[说明书.pdf]]` 这种链附件的双链：不再画成「还没有的笔记」，Mod + 点击不会新建一篇叫「图.png」的笔记（图片找得到就用系统的程序打开，找不到提示一句）
+    - 卡片改用静态渲染器（`render/staticHtml.ts`，导出也用它，见下一条）：图片（相对被嵌那一篇所在的文件夹）、公式、图表、代码高亮、callout、合并单元格都画；里面再嵌的画成双链。卡片里的链接不跳走，可以收起的 callout 点标题行开合。坑：应用里 Tailwind 的 preflight（`@layer base` 里的 `img { display: block }`）让卡片里的图片后面的字掉到下一行，`static.css` 里明确写成行内
+    - 测试：`lib/wikiFiles.test.ts` 5 条、`editor/imageWidget.dom.test.ts` 加 4 条、`editor/embed.dom.test.ts` 加 1 条，Rust `the_vault_keeps_a_list_of_every_image_for_wiki_embeds`。浏览器预览（无头 Chrome，预览窗格隐藏着）里看过正文里的 `![[favicon.svg|64]]` 和卡片里的图、公式、callout；桌面端看过 `![[图.png]]` 解析成 asset 地址
+    - ~~没做：做客的那一篇里的 `![[图.png]]`；`![[说明书.pdf]]` 这类非图片附件的嵌入~~ 做了，见下一条
+  - [x] `![[说明书.pdf]]` 这类非图片附件、做客那一篇里的 `![[图.png]]`（2026-11-12）：
+    - 仓库扫描收的从「图片」扩成「附件」：图片加上一份白名单（`vault::ATTACHMENT_EXTENSIONS`：PDF、Office、文本表格、电子书、音视频、压缩包、psd / xmind / drawio / heic），能执行的（exe、bat、lnk、html、js……）不收。`Vault::images` → `attachments`，命令 `vault_attachments`，vault-changed 带 `attachments`，前端 store 的 `images` → `attachments`。前端的扩展名表 `lib/wikiFiles.ts` 的 `ATTACHMENT_FILE_RE` 和它一致；`lib/embeds.ts` 的 `FILE_EXTENSIONS` 由它们拼成（`![[报表.xlsx]]` 不再当成一篇叫「报表.xlsx」的笔记）
+    - 单独一行的 `![[说明书.pdf]]`、`![[录音.m4a|会议录音]]` 画成附件卡片（`editor/attachmentEmbed.ts`，外框和 `![[笔记]]` 的卡片同一套）：类型图标、名字（写了 `|别名` 用别名，`|300` 这种尺寸、`#page=3` 不算）、类型和所在的文件夹，「打开」「在文件夹中显示」两个按钮一直显示（不做悬停淡入）；音频（mp3 wav m4a ogg flac aac opus）、视频（mp4 m4v webm mov）在卡片里直接放 —— asset 协议的 scope 加了这几种，CSP 加了 `media-src`。PDF 不在卡片里内嵌（WebView2 能、WKWebView 只画第一页、WebKitGTK 不行），交给系统的阅读器。点卡片空白处露出源码、Mod + 点击打开，同图片。找不到的画成虚线框「仓库里找不到」。夹在字里的照旧是双链样子；`[[说明书.pdf]]` 双链 Mod + 点击现在也能打开（以前只认图片）
+    - 打开走新命令 `vault_attachment_open`：只认附件清单里有的路径（`Vault::attachment_path`），前端叫不动 Rust 去开清单外的、能执行的文件
+    - 导出 / 嵌入卡片里（静态渲染器）的 `![[说明书.pdf]]` 画成一个「名字 + 类型」的小标签（导出的页面里打不开它）
+    - 做客的那一篇：主持人推引用表（`collab/store.ts` 的 pushRefs）时，`![[名字]]` 按名字在自己仓库里找（和编辑器同一个 `resolveVaultFile`），记成 `wiki:/名字` → 仓库路径（带协议的键，不会和正文里的相对路径撞；最后一段还是文件名，Rust 缓存时照它起名）。Rust 那边照旧要「在这篇的附件文件夹里」才给 —— 图放在仓库别处的，访客照样看不到（安全上不放宽：不然有编辑权的访客写个 `![[私人.png]]` 就能按名字读主持人仓库里任意一张图）。访客：图片一打开就要（`GuestImages` 扫 `wiki:/` 的键，解析器多了 `wiki(名字)`，`DocumentView` 给编辑器 `wikiImage`）；`![[说明书.pdf]]` 的卡片说「在主持人那边」、没有「在文件夹中显示」、音视频不在卡片里放，点「打开」才向主持人要（`collab_open_attachment`：要来写进本机缓存，扩展名在白名单里才交给系统打开）。「存一份到我的笔记」时 `![[图.png|300]]` 换的是名字那一段，尺寸、图注留着
+    - 测试：`editor/attachmentEmbed.dom.test.ts` 6 条、`lib/wikiFiles.test.ts` 加 3 条、`collab/attachments.test.ts` 加 3 条、`render/staticHtml.dom.test.ts` 加 1 条，Rust `the_vault_keeps_a_list_of_every_attachment_for_wiki_embeds`（含清单外的、能执行的打不开）。浏览器预览里看过卡片（PDF、别名、找不到的）、点卡片露出源码；桌面端（WebView2）看过 PDF 卡片和 WAV 卡片（播放器经 asset 协议加载好、控制台没有 CSP 报错），清单外的路径 `附件/../../evil.exe` 被拒。没在两个实例之间实测做客那一篇的 `![[图.png]]` 和「打开」（单测覆盖了引用表的键、访客的解析器、存一份时的改写）；没在桌面端真点「打开」（会弹你电脑上的 PDF 阅读器）
+- [x] 导出 PDF / HTML（2026-11-11）：
+    - 入口：状态栏右端「导出」按钮（PDF / HTML，导出这个窗格里的这一篇）；命令面板「导出为 PDF…」「导出为 HTML…」（正在写的那个窗格里的那一篇）。编辑器里还没存的字也算
+    - 先弹「另存为」再排版（Rust `print.rs` 的 `export_pick`：挂在窗口上，文件名是标题，从上次导出的文件夹开始），点了马上有对话框。写文件的 `export_html` / `export_pdf` 只认刚在对话框里选的路径，前端没法叫 Rust 往别处写
+    - 排版（`export/document.ts`）：正文用新的静态渲染器 `render/staticHtml.ts` —— 和编辑器同一个 Lezer 解析器，装饰层按正则认的（callout、脚注、双链、==高亮==、定义列表、缩写、[TOC]、合并单元格、智能标点）照着 `MarkdownEditor.tsx` 的规矩，行内 / 块级 HTML 走同一份白名单；用户的字一律转义。图片、公式、图表、代码高亮、嵌入是异步的，先占位最后一起换。段落里的换行就是换行（编辑器里一行就是一行）；脚注收到最后按引用先后编号；开头的属性块不出现；正文第一行就是和标题一样的一级标题时不再另放标题。样式 `render/static.css` 照编辑器画，颜色走 token，导出的页面自带一份亮色的
+    - 嵌进页面：本机图片（相对路径、`![[图.png]]`、绝对路径、块级 HTML 里的）经 `export_image` 读成 data:（只认图片扩展名，30 MB 以内）；网络图片照旧是网址；有公式时带 KaTeX 的样式和字体（woff2 嵌成 data:，约 350 KB）；`![[笔记]]` 嵌的那一篇排进来。「语法全览」整篇排一遍 0.5–0.9 秒，网页 790 KB
+    - PDF：Windows 上一个看不见的窗口（`print-` 开头，window-state 不记它）从临时文件夹打开这一页，等字体、图片都到了，WebView2 的 PrintToPdf 写成 PDF（`ICoreWebView2_7`，A4，打印设置里页边距给 0，页边距和「第几页 / 共几页」由页面的 `@page` 和页边框盒子画，背景色照印）；收起的 callout 展开，正文 14px（10.5pt），分隔线、表格边框加深一档，长代码折行，太宽的公式在运算符后面折行。打印用的页面带 CSP：不许脚本，只许 data: 和网络图片。macOS / Linux 没有不弹框的「打印成 PDF」：开一个窗口显示这一页、弹系统的打印对话框（没在真机上走过）
+    - 坑：块级 HTML 净化时给 `<img>` 加的 `loading="lazy"` 要去掉，不然屏幕外的图不加载、印出来缺图，等「图片都到了」也白等 10 秒；`.odea-static` 的段距规则要用 `:where()`，不然子列表、callout 里的间距盖不过它
+    - 测试：`render/staticHtml.dom.test.ts` 13 条（行内、XSS、图片、标题锚点、属性块、列表、callout、容器里的代码、合并单元格、定义列表、CSV、HTML 块、嵌入、公式），Rust `print.rs` 3 条（文件名、扩展名、只读图片）。无头 Chrome 里把「语法全览」导出成 HTML 逐节截图看过、用 printToPDF 出了 50 页 A4 看过；桌面端（WebView2）实测导出过 PDF 和 HTML：从选好路径到 PDF 写完 1.1 秒，PDF 里的字能选中复制，`![[图.png]]` 和相对路径的图、公式、图表、合并单元格、自绘勾选框、展开的 callout、页码都对。另存为对话框挂在点它的窗口上（模态，开着时主窗口点不动；一开始没挂，按键可能落到别的窗口上，改了）、取消了什么也不做、同名文件在时系统先问要不要替换、下一次从上次导出的文件夹开始，都实测过。对话框是用脚本发按键点的，关掉的那一下有延迟，是发按键的方式造成的，没量出真人点「保存」要多久
+    - 没做：深色的 HTML（图表是亮色主题画的）。页眉页脚、纸张、导出整个文件夹见下一条
+  - [x] PDF 的页面设置、导出整个文件夹（2026-11-12）：
+    - 页面设置（`export/pageSetup.ts`，记在本机 `odea.pageSetup`）：纸张 A4 / A3 / A5 / B5 / 16 开 / Letter / Legal、纵向横向、页边距窄 / 标准（以前写死的那一档）/ 宽，页眉、页脚各一行字、靠左居中靠右，里面能写 `{标题}`、`{日期}`、`{页码}`、`{总页数}`（换成页边框盒子的 `content`，计数器 `counter(page)` / `counter(pages)`，字转义）。默认和以前一样：A4、标准、页脚居中「1 / 3」、没有页眉。纸张大小同时交给 Rust（`export_pdf` 多了宽高，毫米；WebView2 的 PrintToPdf 按它设纸，超出 50–1200 毫米的按 A4）
+    - 对话框 `components/ExportDialog.tsx`：命令面板「PDF 页面设置…」、状态栏导出菜单里的「PDF 页面设置…」；右边一张跟着变的小样张（纸的比例、页边距、页眉页脚写的什么）。「可以写」那几个按钮按下不抢焦点，插在光标所在的那一行
+    - 导出整个文件夹（文件夹「…」菜单的「导出…」、命令面板「导出整个文件夹…」，默认是列表栏停着的那个文件夹）：连同子文件夹，按树上的顺序（先是这一层的，再一个个子文件夹；手动排过的按手动，别的按标题、数字按大小），归档的不算，编辑器里开着的用编辑器里的字
+      - PDF：合成一份，开头一页目录（可关，按子文件夹分组），每篇另起一页（`break-before: page`），篇和篇之间的 `[[双链]]` 变成跳到那一篇（那一节）的页内链接；页眉的 `{标题}` 是文件夹名
+      - 网页：选一个放的地方，在里面新建一个以文件夹命名的文件夹（重名加「 2」），每篇一页、子文件夹照原样，外加目录 `index.html`；每页顶上「‹ 文件夹名」回目录，`[[双链]]` 变成到那一页（那一节，锚点和标题的 id 同一个 `slug`）的相对链接（静态渲染器加了 `wikiHref`）。Rust：`export_folder_pick`（选文件夹、建新文件夹）、`export_folder_write`（只往刚建的那个里写，相对路径一段段检查：没有 `..`、盘符、反斜杠、点开头，只写 .html）、`export_folder_done`
+    - 测试：`export/pageSetup.test.ts` 4 条、`export/folder.test.ts` 3 条（顺序、文件名、相对链接）、`render/staticHtml.dom.test.ts` 加 1 条，Rust `print.rs` 加 2 条（导出文件夹里的路径、纸张）。无头 Chrome 里把浏览器预览的整个「笔记」导出成 A5 的 PDF 看过（页眉靠右、「第 1 页，共 22 页」、目录一页、每篇另起一页）、导出成网页检查过站内链接都指着存在的页、`#表格` 锚点在；桌面端（WebView2）实测：单篇 A5 横向带页眉页脚、整个文件夹合成 PDF、整个文件夹导出成网页都写出来了，没选过的文件夹 Rust 拒写。坑：Windows PowerShell 5.1 读没有 BOM 的 .ps1 按 GBK，中文注释会把下一行吞掉；给「另存为」填路径别用 SendKeys（中文输入法会把字母吃进组字），按控件号 1001 / 1152 找编辑框发 WM_SETTEXT、再发 IDOK
+    - 没做：网页的目录页没有搜索；文件夹导出没有进度条（底部提示条写着第几篇）、不能中途取消；PDF 合成一份时很大的文件夹（几百篇、很多图）没量过
+- [x] 全局快捷键速记（2026-11-12）：应用开着（窗口在后台、最小化都行）时按 Ctrl+Alt+N（macOS 是 ⌃⌥N），屏幕上方弹一个小窗，写一行回车，记进今日TODO
+    - Rust `quick_capture.rs`：`tauri-plugin-global-shortcut` 锁在 2.3（2.4 起要 tauri 2.12，`cargo add` 不锁会顺手把 tauri、wry 都升了）。设置存在应用配置（`Config::quick_capture`，没设过是开着、Ctrl+Alt+N），命令面板「速记快捷键…」（`components/CaptureSettingsDialog.tsx`）里能关、能录新的（至少带 Ctrl / Alt / ⌘ 里的一个；录成 global-hotkey 认的写法，`capture/shortcut.ts`）；注册不上（被别的程序占了）照样存下，对话框里写着为什么
+    - 小窗（标签 `capture`，`index.html?capture`，`capture/CaptureApp.tsx`）第一次按时才建（约 1.1 秒），之后藏着，再按 20–50 毫秒出来、拿到焦点；在光标所在的那块屏幕上、靠上五分之一居中，无边框、置顶、不进任务栏，系统的显示 / 隐藏过渡关掉（PITFALLS/动效.md 第 9 条）。再按一次快捷键、Esc、点到别处都收起来，写了一半的字留着，记下了才清；回车后说「记下了：仓库名的今日TODO」，过 0.65 秒自己收起
+    - 记到哪：最近用过的、开着日程的仓库窗口；都没开日程就是最近用过的那个（那边回「没开日程」）；一个仓库窗口都没有时小窗说先打开一个仓库。Rust 只转话（`CaptureRequest` 发给那个窗口，等 `capture_answer`，最多 8 秒），写由那个窗口的前端做：核心 `app/quickCapture.ts` 交给开着的、有 `Plugin.capture` 的插件，日程的 `plugins/journal/capture.ts` 记成 `- [ ] 写的字` 放在今天那一篇末尾（最后一行是列表项就接着，不是就空一行另起）。今天那一篇开在编辑器里就经编辑器改（`liveDocuments` 的 edit，和正在打的字合在一起、编辑器去存，不会撞出冲突副本；组字中等它组完），没开着就照日程平时那样取今天（延续来的在这一刻以今天的身份落盘）、加上、存
+    - 测试：`plugins/journal/capture.test.ts` 2 条、`capture/shortcut.test.ts` 3 条，Rust `capture_is_on_with_the_default_shortcut_until_changed`。桌面端（单独 identifier 的开发版，系统级 `keybd_event` 按 Ctrl+Alt+N）实测：小窗出来、焦点在输入框、回车后今日TODO 末尾多了一条、磁盘上 `日记/2026/2026-11-12.md` 里有；今日TODO 开在编辑器里时也是经编辑器插进去的；再按收起、Esc 收起、切到别的窗口收起、写了一半的字留着
+    - 没做：macOS、Linux 没走过（Linux 只在 X11 上有全局快捷键，Wayland 不行）；应用没开着时按不出来（没有托盘、关了最后一个窗口就退出）；记到别的地方（某篇笔记、收件箱）、带日期的任务没有专门的写法（照正文写 `@2026-11-20` 就是）
+- [x] 提醒（2026-11-12，设计和调研、实现记录在 [提醒与属性.md](./提醒与属性.md) §1、§2、§5）：没勾的任务写了 `@日期 几点`，到点（减去提前量）弹系统通知、响一声；`⏰ 2026-11-12 17:30` / `⏰ 17:30` 是精确的提醒时刻（obsidian-reminder 的写法）；上午、下午不响；应用关了不响（用户定的），退出时挂着的通知全收掉
+    - 声音先调研再做：烦人主要来自尖锐度（高频），纯音比复合音烦，紧迫感来自高、快、重复；量了 Windows 自带的提示音（日历提醒峰值 -16.5 dBFS、能量在 300–700 Hz）。合成了两个（`scripts/sound/reminder.mjs`）：清泉（D5→A5 上行纯五度，默认）、木铃（C5-E5-G5 马林巴），重心约 740 Hz、2 kHz 以上几乎没有、响度和系统的邮件提示音一个量级；另有「系统提示音」「不响」
+    - Rust：计时线程在日程插件（`plugins/journal/reminders.rs`，按墙上时钟、睡醒合成一条、勾掉了自动收）；核心的 `notify.rs` 管 Windows 通知（WinRT toast、reminder 场景、完成 / 10 分钟后 / 打开）、登记应用标识、放声音、读勿扰；task 表加 `remind_at`，新命令 `task_complete`（只勾不取消）。前端：完成经编辑器或 Rust、打开到那一行；命令面板「提醒设置…」
+    - 测试：Rust 6 条、前端 5 条。桌面端：通知都进了系统的通知历史、字对；**按钮的回调没亲手点过**（UI 自动化找不到屏幕上的通知），声音听不到、勿扰没测；macOS / Linux 没走过
+- [x] 属性面板（2026-11-12，[提醒与属性.md](./提醒与属性.md) §3、§6）：动手时发现属性块根本没进编辑器（Rust 整个拆掉了），用户自己的 `tags`、`status` 在 Odea 里一直看不见。现在标题下面一张表：类型图标（点了换类型，记进 `.obsidian/types.json` 或 `.odea/types.json`）、键、按类型的值（文字带提示、数字、勾选、日期「还有 8 天」、列表 / 标签小块、双链只显示标题），改一条只换它自己那几行，正文不动；「添加属性」（Ctrl+;）提示整个仓库用过的键；「源码」直接改 YAML；类型按值猜、仓库里记着的优先、空着的看整个仓库同名的键
+    - Rust：`vault/properties.rs`（读写、核对、一览、types.json），索引 doc 加 `props` 列（升到第 7 版），`Note` 带 `properties`（和正文一起到，面板第一帧就有）
+    - 测试：Rust 6 条、前端 5 条；浏览器预览、桌面端（WebView2）看过、改过，磁盘上只变了那一行
+- [ ] 视图文件（审查 §9.3）：调研定了（[提醒与属性.md](./提醒与属性.md) §4）—— 用 Obsidian 的 `.base`，不自己发明格式（它的不兼容改动都在 2025 年 5–6 月，之后只加不改；Odea 一直跟着 Obsidian 的文件约定）；第一版表格、看板（卡片、列表跟着），日历视图不做；智能文件夹先不并。还没开工
+- [x] KaTeX 打两份（审查 §5.4，2026-11-12；和提醒、属性面板并行做的）：不是入口文件不同，是两个版本 —— 我们用 0.18.7，Mermaid 12 自己要 `^0.16.47`，pnpm 另装了一份。`pnpm-workspace.yaml` 加 `overrides: "mermaid>katex": "$katex"`，Mermaid 底下的跟着 `package.json` 的版本走，锁文件里只剩 0.18.7。Mermaid 只用 `renderToString` 出 MathML，0.16 和 0.18 出的一样（0.18 的不兼容是内部类名加前缀，只影响 `htmlAndMathml`，我们没开）。生产构建只剩一个 KaTeX 分包（261,690 字节），编辑器和 `mermaid.core` 共用，少了约 261 KB；浏览器预览里画过一张节点里带 `$$分式$$`、`$$根号$$` 的图，公式都在。lint、tsc、1508 个用例过。桌面端没打开带公式的图、导出里的图表没单独看。记录在审查 §5.4.1
+- [x] 入口包拆分（审查 §5.3，2026-11-12）：入口 `main.tsx` 只分流，每种窗口的启动模块在 `src/boot/`（动态加载），入口包 1.39 MB → 26 KB。顺带查出 `DocumentView` 模块顶层的 `import(MarkdownEditor)` 让启动器、速记小窗也拉了编辑器那一串；启动器的「克隆」面板为了 `openExternal` 带上了 CodeMirror（挪到 `lib/openExternal.ts`）。坑：分流写成一串三元表达式的 `import()`，压缩后折成一个调用、预载清单成了所有窗口的并集。量的脚本 `scripts/perf/entry.mjs`（见「常用命令」）：无头 Chrome 4 倍降速，启动器 JS 2190 → 554 KB、`ready` 155 → 89ms，速记小窗 2173 → 306 KB、156 → 79ms，仓库窗口慢了 10ms（多一跳）；桌面端（WebView2，release、单独 identifier）启动器 77–82 → 37–40ms，仓库窗口反而 126 → 108ms（Tauri 给一个大文件是一整块，拆开后并行取）。对话框用到再加载、在 index.html 里按窗口预载都试了 / 量了，不值，没留。桌面端的速记小窗、访客窗口没量，macOS / Linux 没走
+- [x] 审查 §6 工程上的几条（2026-11-13，记录在审查 §6.2）：`commands.rs` 拆成 `commands/`（最大 943 行，`lib.rs` 不用改）、`MarkdownEditor.tsx` 的装饰层挪出去（剩 1515 行）；技术方案 §2.1 / §14.1 / §14.2 / §15 对上了代码；按钮名字的检查脚本 `scripts/a11y-names.mjs`（现在一个都没有缺的）、`useKeyWithClickEvents` 打开；clippy 清到 0 条，CI 加了 clippy、按钮名字、Windows 上比对 `bindings.ts`。发现 `ci.yml` 一直没提交，GitHub 上从没跑过。`cargo fmt`：拷贝上试过，不会写坏（测试全过、还是 LF），只是一次要改 800 多处，等定
+  - [ ] `cargo fmt`：提交手上的改动以后单独一个提交格式化（`max_width = 120` + `use_small_heuristics = "Max"`，改动最少）、记进 `.git-blame-ignore-revs`、CI 加 `cargo fmt --check`
+
+---
+
 ## 决策记录
 
+- **应用里不做复盘，MCP / CLI 往后放，先补全功能**（2026-11-11）：以后做 MCP 时给 AI 一个技能（skill），让它读仓库里的数据复盘，应用里不再另做一套（聚合行为日志、生成复盘文档）。为复盘攒数据的「正文里勾的任务进行为日志」做过一版（存一篇时比前后两版的任务行），没提交就撤了。顺序改成：先补全笔记应用常有的功能，再修 KaTeX 打两份（`docs/1110审查与研究.md` §5.4），MCP 和 CLI 以后再做（§12）
 - **团队仓库：git 管持久、会话管实时，共享仓库退役**（2026-10-22）：共享仓库没有一直在线的一份（两台设备得同时开着才同步）、和 git 二选一、成员按设备算没有「人」，日程跟着整个仓库共享（每一天全体共用一篇、开关一起、干脆不延续）。改成团队仓库 = 一个几个账号都有权限的 git 仓库：不同时在线靠 git，同时在线靠会话（一篇在会话里只有主持人写盘、提交，接手前先同步 git）；成员 = 仓库里 `.odea/devices` 名单上的设备，不用邀请自动连上；外人照旧发邀请链接，范围扩到文件夹；团队仓库的日程是团队的，个人日程在个人仓库，用日程切换器跳。详见 [协同编辑.md](./协同编辑.md) §22
 - **共享仓库 + 换 Loro**（2026-10-21）：逻辑目录让「共享文件夹」最难的一半（两台设备上文件路径怎么对上）没了，共享的单位直接是一个仓库。每台设备上的 .md 仍是这台设备的真相，设备之间靠 CRDT 合并：CRDT 存在 Rust（`.odea/share/`），正文只由 Rust 写，别的程序改了文件照外部改动的办法合进来；网状、没有谁必须一直在线；和 git 同步二选一。持久共享里两边的 CRDT 分叉了就永远分叉，所以前后端要是同一份实现：Loro 的前端就是它 Rust 核心编的 wasm（yrs 是 Yjs 的移植，还在修和 Yjs 不一致的地方），历史版本也是自带的。代价是 wasm 1.1MB（gzip），只在用到时加载。详见 [协同编辑.md](./协同编辑.md) §20
 - **多人协同：会话式 + Yjs + iroh，默认不连任何服务器**（2026-10-18）：主持人那台的 .md 仍是唯一真相，CRDT 只在会话期间存在，和「文件是真相」不冲突（持久共享要和 .md、别的编辑器、git 同步三方对账，不做）。Yjs 13 是实测下来更新包最小、合并最快、体积最小的；Automerge 3.5 的访客每收一次按键要 16–37ms，排除。我们不提供中继：没有第三台机器时，两边都在 NAT 后面就连不上，这一点在界面上说清楚；有条件的用户自己配中继（官方 iroh-relay 就能用），主持人配了、访客零配置。详见 [协同编辑.md](./协同编辑.md)
@@ -678,110 +747,4 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 
 ## 坑记录
 
-**工程**
-
-- Tauri 在调 `setup` 之前就把配置里的窗口建好了（tauri 2.11 `app.rs` 的 `setup()`：先 `WebviewWindowBuilder::from_config`，再调用户的 setup），窗口位置插件更早，在 `Builder::build` 时就读了文件。要在它们之前动数据目录（改名时搬 WebView 数据），只能放在 `run()` 开头、建 Builder 之前。WebView 的数据目录：Windows / Linux 是「本地数据目录/标识」（`manager/webview.rs`），macOS 是系统按 bundle id 放的 `~/Library/WebKit/<标识>`
-- `pnpm 10` 拦 postinstall，esbuild 不放行则 vite 起不来。
-- `pnpm tauri dev` 会占 1420 端口，和已经在跑的 `pnpm dev` 冲突，先停一个。
-- Python 脚本在 Windows 上写文件会把换行转成 CRLF，Biome 会报格式错。批量改文件后跑一次 LF 归一化。
-- ~~这台机器上 `cargo run --example export_bindings` 编得过、跑不起来（`STATUS_ENTRYPOINT_NOT_FOUND`，DLL 加载的问题）；要新的 `bindings.ts` 就启动一次 debug 桌面端。~~ 2026-10-18 修好了，见下面「comctl32 v6」那条。桌面端在 `tauri dev` 里因为改了 Rust 自动重启时，写 `bindings.ts` 可能撞上文件正被占着（Windows 错误 1224「用户映射区域」）直接 panic 退出 —— 再启动一次就好（2026-10-07）。
-- **不要跑 `cargo fmt`**：项目的 Rust 代码不是按 rustfmt 默认配置排的（不少行超过 100 列），也没有 `rustfmt.toml`。跑一次会改动整个 crate 二十多个文件，把没提交的改动里也混进一堆换行（2026-10-07 出过一次，靠 Claude Code 的文件快照还原）。
-- `cargo test --no-default-features` 会因 `main.rs` 的 `run()` 被 feature 门控而失败，加 `--lib`。
-- tauri-specta 三个 crate 的 RC 版本互不兼容，`=` 锁死，不要跟着 `cargo update` 走。
-- 无事件时 tauri-specta 生成的辅助代码触发 `noUnusedLocals`，生成文件头加了 `// @ts-nocheck`，biome 也忽略它。
-
-**主题 / 布局**
-
-- Tailwind v4 的 `dark:` 变体需要 `<html>` 上有明确的 `data-theme`，不能只靠 `prefers-color-scheme` —— `index.html` 里有段内联脚本在首帧前落属性。
-- 标题栏的 `data-tauri-drag-region` 铺满顶部 38px，这一条内会吞掉滚轮事件。各视图内容都从 42px 以下开始。
-- `win_start_dragging` 必须在 mousedown 的同一调用栈里发起 IPC，不能等动态 import。
-- Browser 预览面板的截图会滞后于动画，判断渲染问题要用 DOM 测量而不是看截图。
-
-**动效**
-
-- motion 自带的 `useReducedMotion()`：`MotionConfig` 只要设过一次 `reducedMotion="always"`，它之后就一直返回 true 直到刷新。要判断系统偏好用 `lib/motion.ts::usePrefersReducedMotion()`。
-- 列表栏不能动画化 `marginLeft`：布局属性，动画期间 flex 行每帧重排，开了 lineWrapping 的 CodeMirror 逐帧折行，头几帧稳定 28ms 一帧。改成挂载即入流、只动 `x`；主内容用 `popLayout` + `anchorX="right"` 把退场屏冻结在原位交叉淡出。
-- 中文文字的 `font-weight` 不能做 CSS 过渡：每一帧都是一个新的小数字重，回退字体（YaHei 没有可变轴）每次都要重新匹配，实测一个标签一帧 11ms、拉丁文只要 0.5ms。导航切换时新旧两个标签一起变，就是 22ms 一帧持续 140ms。
-- 工作区进场不能带 transform：编辑器不能挂在正在平移的祖先里，否则得先渲染占位再换编辑器，两者排版不同（正文 15px vs 17px/1.4），一换整篇重排。
-- `React.lazy + Suspense` 即便 promise 已 resolve，首次渲染也必然先 suspend 一次把 fallback 提交上屏。编辑器组件自己持有解析后的引用，bootstrap 里 await 预载。
-
-**弹出层（Ctrl+E 表情选择器、`/模板`、命令面板）**
-
-- **盖在正文上的浮层不能整块从透明淡入**。用户报「按 Ctrl+E 正文会跳一下」，实机录屏（WebView2 远程调试逐帧记录 150 秒）里正文一个像素都没动过：是面板开在光标上方、前 100ms 半透明，一行行表情格子和底下的正文叠在一起，看着像正文在跳。入场方向要在挂载那一帧就对：面板尺寸是定的，先按常量算好位置，挂上以后再按量到的尺寸校正。
-- **盖在正文上的浮层也不能缩放**。上一版「实心卡片 scale 0.97 → 1 + 内容淡入」，用户报「刚打开时字是模糊的，大概 0.1s，然后抖一下才变好」：带字的层一缩放就被当位图拉伸，动画那 ~200ms 字发虚、有重影，结束撤掉 transform 的那一帧重新按原尺寸画，字一下变清楚还挪了一点（1.5 倍屏无头 Chrome，`performance.now` + 文档时间线一起放慢 10 倍逐帧截图，对比最终帧确认）。现在卡片从贴光标的那条边展开 —— 破例动 `height`（fixed 小盒子，内容高度不跟着变，4 倍降速下每帧 3.5–8ms），内容不缩放、不变透明，每一帧露出来的部分和最终画面逐像素一致；往上开的用 `bottom` 定位，钉住贴光标的那条边；收起折回那条边，剩不到 10px 空白边时才淡掉（早淡的话半透明的一条带着搜索栏的字叠在正文上）。位置对齐到物理像素（`pinnedEdge`）。`lib/motion.ts` 的 `popoverCard`，`popupMotion.test.ts` 守着。
-- **同类问题全应用排查（2026-10-06）**：同样「先糊、再抖一下」的还有命令面板（scale 0.97）、下拉菜单（CSS scale 0.96 + 上移）、悬停卡片（CSS scale 0.98 + 位移）、撤销 / 出错 / 通知提示条（scale 0.97）、日历「今天」按钮和列表栏标题右侧按钮（scale 0.9）。逐帧看：动画快结束时字已经不动了但还是虚的，最后一帧才跳清楚。只去掉缩放、保留 CSS 位移的菜单照样跳；只动 opacity 的从头到尾和终帧一致。现在命令面板用 `popoverCard` 展开，菜单和悬停卡片只淡入，提示条上滑 + 淡入不缩放（tween），两个按钮只淡入；没用到的 `popIn`（scale 0.97 的浮层预设）删掉了。日历切月的 spring 加了 `restDelta: 0.01`（默认差半个像素就跳到终点）。没问题的：左侧导航按下的 scale（主线程逐帧重画）、表格 / 目录 / 查找面板的上浮 3–4px（同上）、只有图标的缩放。
-
-- 每张**不同的** `data:` SVG 图，Chrome 都要同步建一个隔离的 SVG 文档（trace 里是 `IsolatedSVGDocumentHost`，发生在布局里），再插一次还得再建。表情的静止帧图只适合「同一个表情画很多遍」的正文；选择器里 48 个各不相同，以前每次打开都建 48 个文档 —— 4 倍降速 + 2x 屏上首次 Ctrl+E 卡 0.75–0.94 秒。选择器的格子现在 `mount(host, { image: false })` 用活的 SVG。
-- 界面字体里没有的字（↵ ⇧ ↑↓ ⌘ ⏎）第一次画时浏览器要把系统字体挨个找一遍兜底（装的字体越多越慢），只一个 ↵ 在 4 倍降速下就是 100ms。按键提示一律用 lucide 图标，`popupGlyphs.test.ts` 守着。
-- 用户的桌面端（WebView2 + dev 构建 + 高分屏）比无头 Chrome 慢好几倍：1 倍速下 100ms 的开销到他那儿接近 1 秒。改了编辑器或弹出层，要在 4 倍 CPU 降速 + 2x 屏下量一遍**已有**弹出层的打开耗时（Chrome trace，不是看截图）。
-
-**性能（2026-10-13）**
-
-- **每个 `motion.*` 元素都是 Motion 投影树上的一个节点**：只要应用里用过 layout / layoutId，Motion 就给所有 HTML 的 motion 元素建投影节点（不管它自己有没有 `layout`）。任何一个 layout 动画（选中高亮、导航指示块、命令面板的高亮）在动的每一帧都要把整棵树过好几遍，节点上的滚动位置也要重量（强制排版）。列表这种一屏几百个的地方，能不用 motion 元素就不用，用的话控制同时挂着的数量（笔记列表分批画）。
-- memo 掉的 motion 元素不重渲染就不会量位置，layout 动画也就不播：它上面的东西变了（插进一张卡片、展开文件夹）时要让它也重渲染。笔记列表用一个「列表样子」的计数传给 `layoutDependency`，只换选中、只存正文时不变。
-- context 的值每次渲染都是新对象的话，所有消费它的组件都跟着重渲染，`memo` 拦不住。要么拆成身份不变的那部分单独一个 context，要么 `useMemo`。
-- CodeMirror 的 `new EditorView({ parent })` 会先把编辑器挂进页面、建好正文，最后才设 contentDOM 的 contenteditable / spellcheck 等属性 —— 挂在页面上时设这一下很贵（切一篇 4 倍降速约 50ms）。先不给 parent 建好，再 `appendChild(view.dom)`。
-- 「写样式 → 量尺寸」放在循环里，每一轮都强制整页排版一次。要量一批东西就先全部写完、再全部量、最后全部写（`math.ts` 的 `fitToWidth`）。
-- 量按键延迟别用 Event Timing：无头模式下按键之后没有新画面时，条目会一直算到下一次真正绘制，长尾全是假的（同一段时间最长的一帧只有 75ms，它报 1 秒）。用页面里「keydown → rAF 里再 setTimeout 0」量。点击有画面变化，Event Timing 可信。
-- 量之前、量之后的场景要真的一样：perf 脚本第一版先切换笔记再测打字，挑哪几篇笔记取决于列表画了多少行（分批渲染后变了），两边最后停在不同的笔记上，打字、滚动是在两篇不同的笔记里量的，结论正好反过来。
-
-**同步（P8）**
-
-- Tauri 窗口在 `tauri.conf.json` 里是 `visible: false`，可它一建出来（还藏着、前端还没加载）就会收到一次 `WindowEvent::Focused(true)`。同步拿「获得焦点」当触发，第一轮就在前端订阅事件之前跑完了，冲突副本的提示没人收。现在第一轮之前的焦点不算，第一轮等 `ready`（2026-10-07）。
-- libgit2 在 Windows 上走 WinHTTP 的默认代理（`netsh winhttp`），不读 Clash 这类工具设的系统代理；连不上报的错误类别是 `Os`，不是 `Net`。
-- git2 0.21 的默认 features 是空的（不带 https）；`Reference::symbolic_target`、`Remote::url` 改成返回 `Result`。
-- 设备码登录「等用户确认」那一步只能调一次（后端把这次登录拿走了）。放在 React effect 里会被 StrictMode 跑两次，第二次报「没有正在进行的登录」；现在在点击里发起（`SyncDialog.tsx` 的 `githubLogin`）。
-- 断开同步时线程可能正在一轮的半路上，剩下的状态事件会在「已断开」之后到前端，把它改回「已同步」。停掉的线程现在不再往外发状态和提示（`Running.alive`）。
-- libgit2 的 mempack 自己的 `dump` 只收**提交**和提交能走到的对象：只放进索引、还没提交时导出来是个 32 字节的空包，`reset` 之后对象就丢了，索引指着不存在的 blob。`stage_bulk` 自己建 packbuilder，按索引项的 id 一个个放进去（2026-10-07）。
-- `Index::add_all` 会给每个新文件生成一份 diff（打开、读完、判断是不是二进制）：2000 个新文件、回调全返回「跳过」也要 5 s；`statuses()` 只比 stat，7 ms。要先知道有哪些文件就用 status。
-- libgit2 每把一个文件写成 blob 都要从头查一遍属性（`.gitattributes`、info/attributes、全局的……，没有 session 缓存），Windows 上一次约 2 ms，一个文件两次；纯读文件 + 算哈希只要 0.05 ms。慢在等文件系统，不在 CPU：依赖开 -O3 没用，清空系统 / 全局配置的搜索路径也没用，多开线程一起等才有用。
-- 想看真实应用里的同步：临时仓库 `git init -b main`，`git config odea.autosync true`，远端设成本机的一个裸仓库，用 `ODEA_VAULT` / `ODEA_DATA_DIR` 指过去再 `pnpm tauri dev`。
-
-**附件 / 冲突副本 / 反向链接**
-
-- 拖文件进桌面端窗口，WebView 收不到 HTML5 的 drop（`dragDropEnabled` 开着时系统拖放被 Tauri 接走），要听 `getCurrentWebview().onDragDropEvent`：给的是路径和**物理像素**坐标，除以 `devicePixelRatio` 才是页面坐标。没法从自动化里真的从资源管理器拖，验证时用 `plugin:event|emit` 发一个 `tauri://drag-drop` 走同一条路
-- 粘贴的图片插进去以后光标要落到下一行：光标挨着图片时图片显示成源码（Typora 式），插完看到的是一串 `![](…)`
-- 光标进到链接 / 图片里时 `(…)` 里的地址也是 `.cm-odea-syntax-marker`；它以前是 `white-space: nowrap`，长地址把整栏撑宽、右边的字被裁掉。改成 `overflow-wrap: anywhere`
-- 网盘拷出来的副本带着原文属性块里的 id；扫描按字节序，「周报 (1).md」排在「周报.md」前面，先被索引就抢走了原文的 id —— 名字像副本的要排到最后
-- `cargo run --example export_bindings` 跑不起来（dialog 插件要 comctl32 v6 的 `TaskDialogIndirect`，tauri-build 只给主程序嵌应用清单，example 没有，STATUS_ENTRYPOINT_NOT_FOUND）：2026-10-18 起 build.rs 给 examples 单独嵌一份只声明 comctl32 v6 的清单（`/MANIFESTDEPENDENCY`），能跑了。注意它导出的命令表是 typegen 那一份，**没有 `ready`、`win_*` 这几个只在桌面运行时里编的窗口命令**：直接覆盖会把它们从 `bindings.ts` 里删掉（前端是按字符串直接 invoke 的，不影响运行，但文件对不上）。要么把旧文件里那一段原样拼回去，要么照旧用 debug 桌面端启动时写的那一份
-
-**CodeMirror**
-
-- **编辑器正文行高是 1.4**：以前 `.cm-editor` 上写着 1.82，但 CodeMirror 自带主题给 `.cm-scroller` 写了 `line-height: 1.4` 把它盖住了，正文从第一版起其实一直是 1.4。2026-10-06 确认保持 1.4，`globals.css` 改成在 `.odea-editor .cm-scroller` 上明写 1.4。17px 字一行只有 23.8px，字体框就占 22px，所以行内带底色的样式上下不能加 padding：`[[双链]]` 小块原来上下各 0.08em，底色冒出这一行 1.36px，把上一行链接的下划线盖掉了（每行 `position: relative`，后面的行整个画在前面的行上面）。`widgetSpacing.test.ts` 守着。
-- 块级 widget 的留白只能用 padding，**不能用 margin**：CodeMirror 用 `getBoundingClientRect` 量 widget 高度，margin 不在边框盒里，高度图比真实布局短，点击会定位到错误的行。`widgetSpacing.test.ts` 用正则守着。
-- 行内 `<img>` widget 同理：块级子元素的上下 margin 会穿透 `.cm-line` 折叠出去。
-- 改变行结构的装饰（折叠整行、块级 widget）必须来自 `StateField`，视口是在 ViewPlugin 更新之前算出来的。
-- 空围栏（只有开闭两行）不能折叠，折叠后再也点不进去。
-- Setext 下划线只藏 `===` 三个字符会留一条空行，得整行折叠；分隔线同理。
-- 收紧 Setext 不能把 lezer 自带的解析器从列表里拿掉：分隔线判断「这行该不该让给 Setext」认的是那个函数本身，拿掉了 `标题\n---` 永远是分隔线。只能留着它、每一段开头把它的那一份换成自己的（`leaf.parsers` 是公开的）；多行段落下面的 `---` 要自己 `finishLeaf` 收尾、这一行不吃掉，下一轮自然是分隔线。
-- 组字时别给组字那段字加标记：CodeMirror 保住组字的文本节点，连同包着它的标记一起原样沿用，新加的标记盖不上去（动了 DOM 输入法就断）。行装饰可以 —— 只改行的属性。也别在 compositionstart 里直接改 DOM：那时先只记一笔状态，第一笔 `input.type.compose` 的改动进来时（`transactionExtender`）再加。直接改 `.cm-line` 的 class 也不行，属性变化被观察器标脏，下次同步就被抹掉。
-- `overflow-x: auto` 隔不断最小宽度：里面是十几列的表，`.cm-content`（flex 子项，`min-width: auto`）照样被撑到表那么宽。要横向滑的块一律加 `contain: inline-size`。
-- CodeMirror 会拿同一个 widget 对象再 `toDOM` 一次（滚出视口又滚回来、旁边的块重排），`fresh` 只能管第一次，不然刚打开那篇的替身每滚回来一次就淡入一次。
-- `<u>` 的源码级配对以前是全文 `indexOf`，两个不相干段落里的 `<u>` 和 `</u>` 会配成一对；现在要求不跨空行。
-- 中文正文在 WebView2 里会被拼写检查画满红波浪线，`spellcheck="false"`。
-- `scrollHeight` 在滚动过程中会变（未渲染的行只有估算高度，滚过去才回填真实值；400 段文档从 17846 涨到 22286）。自绘滚动条的滑块要指数缓动跟随，不能每帧离散校正。
-- 外部回填（store → 编辑器）要用 annotation 标记，否则会被当成用户输入触发一次保存。
-- CommonMark 把任何没有定义的 `[文字]` 都解析成 `Link` 节点（短引用形式），`[!NOTE]`、`[TOC]`、`[^1]`、`[[双链]]` 里那层都是它。装饰层必须按内容分流，不能见 Link 就藏括号。
-- `HardBreak` 节点的末尾是换行符本身；行内 replace 装饰跨过换行会把两行拼成一行，替换范围必须停在 `to - 1`。
-- `LinkReference` 这类顶层节点的父节点是 `Document`，按「父节点是否被光标碰到」判断激活永远为真，只能看节点自己。
-- front matter 的 `---` 会被 CommonMark 解析成分隔线 + Setext 标题，两层装饰和目录收集都要先用 `frontMatterRange` 绕开；光标停在 0（新挂载的编辑器）不算点进了属性块，否则每篇一打开就是展开的 YAML。
-- 预览面板里 `navigator.clipboard.writeText` 会因权限被拒（真机不会），复制按钮要有 execCommand 退路并吞掉 rejection。
-- 用 `::before` 做行首提示（标题的 H2）要给 `width: max-content; white-space: nowrap`，否则 `right: 100%` 的绝对定位伪元素会被压成一列字。
-- **原生选区在一行里字号不一时高低不齐**：浏览器按每段文字自己的字框画底色，小字号的标记底下矮一截。所以选区是自己画的（`selectionLayer.ts`）。CodeMirror 的 `RectangleMarker.forRange` 一行的高度只看选区两端那两个字，两端都落在小标记上时整块也矮，得用 `Range.getClientRects` 补；它量的左右边界跟着视口里**第一行**的 padding 走，引用打头时整片选区都往右缩。
-- **widget 加载完变高了要自己 `view.requestMeasure()`**：CodeMirror 的 ResizeObserver 只理会距上次更新 75ms 以后的尺寸变化。刚粘贴的截图几十毫秒就加载完，光标、高度图都停在图片没高度的时候（光标画在图片中间）。图片、块级 HTML 里的图、mermaid 都这么做了，以后异步出内容的 widget 照办。
-- 列表项后面只有缩进的空白行不属于语法树里的任何一项；行首一个列表项的 `resolveInner(行尾, 1)` 在文末会落到 `Document` 上，找「光标在哪一项」时行尾要往左找（`resolveInner(pos, -1)`）。
-- 有序列表 `1. ` 下面要缩进三个空格才是子项（正文那一栏），两个空格还是同一级。CodeMirror 自带的缩进一律加 indentUnit（两个空格），在列表里用不得。
-
-**数据**
-
-- 某天 / 某周期的文档是异步加载的，编辑器往往先以空文档挂载。`saveDocument` 在 `source` 还没回来时**必须直接返回**，否则用户一输入就把原有内容整篇覆盖。adapter 在数据没到时干脆不给 `editor`。
-- `foreign_keys` 是连接级 PRAGMA，只在建库时设一次没用（旧库的事，搬家只读拷贝，不用管）。
-- 文件改名 / 挪位置后按新路径写入前，索引里得先改路径**并清掉指纹**：标题来自文件名、归档与否来自位置，内容一模一样也得重新解析；不改路径的话旧路径那一行占着同一个 id，新文件会被当成一篇重复的笔记。
-- 应用自己写的文件会触发文件监听：靠「写完立刻把修改时间、大小、指纹记进索引」识别，扫描时对得上就不算外部改动、不发通知。
-- 外部程序用 CRLF 存过的文件：读进来统一成 `\n`，否则编辑器一打开就当成改过了。
-- 编辑器分辨不了「store 里的正文变了」是外部改动还是自己的保存回来了（边打字边保存时两者都是 `当前 ≠ 已同步`）：store 只在外部改动真的改了正文时给 `externalRevisions` 加一，编辑器看这个数有没有变。
-- `saveBus` 引用了数据 store，store 要 flush 编辑器时只能动态 `import("@/editor/saveBus")`，静态引入会成环。
-- 这台机器的 Git 开了 `core.autocrlf`，工作区里的文件是 CRLF，Biome 按 LF 检查会报格式错；改过的文件存成 LF 即可（提交时本来就是 LF）。
-- 全局搜索的位置按 UTF-16 给（编辑器里的位置），Rust 里按字节找到后要换算；不区分大小写别用转小写再找（有的字转小写会变长，位置就对不上），交给正则的大小写折叠。
-- 全局搜索的全词判断要和 CodeMirror 一样（汉字也是词字符），不然搜出来的和跳进去后篇内查找的对不上。
-- 延续来的「今天」不落库；跨过零点后缓存里的延续文档要丢掉，否则翻回昨天会把它当成昨天写的。
+在 [PITFALLS/](./PITFALLS/)，按模块一份。

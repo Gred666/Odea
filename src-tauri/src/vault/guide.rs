@@ -80,7 +80,7 @@ fn guide_of(row: &DocRow) -> Option<&'static Guide> {
 /// 任务行的勾选框：框里那个字符的位置、勾没勾。不是任务行返回 None
 fn task_box(line: &str) -> Option<(usize, bool)> {
     let indent = line.len() - line.trim_start().len();
-    let rest = line[indent..].as_bytes();
+    let rest = &line.as_bytes()[indent..];
     if !matches!(rest.first(), Some(b'-' | b'*' | b'+')) || rest.get(1..3) != Some(b" [".as_slice()) {
         return None;
     }

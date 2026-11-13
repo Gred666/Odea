@@ -56,6 +56,18 @@ pub struct Config {
     /// 团队仓库里写着、问过以后选了「不用」的中继（地址）。不再问
     #[serde(default)]
     pub declined_team_relays: Vec<String>,
+    /// 全局快捷键速记（quick_capture.rs）。没设过是 None：开着，用默认的按键
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_capture: Option<QuickCaptureConfig>,
+}
+
+/// 全局快捷键速记的设置
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickCaptureConfig {
+    pub enabled: bool,
+    /// global-hotkey 认的写法：`Ctrl+Alt+N`、`CommandOrControl+Shift+Space`
+    pub shortcut: String,
 }
 
 /// config.json 里记着的一个仓库
@@ -198,7 +210,7 @@ impl Config {
     /// 最近打开的在前
     pub fn recent_vaults(&self) -> Vec<SavedVault> {
         let mut vaults = self.vaults.clone();
-        vaults.sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
+        vaults.sort_by_key(|vault| std::cmp::Reverse(vault.last_opened));
         vaults
     }
 
@@ -793,8 +805,7 @@ mod tests {
     fn forgetting_and_moving_keep_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let (a, b, c) = (dir.path().join("a"), dir.path().join("b"), dir.path().join("c"));
-        let mut config = Config::default();
-        config.vault_root = Some(a.clone());
+        let mut config = Config { vault_root: Some(a.clone()), ..Config::default() };
         config.migrate_vaults(1);
         config.remember_vault(&b, 2);
         // 搬家：标签跟着走

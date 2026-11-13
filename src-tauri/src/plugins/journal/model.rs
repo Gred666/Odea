@@ -18,6 +18,8 @@ pub struct Task {
     pub due_date: Option<String>,
     pub time_label: Option<String>,
     pub category: Option<String>,
+    /// 写了 ⏰ 的：提醒的时刻 `YYYY-MM-DD HH:MM`（docs/提醒与属性.md §1.2）
+    pub remind_at: Option<String>,
     /// 写着这条任务的那篇文档：日历里点「出处」跳过去
     pub source: Option<DocRef>,
     /// 在那篇正文里的行号（从 0 开始）

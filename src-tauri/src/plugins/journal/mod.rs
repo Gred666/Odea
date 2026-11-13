@@ -14,7 +14,7 @@ docs/插件与跨端.md §6.1）。前端那一半在 src/plugins/journal/。
 这些字符串落在盘上、跟着仓库同步，老版本还在读，一个都不能改（§6.1）：索引里的 id `day:2026-09-26`、
 `goal:week:2026-09-21`（冲突副本的 conflictOf 认它），行为日志里的 entity `day`、`goal`。
 
-此外还有：带日期的任务（tasks.rs，在索引里另存一张表）、「今天还没写过就延续最近的一天」、日历上的记号
+此外还有：带日期的任务（tasks.rs，在索引里另存一张表）、到点提醒（reminders.rs）、「今天还没写过就延续最近的一天」、日历上的记号
 （vault.rs），8 个专用命令里的 6 个（commands.rs；列出写过的日记和目标、开关日程成了核心的通用命令）。
 ============================================================ */
 
@@ -22,6 +22,7 @@ docs/插件与跨端.md §6.1）。前端那一半在 src/plugins/journal/。
 pub mod commands;
 mod legacy;
 mod model;
+pub mod reminders;
 pub mod tasks;
 mod vault;
 

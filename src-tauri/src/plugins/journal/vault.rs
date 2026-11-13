@@ -38,6 +38,9 @@ pub trait JournalVault {
     }
     /// 勾选日历里的一条任务 = 改它所在文件里的那一行
     fn toggle_task(&mut self, id: &str) -> Result<Task>;
+    /// 提醒上点了「完成」：把 doc_id 那一篇里原文是 raw 的那一行勾上（line 是它上次在的行号）。
+    /// 只勾不取消：那一行已经勾上了（在别处做完了）什么也不做，返回 false
+    fn complete_task(&mut self, doc_id: &str, line: usize, raw: &str) -> Result<bool>;
     /// 日历月网格上的记号：写过记录 / 做过事的日子，和还有待办的日子
     fn calendar_marks(&self, from: &str, to: &str) -> Result<CalendarMarks>;
     /// 日历上有记号的所有日子（不分哪一种）
@@ -163,57 +166,33 @@ impl JournalVault for Vault {
 
     fn toggle_task(&mut self, id: &str) -> Result<Task> {
         let task = tasks::task(self.db(), id)?.ok_or_else(|| AppError::NotFound(format!("task {id}")))?;
-        let row = index::by_id(self.db(), &task.doc_id)?
-            .ok_or_else(|| AppError::NotFound(format!("task {id} 所在的文档")))?;
-        let text = self
-            .read(&row.rel_path)?
-            .ok_or_else(|| AppError::NotFound(format!("task {id} 所在的文件")))?;
-        let (meta, body) = frontmatter::split(&text);
-        let mut lines: Vec<String> = body.split('\n').map(str::to_string).collect();
-
-        // 行号对得上就用它；对不上（文件在索引之后被改过）就找原文一样的那一行，
-        // 只有唯一一行时才动 —— 宁可报错，也不勾错
-        let line = if lines.get(task.line).is_some_and(|line| *line == task.raw) {
-            task.line
-        } else {
-            let found: Vec<usize> = lines
-                .iter()
-                .enumerate()
-                .filter(|(_, line)| **line == task.raw)
-                .map(|(index, _)| index)
-                .collect();
-            match found.as_slice() {
-                [only] => *only,
-                _ => {
-                    return Err(AppError::Invalid(
-                        "这条任务所在的文档刚被改过，找不到它了，刷新后再试".into(),
-                    ))
-                }
-            }
-        };
-        lines[line] = tasks::toggle_line(&lines[line])
-            .ok_or_else(|| AppError::Invalid(format!("第 {} 行不是任务", line + 1)))?;
-
-        let mut change = VaultChange::default();
-        let saved = self.write_and_index(
-            &row.rel_path,
-            &frontmatter::render(&meta, &lines.join("\n")),
-            &mut change,
-        )?;
         let done = !task.done;
-        self.log_mut().record_with(
-            "task",
-            &saved.id,
-            if done { "completed" } else { "reopened" },
-            Some(&task.title),
-        );
-        // 前端手里这篇文档的正文过时了：连同它一起通知
-        change.touch_plugin(ID);
-        self.announce(change);
-
-        tasks::task(self.db(), &tasks::task_id(&saved.id, line))?
+        let (saved_id, line) = edit_task_line(self, &task.doc_id, task.line, &task.raw, &task.title, done, tasks::toggle_line)?
+            .ok_or_else(|| AppError::Invalid("这条任务所在的文档刚被改过，找不到它了，刷新后再试".into()))?;
+        tasks::task(self.db(), &tasks::task_id(&saved_id, line))?
             .map(|row| task_from_row(&row))
             .ok_or_else(|| AppError::Internal(format!("task {id} 勾选后读不到")))
+    }
+
+    fn complete_task(&mut self, doc_id: &str, line: usize, raw: &str) -> Result<bool> {
+        let title = tasks::scan(raw).into_iter().next().map(|task| task.title).unwrap_or_else(|| raw.trim().into());
+        match edit_task_line(self, doc_id, line, raw, &title, true, tasks::complete_line)? {
+            Some(_) => Ok(true),
+            None => {
+                // 找不到原样的那一行：是已经勾上了（在别处做完了）就算了，真找不到才报错
+                let done = tasks::complete_line(raw);
+                let row = index::by_id(self.db(), doc_id)?;
+                let text = match row {
+                    Some(row) => self.read(&row.rel_path)?.unwrap_or_default(),
+                    None => String::new(),
+                };
+                if done.is_some_and(|done| text.split('\n').any(|line| line == done)) {
+                    Ok(false)
+                } else {
+                    Err(AppError::Invalid("这条任务改过了，找不到它，去那一篇里勾吧".into()))
+                }
+            }
+        }
     }
 
     fn calendar_marks(&self, from: &str, to: &str) -> Result<CalendarMarks> {
@@ -222,8 +201,46 @@ impl JournalVault for Vault {
     }
 }
 
-/// 灰色小字：分类 · 时间 · 出处（某一天是「9月26日」，目标是「第 39 周目标」，笔记是它的标题）
-fn task_from_row(row: &TaskRow) -> Task {
+/// 改一条任务所在的那一行（edit 给出新的一行，None 是不改）。行号对得上就用它；对不上（文件在索引之后被改过）
+/// 就找原文一样的那一行，只有唯一一行时才动 —— 宁可不改，也不改错。找不到返回 None，
+/// 改了返回存下后的文档 id 和行号（记进行为日志、通知前端）
+fn edit_task_line(
+    vault: &mut Vault,
+    doc_id: &str,
+    hint: usize,
+    raw: &str,
+    title: &str,
+    done: bool,
+    edit: fn(&str) -> Option<String>,
+) -> Result<Option<(String, usize)>> {
+    let row = index::by_id(vault.db(), doc_id)?.ok_or_else(|| AppError::NotFound(format!("任务所在的文档 {doc_id}")))?;
+    let text = vault.read(&row.rel_path)?.ok_or_else(|| AppError::NotFound(format!("任务所在的文件 {}", row.rel_path)))?;
+    let (meta, body) = frontmatter::split(&text);
+    let mut lines: Vec<String> = body.split('\n').map(str::to_string).collect();
+    let line = if lines.get(hint).is_some_and(|line| line == raw) {
+        hint
+    } else {
+        let found: Vec<usize> =
+            lines.iter().enumerate().filter(|(_, line)| *line == raw).map(|(index, _)| index).collect();
+        match found.as_slice() {
+            [only] => *only,
+            _ => return Ok(None),
+        }
+    };
+    let Some(next) = edit(&lines[line]) else { return Ok(None) };
+    lines[line] = next;
+
+    let mut change = VaultChange::default();
+    let saved = vault.write_and_index(&row.rel_path, &frontmatter::render(&meta, &lines.join("\n")), &mut change)?;
+    vault.log_mut().record_with("task", &saved.id, if done { "completed" } else { "reopened" }, Some(title));
+    // 前端手里这篇文档的正文过时了：连同它一起通知
+    change.touch_plugin(ID);
+    vault.announce(change);
+    Ok(Some((saved.id, line)))
+}
+
+/// 任务写在哪一篇、给人看的出处（某一天是「9月26日」，目标是「第 39 周目标」，笔记是它的标题）
+pub(super) fn source_of(row: &TaskRow) -> (DocRef, String) {
     let key = row.doc_key.clone().unwrap_or_default();
     let source = if row.doc_kind == NOTE {
         DocRef::note(&row.doc_id)
@@ -235,6 +252,12 @@ fn task_from_row(row: &TaskRow) -> Task {
         GOAL => key.split_once(':').map_or_else(String::new, |(horizon, start)| goal_title(horizon, start)),
         _ => row.doc_title.clone(),
     };
+    (source, label)
+}
+
+/// 灰色小字：分类 · 时间 · 出处
+fn task_from_row(row: &TaskRow) -> Task {
+    let (source, label) = source_of(row);
     let meta = [row.category.clone(), row.time_label.clone(), Some(label)]
         .into_iter()
         .flatten()
@@ -249,6 +272,7 @@ fn task_from_row(row: &TaskRow) -> Task {
         due_date: Some(row.due_date.clone()),
         time_label: row.time_label.clone(),
         category: row.category.clone(),
+        remind_at: row.remind_at.clone(),
         source: Some(source),
         line: Some(row.line as i64),
     }

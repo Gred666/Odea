@@ -543,7 +543,7 @@ export function askConsent(
 
 let started = false;
 
-/** main.tsx 在 initDeclaredPlugins 之后调一次（装着的清单那时已经读好了） */
+/** boot/vault.tsx 在 initDeclaredPlugins 之后调一次（装着的清单那时已经读好了） */
 export function initScriptedPlugins(): void {
   if (started || typeof document === "undefined") return;
   started = true;

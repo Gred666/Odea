@@ -521,7 +521,7 @@ const CHEVRON_DOWN =
 
 /**
  * 标题行首、画在行左边留白里的那一块：层级提示（H2），能收的顶层标题再带一个箭头。
- * 平时透明，悬停这一行时淡入；收起的标题箭头常亮。只淡 opacity（CLAUDE.md「动效：先对齐
+ * 平时透明，悬停这一行时淡入；收起的标题箭头常亮。只淡 opacity（docs/PITFALLS/动效.md「先对齐
  * 再动」），对齐物理像素见 snapOnHover。H2 用 ::before 画（attr），不进这一行的 textContent
  */
 export class HeadingGutterWidget extends WidgetType {

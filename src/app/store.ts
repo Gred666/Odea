@@ -6,6 +6,14 @@ import { navIds, navItemOf } from "@/plugins/registry";
 import { create } from "zustand";
 import * as panes from "./panes";
 import type { NotePane, PaneLayout, StoredLayout } from "./panes";
+import {
+  DEFAULT_BODY_SIZE,
+  DEFAULT_MEASURE,
+  type Measure,
+  applyTypography,
+  isBodySize,
+  isMeasure,
+} from "./typography";
 
 export type { NotePane, NoteTab } from "./panes";
 
@@ -31,7 +39,12 @@ export type PaletteDialog =
   | "update"
   | "collab"
   | "team"
-  | "relays";
+  | "relays"
+  | "export"
+  | "capture";
+
+/** 导出对话框（components/ExportDialog.tsx）：PDF 的页面设置，或者导出整个文件夹 */
+export type ExportDialogState = { kind: "page" } | { kind: "folder"; folder: string };
 
 /** 从命令面板打开了哪个对话框，回去的时候面板里还是刚才打的字、高亮停在刚才选的那一项 */
 export interface PaletteBack {
@@ -168,6 +181,12 @@ interface AppState {
   setTheme: (t: ThemePref) => boolean;
   reduceMotion: boolean;
   setReduceMotion: (v: boolean) => void;
+  /** 正文字号（px，typography.ts 的 BODY_SIZES 里的一档），记在本机 */
+  bodySize: number;
+  setBodySize: (px: number) => void;
+  /** 正文那一列每行最多几个字（窄 / 标准 / 宽 / 铺满），记在本机 */
+  measure: Measure;
+  setMeasure: (measure: Measure) => void;
   paletteOpen: boolean;
   setPaletteOpen: (v: boolean) => void;
   /** 刚从命令面板打开的对话框；那个对话框关掉就清（PaletteBack.tsx） */
@@ -194,6 +213,12 @@ interface AppState {
   /** 历史版本对话框开着的那一篇（技术方案 §5.9.11）；null = 关着 */
   historyFor: DocumentRef | null;
   setHistoryFor: (target: DocumentRef | null) => void;
+  /** 导出对话框（页面设置、导出整个文件夹）；null = 关着 */
+  exportDialog: ExportDialogState | null;
+  setExportDialog: (v: ExportDialogState | null) => void;
+  /** 全局快捷键速记的设置（components/CaptureSettingsDialog.tsx） */
+  captureSettingsOpen: boolean;
+  setCaptureSettingsOpen: (v: boolean) => void;
   /**
    * 窄栏右边那一栏（文件树、归档列表、插件的列表栏：日历的月历）收起来，给正文让地方（像 VS Code 的侧栏），
    * 记在本机。没有列表栏的页（今日TODO、目标）本来就没有这一栏
@@ -219,6 +244,8 @@ const LS_KEY = "odea.prefs";
 interface Prefs {
   theme: ThemePref;
   reduceMotion: boolean;
+  bodySize: number;
+  measure: Measure;
   noteSort: NoteSort;
   noteExcerpts: boolean;
   panelCollapsed: boolean;
@@ -228,6 +255,8 @@ function loadPrefs(): Prefs {
   const prefs: Prefs = {
     theme: "system",
     reduceMotion: false,
+    bodySize: DEFAULT_BODY_SIZE,
+    measure: DEFAULT_MEASURE,
     noteSort: "updated",
     noteExcerpts: false,
     panelCollapsed: false,
@@ -238,6 +267,8 @@ function loadPrefs(): Prefs {
       const p = JSON.parse(raw);
       if (p.theme === "light" || p.theme === "dark") prefs.theme = p.theme;
       prefs.reduceMotion = !!p.reduceMotion;
+      if (isBodySize(p.bodySize)) prefs.bodySize = p.bodySize;
+      if (isMeasure(p.measure)) prefs.measure = p.measure;
       if (p.noteSort === "created" || p.noteSort === "title" || p.noteSort === "manual")
         prefs.noteSort = p.noteSort;
       prefs.noteExcerpts = !!p.noteExcerpts;
@@ -252,10 +283,20 @@ function loadPrefs(): Prefs {
 
 function savePrefs(patch: Partial<Prefs>) {
   try {
-    const { theme, reduceMotion, noteSort, noteExcerpts, panelCollapsed } = useApp.getState();
+    const { theme, reduceMotion, bodySize, measure, noteSort, noteExcerpts, panelCollapsed } =
+      useApp.getState();
     localStorage.setItem(
       LS_KEY,
-      JSON.stringify({ theme, reduceMotion, noteSort, noteExcerpts, panelCollapsed, ...patch }),
+      JSON.stringify({
+        theme,
+        reduceMotion,
+        bodySize,
+        measure,
+        noteSort,
+        noteExcerpts,
+        panelCollapsed,
+        ...patch,
+      }),
     );
   } catch {
     /* 忽略：偏好丢失不影响使用 */
@@ -266,7 +307,7 @@ const initialPrefs = loadPrefs();
 
 /* ---- 上次停在哪：重新打开应用回到那个区、那一篇、那个文件夹 ----
    按仓库分开记（docs/仓库与启动器.md §4.2）：一个窗口一个仓库，localStorage 是所有窗口共用的。
-   键是「旧键:仓库路径」；main.tsx 在第一帧之前调 restoreVaultSession 换成这个仓库的记录。
+   键是「旧键:仓库路径」；boot/vault.tsx 在第一帧之前调 restoreVaultSession 换成这个仓库的记录。
    浏览器预览里不分（只有一个假仓库），用旧键 */
 
 const SESSION_KEY = "odea.session";
@@ -633,6 +674,19 @@ export const useApp = create<AppState>((set, get) => {
       savePrefs({ reduceMotion: v });
       set({ reduceMotion: v });
     },
+    bodySize: initialPrefs.bodySize,
+    setBodySize: (bodySize) => {
+      if (!isBodySize(bodySize)) return;
+      applyTypography(bodySize, get().measure);
+      savePrefs({ bodySize });
+      set({ bodySize });
+    },
+    measure: initialPrefs.measure,
+    setMeasure: (measure) => {
+      applyTypography(get().bodySize, measure);
+      savePrefs({ measure });
+      set({ measure });
+    },
     paletteOpen: false,
     setPaletteOpen: (v) => set(v ? { paletteOpen: true, findOpen: false } : { paletteOpen: false }),
     paletteBack: null,
@@ -659,6 +713,10 @@ export const useApp = create<AppState>((set, get) => {
     setTrashOpen: (v) => set({ trashOpen: v }),
     historyFor: null,
     setHistoryFor: (target) => set({ historyFor: target }),
+    exportDialog: null,
+    setExportDialog: (v) => set({ exportDialog: v }),
+    captureSettingsOpen: false,
+    setCaptureSettingsOpen: (v) => set({ captureSettingsOpen: v }),
     panelCollapsed: initialPrefs.panelCollapsed,
     setPanelCollapsed: (panelCollapsed) => {
       savePrefs({ panelCollapsed });
@@ -694,7 +752,7 @@ export function applyTheme(pref: ThemePref, animate = false): boolean {
 }
 
 /**
- * 这个窗口开的是哪个仓库（main.tsx 在第一帧之前调）：换成这个仓库的「上次停在哪」和展开的文件夹，
+ * 这个窗口开的是哪个仓库（boot/vault.tsx 在第一帧之前调）：换成这个仓库的「上次停在哪」和展开的文件夹，
  * 以后都记到它的键上。`legacy`：从旧配置迁过来的那个仓库，自己的记录还没有时读旧的那份
  */
 export function restoreVaultSession(root: string, legacy: boolean) {
@@ -710,10 +768,11 @@ export function restoreVaultSession(root: string, legacy: boolean) {
   });
 }
 
-/** 在 main.tsx 调一次：应用初始偏好并跟随系统变化，记下每次停在哪 */
+/** 每种窗口启动时调一次（src/boot/）：应用初始偏好并跟随系统变化，记下每次停在哪 */
 export function initPreferences() {
-  const { theme, reduceMotion } = useApp.getState();
+  const { theme, reduceMotion, bodySize, measure } = useApp.getState();
   applyTheme(theme);
+  applyTypography(bodySize, measure);
   document.documentElement.setAttribute("data-reduce-motion", String(reduceMotion));
 
   // 换了区、换了篇、换了文件夹、开关了标签就记一下（只是几个字符串，不用节流）。

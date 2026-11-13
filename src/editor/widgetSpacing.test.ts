@@ -20,6 +20,7 @@ const WIDGET_ROOT_CLASSES = [
   "cm-odea-fence-block",
   "cm-odea-hr",
   "cm-odea-image-frame",
+  "cm-odea-embed-frame",
   "cm-odea-image",
 ];
 

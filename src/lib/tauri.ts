@@ -25,14 +25,16 @@ export function thisWindow(): WebviewWindow {
 const search = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
 
 /**
- * 这是哪种窗口：启动器的地址带 `?launcher`；协作的访客窗口（不开仓库）带 `?guest`；
- * 启动以后再开的仓库窗口带 `?quiet`（不播开场）。浏览器预览里也认得：`/?launcher` 就是启动器
+ * 这是哪种窗口：启动器的地址带 `?launcher`；协作的访客窗口（不开仓库）带 `?guest`；全局快捷键速记的小窗带
+ * `?capture`；启动以后再开的仓库窗口带 `?quiet`（不播开场）。浏览器预览里也认得：`/?launcher` 就是启动器
  */
-export const windowKind: "launcher" | "guest" | "vault" = search.has("launcher")
+export const windowKind: "launcher" | "guest" | "capture" | "vault" = search.has("launcher")
   ? "launcher"
   : search.has("guest")
     ? "guest"
-    : "vault";
+    : search.has("capture")
+      ? "capture"
+      : "vault";
 
 /** 启动以后才开的仓库窗口：开场只在冷启动的第一批窗口里播 */
 export const quietWindow = search.has("quiet");

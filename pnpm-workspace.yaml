@@ -1,3 +1,9 @@
 onlyBuiltDependencies:
   - esbuild
   - "@biomejs/biome"
+
+overrides:
+  # Mermaid 12 自己要 katex ^0.16，和我们的 0.18 各装一份，生产构建里 KaTeX 打成两个 260 KB 的分包
+  # （docs/1110审查与研究.md §5.4）。Mermaid 只用 renderToString 出 MathML，0.16 和 0.18 出的一样；
+  # 跟着 package.json 里的版本走，升级 katex 时两边一起升
+  "mermaid>katex": "$katex"

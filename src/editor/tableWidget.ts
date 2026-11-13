@@ -388,7 +388,7 @@ const part = <T extends HTMLElement = HTMLElement>(block: HTMLElement, selector:
   block.querySelector<T>(selector);
 
 /**
- * 淡入淡出的小控件：动之前对齐到整物理像素（CLAUDE.md「动效：先对齐再动」）。
+ * 淡入淡出的小控件：动之前对齐到整物理像素（docs/PITFALLS/动效.md「先对齐再动」）。
  * 已经显示着、只是挪了位置（换了一行、表格长高了）也重新对齐：零头跟着新位置变
  */
 function reveal(node: HTMLElement | null, shown: boolean) {
@@ -703,7 +703,7 @@ function freeze(block: HTMLElement) {
 
 /**
  * 从 from 的列宽滑到 to（ease-out cubic，200ms：起步就走、收尾短，每一帧挪的像素均匀 ——
- * CLAUDE.md 动效规矩 7）。done 在最后一帧之后调
+ * docs/PITFALLS/动效.md 规矩 7）。done 在最后一帧之后调
  */
 function animateWidths(block: HTMLElement, from: number[], to: number[], done: () => void) {
   const state = states.get(block)!;

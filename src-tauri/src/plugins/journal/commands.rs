@@ -18,6 +18,14 @@ pub async fn task_toggle(ws: Ws, id: String) -> Result<Task> {
     with_vault(&ws, move |v| v.toggle_task(&id)).await
 }
 
+/// 提醒上点了「完成」、这一篇没开在编辑器里（开着的经编辑器改）：把那一行勾上。
+/// 只勾不取消；已经勾上了返回 false
+#[tauri::command]
+#[specta::specta]
+pub async fn task_complete(ws: Ws, doc_id: String, line: u32, raw: String) -> Result<bool> {
+    with_vault(&ws, move |v| v.complete_task(&doc_id, line as usize, &raw)).await
+}
+
 /// 某个周期的目标。period_start 由前端按 horizon 算好（周一 / 1 号 / 1 月 1 日），
 /// 这里校验它确实是周期起点。没写过的周期返回空文档。
 #[tauri::command]

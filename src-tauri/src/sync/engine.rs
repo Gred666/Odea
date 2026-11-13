@@ -71,6 +71,9 @@ pub const PROVIDER_KEY: &str = "odea.provider";
 /// 这个仓库用哪个账号同步（login，令牌在钥匙串里）
 pub const LOGIN_KEY: &str = "odea.login";
 
+/// 按仓库要连云端用的令牌和代理；第二个参数是「刚才用它被云端拒了」（见 `Hooks::net`）
+pub type NetFor = dyn Fn(&SyncRepo, bool) -> SyncResult<Net> + Send + Sync;
+
 /// 同步线程和外面打交道的口子
 #[derive(Clone)]
 pub struct Hooks {
@@ -80,7 +83,7 @@ pub struct Hooks {
     pub notice: Arc<dyn Fn(String) + Send + Sync>,
     /// 连云端用的令牌和代理（技术方案 §5.9.4）。每轮问一次：令牌可能刚续过期。
     /// 第二个参数是「刚才用它被云端拒了」：GitHub 的令牌要先续一次
-    pub net: Arc<dyn Fn(&SyncRepo, bool) -> SyncResult<Net> + Send + Sync>,
+    pub net: Arc<NetFor>,
 }
 
 enum Signal {
@@ -533,7 +536,7 @@ impl Engine {
         let snapshot = {
             let mut status = self.status.lock().unwrap_or_else(|e| e.into_inner());
             let before = status.clone();
-            change(&mut *status);
+            change(&mut status);
             if *status == before {
                 return;
             }

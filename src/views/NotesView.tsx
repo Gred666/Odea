@@ -53,6 +53,7 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
+  FolderOutput,
   FolderPlus,
   History,
   Import,
@@ -1343,7 +1344,7 @@ const SLOT_EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
 /**
  * 一篇笔记那一格。不用 Motion 组件：几百行每行一个就是几百个投影节点，
  * 选中高亮滑一下都要全部过一遍（ListColumn 的 ROW_BATCH）。这里只在进出的那一格上
- * 跑一个 WAAPI 的高度动画：字不动、不变透明、不进合成层（CLAUDE.md「动效」规矩 1、7）
+ * 跑一个 WAAPI 的高度动画：字不动、不变透明、不进合成层（docs/PITFALLS/动效.md 规矩 1、7）
  */
 function NoteSlot({ appear, children }: { appear: boolean; children: ReactNode }) {
   const [present, safeToRemove] = usePresence();
@@ -1554,7 +1555,7 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
           </span>
         )}
       </span>
-      {/* 右边一格：静止时是篇数，悬停时换成「…」。淡的是颜色，不是 opacity（CLAUDE.md 动效规矩第 3 条：
+      {/* 右边一格：静止时是篇数，悬停时换成「…」。淡的是颜色，不是 opacity（docs/PITFALLS/动效.md 规矩第 3 条：
           一排很多个的不进合成层）。未整理是固定的，没有菜单 */}
       <span className="relative z-20 -mr-1 grid min-w-5 shrink-0 place-items-center justify-items-end">
         <span
@@ -1648,6 +1649,12 @@ function folderActions(
       label: "导入文件夹到这里…",
       icon: Import,
       onSelect: () => tree.importHere(path),
+    },
+    {
+      id: "export",
+      label: "导出…",
+      icon: FolderOutput,
+      onSelect: () => useApp.getState().setExportDialog({ kind: "folder", folder: path }),
     },
     // 逻辑目录的文件夹不在硬盘上
     ...(tree.logical

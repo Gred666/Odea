@@ -6,7 +6,7 @@ import { useState } from "react";
 
 /**
  * 团队仓库里写着一台还没用过的中继（docs/协同编辑.md §22.4）：问一句用不用。用了以后不在同一个网络的
- * 成员也连得上；说了不用就不再问（中继对话框里还能加）。出现、消失只淡（CLAUDE.md 动效规矩 1）
+ * 成员也连得上；说了不用就不再问（中继对话框里还能加）。出现、消失只淡（docs/PITFALLS/动效.md 规矩 1）
  */
 export function TeamRelayToast() {
   const relay = useTeam((s) => s.relays.find((item) => item.state === "ask"));

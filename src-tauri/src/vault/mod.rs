@@ -27,6 +27,7 @@ pub mod links;
 mod export;
 mod import;
 mod logical;
+pub mod properties;
 pub mod query;
 pub mod seed;
 pub mod team;
@@ -97,6 +98,10 @@ pub struct Vault {
     folders: Vec<String>,
     /// 上次扫描时树上列的图片、PDF（本地目录才有）：多了、少了、改了也要告诉前端
     files: Vec<TreeFile>,
+    /// 上次扫描时整个仓库里的附件（图片和 ATTACHMENT_EXTENSIONS 那几种，相对仓库的路径，排好序）：
+    /// Obsidian 的 `![[图.png]]`、`![[说明书.pdf]]` 只写文件名，前端按名字在这里面找（lib/wikiFiles.ts）。
+    /// 和树上的 files 不同，逻辑目录、日程的文件夹里的也算
+    attachments: Vec<String>,
     /// 逻辑目录的树（.odea/tree，见 tree.rs、logical.rs）；本地目录是 None
     tree: Option<tree::Tree>,
     /// 清单文件上次读到 / 写下的内容：和磁盘上的一比，就知道别处改没改过它
@@ -115,6 +120,7 @@ impl VaultChange {
             && self.conflicts.is_empty()
             && self.found_copies.is_empty()
             && !self.folders
+            && !self.attachments
             && !self.layout
     }
 
@@ -237,6 +243,7 @@ impl Vault {
             layout_pending: None,
             folders: Vec::new(),
             files: Vec::new(),
+            attachments: Vec::new(),
             tree: None,
             tree_text: String::new(),
             tree_build: false,
@@ -389,7 +396,11 @@ impl Vault {
             layout: self.check_layout(),
             ..VaultChange::default()
         };
-        let mut files = fsio::walk_markdown(&self.root);
+        let (mut files, attachments) = fsio::walk(&self.root, is_attachment_name);
+        if attachments != self.attachments {
+            self.attachments = attachments;
+            change.attachments = true;
+        }
         // 名字像冲突副本的放到最后：网盘拷出来的副本带着原文属性块里的 id，谁先被索引
         // 谁拿到这个 id。「周报 (1).md」按字节序排在「周报.md」前面，不挪的话原文反倒
         // 成了「另一份」、换了 id。（排序是稳定的，其余文件的顺序不变）
@@ -436,6 +447,22 @@ impl Vault {
         self.folders = folders;
         self.files = files.clone();
         files
+    }
+
+    /// 整个仓库里的附件（相对仓库的路径），上次扫描时的。`![[图.png]]`、`![[说明书.pdf]]` 按名字在这里面找
+    pub fn attachments(&self) -> Vec<String> {
+        self.attachments.clone()
+    }
+
+    /// 附件清单里的一个文件在磁盘上的位置（`![[说明书.pdf]]` 的卡片上点「打开」）。只认清单里有的：
+    /// 扫描时收的，不在隐藏目录里、扩展名在 IMAGE_EXTENSIONS / ATTACHMENT_EXTENSIONS 里 ——
+    /// 前端不能叫 Rust 打开仓库外面的、或者能执行的文件（.exe、.bat、.lnk 这些不在清单里）
+    pub fn attachment_path(&self, rel: &str) -> Result<PathBuf> {
+        let path = fsio::abs(&self.root, rel);
+        if !self.attachments.iter().any(|known| known == rel) || !path.is_file() {
+            return Err(AppError::NotFound(format!("仓库里找不到这个文件: {rel}")));
+        }
+        Ok(path)
     }
 
     /// 树上列出来的一个文件在磁盘上的位置（前端给的路径要是树上真有的那种文件，以点开头的不认）
@@ -588,7 +615,7 @@ impl Vault {
         let previous = index::by_path(&self.db, rel)?;
         if let Some(previous) = &previous {
             // 换过字的两份可能解出同样的字（不同的 GBK 字都成了 U+FFFD）：编码变了也得重新认
-            if previous.hash == hash && previous.not_utf8 == !utf8 {
+            if previous.hash == hash && previous.not_utf8 != utf8 {
                 if previous.mtime != mtime || previous.size != size {
                     index::touch(&self.db, &previous.id, mtime, size)?;
                 }
@@ -634,6 +661,8 @@ impl Vault {
             hash,
             file_id: meta.id.clone(),
             not_utf8: !utf8,
+            tags: meta.tags(),
+            props: meta.extra.join("\n"),
         };
         match slot {
             Slot::Note { archived } => {
@@ -1322,7 +1351,7 @@ impl Vault {
                 purge_at: deleted_at + keep,
             });
         }
-        notes.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+        notes.sort_by_key(|note| std::cmp::Reverse(note.deleted_at));
         Ok(notes)
     }
 
@@ -1640,7 +1669,7 @@ impl Vault {
                 count: hits.len() as i64,
             });
         }
-        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        out.sort_by_key(|doc| std::cmp::Reverse(doc.updated_at));
         Ok(out)
     }
 
@@ -1890,6 +1919,25 @@ const MAX_ATTACHMENT_BYTES: usize = 50 * 1_048_576;
 /// 当图片插进正文（`![](…)`）的扩展名；和 tauri.conf.json 里 asset 协议放行的一致
 pub const IMAGE_EXTENSIONS: [&str; 9] = ["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "bmp", "ico"];
 
+/// 图片以外、`![[x]]` 嵌成附件卡片的扩展名（前端 lib/wikiFiles.ts 的 ATTACHMENT_FILE_RE 和它一致）。
+/// 卡片上能「用系统的程序打开」，所以只收文档、表格、演示、音视频、压缩包这类：
+/// 能执行的（exe、bat、cmd、ps1、lnk、url、js、html……）不在里面，点不开它们
+pub const ATTACHMENT_EXTENSIONS: [&str; 39] = [
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "txt", "csv", "tsv", "epub",
+    "pages", "numbers", "key", "mp3", "wav", "m4a", "ogg", "oga", "flac", "aac", "opus", "mp4", "m4v", "webm", "mov",
+    "mkv", "avi", "zip", "7z", "rar", "psd", "xmind", "drawio", "heic",
+];
+
+/// 文件名是不是附件：图片或者 ATTACHMENT_EXTENSIONS 那几种（按扩展名，不分大小写）
+pub fn is_attachment_name(name: &str) -> bool {
+    let ext = split_name(name).1;
+    !ext.is_empty()
+        && IMAGE_EXTENSIONS
+            .iter()
+            .chain(ATTACHMENT_EXTENSIONS.iter())
+            .any(|known| known.eq_ignore_ascii_case(ext))
+}
+
 /// 「截图 1.PNG」→ ("截图 1", "PNG")；没有扩展名时第二个是空串
 fn split_name(name: &str) -> (&str, &str) {
     match name.rsplit_once('.') {
@@ -1945,7 +1993,7 @@ pub fn search_text(
     };
     let (mut notes, mut docs): (Vec<_>, Vec<_>) = found.into_iter().partition(|hit| hit.doc.kind == NOTE);
     notes.sort_by(|a, b| list_order(&a.doc, &b.doc));
-    docs.sort_by(|a, b| b.doc.updated_at.cmp(&a.doc.updated_at));
+    docs.sort_by_key(|hit| std::cmp::Reverse(hit.doc.updated_at));
     let hits = |list: Vec<index::TextMatch>| -> Vec<TextHit> {
         list.into_iter()
             .take(limit)
@@ -1991,6 +2039,9 @@ const PREVIEW_BEFORE: usize = 32;
 const PREVIEW_AFTER: usize = 160;
 const PREVIEW_TEXT: usize = 200;
 
+/// 全局搜索里的一篇：命中的位置 (第几行（从 0 数）, 这一行里的字节区间)，和一共几处
+type FoundDoc = (DocRow, Vec<(usize, usize, usize)>, usize);
+
 /// 全局搜索（commands::find_in_vault）：每一篇里每一处命中，一行一行地找，和 VS Code 的
 /// 「在文件中查找」一样只搜正文。不在 Vault 上，理由同 search_text（types 也是）。
 /// 正则写错了放在结果的 error 里；cancelled() 返回 true 说明又来了新的搜索，这一次作废，返回 None
@@ -2013,7 +2064,7 @@ pub fn find_text(
     };
     // 每一篇：命中的位置 (第几行（从 0 数）, 这一行里的字节区间)，和一共几处。位置一篇最多留
     // FIND_MATCH_LIMIT 个（再多也给不出去），一大篇里搜一个「的」不会攒下几十万个
-    let mut found: Vec<(DocRow, Vec<(usize, usize, usize)>, usize)> = Vec::new();
+    let mut found: Vec<FoundDoc> = Vec::new();
     let finished = index::each_text_doc(conn, false, |doc| {
         if cancelled() {
             return false;
@@ -2043,7 +2094,7 @@ pub fn find_text(
 
     let (mut notes, mut docs): (Vec<_>, Vec<_>) = found.into_iter().partition(|(doc, _, _)| doc.kind == NOTE);
     notes.sort_by(|a, b| list_order(&a.0, &b.0));
-    docs.sort_by(|a, b| b.0.updated_at.cmp(&a.0.updated_at));
+    docs.sort_by_key(|found| std::cmp::Reverse(found.0.updated_at));
 
     let total: usize = notes.iter().chain(&docs).map(|(_, _, count)| count).sum();
     let mut budget = FIND_MATCH_LIMIT;
@@ -2163,6 +2214,7 @@ fn note_from_row(row: &DocRow, conflict_of: Option<String>) -> Note {
         conflict_of,
         id_in_file: id_in_file(row),
         not_utf8: row.not_utf8,
+        properties: row.props.clone(),
     }
 }
 

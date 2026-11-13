@@ -699,6 +699,10 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
       void path;
       return { url: PLACEHOLDER, file: null };
     },
+    openAttachment: async () => {
+      await wait(150);
+      throw new Error("浏览器预览里打不开文件，桌面版里才行");
+    },
     putAttachment: async (id, doc, name) => {
       void id;
       void doc;

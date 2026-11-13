@@ -626,7 +626,7 @@ impl Tree {
 impl Tree {
     /// 在 parent 里新建文件夹，排在这一层最前面（前端就地起名的输入框也在最前面）。返回它的路径
     pub fn add_folder(&mut self, parent: &str, name: &str) -> Result<String> {
-        self.add_branch(parent, name, |name| Item::Folder(name))
+        self.add_branch(parent, name, Item::Folder)
     }
 
     /// 新建智能文件夹

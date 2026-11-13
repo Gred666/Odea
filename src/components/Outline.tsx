@@ -578,7 +578,7 @@ function OutlineRow({
         >
           {/* 淡入淡出的是颜色，不是 opacity；转的是 SVG 里的 <path>，不是外面的盒子。
               两样都在原地重画，不进合成层（Chrome 不给 SVG 里面的元素单独建层）。
-              以前按 CLAUDE.md 第 3 条给每个箭头 will-change: opacity、里面转的那层
+              以前按 docs/PITFALLS/动效.md 第 3 条给每个箭头 will-change: opacity、里面转的那层
               will-change: transform，一个箭头两个图层：两百多条的目录一百二十多个图层，
               收起展开时每帧光整理图层就要 1ms 多，慢机器上（CPU 降速 4 倍）一帧画不完。
               不进图层就没有「淡完那一帧从图层退回页面、挪半个像素」的问题，也不用对齐像素 */}

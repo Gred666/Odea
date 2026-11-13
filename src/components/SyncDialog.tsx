@@ -10,9 +10,9 @@ import type {
   SyncRemoteRepo,
   SyncStatus,
 } from "@/data/types";
-import { openExternal } from "@/editor/links";
 import { cn } from "@/lib/cn";
 import { popoverCard, tween } from "@/lib/motion";
+import { openExternal } from "@/lib/openExternal";
 import { describeSync, formatBytes, formatSyncedAt } from "@/lib/syncText";
 import { ChevronLeft, Cloud, Copy, Github, Globe, LoaderCircle, Lock, Plus, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";

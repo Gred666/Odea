@@ -85,7 +85,7 @@ pub fn list(data_dir: &Path) -> Vec<GuestCopy> {
         .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
         .filter_map(|text| serde_json::from_str(&text).ok())
         .collect();
-    copies.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
+    copies.sort_by_key(|copy| std::cmp::Reverse(copy.saved_at));
     copies
 }
 

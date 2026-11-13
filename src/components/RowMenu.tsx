@@ -193,7 +193,7 @@ export function RowMenu({
           : undefined
       }
       // 悬停才出现的淡的是颜色，不是 opacity：列表里一行一个，进合成层的话淡完那一帧
-      // 退回页面会挪半个像素（CLAUDE.md 动效规矩第 3 条，同右侧目录树的收起箭头）
+      // 退回页面会挪半个像素（docs/PITFALLS/动效.md 规矩第 3 条，同右侧目录树的收起箭头）
       className={cn(
         // 24×24：WCAG 2.5.8 的最小点击区
         "grid h-6 w-6 place-items-center rounded-md",

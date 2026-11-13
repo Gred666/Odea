@@ -44,8 +44,12 @@ use serde::{Deserialize, Serialize};
 pub use diagnose::Diagnosis;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 pub use endpoint::id_text;
+// 命令层（commands.rs）和测试用；不带 Tauri 编库时没人用，不加条件 clippy 会报没用到
+#[cfg(any(feature = "desktop-runtime", feature = "typegen", test))]
 pub use guest::{Guest, GuestOptions};
+#[cfg(any(feature = "desktop-runtime", feature = "typegen", test))]
 pub use host::{Decision, Host, HostOptions};
+#[cfg(any(feature = "desktop-runtime", feature = "typegen", test))]
 pub use node::{Node, NodeOptions};
 pub use protocol::{Permission, RejectReason, Scope};
 pub use reach::Reach;

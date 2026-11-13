@@ -1,0 +1,611 @@
+/* ============================================================
+   静态渲染（render/staticHtml.ts）排出来的 HTML 的样式：导出的 HTML / PDF、`![[笔记]]` 的嵌入卡片。
+
+   照编辑器的样子画（globals.css 里 .odea-editor 那几段：标题比例、callout、代码块、脚注徽章、
+   ==高亮== 的荧光笔……），颜色、字体全走 token：应用里跟着亮暗主题，导出的页面自己带一份亮色的
+   （export/document.ts 的 TOKENS）。段距比编辑器紧一点：编辑器里段与段之间是一整行空行（1.7em），
+   排成文章、印在纸上太松。
+
+   照 docs/PITFALLS/描边.md 的规矩：描边用 border（不用 box-shadow 的扩展），这里没有动画
+   ============================================================ */
+
+.odea-static {
+  color: var(--color-body);
+  font-family: var(--font-sans);
+  font-size: var(--odea-body-size, 17px);
+  line-height: 1.7;
+  letter-spacing: 0.012em;
+  overflow-wrap: break-word;
+  text-autospace: normal;
+}
+/* :where 不加特异度：列表项里的子列表、callout 里的段落这些更具体的规则才盖得过它 */
+.odea-static
+  :where(
+    p,
+    ul,
+    ol,
+    dl,
+    blockquote,
+    pre,
+    .table-wrap,
+    .callout,
+    .math-display,
+    .diagram,
+    .toc,
+    .embed,
+    .html-block,
+    details,
+    figure
+  ) {
+  margin: 0 0 0.9em;
+}
+.odea-static > :first-child,
+.odea-static :is(li, blockquote, .callout-body, .embed-body, dd) > :first-child {
+  margin-top: 0;
+}
+.odea-static > :last-child,
+.odea-static :is(li, blockquote, .callout-body, .embed-body, dd, .task-body) > :last-child {
+  margin-bottom: 0;
+}
+
+/* ---------- 标题（比例同编辑器，docs/排版规范.md §3） ---------- */
+
+.odea-static :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.5em 0 0.6em;
+  color: var(--color-ink);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.odea-static :is(h1, h2, h3) {
+  font-family: var(--font-display);
+}
+.odea-static h1 {
+  border-bottom: 1px solid var(--color-line);
+  padding-bottom: 0.18em;
+  font-size: 1.75em;
+  line-height: 1.3;
+}
+.odea-static h2 {
+  border-bottom: 1px solid var(--color-line);
+  padding-bottom: 0.16em;
+  font-size: 1.45em;
+  line-height: 1.35;
+}
+.odea-static h3 {
+  font-size: 1.22em;
+  line-height: 1.45;
+}
+.odea-static h4 {
+  font-size: 1.1em;
+  line-height: 1.55;
+}
+.odea-static h5 {
+  color: var(--color-body);
+  font-size: 1em;
+}
+.odea-static h6 {
+  color: var(--color-muted);
+  font-size: 1em;
+}
+
+/* ---------- 行内 ---------- */
+
+.odea-static :is(strong, b) {
+  color: var(--color-ink);
+  font-weight: 700;
+}
+.odea-static :is(del, s, strike) {
+  color: var(--color-muted);
+}
+.odea-static :is(u, ins) {
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+/* ==高亮==：荧光笔只涂下半截 */
+.odea-static mark {
+  border-radius: 2px;
+  background: linear-gradient(
+    transparent 32%,
+    color-mix(in srgb, var(--color-warning) 38%, transparent) 32%,
+    color-mix(in srgb, var(--color-warning) 38%, transparent) 92%,
+    transparent 92%
+  );
+  padding: 0 0.08em;
+  color: var(--color-ink);
+  print-color-adjust: exact;
+}
+.odea-static :is(sub, sup):not(.footnote-ref) {
+  font-size: 0.72em;
+  line-height: 0;
+}
+.odea-static :is(code, samp, kbd, pre) {
+  font-family: var(--font-mono);
+  text-autospace: no-autospace;
+}
+.odea-static :not(pre) > :is(code, samp) {
+  border-radius: 4px;
+  background: var(--color-rail);
+  padding: 0.1em 0.3em;
+  color: var(--color-ink);
+  font-size: 0.9em;
+}
+.odea-static kbd {
+  display: inline-block;
+  border: 1px solid var(--color-line-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--color-panel);
+  padding: 0 0.38em;
+  color: var(--color-body);
+  font-size: 0.78em;
+  line-height: 1.55;
+  vertical-align: 0.08em;
+}
+.odea-static small {
+  font-size: 0.85em;
+}
+.odea-static big {
+  font-size: 1.2em;
+}
+.odea-static :is(cite, var) {
+  font-style: italic;
+}
+.odea-static abbr[title] {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--color-faint);
+  text-underline-offset: 0.18em;
+}
+.odea-static :is(a, .link) {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 42%, transparent);
+  text-underline-offset: 3px;
+}
+.odea-static .wikilink {
+  border-bottom: 1px solid var(--color-accent-line);
+  border-radius: var(--radius-xs, 4px);
+  background: var(--color-accent-wash);
+  padding: 0 0.32em;
+  color: var(--color-ink);
+  print-color-adjust: exact;
+}
+
+/* ---------- 列表 ---------- */
+
+.odea-static :is(ul, ol) {
+  padding-left: 1.55em;
+}
+.odea-static ul {
+  list-style: disc;
+}
+.odea-static ul ul {
+  list-style: circle;
+}
+.odea-static ul ul ul {
+  list-style: square;
+}
+/* 再往里又从圆点起（和编辑器一样 • ◦ ▪ 循环） */
+.odea-static ul ul ul ul {
+  list-style: disc;
+}
+.odea-static ul ul ul ul ul {
+  list-style: circle;
+}
+.odea-static ol {
+  list-style: decimal;
+}
+.odea-static li::marker {
+  color: var(--color-muted);
+}
+.odea-static li > :is(ul, ol) {
+  margin: 0.15em 0 0;
+}
+.odea-static ul.tasks {
+  padding-left: 0.1em;
+  list-style: none;
+}
+.odea-static li.task {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55em;
+}
+/* 勾选框自己画（系统的 disabled 勾选框是灰的，印出来看不清）：没勾是一个圆角方框，勾了是主色底的白勾 */
+.odea-static li.task > input {
+  flex: none;
+  box-sizing: border-box;
+  width: 0.9em;
+  height: 0.9em;
+  margin: 0;
+  border: 1.5px solid var(--color-faint);
+  border-radius: 4px;
+  background: transparent;
+  appearance: none;
+  translate: 0 0.12em;
+  print-color-adjust: exact;
+}
+.odea-static li.task > input:checked {
+  border-color: var(--color-accent);
+  background: var(--color-accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 100% no-repeat;
+}
+.odea-static li.task.is-done > .task-body {
+  color: var(--color-muted);
+}
+.odea-static .task-body {
+  min-width: 0;
+  flex: 1;
+}
+.odea-static dt {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+.odea-static dd {
+  margin: 0 0 0.3em 1.5em;
+}
+
+/* ---------- 引用、callout ---------- */
+
+.odea-static blockquote {
+  border-left: 3px solid var(--color-accent-line);
+  padding-left: 1em;
+  color: var(--color-muted);
+}
+/* 中文自定义标签（核心判断）：主色竖线、无底色、正文放大加重；GitHub 的五种按语义配色、铺一层极淡的底 */
+.odea-static .callout {
+  --callout: var(--color-accent);
+  --callout-fill: transparent;
+  border-left: 3px solid var(--callout);
+  border-radius: 0 8px 8px 0;
+  background: var(--callout-fill);
+  padding: 0.45em 0.8em 0.4em 1em;
+  color: var(--color-ink);
+  font-size: 1.04em;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  print-color-adjust: exact;
+}
+.odea-static .callout:is(.is-note, .is-tip, .is-important, .is-warning, .is-caution) {
+  --callout-fill: color-mix(in srgb, var(--callout) 7%, transparent);
+  color: var(--color-body);
+  font-size: 1em;
+  font-weight: 400;
+}
+.odea-static .callout.is-tip {
+  --callout: var(--color-success);
+}
+.odea-static .callout.is-important {
+  --callout: var(--color-callout-important);
+}
+.odea-static .callout.is-warning {
+  --callout: var(--color-warning);
+}
+.odea-static .callout.is-caution {
+  --callout: var(--color-danger);
+}
+.odea-static .callout-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 0.6em;
+}
+.odea-static summary.callout-head {
+  cursor: pointer;
+  list-style: none;
+}
+.odea-static summary.callout-head::-webkit-details-marker {
+  display: none;
+}
+.odea-static summary.callout-head::after {
+  color: var(--callout);
+  content: "▸";
+  font-size: 0.8em;
+}
+.odea-static details[open] > summary.callout-head::after {
+  content: "▾";
+}
+.odea-static .callout-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--callout);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  line-height: 1.6;
+  text-transform: uppercase;
+}
+.odea-static .callout-badge svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.odea-static .callout-title {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+.odea-static .callout-body {
+  margin-top: 0.15em;
+}
+
+/* ---------- 代码 ---------- */
+
+.odea-static pre.code {
+  position: relative;
+  overflow-x: auto;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 10px;
+  background: var(--color-panel);
+  padding: 12px 14px;
+  color: var(--color-body);
+  font-size: 0.86em;
+  line-height: 1.5;
+  white-space: pre;
+  print-color-adjust: exact;
+}
+.odea-static pre.code[data-lang]::before {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  color: var(--color-faint);
+  content: attr(data-lang);
+  font: 500 12px / 1 var(--font-sans);
+}
+.odea-static pre.code code {
+  font-size: inherit;
+}
+.odea-static .tok-keyword {
+  color: var(--code-keyword);
+}
+.odea-static .tok-string {
+  color: var(--code-string);
+}
+.odea-static .tok-comment {
+  color: var(--code-comment);
+  font-style: italic;
+}
+.odea-static .tok-number {
+  color: var(--code-number);
+}
+.odea-static .tok-function {
+  color: var(--code-function);
+}
+.odea-static .tok-definition {
+  color: var(--code-definition);
+}
+.odea-static .tok-type {
+  color: var(--code-type);
+}
+.odea-static .tok-property {
+  color: var(--code-property);
+}
+.odea-static .tok-tag {
+  color: var(--code-tag);
+}
+.odea-static .tok-operator {
+  color: var(--code-operator);
+}
+.odea-static .tok-punct {
+  color: var(--code-punct);
+}
+.odea-static .tok-meta {
+  color: var(--code-meta);
+}
+.odea-static .tok-invalid {
+  color: var(--code-invalid);
+}
+
+/* ---------- 表格 ---------- */
+
+.odea-static .table-wrap {
+  overflow-x: auto;
+}
+.odea-static table {
+  border-collapse: collapse;
+  font-size: calc(var(--odea-body-size, 17px) - 2px);
+  line-height: 1.6;
+}
+.odea-static :is(th, td) {
+  border: 1px solid var(--color-line-strong);
+  padding: 6px 12px;
+  vertical-align: top;
+}
+.odea-static th {
+  background: var(--color-panel);
+  color: var(--color-ink);
+  font-size: calc(var(--odea-body-size, 17px) - 4px);
+  font-weight: 600;
+  text-align: start;
+  print-color-adjust: exact;
+}
+.odea-static td.num {
+  font-variant-numeric: tabular-nums;
+}
+.odea-static caption {
+  padding-bottom: 6px;
+  color: var(--color-muted);
+  font-size: 0.9em;
+}
+
+/* ---------- 图片、公式、图表 ---------- */
+
+/* 行内的：应用里 Tailwind 的 preflight 把 img 设成了块级（嵌入卡片里图片后面的字会被挤到下一行），
+   导出的页面里没有它。两边都按这里的来 */
+.odea-static img {
+  display: inline;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+.odea-static .image-missing {
+  display: inline-block;
+  border: 1px dashed var(--color-line-strong);
+  border-radius: 6px;
+  padding: 2px 10px;
+  color: var(--color-muted);
+  font-size: 0.85em;
+}
+/* 折不开的一整块（大矩阵）横向滑动；上下多留一点，积分的上下限不会被裁掉 */
+.odea-static .math-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.3em 0;
+}
+.odea-static .math-display .katex-display {
+  margin: 0;
+}
+/* 太宽的块级公式在顶层的关系符、运算符后面折行（KaTeX 在这些地方切好了 .base），不横着滑出去 ——
+   纸上没有滑块。编辑器里还会把括号里的几段粘起来、续行缩进（editor/math.ts），这里只折 */
+.odea-static .math-display .katex-display > .katex {
+  white-space: normal;
+}
+.odea-static .is-source {
+  color: var(--color-faint);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+.odea-static .diagram {
+  text-align: center;
+}
+.odea-static .diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+/* 画不出来时那段源码照常靠左 */
+.odea-static .diagram pre {
+  text-align: start;
+}
+.odea-static .diagram-error {
+  margin-top: 0.4em;
+  color: var(--color-danger);
+  font-size: 0.85em;
+  text-align: start;
+}
+.odea-static hr {
+  margin: 1.6em 0;
+  border: 0;
+  border-top: 1px solid var(--color-line-strong);
+}
+
+/* ---------- 目录、嵌入、脚注 ---------- */
+
+.odea-static .toc {
+  border: 1px solid var(--color-line-strong);
+  border-radius: 10px;
+  padding: 10px 16px 12px;
+}
+.odea-static .toc-title {
+  margin-bottom: 4px;
+  color: var(--color-faint);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.odea-static .toc ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.odea-static .toc li {
+  padding-left: calc(var(--depth, 0) * 1.2em);
+  line-height: 1.8;
+}
+.odea-static .toc a {
+  color: var(--color-body);
+  text-decoration: none;
+}
+.odea-static .toc-empty {
+  color: var(--color-muted);
+  font-size: 0.9em;
+}
+.odea-static .embed {
+  border: 1px solid var(--color-line-strong);
+  border-radius: 8px;
+  padding: 10px 18px 12px;
+}
+.odea-static .embed-head {
+  margin-bottom: 4px;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+.odea-static .embed-section {
+  color: var(--color-muted);
+  font-weight: 400;
+}
+/* `![[说明书.pdf]]` 这类附件：导出的页面里打不开它，只写名字和类型（编辑器里是能打开的卡片） */
+.odea-static .attachment {
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-xs, 4px);
+  padding: 0 0.4em;
+  color: var(--color-ink);
+  white-space: nowrap;
+}
+.odea-static .attachment-kind {
+  margin-left: 0.4em;
+  color: var(--color-muted);
+  font-size: 0.86em;
+}
+/* 脚注：正文里是主色的小圆角徽章（同编辑器的 .cm-odea-footnote.is-ref），收在最后一节 */
+.odea-static sup.footnote-ref {
+  font-size: inherit;
+  line-height: 0;
+  vertical-align: baseline;
+}
+.odea-static .footnote-ref a {
+  position: relative;
+  top: -0.55em;
+  display: inline-block;
+  min-width: 1.3em;
+  margin: 0 0.12em 0 0.06em;
+  border-radius: 999px;
+  background: var(--color-accent-wash);
+  padding: 0 0.36em;
+  color: var(--color-accent);
+  font-family: var(--font-sans);
+  font-size: 0.7em;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-align: center;
+  text-decoration: none;
+  print-color-adjust: exact;
+}
+.odea-static .footnotes {
+  margin-top: 2em;
+  border-top: 1px solid var(--color-line);
+  padding-top: 0.8em;
+  color: var(--color-muted);
+  font-size: 0.9em;
+}
+.odea-static .footnotes ol {
+  margin: 0;
+  padding-left: 1.4em;
+}
+.odea-static .footnote-back {
+  text-decoration: none;
+}
+
+/* ---------- 印在纸上 ---------- */
+
+@media print {
+  .odea-static pre.code {
+    overflow: visible;
+    white-space: pre-wrap;
+  }
+  .odea-static :is(.table-wrap, .math-display) {
+    overflow: visible;
+  }
+  /* 只给不会很高的东西：长的代码块、callout 设了 avoid 的话，前一页会空出一大截 */
+  .odea-static :is(.math-display, .diagram, img, tr, .callout-head) {
+    break-inside: avoid;
+  }
+  .odea-static :is(h1, h2, h3, h4, h5, h6) {
+    break-after: avoid;
+  }
+  .odea-static .footnote-back {
+    display: none;
+  }
+}

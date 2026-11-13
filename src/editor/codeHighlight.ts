@@ -11,7 +11,8 @@ import { tags as t } from "@lezer/highlight";
  * 颜色全部走 CSS 变量（globals.css 的 `--code-*`），亮暗主题各一套，
  * 这里只发类名。
  */
-const codeHighlightStyle = HighlightStyle.define([
+/** 静态渲染（render/staticHtml.ts）也用它给代码块上色：同一套 tok-* 类名 */
+export const codeHighlightStyle = HighlightStyle.define([
   { tag: [t.keyword, t.modifier, t.controlKeyword, t.operatorKeyword], class: "tok-keyword" },
   { tag: [t.definitionKeyword, t.moduleKeyword], class: "tok-keyword" },
   { tag: [t.string, t.special(t.string), t.character, t.regexp], class: "tok-string" },

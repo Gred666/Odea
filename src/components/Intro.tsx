@@ -125,7 +125,7 @@ export function Intro() {
     () => `${START_STROKE + (STROKE_WIDTH - START_STROKE) * shrunk.get()}px`,
   );
   // 蓝点长出来、缩回原样都改半径，不用 transform: scale —— 圆是矢量，每一帧按当时的大小重画
-  //（CLAUDE.md 动效规矩 5）
+  //（docs/PITFALLS/动效.md 规矩 5）
   const dotR = useTransform(() => dot.get() * (START_DOT_R + (DOT.r - START_DOT_R) * shrunk.get()));
   const dotEl = useRef<SVGCircleElement>(null);
   useMotionValueEvent(dotR, "change", (value) =>

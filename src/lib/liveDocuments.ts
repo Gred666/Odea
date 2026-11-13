@@ -43,6 +43,8 @@ export interface VisibleDocument {
   focused: boolean;
   /** 编辑器还没挂上时的正文 */
   bodyMd: string;
+  /** 在仓库里的路径（导出时相对路径的图片按它解析）；还没有文件的文档没有 */
+  relPath?: string;
 }
 
 const visible = new Map<number, VisibleDocument>();

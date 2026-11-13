@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from "react";
 
 const EXAMPLES: [string, string][] = [
   ["复盘 交易", "标题或正文里有这几个词"],
-  ["#复盘", "正文里的标签"],
+  ["#复盘", "标签：正文里的，或属性块 tags 里的"],
   ["in:交易", "在树上这个文件夹里"],
   ["updated:7d", "7 天内改过（d 天 · w 周 · m 月）"],
   ["has:todo", "有没勾的待办"],

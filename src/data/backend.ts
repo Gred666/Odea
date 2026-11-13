@@ -1,6 +1,13 @@
-import { events, type Result as IpcResult, commands } from "@/lib/bindings";
+import {
+  events,
+  type DocProperties,
+  type Result as IpcResult,
+  type PropertyCatalog,
+  commands,
+} from "@/lib/bindings";
 import { isTauri, thisWindow } from "@/lib/tauri";
 import { installedPlugins } from "@/plugins/registry";
+import { primeProperties } from "@/properties/store";
 import type {
   AppUpgrade,
   Attachment,
@@ -99,6 +106,33 @@ export interface Backend {
   treeFiles(): Promise<TreeFile[]>;
   /** 树上的一个文件：用系统的默认程序打开，reveal 时在文件管理器里定位它 */
   treeFileOpen(relPath: string, reveal: boolean): Promise<void>;
+  /** 整个仓库里的附件（相对仓库的路径）：`![[图.png]]`、`![[说明书.pdf]]` 按名字在这里面找（lib/wikiFiles.ts） */
+  vaultAttachments(): Promise<string[]>;
+  /** 附件清单里的一个文件：用系统的默认程序打开，reveal 时在文件管理器里定位它（只认清单里有的） */
+  vaultAttachmentOpen(relPath: string, reveal: boolean): Promise<void>;
+  /** 导出前先弹「另存为」（format：html / pdf），返回选的路径；取消了是 null（print.rs） */
+  exportPick(title: string, format: "html" | "pdf"): Promise<string | null>;
+  /** 导出成 HTML：写到刚在「另存为」里选的路径 */
+  exportHtml(path: string, html: string): Promise<void>;
+  /**
+   * 导出成 PDF。Windows：直接写到刚在「另存为」里选的路径，返回 true；
+   * 别的平台（path 给 null）开一个窗口弹系统的打印对话框，返回 false
+   */
+  exportPdf(
+    path: string | null,
+    title: string,
+    html: string,
+    widthMm: number,
+    heightMm: number,
+  ): Promise<boolean>;
+  /** 导出整个文件夹成网页：选放在哪，在那里新建一个以 title 命名的文件夹，返回它；取消了是 null */
+  exportFolderPick(title: string): Promise<string | null>;
+  /** 往刚建的导出文件夹里写一页（rel：里面的相对路径，正斜杠） */
+  exportFolderWrite(root: string, rel: string, html: string): Promise<void>;
+  /** 写完了：这个文件夹不能再往里写 */
+  exportFolderDone(root: string): Promise<void>;
+  /** 导出时把一张本机图片读成 data: 地址（只认图片）；读不到是 null */
+  exportImage(path: string): Promise<string | null>;
   /* ---- 逻辑目录（docs/仓库与启动器.md §7）：树在清单里，文件夹不在硬盘上 ---- */
   /** 树上的节点：文件夹、智能文件夹、放在树上的笔记（不是逻辑目录报错） */
   treeView(): Promise<TreeNode[]>;
@@ -151,6 +185,14 @@ export interface Backend {
   vaultRelayout(): Promise<VaultInfo>;
   /** 在系统的文件管理器里定位这篇文档的文件 */
   vaultReveal(target: DocumentRef): Promise<void>;
+  /** 一篇的属性：属性块里用户自己的那几行（docs/提醒与属性.md §3） */
+  docProperties(target: DocumentRef): Promise<DocProperties>;
+  /** 换掉一篇的属性：只动属性块里用户自己的那几行 */
+  docSetProperties(target: DocumentRef, text: string): Promise<DocProperties>;
+  /** 整个仓库的属性一览（加属性、填值时的提示）和记着的类型 */
+  propertyCatalog(): Promise<PropertyCatalog>;
+  /** 记下（null 是忘掉）一个键是什么类型，返回记着的全部 */
+  setPropertyType(key: string, kind: string | null): Promise<Record<string, string>>;
   /** 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（转之前给用户看） */
   docLegacyText(target: DocumentRef): Promise<LegacyText>;
   /** 转成 UTF-8，原文另存在旁边。fingerprint 是 docLegacyText 给的，文件之后被改过就不转 */
@@ -243,10 +285,17 @@ async function unwrap<T>(request: Promise<IpcResult<T, unknown>>): Promise<T> {
   return result.data;
 }
 
+/** 取到、存好一篇笔记：属性跟着放进属性面板的缓存（面板第一帧就画得出来，正文不会再往下跳） */
+function withProperties(note: Note): Note {
+  primeProperties({ type: "note", key: note.id }, note.properties ?? "", !note.notUtf8);
+  return note;
+}
+
 const tauriBackend: Backend = {
   noteList: (archived) => unwrap(commands.noteList(archived)),
-  noteGet: (id) => unwrap(commands.noteGet(id)) as Promise<Note>,
-  noteSave: (id, contentMd, base) => unwrap(commands.noteSave(id, contentMd, base)),
+  noteGet: async (id) => withProperties((await unwrap(commands.noteGet(id))) as Note),
+  noteSave: async (id, contentMd, base) =>
+    withProperties(await unwrap(commands.noteSave(id, contentMd, base))),
   noteRename: (id, title) => unwrap(commands.noteRename(id, title)),
   noteSetPinned: async (id, pinned) => {
     await unwrap(commands.noteSetPinned(id, pinned));
@@ -285,6 +334,24 @@ const tauriBackend: Backend = {
   treeFileOpen: async (relPath, reveal) => {
     await unwrap(commands.treeFileOpen(relPath, reveal));
   },
+  vaultAttachments: () => unwrap(commands.vaultAttachments()),
+  vaultAttachmentOpen: async (relPath, reveal) => {
+    await unwrap(commands.vaultAttachmentOpen(relPath, reveal));
+  },
+  exportPick: (title, format) => unwrap(commands.exportPick(title, format)),
+  exportHtml: async (path, html) => {
+    await unwrap(commands.exportHtml(path, html));
+  },
+  exportPdf: (path, title, html, widthMm, heightMm) =>
+    unwrap(commands.exportPdf(path, title, html, widthMm, heightMm)),
+  exportFolderPick: (title) => unwrap(commands.exportFolderPick(title)),
+  exportFolderWrite: async (root, rel, html) => {
+    await unwrap(commands.exportFolderWrite(root, rel, html));
+  },
+  exportFolderDone: async (root) => {
+    await unwrap(commands.exportFolderDone(root));
+  },
+  exportImage: (path) => unwrap(commands.exportImage(path)),
   treeView: () => unwrap(commands.treeView()),
   treeAddShortcut: (id, folder) => unwrap(commands.treeAddShortcut(id, folder)),
   treeRemoveShortcut: async (node) => {
@@ -318,6 +385,11 @@ const tauriBackend: Backend = {
   vaultReveal: async (target) => {
     await unwrap(commands.vaultReveal(target));
   },
+  docProperties: (target) => unwrap(commands.docProperties(target)),
+  docSetProperties: (target, text) => unwrap(commands.docSetProperties(target, text)),
+  propertyCatalog: () => unwrap(commands.vaultPropertyCatalog()),
+  setPropertyType: async (key, kind) =>
+    (await unwrap(commands.vaultSetPropertyType(key, kind))) as Record<string, string>,
   docLegacyText: (target) => unwrap(commands.docLegacyText(target)),
   docConvertUtf8: async (target, fingerprint) => {
     await unwrap(commands.docConvertUtf8(target, fingerprint));

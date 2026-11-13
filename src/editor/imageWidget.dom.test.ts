@@ -3,7 +3,8 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
-import { typoraDecorations } from "./MarkdownEditor";
+import { knownWikiTitles, typoraDecorations } from "./MarkdownEditor";
+import { wikiImages } from "./html";
 import { markdownSupport } from "./markdownParser";
 import { selectionOpensRange } from "./markdownStyleRegistry";
 import { resizedImageSource } from "./widgets";
@@ -123,5 +124,61 @@ describe("改图片大小", () => {
     // 同一个 <img> 就地改了尺寸，没有重新加载
     expect(imageOf(parent)).toBe(image);
     expect(image?.style.width).toBe("");
+  });
+});
+
+describe("Obsidian 的 ![[图.png]]", () => {
+  const files: Record<string, string> = { "图.png": "附件/图.png" };
+  const resolver = (name: string) =>
+    files[name] ? { rel: files[name]!, src: `asset:${files[name]}` } : null;
+
+  function mountWiki(doc: string, anchor = 0) {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc,
+        selection: { anchor },
+        extensions: [
+          markdownSupport(),
+          typoraDecorations,
+          wikiImages.of(resolver),
+          knownWikiTitles.of(new Set(["周报"])),
+        ],
+      }),
+    });
+    views.push(view);
+    return { parent, view };
+  }
+
+  it("draws the file it finds by name, with the size written after the bar", () => {
+    const { parent } = mountWiki("前\n\n![[图.png|240]]\n\n后");
+    const image = imageOf(parent);
+    expect(image?.getAttribute("src")).toBe("asset:附件/图.png");
+    expect(image?.style.width).toBe("240px");
+    expect(text(parent)).toBe("前后");
+  });
+
+  it("says so when the vault has no such file", () => {
+    const { parent } = mountWiki("![[没有.png]]\n\n后");
+    expect(imageOf(parent)?.title).toBe("仓库里找不到「没有.png」");
+  });
+
+  it("writes a new width back in the same syntax", () => {
+    expect(resizedImageSource("![[图.png]]", "wiki", 320)).toBe("![[图.png|320]]");
+    expect(resizedImageSource("![[附件/图.png|300x200]]", "wiki", null)).toBe("![[附件/图.png]]");
+    expect(resizedImageSource("![[图.png|流程图]]", "wiki", 100)).toBe("![[图.png|100]]");
+    expect(resizedImageSource("![图](a.png)", "wiki", 100)).toBeNull();
+  });
+
+  it("does not paint links to attachments as missing notes", () => {
+    const doc = "[[图.png]] 和 [[没写的]]\n\n后";
+    const { parent } = mountWiki(doc, doc.length);
+    const links = [...parent.querySelectorAll(".cm-odea-wikilink")];
+    expect(links.map((link) => [link.textContent, link.classList.contains("is-missing")])).toEqual([
+      ["图.png", false],
+      ["没写的", true],
+    ]);
   });
 });

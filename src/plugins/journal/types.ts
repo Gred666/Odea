@@ -45,6 +45,8 @@ export interface Task {
   timeLabel: string | null;
   /** 分类：任务里的第一个 #标签 */
   category: string | null;
+  /** 写了 ⏰ 的：提醒的时刻 `YYYY-MM-DD HH:MM`（docs/提醒与属性.md §1.2） */
+  remindAt?: string | null;
   /** 写着这条任务的那篇文档（日历里点「出处」跳过去）；浏览器预览里的演示任务没有 */
   source?: DocumentRef | null;
   /** 在那篇正文里的行号（从 0 开始） */

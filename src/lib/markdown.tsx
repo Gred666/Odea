@@ -275,7 +275,9 @@ export function renderMarkdown(md: string, ns = "h"): ReactNode[] {
           b.items.map((it, j) => (
             <li key={`${key}-${it.text.slice(0, 24)}`}>
               {it.checked !== null && <input type="checkbox" checked={it.checked} disabled />}
-              {renderInline(it.text, `${key}-${j}`)}
+              {/* 任务列表的 li 是 flex（勾选框和字并排）：字得包一层，不然字和行内代码各成一个
+                  flex 子项，`/`、`[[` 这种行内代码被挤成单独一列（2026-11-11 嵌入卡片里看到的） */}
+              <span>{renderInline(it.text, `${key}-${j}`)}</span>
             </li>
           )),
         );

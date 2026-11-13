@@ -2,6 +2,7 @@ import { useApp } from "@/app/store";
 import { isMac } from "@/lib/platform";
 import { type DocumentType, type Plugin, registerTemplates } from "@/plugins/registry";
 import {
+  Bell,
   CalendarCheck,
   CalendarDays,
   CalendarOff,
@@ -12,6 +13,8 @@ import {
 import { CalendarPanel } from "./CalendarView";
 import { JournalEffects } from "./Effects";
 import { journalSwitchNext } from "./JournalSwitcher";
+import { openReminderSettings } from "./ReminderSettings";
+import { captureToToday } from "./capture";
 import { useJournalDocument } from "./documents";
 import { useJournal } from "./store";
 import { TEMPLATES } from "./templates";
@@ -153,6 +156,15 @@ export const journalPlugin: Plugin = {
       keywords: "journal switch team personal 切换 日程 团队 个人 仓库 今日 todo 目标 日历",
       run: () => void journalSwitchNext(),
     },
+    {
+      id: "journal-reminders",
+      group: "文件",
+      icon: Bell,
+      label: "提醒设置…",
+      hint: "任务写了几点，到点弹通知、响一声；提前多久、用什么声音",
+      keywords: "reminder notification alarm sound 提醒 通知 到点 闹钟 声音 提示音 提前 勿扰 ⏰",
+      run: openReminderSettings,
+    },
   ],
   toggle: {
     off: {
@@ -170,6 +182,8 @@ export const journalPlugin: Plugin = {
     keywords: "journal 日程 日记 今日 todo 目标 goal 日历 calendar 启用 开启 关闭 obsidian",
   },
   applyChange: (change) => useJournal.getState().applyChange(change),
+  // 全局快捷键速记：记一行进今日TODO（capture.ts）
+  capture: (text) => captureToToday(text),
   reset: () => useJournal.getState().reset(),
   // 后台把文件读完了：延续来的「今天」是按读了一半的索引找的「之前最近一天」，当日安排和记号也重取
   reindexed: () => {

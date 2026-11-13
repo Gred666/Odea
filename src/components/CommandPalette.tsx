@@ -1,5 +1,6 @@
 import { openDocument } from "@/app/navigate";
 import { type PaletteDialog, hasListColumn, useApp } from "@/app/store";
+import { DEFAULT_BODY_SIZE, MEASURES, stepBodySize } from "@/app/typography";
 import { useRelays } from "@/collab/relayStore";
 import { overlapOf, sessionName, useCollab } from "@/collab/store";
 import { releaseOf } from "@/content/changelog";
@@ -31,15 +32,21 @@ import {
   pluginNavItems,
 } from "@/plugins/registry";
 import { runScriptedCommand, scriptedCommands } from "@/plugins/scripted";
+import { requestAddProperty, setPropertySource, usePropertyView } from "@/properties/store";
 import {
+  AArrowDown,
+  AArrowUp,
   Archive,
   ArchiveX,
   ArrowDown,
   ArrowUp,
   BookOpen,
+  Braces,
   CircleFadingArrowUp,
   Cloud,
   CornerDownLeft,
+  FileCode,
+  FileDown,
   FileText,
   FolderInput,
   FolderOpen,
@@ -51,10 +58,12 @@ import {
   Keyboard,
   Library,
   ListCollapse,
+  ListPlus,
   ListTree,
   LogOut,
   Monitor,
   Moon,
+  MoveHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -67,6 +76,7 @@ import {
   Sun,
   TextSearch,
   Trash2,
+  Type,
   Users,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -159,7 +169,12 @@ export function CommandPalette({
   const theme = useApp((s) => s.theme);
   const setTheme = useApp((s) => s.setTheme);
   const reduceMotion = useApp((s) => s.reduceMotion);
+  const propertySource = usePropertyView((s) => s.source);
   const setReduceMotion = useApp((s) => s.setReduceMotion);
+  const bodySize = useApp((s) => s.bodySize);
+  const setBodySize = useApp((s) => s.setBodySize);
+  const measure = useApp((s) => s.measure);
+  const setMeasure = useApp((s) => s.setMeasure);
   const noteFolder = useApp((s) => s.noteFolder);
   const notes = useData((s) => s.notes);
   const archived = useData((s) => s.archived);
@@ -276,6 +291,27 @@ export function CommandPalette({
         keywords: `主题 外观 theme ${keywords}`,
         run: () => setTheme(pref),
       }) satisfies Item;
+    // 正文字号、行宽（app/typography.ts）。没有设置页，命令面板就是入口；Ctrl+= / Ctrl+- 已经是标题升降级，不另给快捷键
+    const sizeItem = (
+      id: string,
+      label: string,
+      icon: LucideIcon,
+      to: number | null,
+      keywords: string,
+    ) =>
+      to === null || to === bodySize
+        ? []
+        : [
+            {
+              id,
+              group: "外观",
+              icon,
+              label,
+              hint: `现在 ${bodySize}px，改成 ${to}px`,
+              keywords: `正文 字号 字体 文字 大小 font size text ${keywords}`,
+              run: () => setBodySize(to),
+            } satisfies Item,
+          ];
 
     return [
       {
@@ -336,6 +372,42 @@ export function CommandPalette({
               dialog: "history",
               run: () => setHistoryFor(docTarget),
             } satisfies Item,
+            // 属性（docs/提醒与属性.md §3）：标题下面加一条，正在写的那一篇的属性面板接
+            {
+              id: "add-property",
+              group: "操作",
+              icon: ListPlus,
+              label: "添加属性",
+              hint: isMac ? "Cmd+;" : "Ctrl+;",
+              keywords:
+                "property properties frontmatter yaml metadata 属性 元数据 字段 标签 tags 状态 截止 shuxing",
+              run: () => requestAddProperty(docTarget),
+            } satisfies Item,
+            // 导出（export/document.ts，用到才加载）：正在写的那个窗格里的那一篇
+            {
+              id: "export-pdf",
+              group: "操作",
+              icon: FileDown,
+              label: "导出为 PDF…",
+              hint: "按页面设置排（纸张、页眉页脚），图片、公式、图表都在",
+              keywords: "export pdf 导出 打印 print 分享 发给别人 存成 daochu",
+              run: () =>
+                void import("@/export/document").then((module) =>
+                  module.exportFocusedDocument("pdf"),
+                ),
+            } satisfies Item,
+            {
+              id: "export-html",
+              group: "操作",
+              icon: FileCode,
+              label: "导出为 HTML…",
+              hint: "一个文件，图片嵌在里面，浏览器直接打开",
+              keywords: "export html 导出 网页 web 分享 发布 存成 daochu",
+              run: () =>
+                void import("@/export/document").then((module) =>
+                  module.exportFocusedDocument("html"),
+                ),
+            } satisfies Item,
           ]
         : []),
 
@@ -358,6 +430,15 @@ export function CommandPalette({
       themeItem("dark", "切换到暗色", Moon, "dark 深色 夜间 黑 暗"),
       themeItem("system", "主题跟随系统", Monitor, "system auto 自动 系统"),
       {
+        id: "properties-view",
+        group: "外观",
+        icon: Braces,
+        label: propertySource ? "属性显示成面板" : "属性显示成源码",
+        hint: propertySource ? "当前：YAML 源码" : "标题下面的属性直接显示成 YAML",
+        keywords: "properties frontmatter yaml source 属性 源码 面板 元数据",
+        run: () => setPropertySource(!propertySource),
+      },
+      {
         id: "reduce-motion",
         group: "外观",
         icon: Sparkles,
@@ -366,6 +447,44 @@ export function CommandPalette({
         keywords: "动效 动画 motion animation reduce",
         run: () => setReduceMotion(!reduceMotion),
       },
+      ...sizeItem(
+        "body-size-up",
+        "正文字号大一号",
+        AArrowUp,
+        stepBodySize(bodySize, 1),
+        "放大 调大 大一点 bigger larger",
+      ),
+      ...sizeItem(
+        "body-size-down",
+        "正文字号小一号",
+        AArrowDown,
+        stepBodySize(bodySize, -1),
+        "缩小 调小 小一点 smaller",
+      ),
+      ...sizeItem(
+        "body-size-reset",
+        "正文字号恢复默认",
+        Type,
+        DEFAULT_BODY_SIZE,
+        "默认 重置 恢复 reset default",
+      ),
+      ...MEASURES.map(
+        (option) =>
+          ({
+            id: `measure-${option.id}`,
+            group: "外观",
+            icon: MoveHorizontal,
+            label: `行宽：${option.label}`,
+            hint:
+              measure === option.id
+                ? "当前"
+                : option.chars
+                  ? `每行最多约 ${option.chars} 字`
+                  : "正文区多宽就多宽",
+            keywords: "行宽 宽度 行长 每行 字数 版心 正文 width line length measure 窄 宽 铺满",
+            run: () => setMeasure(option.id),
+          }) satisfies Item,
+      ),
       // 今日TODO、目标没有那一栏：那两页不给这一条（和正文底下状态栏左端的开关一样）
       ...(hasListColumn(workspace)
         ? [
@@ -427,6 +546,43 @@ export function CommandPalette({
         keywords: "trash recycle bin 回收站 删除 恢复 找回 误删 undo",
         dialog: "trash",
         run: () => setTrashOpen(true),
+      },
+      // 导出整个文件夹（components/ExportDialog.tsx）：默认是列表栏现在停着的那个文件夹
+      {
+        id: "export-folder",
+        group: "文件",
+        icon: FolderOutput,
+        label: "导出整个文件夹…",
+        hint: "合成一份 PDF，或者一个文件夹的网页",
+        keywords: "export folder 导出 文件夹 整个 全部 批量 pdf html 网页 打印 合并 daochu",
+        dialog: "export",
+        run: () =>
+          useApp.getState().setExportDialog({
+            kind: "folder",
+            folder: smartQuery(noteFolder) === undefined ? noteFolder : "",
+          }),
+      },
+      // 全局快捷键速记（components/CaptureSettingsDialog.tsx）
+      {
+        id: "quick-capture",
+        group: "文件",
+        icon: Keyboard,
+        label: "速记快捷键…",
+        hint: "应用在后台时按快捷键弹小窗，记一行进今日TODO",
+        keywords:
+          "quick capture hotkey global shortcut 速记 快捷键 全局 小窗 今日 todo 待办 记一下 inbox",
+        dialog: "capture",
+        run: () => useApp.getState().setCaptureSettingsOpen(true),
+      },
+      {
+        id: "page-setup",
+        group: "文件",
+        icon: FileDown,
+        label: "PDF 页面设置…",
+        hint: "纸张、方向、页边距、页眉页脚",
+        keywords: "page setup paper pdf 页面 纸张 a4 横向 页边距 页眉 页脚 页码 打印 print",
+        dialog: "export",
+        run: () => useApp.getState().setExportDialog({ kind: "page" }),
       },
       logical
         ? {
@@ -725,7 +881,12 @@ export function CommandPalette({
     theme,
     setTheme,
     reduceMotion,
+    propertySource,
     setReduceMotion,
+    bodySize,
+    setBodySize,
+    measure,
+    setMeasure,
     panelCollapsed,
     setPanelCollapsed,
     plugins,

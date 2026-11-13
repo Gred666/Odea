@@ -206,8 +206,16 @@ interface DataState {
   /** 文件树上列的图片、PDF（本地目录；跟着 refreshFolders 一起取） */
   files: TreeFile[];
   refreshFolders: () => Promise<void>;
+  /**
+   * 整个仓库里的附件（图片、PDF、文档、音视频……，相对仓库的路径）：`![[图.png]]`、`![[说明书.pdf]]`
+   * 按名字在这里面找（lib/wikiFiles.ts）。启动后补取，vault-changed 说附件变了再取
+   */
+  attachments: string[];
+  refreshAttachments: () => Promise<void>;
   /** 树上的一个文件：用系统的默认程序打开，reveal 时在文件管理器里定位它 */
   openTreeFile: (relPath: string, reveal?: boolean) => Promise<void>;
+  /** 附件清单里的一个文件（`![[说明书.pdf]]` 的卡片）：用系统的默认程序打开，reveal 时在文件管理器里定位它 */
+  openAttachment: (relPath: string, reveal?: boolean) => Promise<void>;
   /** 新建文件夹，返回它的路径（重名时后端加了序号）；失败返回 null */
   createFolder: (parent: string, name: string) => Promise<string | null>;
   /** 改名，返回新路径；失败返回 null。底下笔记的路径跟着换 */
@@ -834,6 +842,7 @@ export const useData = create<DataState>((set, get) => ({
     }
     if (change.docs.length) set((state) => ({ typedTick: state.typedTick + 1 }));
     if (change.folders) await get().refreshFolders();
+    if (change.attachments) await get().refreshAttachments();
 
     if (change.layout) set({ layoutChanged: true });
   },
@@ -1022,6 +1031,8 @@ export const useData = create<DataState>((set, get) => ({
             .catch(() => {
               // 取不到树上就只有笔记
             });
+        // `![[图.png]]`、`![[说明书.pdf]]` 要的附件清单：同样不耽误启动
+        void get().refreshAttachments();
       } catch (error) {
         set({ error: messageOf(error), loading: false });
       } finally {
@@ -1474,6 +1485,16 @@ export const useData = create<DataState>((set, get) => ({
 
   folders: [],
   files: [],
+  attachments: [],
+
+  refreshAttachments: async () => {
+    try {
+      const attachments = await (await backend()).vaultAttachments();
+      set({ attachments });
+    } catch {
+      // 取不到就照旧：`![[图.png]]` 先显示找不到
+    }
+  },
 
   refreshFolders: async () => {
     if (get().tree) return syncTree();
@@ -1495,6 +1516,14 @@ export const useData = create<DataState>((set, get) => ({
   openTreeFile: async (relPath, reveal = false) => {
     try {
       await (await backend()).treeFileOpen(relPath, reveal);
+    } catch (error) {
+      set({ error: messageOf(error) });
+    }
+  },
+
+  openAttachment: async (relPath, reveal = false) => {
+    try {
+      await (await backend()).vaultAttachmentOpen(relPath, reveal);
     } catch (error) {
       set({ error: messageOf(error) });
     }

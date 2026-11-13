@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>白板卡片实验</title>
+<!--
+  实验 2（docs/白板.md §9）：一张白板两百张卡片，不在编辑的用静态渲染器画，
+  点哪张才给哪张挂一个真的编辑器（应用里的 MarkdownEditor），改动写回整篇正文。
+  由 cards.mjs 打开，要开着开发服务器（launch.json 的 odea-browser-v4）：
+    http://127.0.0.1:1434/scripts/perf/board/cards.html
+-->
+<style>
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+  }
+  #world {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform-origin: 0 0;
+  }
+  .lab-card {
+    position: absolute;
+    box-sizing: border-box;
+    width: 300px;
+    padding: 10px 14px 12px;
+    border: 1px solid var(--color-line-strong);
+    border-radius: 8px;
+    background: var(--color-canvas);
+  }
+  #full {
+    position: fixed;
+    inset: 0;
+    overflow: auto;
+    background: var(--color-canvas);
+    display: none;
+  }
+  #full > div {
+    width: 860px;
+    margin: 0 auto;
+  }
+</style>
+<div id="world"></div>
+<div id="full" data-doc-scroller><div id="full-host"></div></div>
+<script type="module" src="./cards.ts"></script>

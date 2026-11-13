@@ -47,7 +47,7 @@ pub fn fingerprint_bytes(bytes: &[u8]) -> String {
 /// 只是满屏乱码，所以这一步不能省
 pub fn decode_legacy(bytes: &[u8]) -> Option<(&'static str, String)> {
     let utf16 = |rest: &[u8], little: bool| -> Option<String> {
-        if rest.len() % 2 != 0 {
+        if !rest.len().is_multiple_of(2) {
             return None;
         }
         let units: Vec<u16> = rest
@@ -160,7 +160,14 @@ pub struct FileEntry {
 
 /// 仓库里所有的 .md 文件，跳过隐藏的文件和目录。按路径排序，结果稳定。
 pub fn walk_markdown(root: &Path) -> Vec<FileEntry> {
+    walk(root, |_| false).0
+}
+
+/// 走一遍仓库：所有的 .md 文件（同 walk_markdown），外加 `want` 认的别的文件的相对路径
+/// （都按路径排序）。扫描时用它顺带收集图片，不用为 `![[图.png]]` 再走一遍
+pub fn walk(root: &Path, want: impl Fn(&str) -> bool) -> (Vec<FileEntry>, Vec<String>) {
     let mut out = Vec::new();
+    let mut others = Vec::new();
     let mut stack = vec![(root.to_path_buf(), String::new())];
     while let Some((dir, rel_dir)) = stack.pop() {
         let Ok(entries) = fs::read_dir(&dir) else {
@@ -189,11 +196,14 @@ pub fn walk_markdown(root: &Path) -> Vec<FileEntry> {
                         size: meta.len() as i64,
                     });
                 }
+            } else if file_type.is_file() && want(&name) {
+                others.push(rel);
             }
         }
     }
     out.sort_by(|a, b| a.rel.cmp(&b.rel));
-    out
+    others.sort();
+    (out, others)
 }
 
 /// 仓库里有没有任何 .md 文件

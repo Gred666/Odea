@@ -1,5 +1,4 @@
 import { winOf } from "@/lib/paneWindow";
-import { isTauri } from "@/lib/tauri";
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState } from "@codemirror/state";
 import { type EditorView, ViewPlugin } from "@codemirror/view";
@@ -91,21 +90,8 @@ export function normalizeLabel(label: string): string {
     .toLowerCase();
 }
 
-/** 只放行 http(s) / mailto / tel；本地路径和 javascript: 一律不开。 */
-export function isOpenableUrl(url: string): boolean {
-  return /^(?:https?:\/\/|mailto:|tel:)/i.test(url.trim());
-}
-
-/** 用系统浏览器打开。桌面端走 opener 插件，浏览器里退化成新标签页。 */
-export async function openExternal(url: string): Promise<void> {
-  if (!isOpenableUrl(url)) return;
-  if (isTauri) {
-    const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(url.trim());
-    return;
-  }
-  window.open(url.trim(), "_blank", "noopener,noreferrer");
-}
+// 编辑器之外（启动器、对话框）直接从 lib/openExternal 引，别为了它带上 CodeMirror
+export { isOpenableUrl, openExternal } from "@/lib/openExternal";
 
 /**
  * 按住 Mod 时在内容区上打 `data-mod-key`，CSS 据此把链接换成手形光标。

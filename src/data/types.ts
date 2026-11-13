@@ -98,6 +98,8 @@ export interface LegacyText {
 export interface Note extends NoteSummary {
   /** 正文，Markdown 源码 */
   contentMd: string;
+  /** 属性块里用户自己的那几行（和正文一起到，属性面板第一帧就画得出来，docs/提醒与属性.md §3） */
+  properties?: string;
 }
 
 /** 回收站里的一篇（Rust 的 TrashedNote）：回收站对话框列它们，恢复走 noteUndelete */
@@ -211,6 +213,8 @@ export interface VaultChange {
   foundCopies: string[];
   /** 「笔记」下面的文件夹变了（在资源管理器里建了、删了、改了名） */
   folders: boolean;
+  /** 仓库里的附件（图片、PDF……）多了、少了：`![[图.png]]` 按名字找的那份清单要重取（store 的 attachments） */
+  attachments?: boolean;
   /**
    * 仓库的摆法在别处变了（另一台设备开关了日程、转成了逻辑目录，同步过来）：问一句「切换过去」，
    * 点了才按新的摆法重新认文件、整页重载（vaultRelayout）

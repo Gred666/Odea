@@ -1,0 +1,225 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>白板缩放实验</title>
+<!--
+  实验 1（docs/白板.md §9）：白板缩放时，卡片里的字和描边清不清楚、跳不跳。
+  由 zoom.mjs 打开：?mode=transform|transform-wc|zoom|relayout&cards=40&z=1
+    transform     整个世界 transform: scale()
+    transform-wc  同上，再加 will-change: transform（缩放途中拿位图拉伸）
+    zoom          整个世界 CSS zoom（每次重新排版）
+    relayout      每张卡片自己 zoom，位置由脚本算、对齐到整物理像素
+  平移都放在外面一层，位移对齐到整物理像素。
+-->
+<style>
+  html,
+  body {
+    margin: 0;
+    background: #fff;
+    overflow: hidden;
+  }
+  body {
+    color: #33332f;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    letter-spacing: 0.01em;
+    -webkit-font-smoothing: antialiased;
+  }
+  #viewport {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 1200px;
+    height: 800px;
+    overflow: hidden;
+    background: #fff;
+  }
+  #pan,
+  #world {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform-origin: 0 0;
+  }
+  .slot {
+    position: absolute;
+  }
+  .card {
+    box-sizing: border-box;
+    width: 280px;
+    padding: 10px 14px 12px;
+    border: 1px solid #55554f;
+    border-radius: 8px;
+    background: #fff;
+  }
+  .card h4 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #1a1a18;
+  }
+  .card p {
+    margin: 0;
+  }
+  .card code {
+    font: 13px / 1 "Cascadia Mono", Consolas, monospace;
+    background: #f1f1ee;
+    padding: 1px 4px;
+    border-radius: 4px;
+  }
+</style>
+<div id="viewport">
+  <div id="pan"><div id="world"></div></div>
+</div>
+<script>
+  const query = new URLSearchParams(location.search);
+  const mode = query.get("mode") ?? "transform";
+  const count = Number(query.get("cards") ?? 40);
+  const world = document.getElementById("world");
+  const pan = document.getElementById("pan");
+  const dpr = devicePixelRatio;
+  const snap = (v) => Math.round(v * dpr) / dpr;
+
+  const TITLES = ["导出为什么慢", "图片并行读", "字体只嵌一次", "先量再改", "Typora 的往返", "阅读顺序"];
+  const BODIES = [
+    "两千篇笔记导出成 PDF 要 40 秒，其中一半花在把图片读成 data: 上，30 MB 以内的都读。",
+    "限 4 路并行。WebView2 的 PrintToPdf 一次只能排一页，排版本身是串行的，这一步省不掉。",
+    "KaTeX 的 woff2 嵌成 data: 约 350 KB，每篇都嵌一遍；改成第一篇嵌、后面的引用它。",
+    "The quick brown fox jumps over the lazy dog, 然后量一下 <code>export_image</code> 花了多久。",
+    "打开、改几个字、存，回来看标记还在不在：Obsidian 1.15 里一个字节都不差。",
+    "先分区，分区里先上后下、再左后右；右侧的目录树就是这份顺序，拖着能改。",
+    "12 × 3.5 = 42，1280 × 0.85 = 1088，房租 3200 一年是 38400。",
+  ];
+  const cards = [];
+  for (let i = 0; i < count; i++) {
+    const slot = document.createElement("div");
+    slot.className = "slot";
+    const card = document.createElement("div");
+    card.className = "card";
+    // 位置故意不落在整数上：真的白板上拖出来的位置就是这样
+    const x = 37.3 + (i % 5) * 312.4;
+    const y = 29.6 + Math.floor(i / 5) * 214.7;
+    const body = BODIES[i % BODIES.length] + (i % 3 === 0 ? BODIES[(i + 3) % BODIES.length] : "");
+    card.innerHTML = `<h4>${TITLES[i % TITLES.length]}</h4><p>${body.replace(/(，|。)/, "$1<span data-probe></span>")}</p>`;
+    slot.append(card);
+    world.append(slot);
+    cards.push({ slot, card, x, y });
+  }
+
+  let zoom = 1;
+  /** 以视口中心为不动点缩放 */
+  function setZoom(z) {
+    zoom = z;
+    const focus = { x: 600, y: 400 };
+    const tx = snap(600 - focus.x * z);
+    const ty = snap(400 - focus.y * z);
+    pan.style.transform = `translate(${tx}px, ${ty}px)`;
+    if (mode === "transform" || mode === "transform-wc") {
+      world.style.transform = `scale(${z})`;
+      if (mode === "transform-wc") world.style.willChange = "transform";
+    } else if (mode === "zoom") {
+      world.style.zoom = z;
+    }
+    for (const { slot, card, x, y } of cards) {
+      if (mode === "relayout") {
+        card.style.zoom = z;
+        slot.style.left = `${snap(x * z)}px`;
+        slot.style.top = `${snap(y * z)}px`;
+      } else {
+        slot.style.left = `${x}px`;
+        slot.style.top = `${y}px`;
+      }
+    }
+  }
+  setZoom(Number(query.get("z") ?? 1));
+
+  /** 每张卡片在「世界」里的高度、探针的位置（除掉缩放）：缩放时这些不该变 */
+  function metrics() {
+    return cards.map(({ card }) => {
+      const box = card.getBoundingClientRect();
+      const probe = card.querySelector("[data-probe]").getBoundingClientRect();
+      return {
+        h: box.height / zoom,
+        // 正文折成了几行（行高 15 × 1.7 = 25.5）
+        lines: Math.round(card.querySelector("p").getBoundingClientRect().height / zoom / 25.5),
+        px: (probe.left - box.left) / zoom,
+        py: (probe.top - box.top) / zoom,
+      };
+    });
+  }
+
+  /** 第 index 张卡片左上角在屏幕上的位置（CSS 像素）、描边按物理像素算多宽 */
+  function cardBox(index) {
+    const box = cards[index].card.getBoundingClientRect();
+    return { left: box.left, top: box.top, width: box.width, height: box.height };
+  }
+
+  const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+
+  /** 连着缩放 frames 帧，记每一帧「改样式 + 排版」花了多久、两帧隔了多久 */
+  async function animate(from, to, frames) {
+    const work = [];
+    const gaps = [];
+    let last = performance.now();
+    for (let i = 1; i <= frames; i++) {
+      await nextFrame();
+      const now = performance.now();
+      gaps.push(now - last);
+      last = now;
+      const z = from * (to / from) ** (i / frames);
+      const start = performance.now();
+      setZoom(z);
+      world.getBoundingClientRect(); // 把排版逼出来
+      work.push(performance.now() - start);
+    }
+    return { work, gaps };
+  }
+
+  /* ---------------- 截图的比较（在页面里解 PNG） ---------------- */
+
+  async function pixels(b64) {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const canvas = new OffscreenCanvas(img.width, img.height);
+    const g = canvas.getContext("2d");
+    g.drawImage(img, 0, 0);
+    return g.getImageData(0, 0, img.width, img.height);
+  }
+  async function diff(a64, b64) {
+    const [a, b] = [await pixels(a64), await pixels(b64)];
+    if (a.width !== b.width || a.height !== b.height) return { changed: -1, mean: -1 };
+    let changed = 0;
+    let strong = 0;
+    let sum = 0;
+    for (let i = 0; i < a.data.length; i += 4) {
+      const d =
+        Math.abs(a.data[i] - b.data[i]) +
+        Math.abs(a.data[i + 1] - b.data[i + 1]) +
+        Math.abs(a.data[i + 2] - b.data[i + 2]);
+      sum += d;
+      if (d > 6) changed++;
+      // 三个通道加起来差了 150 以上：肉眼看得出的那种（一个笔画的位置、有没有）
+      if (d > 150) strong++;
+    }
+    return { changed, strong, mean: +(sum / (a.data.length / 4)).toFixed(3) };
+  }
+  /**
+   * 横着穿过一条竖的描边取一排像素（设备像素坐标），数出几列是「实的」（就是描边的颜色）、
+   * 几列是「半透明的」（介于描边和底色之间）
+   */
+  async function edge(b64, x, y, span = 4) {
+    const image = await pixels(b64);
+    const cols = [];
+    for (let dx = -span; dx <= span; dx++) {
+      const i = (Math.round(y) * image.width + Math.round(x) + dx) * 4;
+      cols.push(image.data[i]);
+    }
+    const solid = cols.filter((v) => Math.abs(v - 0x55) <= 3).length;
+    const partial = cols.filter((v) => v > 0x58 && v < 0xfa).length;
+    return { solid, partial, cols };
+  }
+
+  window.board = { setZoom, metrics, cardBox, animate, diff, edge, nextFrame, mode };
+</script>

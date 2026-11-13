@@ -8,6 +8,8 @@ import {
   isRelativeRef,
   rewriteImageRefs,
   vaultPathOf,
+  wikiEmbeds,
+  wikiRef,
 } from "./attachments";
 
 /* 协作里的附件（attachments.ts）：主持人给 Rust 的引用表、访客要图片和给编辑器的解析器。
@@ -36,6 +38,7 @@ describe("正文里的图片", () => {
       "附件/e.gif",
     ]);
     expect(isRelativeRef("file:///C:/a.png")).toBe(false);
+    expect(isRelativeRef(wikiRef("图.png")), "按名字找的键不会和相对路径撞上").toBe(false);
     expect(isRelativeRef("\\\\server\\share\\a.png")).toBe(false);
   });
 
@@ -45,6 +48,39 @@ describe("正文里的图片", () => {
     expect(vaultPathOf("周会.md", "./附件/./x.png")).toBe("附件/x.png");
     expect(vaultPathOf("笔记/周会.md", "../../../etc/passwd")).toBeNull();
     expect(vaultPathOf("笔记\\工作\\周会.md", "..\\..\\附件\\a.png")).toBe("附件/a.png");
+  });
+});
+
+describe("Obsidian 的 ![[图.png]]、![[说明书.pdf]]", () => {
+  it("图片记成按名字找的键，访客一打开就要；PDF 这些只进主持人的引用表", () => {
+    const markdown = [
+      "![[图.png]] ![[图.png|300]] ![[附件\\流程.svg|流程图]]",
+      "![[说明书.pdf]] ![[周报]] ![[周报#下周]] ![[录音.m4a|会议]]",
+    ].join("\n");
+    expect(imageRefs(markdown)).toEqual(["wiki:/图.png", "wiki:/附件/流程.svg"]);
+    expect(wikiEmbeds(markdown, false)).toEqual([
+      "图.png",
+      "附件\\流程.svg",
+      "说明书.pdf",
+      "录音.m4a",
+    ]);
+    expect(wikiRef(" 附件\\流程.svg ")).toBe("wiki:/附件/流程.svg");
+  });
+
+  it("访客存一份时换的是名字那一段，尺寸、图注留着", () => {
+    const markdown = "![[图.png|300]] 和 ![[ 图.png ]]，![[别的.png]] 不动";
+    const out = rewriteImageRefs(markdown, new Map([[wikiRef("图.png"), "../附件/图-1.png"]]));
+    expect(out).toBe("![[../附件/图-1.png|300]] 和 ![[ ../附件/图-1.png ]]，![[别的.png]] 不动");
+  });
+
+  it("要到了的按名字给编辑器", async () => {
+    const fetch = vi.fn(async (_path: string) => ({ url: "asset://cache/图.png", file: null }));
+    const images = new GuestImages(fetch, () => {});
+    expect(images.resolver.wiki?.("图.png")).toBe("");
+    images.scan("![[图.png|300]]");
+    await vi.waitFor(() => expect(images.resolver.wiki?.("图.png")).toBe("asset://cache/图.png"));
+    expect(fetch).toHaveBeenCalledWith("wiki:/图.png");
+    images.destroy();
   });
 });
 

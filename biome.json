@@ -20,7 +20,6 @@
     "rules": {
       "recommended": true,
       "a11y": {
-        "useKeyWithClickEvents": "off",
         "useSemanticElements": "off"
       },
       "correctness": {

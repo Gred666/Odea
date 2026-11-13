@@ -1,0 +1,118 @@
+# 每次推送都跑的检查（docs/1110审查与研究.md §6、§12）。和本地提交前跑的是同一套：
+#
+#   前端：pnpm lint、pnpm exec tsc --noEmit、pnpm test、node scripts/a11y-names.mjs --check
+#   Rust：cd src-tauri; cargo test --no-default-features --lib，clippy 不许有警告
+#   绑定：重新导出 src/lib/bindings.ts，和提交的一样（Windows 上）
+#
+# Rust 只测不带 Tauri 的那部分（vault / sync / collab / team 这些，技术方案 §15）：不用装 WebKitGTK、
+# 不编 Tauri，几分钟跑完。命令层（commands.rs）和窗口那一层这里不编，发版打包时才编到
+#
+# Rust 放在 Linux 上跑：平时在 Windows 上开发，Windows 那一半本地就编过、测过；
+# cfg(not(windows)) 的那几段（collab/firewall.rs、memory.rs、workspace.rs）以前要到发版打包才第一次编到。
+# libssl-dev、pkg-config（git2 / ureq 在 Linux 上走 OpenSSL）GitHub 的 Ubuntu 镜像里本来就有
+#
+# 只管分支；打 tag 发版走 release.yml，那边自己再查一遍类型和前端测试
+name: 检查
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一个分支又推了一次：上一次还没跑完的作废
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: 前端（lint、类型、测试）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: lint
+        run: pnpm lint
+
+      - name: 类型检查
+        run: pnpm exec tsc --noEmit
+
+      - name: 前端测试
+        run: pnpm test
+
+      # 只放了图标、又没写 aria-label / title 的按钮（docs/1110审查与研究.md §6.2）
+      - name: 按钮都有可读的名字
+        run: node scripts/a11y-names.mjs --check
+
+  rust:
+    name: Rust 测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # 依赖的编译结果只在 master 上存：别的分支拿 master 的来用、不另存一份，不把缓存的配额占满
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      - name: cargo test --no-default-features --lib
+        run: cargo test --no-default-features --lib
+
+      # 有一条警告就算没过。--profile test 是连 #[cfg(test)] 的代码一起查（不能用 --tests：
+      # 那样 main.rs 也算进来，不带 Tauri 它编不过）
+      - name: clippy
+        run: |
+          cargo clippy --no-default-features --lib -- -D warnings
+          cargo clippy --no-default-features --lib --profile test -- -D warnings
+
+  # src/lib/bindings.ts 是 Rust 的命令和类型导出来的（tauri-specta），改了命令忘了重新导出，
+  # 前端照旧编得过、一调就错。这里重新导出一遍，和提交的不一样就算没过。
+  # 放在 Windows 上：要编 Tauri，Linux 上得先装 WebKitGTK；平时也是在 Windows 上导出的
+  bindings:
+    name: 前端绑定是不是最新
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      - name: 重新导出 src/lib/bindings.ts
+        working-directory: src-tauri
+        run: cargo run --example export_bindings --features typegen
+
+      - name: 和提交的比
+        run: git diff --exit-code -- src/lib/bindings.ts

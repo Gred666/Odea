@@ -20,7 +20,7 @@ import { Button, FIELD, PanelHeader } from "./parts";
    新装第一次打开、已经在运行时再双击图标、仓库窗口里「打开别的仓库…」时出现。
    打开了一个仓库，新窗口画出来以后它自己关掉（Rust 那边关）。
 
-   动效守 CLAUDE.md 的规矩：右边几屏之间只淡 opacity，不位移、不缩放。
+   动效守 docs/PITFALLS/动效.md 的规矩：右边几屏之间只淡 opacity，不位移、不缩放。
    ============================================================ */
 
 type Panel = "home" | "create" | "clone" | "join";
@@ -414,7 +414,7 @@ function CreatePanel({
       <p className="mt-4 text-[13px] text-muted" id="launcher-layout">
         文件夹
       </p>
-      {/* 选中只换底色和描边，直接换上（描边不做过渡，CLAUDE.md 规矩 2）。描边是 border 不是 ring：
+      {/* 选中只换底色和描边，直接换上（描边不做过渡，docs/PITFALLS/动效.md 规矩 2）。描边是 border 不是 ring：
           ring 是 box-shadow，粗细不取整到物理像素，1.5 倍屏上 1px 是一排实色 + 一排半透明的主色 */}
       <div
         role="radiogroup"

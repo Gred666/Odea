@@ -360,7 +360,7 @@ const ICON_MOTION: Record<string, { to: TargetAndTransition; origin: string }> =
   },
 };
 
-/** 窄栏那几项挪位置的曲线：起步就走、收尾短（CLAUDE.md 动效规矩 7） */
+/** 窄栏那几项挪位置的曲线：起步就走、收尾短（docs/PITFALLS/动效.md 规矩 7） */
 const SLIDE_EASE = "cubic-bezier(0.33, 1, 0.68, 1)";
 const SLIDE_MS = 240;
 /** 拿掉的那几项原地淡出；淡完下面的才滑上去 */
@@ -379,7 +379,7 @@ const ENTER_DELAY = 70;
  * 现在排版只变一次，动的都是合成器上的 opacity / transform（Web Animations），主线程再忙也照常走：
  * - 多出来的：挂上就占好格子，淡入；它下面的（「归档」）从原来的位置滑过去（FLIP）
  * - 拿掉的：先留在原来的格子里淡出（leaving，点不到），淡完撤掉，下面的再滑上去
- * 位置都是整 CSS 像素，可 1.25 倍屏上奇数格落在半个物理像素上：动之前先对齐（CLAUDE.md 规矩 3）。
+ * 位置都是整 CSS 像素，可 1.25 倍屏上奇数格落在半个物理像素上：动之前先对齐（docs/PITFALLS/动效.md 规矩 3）。
  */
 function useNavRows(
   listRef: React.RefObject<HTMLUListElement | null>,
@@ -523,7 +523,7 @@ function NavRow({
   }, [active, tapCount, icon, motionSpec, skipMotion]);
 
   return (
-    // 首屏错峰淡入。只淡 opacity，不位移（CLAUDE.md 动效规矩 1）。
+    // 首屏错峰淡入。只淡 opacity，不位移（docs/PITFALLS/动效.md 规矩 1）。
     // 之后插进来的、拿掉的由 useNavRows 用 Web Animations 淡 / 滑；一直待在自己的图层上（规矩 3）
     <motion.li
       data-nav={item.id}

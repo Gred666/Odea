@@ -23,9 +23,19 @@ import type {
   TrustedPeer,
 } from "@/lib/bindings";
 import { windowKind } from "@/lib/tauri";
+import { resolveVaultFile } from "@/lib/wikiFiles";
 import { holdTeamDoc } from "@/team/store";
 import { create } from "zustand";
-import { GuestImages, copyImages, dataUrlBase64, imageRefs, vaultPathOf } from "./attachments";
+import {
+  GuestImages,
+  copyImages,
+  dataUrlBase64,
+  imageRefs,
+  vaultPathOf,
+  wikiEmbeds,
+  wikiRef,
+  wikiRefName,
+} from "./attachments";
 import { peerColor } from "./colors";
 import type { SavedSnapshot } from "./external";
 import { keepGuestCopy } from "./keep";
@@ -279,6 +289,11 @@ export interface CollabState {
   /** 访客：粘贴 / 拖进来的文件交给主持人存进他的「附件」，回从那篇引用它的路径 */
   attachFiles(files: File[]): Promise<Attachment[]>;
   attachPaths(paths: string[]): Promise<Attachment[]>;
+  /**
+   * 访客：正文区那一篇里 `![[说明书.pdf]]` 的「打开」—— 向主持人要来（主持人按名字找，只给这篇的附件文件夹里的），
+   * 缓存在本机，用系统的程序打开。失败了提示
+   */
+  openAttachment(name: string): Promise<void>;
 }
 
 /* ---------------- 会话之外的东西（不进 React 的状态） ---------------- */
@@ -1505,6 +1520,18 @@ export const useCollab = create<CollabState>((set, get) => ({
     }
     return out;
   },
+  openAttachment: async (name) => {
+    const current = net;
+    const target = shownGuestDoc();
+    if (!current || !target) return;
+    useData.setState({ notice: `正在向主持人要「${name.trim()}」…` });
+    try {
+      await current.openAttachment(target.id, target.doc, wikiRef(name));
+      useData.setState({ notice: null });
+    } catch (error) {
+      useData.setState({ notice: null, error: `打不开「${name.trim()}」：${errorText(error)}` });
+    }
+  },
 }));
 
 /** 正文区那一篇（访客）：会话号、文档 id */
@@ -1760,12 +1787,19 @@ function watchHosted(
   let lastRefs = "";
   const pushRefs = () => {
     refsTimer = null;
-    const relPath = useData.getState().notes.find((note) => note.id === noteId)?.relPath;
+    const { notes, attachments } = useData.getState();
+    const relPath = notes.find((note) => note.id === noteId)?.relPath;
     if (!relPath) return;
-    const refs = imageRefs(session.toString()).flatMap((path) => {
-      const vaultPath = vaultPathOf(relPath, path);
+    const text = session.toString();
+    // 相对路径的照着这一篇的位置算；`![[图.png]]`、`![[说明书.pdf]]` 按名字在仓库里找（和编辑器一样）
+    const refs = imageRefs(text).flatMap((path) => {
+      const vaultPath = wikiRefName(path) === null ? vaultPathOf(relPath, path) : null;
       return vaultPath ? [{ path, vaultPath }] : [];
     });
+    for (const name of wikiEmbeds(text, false)) {
+      const vaultPath = resolveVaultFile(name, relPath, attachments);
+      if (vaultPath) refs.push({ path: wikiRef(name), vaultPath });
+    }
     const key = JSON.stringify(refs);
     if (key === lastRefs) return;
     lastRefs = key;

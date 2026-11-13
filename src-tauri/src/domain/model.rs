@@ -31,6 +31,9 @@ pub struct Note {
     /// 只能看 —— 保存、改名、置顶、移动、归档、删除后端都拒绝，不然原文就被写坏了
     /// （docs/1110审查与研究.md §5.1）
     pub not_utf8: bool,
+    /// 属性块里用户自己的那几行（应用的 id、created 这些不在里面）：和正文一起到，属性面板在第一帧就画得出来，
+    /// 正文不会等它到了再往下跳（docs/提醒与属性.md §3）
+    pub properties: String,
 }
 
 /// 列表里的一篇：Note 去掉正文。仓库里有多少篇列表就给多少篇，正文打开时再取（note_get）、
@@ -237,6 +240,9 @@ pub struct VaultChange {
     pub found_copies: Vec<String>,
     /// 「笔记」下面的文件夹变了（在资源管理器里建了、删了、改了名）
     pub folders: bool,
+    /// 仓库里的附件（图片、PDF……）多了、少了（`![[图.png]]` 按名字找的那份清单，Vault::attachments）
+    #[serde(default)]
+    pub attachments: bool,
     /// 仓库的摆法在别处变了（另一台设备开关了日程、转成了逻辑目录，同步过来）：要按新的摆法重新认文件、
     /// 整页重载，前端问一句「切换过去」（vault_relayout）。没切换之前照旧按原来的摆法
     pub layout: bool,

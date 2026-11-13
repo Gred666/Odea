@@ -1,5 +1,5 @@
-import { openExternal } from "@/editor/links";
 import { cn } from "@/lib/cn";
+import { openExternal } from "@/lib/openExternal";
 import { Copy, Github, Globe, LoaderCircle, Lock, Users } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {

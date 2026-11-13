@@ -1092,7 +1092,7 @@ impl Inner {
         // 在主持（或者在做客、接下游）的才接；我连着他看这一篇的不接（成了环）
         let hosted = |me: &Inner| {
             me.teams.lock().unwrap().get(&team_id).is_some_and(|team| {
-                team.hosted.contains(&doc) && !team.attached.get(&doc).is_some_and(|attached| attached.host == guest)
+                team.hosted.contains(&doc) && team.attached.get(&doc).is_none_or(|attached| attached.host != guest)
             })
         };
         if !hosted(&self) {
@@ -1120,7 +1120,7 @@ impl Inner {
             let mut teams = self.teams.lock().unwrap();
             let Some(team) = teams.get_mut(&team_id) else { break };
             // 不主持了（流收尾的那一刻）
-            if !team.guests.get(&doc).is_some_and(|guests| guests.get(&guest).is_some_and(|stream| stream.serial == serial)) {
+            if team.guests.get(&doc).is_none_or(|guests| guests.get(&guest).is_none_or(|stream| stream.serial != serial)) {
                 break;
             }
             match frame_kind {

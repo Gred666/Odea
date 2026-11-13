@@ -68,7 +68,7 @@ import { DialogLead, usePaletteBack } from "./PaletteBack";
 
    外壳和同步对话框一样：遮罩 + 从标题栏往下展开的实心卡片（popoverCard）。展开时只量第一帧，
    所以「正在准备邀请链接」和链接本身占同样的高度（技术方案 §10.1 第 5 条）。
-   会话条换一个看是当场换（只变底色、字色），不淡入不位移；提示卡、标签只淡 opacity（CLAUDE.md 动效规矩第 1 条）。
+   会话条换一个看是当场换（只变底色、字色），不淡入不位移；提示卡、标签只淡 opacity（docs/PITFALLS/动效.md 规矩第 1 条）。
    ============================================================ */
 
 const HEADER = 52;
@@ -1416,7 +1416,7 @@ export function CollabRequests() {
           role="alertdialog"
           aria-label={`${knock.name} 想加入`}
           data-collab-knock-toast
-          // 只淡入：不位移、不缩放（CLAUDE.md 动效规矩第 1 条）
+          // 只淡入：不位移、不缩放（docs/PITFALLS/动效.md 规矩第 1 条）
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, transition: tween.fast }}

@@ -201,7 +201,7 @@ mod tests {
         write(&base.join(IDENTIFIER).join("ontheway.db"), "旧库");
         write(&base.join("dev.odea.editor").join("config.json"), "新");
 
-        move_app_dirs_in(&[base.clone()], "dev.odea.editor");
+        move_app_dirs_in(std::slice::from_ref(&base), "dev.odea.editor");
 
         let new = base.join("dev.odea.editor");
         assert_eq!(fs::read_to_string(new.join("config.json")).unwrap(), "新");

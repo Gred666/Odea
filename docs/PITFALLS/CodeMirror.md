@@ -1,0 +1,26 @@
+# CodeMirror
+
+- **编辑器正文行高是 1.4**：以前 `.cm-editor` 上写着 1.82，但 CodeMirror 自带主题给 `.cm-scroller` 写了 `line-height: 1.4` 把它盖住了，正文从第一版起其实一直是 1.4。2026-10-06 确认保持 1.4，`globals.css` 改成在 `.odea-editor .cm-scroller` 上明写 1.4。17px 字一行只有 23.8px，字体框就占 22px，所以行内带底色的样式上下不能加 padding：`[[双链]]` 小块原来上下各 0.08em，底色冒出这一行 1.36px，把上一行链接的下划线盖掉了（每行 `position: relative`，后面的行整个画在前面的行上面）。`widgetSpacing.test.ts` 守着。
+- 块级 widget 的留白只能用 padding，**不能用 margin**：CodeMirror 用 `getBoundingClientRect` 量 widget 高度，margin 不在边框盒里，高度图比真实布局短，点击会定位到错误的行。`widgetSpacing.test.ts` 用正则守着。
+- 行内 `<img>` widget 同理：块级子元素的上下 margin 会穿透 `.cm-line` 折叠出去。
+- 改变行结构的装饰（折叠整行、块级 widget）必须来自 `StateField`，视口是在 ViewPlugin 更新之前算出来的。
+- 空围栏（只有开闭两行）不能折叠，折叠后再也点不进去。
+- Setext 下划线只藏 `===` 三个字符会留一条空行，得整行折叠；分隔线同理。
+- 收紧 Setext 不能把 lezer 自带的解析器从列表里拿掉：分隔线判断「这行该不该让给 Setext」认的是那个函数本身，拿掉了 `标题\n---` 永远是分隔线。只能留着它、每一段开头把它的那一份换成自己的（`leaf.parsers` 是公开的）；多行段落下面的 `---` 要自己 `finishLeaf` 收尾、这一行不吃掉，下一轮自然是分隔线。
+- 组字时别给组字那段字加标记：CodeMirror 保住组字的文本节点，连同包着它的标记一起原样沿用，新加的标记盖不上去（动了 DOM 输入法就断）。行装饰可以 —— 只改行的属性。也别在 compositionstart 里直接改 DOM：那时先只记一笔状态，第一笔 `input.type.compose` 的改动进来时（`transactionExtender`）再加。直接改 `.cm-line` 的 class 也不行，属性变化被观察器标脏，下次同步就被抹掉。
+- `overflow-x: auto` 隔不断最小宽度：里面是十几列的表，`.cm-content`（flex 子项，`min-width: auto`）照样被撑到表那么宽。要横向滑的块一律加 `contain: inline-size`。
+- CodeMirror 会拿同一个 widget 对象再 `toDOM` 一次（滚出视口又滚回来、旁边的块重排），`fresh` 只能管第一次，不然刚打开那篇的替身每滚回来一次就淡入一次。
+- `<u>` 的源码级配对以前是全文 `indexOf`，两个不相干段落里的 `<u>` 和 `</u>` 会配成一对；现在要求不跨空行。
+- 中文正文在 WebView2 里会被拼写检查画满红波浪线，`spellcheck="false"`。
+- `scrollHeight` 在滚动过程中会变（未渲染的行只有估算高度，滚过去才回填真实值；400 段文档从 17846 涨到 22286）。自绘滚动条的滑块要指数缓动跟随，不能每帧离散校正。
+- 外部回填（store → 编辑器）要用 annotation 标记，否则会被当成用户输入触发一次保存。
+- CommonMark 把任何没有定义的 `[文字]` 都解析成 `Link` 节点（短引用形式），`[!NOTE]`、`[TOC]`、`[^1]`、`[[双链]]` 里那层都是它。装饰层必须按内容分流，不能见 Link 就藏括号。
+- `HardBreak` 节点的末尾是换行符本身；行内 replace 装饰跨过换行会把两行拼成一行，替换范围必须停在 `to - 1`。
+- `LinkReference` 这类顶层节点的父节点是 `Document`，按「父节点是否被光标碰到」判断激活永远为真，只能看节点自己。
+- front matter 的 `---` 会被 CommonMark 解析成分隔线 + Setext 标题，两层装饰和目录收集都要先用 `frontMatterRange` 绕开；光标停在 0（新挂载的编辑器）不算点进了属性块，否则每篇一打开就是展开的 YAML。
+- 预览面板里 `navigator.clipboard.writeText` 会因权限被拒（真机不会），复制按钮要有 execCommand 退路并吞掉 rejection。
+- 用 `::before` 做行首提示（标题的 H2）要给 `width: max-content; white-space: nowrap`，否则 `right: 100%` 的绝对定位伪元素会被压成一列字。
+- **原生选区在一行里字号不一时高低不齐**：浏览器按每段文字自己的字框画底色，小字号的标记底下矮一截。所以选区是自己画的（`selectionLayer.ts`）。CodeMirror 的 `RectangleMarker.forRange` 一行的高度只看选区两端那两个字，两端都落在小标记上时整块也矮，得用 `Range.getClientRects` 补；它量的左右边界跟着视口里**第一行**的 padding 走，引用打头时整片选区都往右缩。
+- **widget 加载完变高了要自己 `view.requestMeasure()`**：CodeMirror 的 ResizeObserver 只理会距上次更新 75ms 以后的尺寸变化。刚粘贴的截图几十毫秒就加载完，光标、高度图都停在图片没高度的时候（光标画在图片中间）。图片、块级 HTML 里的图、mermaid 都这么做了，以后异步出内容的 widget 照办。
+- 列表项后面只有缩进的空白行不属于语法树里的任何一项；行首一个列表项的 `resolveInner(行尾, 1)` 在文末会落到 `Document` 上，找「光标在哪一项」时行尾要往左找（`resolveInner(pos, -1)`）。
+- 有序列表 `1. ` 下面要缩进三个空格才是子项（正文那一栏），两个空格还是同一级。CodeMirror 自带的缩进一律加 indentUnit（两个空格），在列表里用不得。

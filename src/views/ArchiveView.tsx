@@ -148,7 +148,7 @@ const ArchiveCard = memo(function ArchiveCard({
     <motion.div
       layout="position"
       layoutDependency={index}
-      // 进出只淡，不位移：行里是字，位移时整层当位图重采样，停下那一帧字会糊一下再变清楚（CLAUDE.md 动效规矩 1）
+      // 进出只淡，不位移：行里是字，位移时整层当位图重采样，停下那一帧字会糊一下再变清楚（docs/PITFALLS/动效.md 规矩 1）
       initial={appear ? { opacity: 0 } : false}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0, transition: tween.fast }}
@@ -206,7 +206,7 @@ const ArchiveCard = memo(function ArchiveCard({
           aria-label={`删除「${title}」`}
           title="删除（可以撤销）"
           onClick={() => actions.remove(note.id)}
-          // 一列每行都有：淡的是颜色，不是 opacity，不进合成层（CLAUDE.md 动效规矩 3）
+          // 一列每行都有：淡的是颜色，不是 opacity，不进合成层（docs/PITFALLS/动效.md 规矩 3）
           className="grid h-6 w-6 place-items-center rounded-md text-transparent transition-colors
                      duration-[150ms] hover:!text-danger focus-visible:text-muted group-hover:text-muted"
         >

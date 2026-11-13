@@ -6,7 +6,7 @@ import { type EditorView, type LayerMarker, RectangleMarker, layer } from "@code
    远端光标：别人的光标、选区和名字标签（docs/协同编辑.md §4.3「远端光标」）。
 
    画在 CodeMirror 的图层里，和自己的光标（smoothCaret.ts）、选区（selectionLayer.ts）一样。
-   - 位置变了直接落位，不做位移过渡（CLAUDE.md 动效规矩第 1 条）：别人打字时光标是一跳一跳的，
+   - 位置变了直接落位，不做位移过渡（docs/PITFALLS/动效.md 规矩第 1 条）：别人打字时光标是一跳一跳的，
      滑过去反而像在追
    - 名字标签只淡 opacity，一直待在自己的图层上（will-change），每次开始淡之前对齐到整物理
      像素（规矩第 3 条）；底色是这个人自己颜色的实色，不用毛玻璃（第 4 条）
@@ -150,7 +150,7 @@ class RemoteCaretMarker implements LayerMarker {
   }
 }
 
-/** 开始淡之前对齐到整物理像素：层里画出来才不糊，淡完那一帧也不跳（CLAUDE.md「动效：先对齐再动」） */
+/** 开始淡之前对齐到整物理像素：层里画出来才不糊，淡完那一帧也不跳（docs/PITFALLS/动效.md「先对齐再动」） */
 function snap(dom: HTMLElement, label: HTMLElement) {
   snapToDevicePixels(dom);
   snapToDevicePixels(label);

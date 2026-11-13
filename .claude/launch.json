@@ -197,6 +197,26 @@
         "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:CARGO_BUILD_JOBS='1'; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-p143\\data\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-p143\\vault\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9341'; pnpm tauri dev --config 'C:\\Users\\Gred\\AppData\\Local\\Temp\\claude\\21c88b570fbe4824\\bfca580d-ec1c-49d4-a9b9-ab5d5b2e7d71\\scratchpad\\tauri.p143.json'"
       ],
       "port": 1420
+    },
+    {
+      "name": "odea-desktop-export",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-export\\data\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-export\\vault\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9343'; pnpm tauri dev --config 'C:\\Users\\Gred\\AppData\\Local\\Temp\\claude\\fecf2d89b2843ca1\\d5565415-dcb4-45d2-bd92-b7195df6c250\\scratchpad\\tauri.export.json'"
+      ],
+      "port": 1420
+    },
+    {
+      "name": "odea-desktop-capture",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-capture\\data\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-capture\\vault\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9345'; pnpm tauri dev --config 'C:\\Users\\Gred\\AppData\\Local\\Temp\\claude\\fecf2d89b2843ca1\\1dcb59ac-8d11-4776-a2b3-3d3ea3ccae31\\scratchpad\\tauri.capture.json'"
+      ],
+      "port": 1420
     }
   ]
 }

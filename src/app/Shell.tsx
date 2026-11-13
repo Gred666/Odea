@@ -1,9 +1,11 @@
 import { ZEN_TRANSITION } from "@/app/navMotion";
 import { LIST_WIDTH, chromeWidth, hasListColumn, useApp } from "@/app/store";
+import { CaptureSettingsDialog } from "@/components/CaptureSettingsDialog";
 import { CollabDialog, CollabRequests, CollabResume } from "@/components/CollabDialog";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DocumentPanes } from "@/components/DocumentPanes";
 import { ErrorToast, LayoutChangeToast, NoticeToast } from "@/components/ErrorToast";
+import { ExportDialog } from "@/components/ExportDialog";
 import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
@@ -279,6 +281,8 @@ export function Shell() {
         <TeamDialog />
         <HistoryDialog />
         <TrashDialog />
+        <ExportDialog />
+        <CaptureSettingsDialog />
         <UpdateDialog />
         {/* 带脚本的插件（L1）要的权限：扩展页装之前、授权时弹（plugins/scripted.ts 的 askConsent） */}
         <PluginConsent />

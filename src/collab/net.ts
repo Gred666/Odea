@@ -135,6 +135,8 @@ export interface CollabNet {
   setAttachmentRefs(session: number, doc: string, refs: AttachmentRef[] | null): Promise<void>;
   /** 访客：向主持人要这一篇里引用的一个，缓存在本机 */
   fetchAttachment(session: number, doc: string, path: string): Promise<FetchedAttachment>;
+  /** 访客：同上，要到了用系统的程序打开（`![[说明书.pdf]]` 的卡片） */
+  openAttachment(session: number, doc: string, path: string): Promise<void>;
   /** 访客：粘贴的文件交给主持人存进这一篇的附件位置，返回从那篇引用它的路径 */
   putAttachment(
     session: number,
@@ -310,6 +312,9 @@ const tauriNet: CollabNet = {
   fetchAttachment: async (session, doc, path) => {
     const file = await unwrap(commands.collabFetchAttachment(session, doc, path));
     return { url: convertFileSrc(file), file };
+  },
+  openAttachment: async (session, doc, path) => {
+    await unwrap(commands.collabOpenAttachment(session, doc, path));
   },
   putAttachment: (session, doc, name, dataBase64) =>
     unwrap(commands.collabPutAttachment(session, doc, name, dataBase64)),

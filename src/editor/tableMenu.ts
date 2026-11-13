@@ -5,7 +5,7 @@ import { docOf, winOf } from "@/lib/paneWindow";
 
    表格替身是纯 DOM（不在 React 树里），菜单也是：样子照着 ActionMenu（RowMenu.tsx）——
    32 高的项、13px 字、14px 图标、白底圆角卡片；进出只淡（.odea-menu 的 data-state 动画，
-   CLAUDE.md 动效规矩 1）。挂在格子所在窗口的 body 上（弹出窗口里的表格挂到弹出窗口）。
+   docs/PITFALLS/动效.md 规矩 1）。挂在格子所在窗口的 body 上（弹出窗口里的表格挂到弹出窗口）。
    ============================================================ */
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -260,7 +260,7 @@ export function showTableMenu(
   menu.addEventListener("mousedown", (event) => event.preventDefault());
 
   doc.body.append(menu);
-  // 摆位置：先贴着点往右下，出了窗口就翻过去。整数像素（菜单里全是字，见 CLAUDE.md 动效规矩 6）
+  // 摆位置：先贴着点往右下，出了窗口就翻过去。整数像素（菜单里全是字，见 docs/PITFALLS/动效.md 规矩 6）
   const box = menu.getBoundingClientRect();
   const width = win.innerWidth;
   const height = win.innerHeight;

@@ -45,6 +45,51 @@ impl FrontMatter {
             && self.trashed_from.is_none()
             && self.extra.is_empty()
     }
+
+    /// 别的工具写的标签（Obsidian 的 `tags`，老写法 `tag`），认这几种写法：
+    /// `tags: [旅行, 书店]`、`tags: 旅行, 书店`、`tags: 旅行 书店`、下面一行一条的 `  - 旅行`。
+    /// 去掉引号和开头的 `#`，转小写，重复的只留一个；`工作/周报` 这种带层级的照原样（认 `#工作` 时也算它，
+    /// vault/query.rs）。应用自己不写 tags，只从 extra 里读，一字不改
+    pub fn tags(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut lines = self.extra.iter().peekable();
+        while let Some(line) = lines.next() {
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            if line.starts_with([' ', '\t']) || !matches!(key.trim().to_lowercase().as_str(), "tags" | "tag") {
+                continue;
+            }
+            let value = value.trim();
+            if value.is_empty() {
+                // 下面一行一条：`  - 旅行`（YAML 也允许不缩进的 `- 旅行`）
+                while let Some(item) = lines
+                    .peek()
+                    .copied()
+                    .and_then(|next| next.trim_start().strip_prefix('-'))
+                {
+                    push_tags(&mut out, item);
+                    lines.next();
+                }
+            } else {
+                push_tags(&mut out, value.trim_start_matches('[').trim_end_matches(']'));
+            }
+        }
+        out
+    }
+}
+
+/// 一段里的几个标签：逗号、空白分开
+fn push_tags(out: &mut Vec<String>, text: &str) {
+    for word in text.split(|c: char| c == ',' || c.is_whitespace()) {
+        let tag = word
+            .trim_matches(|c| c == '"' || c == '\'')
+            .trim_start_matches('#')
+            .to_lowercase();
+        if !tag.is_empty() && !out.contains(&tag) {
+            out.push(tag);
+        }
+    }
 }
 
 /// 拆成属性块和正文。正文的换行统一成 `\n`（编辑器里就是 `\n`，不统一的话
@@ -338,6 +383,22 @@ mod tests {
         );
         assert_eq!(body, "正文");
         assert_eq!(render(&meta, &body), text);
+    }
+
+    #[test]
+    fn tags_are_read_in_every_way_obsidian_writes_them() {
+        let tags = |block: &str| split(&format!("---\n{block}\n---\n\n正文")).0.tags();
+        let travel = vec!["旅行".to_string(), "书店".to_string()];
+        assert_eq!(tags("tags:\n  - 旅行\n  - 书店\naliases: [京都]"), travel);
+        assert_eq!(tags("tags:\n- 旅行\n- \"#书店\""), travel, "不缩进的、带引号和 # 的");
+        assert_eq!(tags("tags: [旅行, 书店]"), travel);
+        assert_eq!(tags("tags: 旅行, 书店"), travel);
+        assert_eq!(tags("tags: 旅行 书店 旅行"), travel, "重复的只留一个");
+        assert_eq!(tags("tag: 旅行"), vec!["旅行".to_string()], "老写法");
+        assert_eq!(tags("Tags: [Work/Weekly]"), vec!["work/weekly".to_string()], "转小写，层级照原样");
+        // 别的键下面的列表、别的键里出现的 tags 字样都不算
+        assert!(tags("aliases:\n  - 旅行\nmy-tags: 书店\nid: n1").is_empty());
+        assert!(tags("tags:\nid: n1").is_empty(), "空的");
     }
 
     #[test]

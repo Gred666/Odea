@@ -257,7 +257,7 @@ fn strip_line_prefix(line: &str) -> &str {
         && line[hashes..]
             .chars()
             .next()
-            .map_or(true, char::is_whitespace)
+            .is_none_or(char::is_whitespace)
     {
         let text = line[hashes..].trim();
         // `## 标题 ##` 的收尾井号；`## C#` 里的不算（前面没有空格）

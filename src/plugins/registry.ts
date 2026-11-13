@@ -130,6 +130,11 @@ export interface Plugin {
   reset?(): void;
   /** 后台把文件读进索引读完了（第一次打开大文件夹）：读了一半时取的那些重取 */
   reindexed?(): Promise<void>;
+  /**
+   * 全局快捷键速记（app/quickCapture.ts）交来的一行：记下来（日程：进今日TODO）。没记上抛出原因。
+   * 开着的插件里只有一个会接（先装的那个）
+   */
+  capture?(text: string): Promise<void>;
   /** 浏览器预览（data/mock.ts）里它的那一份：搜索、反链、历史版本都要看到它的文档 */
   loadMock?(): Promise<void>;
   /**

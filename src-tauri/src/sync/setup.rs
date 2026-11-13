@@ -182,12 +182,18 @@ mod tests {
     #[test]
     fn spots_cloud_drive_folders_by_name() {
         let drive = |path: &str| cloud_drive_by_name(Path::new(path));
-        assert_eq!(drive(r"C:\Users\me\OneDrive\文档\Odea"), Some("OneDrive"));
-        assert_eq!(drive(r"C:\Users\me\OneDrive - 公司\Odea"), Some("OneDrive"));
         assert_eq!(drive("/Users/me/Library/Mobile Documents/com~apple~CloudDocs/Odea"), Some("iCloud Drive"));
-        assert_eq!(drive(r"D:\Nutstore Files\Odea"), Some("坚果云"));
-        assert_eq!(drive(r"D:\百度网盘同步\Odea"), Some("百度网盘"));
-        assert_eq!(drive(r"C:\Users\me\Documents\Odea"), None);
+        assert_eq!(drive("/home/me/Dropbox/Odea"), Some("Dropbox"));
+        assert_eq!(drive("/home/me/Nutstore Files/Odea"), Some("坚果云"));
+        assert_eq!(drive("/home/me/Documents/Odea"), None);
+        // 反斜杠只在 Windows 上是分隔符：别的平台上整串是一个目录名，认不出来（2026-11-10 加 CI 前在 Linux 上跑，挂在这里）
+        if cfg!(windows) {
+            assert_eq!(drive(r"C:\Users\me\OneDrive\文档\Odea"), Some("OneDrive"));
+            assert_eq!(drive(r"C:\Users\me\OneDrive - 公司\Odea"), Some("OneDrive"));
+            assert_eq!(drive(r"D:\Nutstore Files\Odea"), Some("坚果云"));
+            assert_eq!(drive(r"D:\百度网盘同步\Odea"), Some("百度网盘"));
+            assert_eq!(drive(r"C:\Users\me\Documents\Odea"), None);
+        }
     }
 
     #[test]

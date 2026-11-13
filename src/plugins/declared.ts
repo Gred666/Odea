@@ -32,7 +32,7 @@ import {
 
    停用、卸载：上面四样都撤掉，文档一个字不动。提示块回到中性的样子，模板菜单里少了那几个。
 
-   桌面端在第一帧之前就取到了仓库的摆法（main.tsx 等 initialize），装着的清单是同步读的，
+   桌面端在第一帧之前就取到了仓库的摆法（boot/vault.tsx 等 initialize），装着的清单是同步读的，
    所以主题色、提示块的样子第一帧就是对的，不先画默认的再变。
    ============================================================ */
 
@@ -64,7 +64,7 @@ export function activeManifests(): PluginManifest[] {
 
 let started = false;
 
-/** main.tsx 在内置插件装上以后、取仓库之前调一次 */
+/** boot/vault.tsx 在内置插件装上以后、取仓库之前调一次 */
 export function initDeclaredPlugins(): void {
   if (started) return;
   started = true;

@@ -1,0 +1,261 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>白板墨迹实验</title>
+<!--
+  实验 3（docs/白板.md §9）里不用笔也能量的那一半。由 ink.mjs 打开，要开着开发服务器：
+    http://127.0.0.1:1434/scripts/perf/board/ink.html
+  两层画布：干的（写完的笔画）、湿的（正在写的这一笔，desynchronized）。
+-->
+<style>
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #fff;
+  }
+  canvas {
+    position: fixed;
+    left: 0;
+    top: 0;
+    touch-action: none;
+  }
+</style>
+<canvas id="dry"></canvas>
+<canvas id="wet"></canvas>
+<script type="module">
+  import { rng, write } from "./glyphs.mjs";
+  import { outline, penSamples } from "./ink-core.mjs";
+
+  const dpr = devicePixelRatio;
+  const [W, H] = [innerWidth, innerHeight];
+  const dryCanvas = document.getElementById("dry");
+  const wetCanvas = document.getElementById("wet");
+  for (const canvas of [dryCanvas, wetCanvas]) {
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width = `${W}px`;
+    canvas.style.height = `${H}px`;
+  }
+  const dry = dryCanvas.getContext("2d");
+  const wet = wetCanvas.getContext("2d", { desynchronized: true });
+  const frame = () => new Promise((resolve) => requestAnimationFrame((t) => resolve(t)));
+  const summary = (values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
+    return { mean: values.reduce((a, b) => a + b, 0) / (values.length || 1), p50: at(0.5), p95: at(0.95), max: sorted.at(-1) ?? 0 };
+  };
+
+  /* ---------------- 事件：笔来的时候浏览器给了什么 ---------------- */
+
+  const log = { down: 0, move: 0, raw: 0, up: 0, types: [], coalesced: [], predicted: [], pressures: [], tilts: [], trail: "没调" };
+  let presenter = null;
+  try {
+    presenter = await navigator.ink?.requestPresenter({ presentationArea: wetCanvas });
+  } catch (error) {
+    log.trail = `requestPresenter: ${error.message}`;
+  }
+  let drawing = null;
+  wetCanvas.addEventListener("pointerdown", (event) => {
+    log.down++;
+    wetCanvas.setPointerCapture(event.pointerId);
+    drawing = [[event.offsetX, event.offsetY, event.pressure || 0.5, event.timeStamp]];
+  });
+  wetCanvas.addEventListener("pointermove", (event) => {
+    if (!drawing) return;
+    log.move++;
+    if (!log.types.includes(event.pointerType)) log.types.push(event.pointerType);
+    const batch = event.getCoalescedEvents();
+    log.coalesced.push(batch.length);
+    log.predicted.push(event.getPredictedEvents().length);
+    log.pressures.push(event.pressure);
+    log.tilts.push(event.tiltX);
+    for (const e of batch.length ? batch : [event]) {
+      const previous = drawing.at(-1);
+      const sample = [e.offsetX, e.offsetY, e.pressure || 0.5, e.timeStamp];
+      segment(wet, previous, sample, 3);
+      drawing.push(sample);
+    }
+    if (presenter) {
+      try {
+        presenter.updateInkTrailStartPoint(event, { color: "#1a1a18", diameter: 3 });
+        log.trail = "调通了";
+      } catch (error) {
+        log.trail = `updateInkTrailStartPoint: ${error.message}`;
+      }
+    }
+  });
+  addEventListener("pointerrawupdate", () => log.raw++);
+  wetCanvas.addEventListener("pointerup", () => {
+    log.up++;
+    if (drawing) {
+      fill(dry, drawing, 3);
+      wet.clearRect(0, 0, W * dpr, H * dpr);
+    }
+    drawing = null;
+  });
+
+  /* ---------------- 画 ---------------- */
+
+  function trace(samples, size) {
+    const poly = outline(samples, size);
+    const path = new Path2D();
+    if (!poly.length) return path;
+    path.moveTo(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) path.lineTo(poly[i][0], poly[i][1]);
+    path.closePath();
+    return path;
+  }
+  function fill(ctx, samples, size) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#1a1a18";
+    ctx.fill(trace(samples, size));
+  }
+  /** 只画新来的这一小段：两个采样之间一个梯形，接头处一个圆 */
+  function segment(ctx, a, b, size) {
+    const ra = (size / 2) * (0.35 + 0.65 * a[2]);
+    const rb = (size / 2) * (0.35 + 0.65 * b[2]);
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len;
+    dy /= len;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#1a1a18";
+    ctx.beginPath();
+    ctx.moveTo(a[0] - dy * ra, a[1] + dx * ra);
+    ctx.lineTo(b[0] - dy * rb, b[1] + dx * rb);
+    ctx.lineTo(b[0] + dy * rb, b[1] - dx * rb);
+    ctx.lineTo(a[0] + dy * ra, a[1] - dx * ra);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(b[0], b[1], rb, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /* ---------------- 湿墨迹：一笔越写越长，每帧画多久 ---------------- */
+
+  /**
+   * 一笔写 total 个采样，每帧来 perFrame 个。strategy：
+   *   "full" 每帧清掉、把整笔的轮廓重算重画；"tail" 只画新来的那几段
+   * 返回每帧「算 + 画」的毫秒，按这一笔当时有多长分段
+   */
+  async function benchWet(total, perFrame, strategy) {
+    const random = rng(3);
+    const samples = [];
+    for (let i = 0; i < total; i++) {
+      const t = i / 30;
+      samples.push([W / 2 + Math.cos(t) * (60 + i * 0.25), H / 2 + Math.sin(t * 1.3) * (60 + i * 0.2), 0.3 + 0.5 * Math.abs(Math.sin(t * 2)) + random() * 0.05, i * 4]);
+    }
+    wet.setTransform(1, 0, 0, 1, 0, 0);
+    wet.clearRect(0, 0, W * dpr, H * dpr);
+    const buckets = { 50: [], 200: [], 1000: [], 3000: [] };
+    for (let n = perFrame; n <= total; n += perFrame) {
+      await frame();
+      const start = performance.now();
+      if (strategy === "full") {
+        wet.setTransform(1, 0, 0, 1, 0, 0);
+        wet.clearRect(0, 0, W * dpr, H * dpr);
+        fill(wet, samples.slice(0, n), 3);
+      } else {
+        for (let i = Math.max(1, n - perFrame); i < n; i++) segment(wet, samples[i - 1], samples[i], 3);
+      }
+      const ms = performance.now() - start;
+      for (const limit of Object.keys(buckets)) {
+        if (n <= Number(limit) && n > Number(limit) * 0.6) buckets[limit].push(ms);
+      }
+    }
+    return Object.fromEntries(Object.entries(buckets).map(([limit, values]) => [limit, values.length ? summary(values).p50 : null]));
+  }
+
+  /* ---------------- 干墨迹：几千笔，平移、缩放时每帧重画 ---------------- */
+
+  let page = null;
+  /** 造一页：count 笔，像一行一行写的字。每笔预先算好路径和包围盒 */
+  function buildPage(count) {
+    const random = rng(11);
+    const texts = ["12+3=15", "1280×0.85=1088", "(40+2)÷6=7", "3.5+2.25=5.75", "86400", "6×(15-9)=36"];
+    const strokes = [];
+    let line = 0;
+    while (strokes.length < count) {
+      let x = 40;
+      while (x < 1340 && strokes.length < count) {
+        const ink = write(texts[Math.floor(random() * texts.length)], { seed: strokes.length + 1, height: 22, messy: 0.6 });
+        for (const stroke of ink.strokes) {
+          const samples = penSamples(stroke.map(([px, py]) => [px + x, py + 30 + line * 38]), { random });
+          let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+          for (const [sx, sy] of samples) {
+            x0 = Math.min(x0, sx);
+            y0 = Math.min(y0, sy);
+            x1 = Math.max(x1, sx);
+            y1 = Math.max(y1, sy);
+          }
+          strokes.push({ path: trace(samples, 2.6), box: [x0 - 2, y0 - 2, x1 + 2, y1 + 2] });
+        }
+        x += ink.width + 28;
+      }
+      line++;
+    }
+    const all = new Path2D();
+    for (const stroke of strokes) all.addPath(stroke.path);
+    page = { strokes: strokes.slice(0, count), all, height: line * 38 + 60 };
+    return { strokes: page.strokes.length, height: page.height };
+  }
+
+  /**
+   * 平移 frames 帧（缩放 zoom 不变），每帧整层重画。strategy：
+   *   "each" 一笔一次 fill，只画视口里的；"batch" 视口里的并成一条路径 fill 一次；"all" 整页一条现成的路径、不剔除
+   * 每次用一张新画布：读过像素的画布会被 Chrome 切成软件渲染，量出来的就不是平时的样子了。
+   * GPU 那边画不画得过来，看两帧之间隔了多久
+   */
+  async function benchDry(zoom, frames, strategy) {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width = `${W}px`;
+    canvas.style.height = `${H}px`;
+    document.body.append(canvas);
+    const dry = canvas.getContext("2d");
+    const work = [];
+    const gaps = [];
+    const drawn = [];
+    for (let i = 0; i < 5; i++) await frame();
+    let last = await frame();
+    const span = Math.max(0, page.height - H / zoom);
+    for (let f = 0; f < frames; f++) {
+      const now = await frame();
+      gaps.push(now - last);
+      last = now;
+      const top = (span * f) / frames;
+      const start = performance.now();
+      dry.setTransform(1, 0, 0, 1, 0, 0);
+      dry.clearRect(0, 0, W * dpr, H * dpr);
+      // 位移对齐到整物理像素
+      const ty = Math.round(-top * zoom * dpr);
+      dry.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, ty);
+      dry.fillStyle = "#1a1a18";
+      const bottom = top + H / zoom;
+      let count = 0;
+      if (strategy === "all") {
+        dry.fill(page.all);
+        count = page.strokes.length;
+      } else {
+        const batch = strategy === "batch" ? new Path2D() : null;
+        for (const stroke of page.strokes) {
+          if (stroke.box[3] < top || stroke.box[1] > bottom) continue;
+          count++;
+          if (batch) batch.addPath(stroke.path);
+          else dry.fill(stroke.path);
+        }
+        if (batch) dry.fill(batch);
+      }
+      work.push(performance.now() - start);
+      drawn.push(count);
+    }
+    canvas.remove();
+    return { work: summary(work), gaps: summary(gaps), drawn: Math.round(drawn.reduce((a, b) => a + b, 0) / drawn.length) };
+  }
+
+  window.ink = { ready: true, log, benchWet, buildPage, benchDry, dpr, size: [W, H], hasPresenter: !!presenter };
+</script>

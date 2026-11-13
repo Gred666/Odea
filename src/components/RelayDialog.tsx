@@ -1,9 +1,9 @@
 import { relayCheckText } from "@/collab/reach";
 import { isRelayCode, useRelays } from "@/collab/relayStore";
-import { openExternal } from "@/editor/links";
 import type { RelayInfo } from "@/lib/bindings";
 import { cn } from "@/lib/cn";
 import { popoverCard, tween } from "@/lib/motion";
+import { openExternal } from "@/lib/openExternal";
 import { refreshTeamRelays, shareTeamRelay, useTeam } from "@/team/store";
 import { Check, Copy, LoaderCircle, Server, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";

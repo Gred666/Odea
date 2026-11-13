@@ -17,6 +17,7 @@ desktop-runtime = [
   "dep:tauri-plugin-single-instance",
   "dep:tauri-plugin-updater",
   "dep:tauri-plugin-deep-link",
+  "dep:tauri-plugin-global-shortcut",
   "tauri/wry",
   "tauri/compression",
   "tauri/common-controls-v6",
@@ -137,6 +138,9 @@ specta-typescript = "=0.0.9"
 tauri-specta = { version = "=2.0.0-rc.21", features = ["derive", "typescript"], optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# 全局快捷键速记（quick_capture.rs）：应用在后台时按快捷键弹一个小窗，记一行进今日TODO。
+# 2.4 起要 tauri 2.12，锁在 2.3（tauri 是 2.11）
+tauri-plugin-global-shortcut = { version = "~2.3", optional = true }
 # deep-link：应用已经开着时再点 odea:// 链接，交给正在运行的那个实例
 tauri-plugin-single-instance = { version = "2", optional = true, features = ["deep-link"] }
 
@@ -157,7 +161,16 @@ windows = { version = "0.61", features = [
   "Win32_System_Com",
   "Win32_System_Ole",
   "Win32_System_Variant",
+  # 提醒（notify.rs）：系统通知（WinRT 的 ToastNotification）、放提示音（PlaySound）、
+  # 现在该不该出声（SHQueryUserNotificationState）
+  "Foundation",
+  "Data_Xml_Dom",
+  "UI_Notifications",
+  "Win32_Media_Audio",
+  "Win32_UI_Shell",
 ] }
+# 读「勿扰」开没开（ntdll 的 NtQueryWnfStateData，notify.rs）：和 windows 用的同一个导入宏。依赖树里本来就有
+windows-link = "0.2"
 # 最小化时让 WebView2 少占内存（memory.rs）。Tauri 只给出 WebView2 的 controller，
 # 要 ICoreWebView2_19 得用它自己用的这个版本的绑定
 webview2-com = "0.38"

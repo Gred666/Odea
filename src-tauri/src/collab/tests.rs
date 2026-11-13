@@ -2313,7 +2313,10 @@ async fn a_folder_session_opens_docs_on_request_and_keeps_them_apart() {
     let (guest, mut guest_events, member) =
         admitted_to_folder(&host, &mut host_events, "Alex", Permission::Edit).await;
     expect(&mut guest_events, "树", |event| match event {
-        Event::Control(Control::Tree { tree }) => Some(assert_eq!(tree, r#"{"docs":["a","b"]}"#)),
+        Event::Control(Control::Tree { tree }) => {
+            let _: () = assert_eq!(tree, r#"{"docs":["a","b"]}"#);
+            Some(())
+        },
         _ => None,
     })
     .await;
@@ -2345,7 +2348,10 @@ async fn a_folder_session_opens_docs_on_request_and_keeps_them_apart() {
     host.send_update("c", b"c-update".to_vec());
     host.send_update("a", b"a-update".to_vec());
     expect(&mut guest_events, "a 的更新", |event| match event {
-        Event::Update { from: 0, doc, bytes } if doc == "a" => Some(assert_eq!(bytes, b"a-update")),
+        Event::Update { from: 0, doc, bytes } if doc == "a" => {
+            let _: () = assert_eq!(bytes, b"a-update");
+            Some(())
+        },
         Event::Update { doc, .. } if doc == "c" => panic!("没开 c 却收到了 c 的更新"),
         _ => None,
     })

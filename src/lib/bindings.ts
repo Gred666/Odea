@@ -280,6 +280,30 @@ async treeFiles() : Promise<Result<TreeFile[], AppError>> {
 }
 },
 /**
+ * 整个仓库里的附件（图片、PDF、文档、音视频……，相对仓库的路径）：Obsidian 的 `![[图.png]]`、
+ * `![[说明书.pdf]]` 只写文件名，前端按名字在这里面找。扫描时顺带收集的，多了、少了发 vault-changed（attachments）
+ */
+async vaultAttachments() : Promise<Result<string[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_attachments") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 附件清单里的一个文件（`![[说明书.pdf]]` 的卡片、`[[说明书.pdf]]` 双链）：`reveal` 在文件管理器里定位它，
+ * 否则用系统的默认程序打开。只认清单里有的（Vault::attachment_path）
+ */
+async vaultAttachmentOpen(relPath: string, reveal: boolean) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_attachment_open", { relPath, reveal }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 树上的一个文件：`reveal` 在文件管理器里定位它，否则用系统的默认程序打开（PDF 交给阅读器）
  */
 async treeFileOpen(relPath: string, reveal: boolean) : Promise<Result<null, AppError>> {
@@ -403,6 +427,165 @@ async treeExport() : Promise<Result<string | null, AppError>> {
 }
 },
 /**
+ * 导出前先弹「另存为」（文件名是标题，从上次导出的文件夹开始）。format 是 `html` 或 `pdf`。
+ * 返回选的路径，取消了返回 null。选好了再排版（前端），排好了交给 export_html / export_pdf 写
+ */
+async exportPick(title: string, format: string) : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_pick", { title, format }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 小窗：记下这一行。交给记到的那个仓库窗口去写，等它回话；返回仓库的名字
+ */
+async captureSubmit(text: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("capture_submit", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 小窗：收起来（Esc、点到别处、记好了）
+ */
+async captureHide() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("capture_hide") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 「发一条试试」：照现在的设置弹一条、响一声（不管勿扰）
+ */
+async reminderTest() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reminder_test") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 改速记的设置：开关、换快捷键。新的注册不上也照样存下（设置里写着为什么），旧的已经注销了
+ */
+async captureConfigure(enabled: boolean, shortcut: string) : Promise<Result<CaptureSettings, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("capture_configure", { enabled, shortcut }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 导出整个文件夹：选一个放的地方，在里面新建一个以 title 命名的文件夹（重名的加「 2」「 3」），返回它。
+ * 取消了返回 null。之后 export_folder_write 一篇篇往里写，写完调 export_folder_done
+ */
+async exportFolderPick(title: string) : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_folder_pick", { title }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 导出成 HTML：写进刚在「另存为」里选的那个路径（export_pick）
+ */
+async exportHtml(path: string, html: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_html", { path, html }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 导出成 PDF。Windows：不弹打印框，直接写到刚在「另存为」里选的那个路径（export_pick），返回 true。
+ * 别的平台（path 给 null）：开一个窗口显示这一页、弹系统的打印对话框，在那里存成 PDF，返回 false。
+ * 纸张是页面设置里选的（毫米，横着放的已经换过来），和页面的 `@page size` 是同一个
+ */
+async exportPdf(path: string | null, title: string, html: string, widthMm: number, heightMm: number) : Promise<Result<boolean, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_pdf", { path, title, html, widthMm, heightMm }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 导出时把一张本机图片嵌进页面：读出来，返回 data: 地址。只认图片扩展名（和 asset 协议放行的一样，
+ * 前端本来就能显示它们）；不是图片、太大（30 MB）、读不到返回 null
+ */
+async exportImage(path: string) : Promise<Result<string | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_image", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 小窗：记到哪。一个仓库窗口都没开着是 null
+ */
+async captureTarget() : Promise<Result<CaptureTarget | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("capture_target") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 仓库窗口：CaptureRequest 做完了。error 是没记上的原因
+ */
+async captureAnswer(id: number, error: string | null) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("capture_answer", { id, error }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 速记的设置、现在注册上没有
+ */
+async captureSettings() : Promise<Result<CaptureSettings, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("capture_settings") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 往刚建的导出文件夹（export_folder_pick）里写一页。rel 是里面的相对路径（export_rel_path 的规矩）
+ */
+async exportFolderWrite(root: string, rel: string, html: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_folder_write", { root, rel, html }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 导出整个文件夹写完了（或者半路失败了）：这个文件夹不能再往里写
+ */
+async exportFolderDone(root: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_folder_done", { root }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 导入（docs/仓库与启动器.md §7.6）：弹选文件夹的对话框，把仓库外的一个文件夹照原样复制进来，
  * 放在树上的 folder 里（逻辑目录在树上照原来的结构摆好）。原来的不动。取消了返回 null
  */
@@ -444,6 +627,45 @@ async findInVault(query: string, options: FindOptions) : Promise<Result<FindResu
 async taskToggle(id: string) : Promise<Result<Task, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("task_toggle", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 提醒上点了「完成」、这一篇没开在编辑器里（开着的经编辑器改）：把那一行勾上。
+ * 只勾不取消；已经勾上了返回 false
+ */
+async taskComplete(docId: string, line: number, raw: string) : Promise<Result<boolean, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("task_complete", { docId, line, raw }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async reminderSettings() : Promise<Result<ReminderState, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reminder_settings") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async reminderConfigure(settings: ReminderSettings) : Promise<Result<ReminderState, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reminder_configure", { settings }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 试听：不管勿扰（是人点的）
+ */
+async reminderPreview(sound: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reminder_preview", { sound }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -627,6 +849,50 @@ async vaultReveal(target: DocRef) : Promise<Result<null, AppError>> {
 async docLegacyText(target: DocRef) : Promise<Result<LegacyText, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("doc_legacy_text", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 一篇的属性：属性块里用户自己的那几行（应用的 id、created 这些不在里面）
+ */
+async docProperties(target: DocRef) : Promise<Result<DocProperties, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("doc_properties", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 换掉一篇的属性：只动属性块里用户自己的那几行，正文、应用的键一个字不动
+ */
+async docSetProperties(target: DocRef, text: string) : Promise<Result<DocProperties, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("doc_set_properties", { target, text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 整个仓库的属性一览（加属性、填值时的提示）和记着的类型
+ */
+async vaultPropertyCatalog() : Promise<Result<PropertyCatalog, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_property_catalog") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 记下（kind 是 null 是忘掉）一个键是什么类型
+ */
+async vaultSetPropertyType(key: string, kind: string | null) : Promise<Result<Partial<{ [key in string]: string }>, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_set_property_type", { key, kind }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1734,6 +2000,18 @@ async collabFetchAttachment(session: number, doc: string, path: string) : Promis
 }
 },
 /**
+ * 访客：`![[说明书.pdf]]` 卡片上的「打开」—— 向主持人要来（同 collab_fetch_attachment），用系统的程序打开。
+ * 只开附件那几种扩展名的（vault::is_attachment_name）：主持人那边给什么名字都不会在这台上执行起来
+ */
+async collabOpenAttachment(session: number, doc: string, path: string) : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("collab_open_attachment", { session, doc, path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 访客：粘贴的文件交给主持人存进他的「附件」，返回从那篇引用它的路径（编辑器插进正文）
  */
 async collabPutAttachment(session: number, doc: string, name: string, dataBase64: string) : Promise<Result<Attachment, AppError>> {
@@ -1761,11 +2039,14 @@ async collabPutAttachmentPath(session: number, doc: string, path: string) : Prom
 
 
 export const events = __makeEvents__<{
+captureRequest: CaptureRequest,
+captureShown: CaptureShown,
 collabCopyReady: CollabCopyReady,
 collabEvent: CollabEvent,
 collabLink: CollabLink,
 indexProgress: IndexProgress,
 launcherLink: LauncherLink,
+reminderAction: ReminderAction,
 syncNotice: SyncNotice,
 syncStatusChanged: SyncStatusChanged,
 teamChanged: TeamChanged,
@@ -1773,11 +2054,14 @@ updateReady: UpdateReady,
 vaultChanged: VaultChanged,
 vaultGoto: VaultGoto
 }>({
+captureRequest: "capture-request",
+captureShown: "capture-shown",
 collabCopyReady: "collab-copy-ready",
 collabEvent: "collab-event",
 collabLink: "collab-link",
 indexProgress: "index-progress",
 launcherLink: "launcher-link",
+reminderAction: "reminder-action",
 syncNotice: "sync-notice",
 syncStatusChanged: "sync-status-changed",
 teamChanged: "team-changed",
@@ -1876,6 +2160,34 @@ written: string[];
  * 还有没做完的任务的日子
  */
 open: string[] }
+/**
+ * 发给仓库窗口：把这一行记进今日TODO，做完了调 capture_answer(id, 出错的话为什么)
+ */
+export type CaptureRequest = { id: number; text: string }
+/**
+ * 给前端的设置和现在的状态
+ */
+export type CaptureSettings = { enabled: boolean; shortcut: string; 
+/**
+ * 开着却没注册上：为什么（被别的程序占了、写法不认得）。注册上了、关着是 null
+ */
+error: string | null }
+/**
+ * 发给小窗：又显示出来了（清空输入框、重新问记到哪、把光标放进去）
+ */
+export type CaptureShown = null
+/**
+ * 小窗问：记到哪
+ */
+export type CaptureTarget = { 
+/**
+ * 仓库的名字（文件夹名）
+ */
+name: string; 
+/**
+ * 开着日程（有今日TODO）
+ */
+journal: boolean }
 export type Cause = 
 /**
  * 我这边没有网络
@@ -2071,6 +2383,14 @@ versions: DocVersion[];
  * 更早的还有，没列出来
  */
 more: boolean }
+/**
+ * 一篇的属性：属性块里用户自己的那几行，原样
+ */
+export type DocProperties = { text: string; 
+/**
+ * 能不能改：文件不是 UTF-8 的、还没写过的插件文档（某一天）不能
+ */
+editable: boolean }
 /**
  * 仓库里的一篇（docs/插件与跨端.md §6.1）。type 带命名空间：核心只认 `note`，别的由插件声明
  * （`journal.day`、`journal.goal`，plugins/）；key 的格式由那个类型自己定：笔记 id、`2026-11-03`、`week:2026-11-02`
@@ -2406,7 +2726,12 @@ idInFile: boolean;
  * 只能看 —— 保存、改名、置顶、移动、归档、删除后端都拒绝，不然原文就被写坏了
  * （docs/1110审查与研究.md §5.1）
  */
-notUtf8: boolean }
+notUtf8: boolean; 
+/**
+ * 属性块里用户自己的那几行（应用的 id、created 这些不在里面）：和正文一起到，属性面板在第一帧就画得出来，
+ * 正文不会等它到了再往下跳（docs/提醒与属性.md §3）
+ */
+properties: string }
 /**
  * 列表里的一篇：Note 去掉正文。仓库里有多少篇列表就给多少篇，正文打开时再取（note_get）、
  * 搜正文走 search_text —— 前端不留每篇的全文，篇数再多常驻内存也只多一点摘要（技术方案 §13.2）
@@ -2489,6 +2814,31 @@ upstream: string | null;
  * 连不上主持人的人看它找一位连着主持人的成员经他转
  */
 root: string | null }
+export type PropertyCatalog = { 
+/**
+ * 用得多的在前
+ */
+keys: PropertyKey[]; 
+/**
+ * 记着的类型：键 → 类型
+ */
+types: Partial<{ [key in string]: string }> }
+/**
+ * 整个仓库里的一个键
+ */
+export type PropertyKey = { key: string; 
+/**
+ * 几篇里写了它
+ */
+count: number; 
+/**
+ * 值多半是什么类型（KINDS 里的一个；没填过值的是 text）
+ */
+kind: string; 
+/**
+ * 常见的值，用得多的在前，最多 40 个
+ */
+values: string[] }
 export type Reach = { 
 /**
  * 还在查（端口映射要等路由器回话，中继要连一下）
@@ -2603,6 +2953,35 @@ skipped: string | null;
  * 每篇改之前、之后的全文，原样交给 note_relink_undo 就能撤销
  */
 rewrites: LinkRewrite[] }
+/**
+ * 交给仓库窗口的前端：done 把那一行勾上（开着编辑器的经编辑器改），open 打开那一篇、停在那一行
+ */
+export type ReminderAction = { action: string; docId: string; line: number; raw: string; source: DocRef }
+export type ReminderSettings = { 
+/**
+ * 到点提醒
+ */
+enabled: boolean; 
+/**
+ * 提前几分钟（LEADS 里的一个）。写了 ⏰ 的不管它
+ */
+leadMinutes: number; 
+/**
+ * SOUNDS 里的一个
+ */
+sound: string }
+/**
+ * 提醒设置对话框要的：设置，加上现在是不是在勿扰（提示一句「现在不会出声」）
+ */
+export type ReminderState = { settings: ReminderSettings; 
+/**
+ * 现在开着勿扰、全屏、演示：我们的提示音不出声
+ */
+quiet: boolean; 
+/**
+ * 这个平台的通知有按钮（Windows）；没有的只是告诉一声
+ */
+actions: boolean }
 export type Scope = { kind: ScopeKind; 
 /**
  * 一篇的话是它的文档 id（访客进来就开它）；文件夹、整个仓库是空的
@@ -2782,6 +3161,10 @@ status: string;
  * 灰色小字：分类 · 时间 · 出处
  */
 meta: string | null; dueDate: string | null; timeLabel: string | null; category: string | null; 
+/**
+ * 写了 ⏰ 的：提醒的时刻 `YYYY-MM-DD HH:MM`（docs/提醒与属性.md §1.2）
+ */
+remindAt: string | null; 
 /**
  * 写着这条任务的那篇文档：日历里点「出处」跳过去
  */
@@ -3072,6 +3455,10 @@ foundCopies: string[];
  * 「笔记」下面的文件夹变了（在资源管理器里建了、删了、改了名）
  */
 folders: boolean; 
+/**
+ * 仓库里的附件（图片、PDF……）多了、少了（`![[图.png]]` 按名字找的那份清单，Vault::attachments）
+ */
+attachments?: boolean; 
 /**
  * 仓库的摆法在别处变了（另一台设备开关了日程、转成了逻辑目录，同步过来）：要按新的摆法重新认文件、
  * 整页重载，前端问一句「切换过去」（vault_relayout）。没切换之前照旧按原来的摆法

@@ -5,14 +5,15 @@
     交易 复盘          标题或正文里有这两个词（不分大小写）
     "两个 词"          带空格的词用引号括起来
     title:周报         只看标题
-    #复盘              正文里的标签（`#复盘`、`#复盘/周`；后面紧跟着字的 `#复盘会` 不算，代码里的不算）
+    #复盘              标签：正文里的（`#复盘`、`#复盘/周`；后面紧跟着字的 `#复盘会` 不算，代码里的不算），
+                       和属性块里 tags 写的（`tags: [复盘/周]`，FrontMatter::tags）
     in:交易/学习       在树上这个文件夹里（子文件夹里的也算）；in:未整理 是没被放进树里的
     updated:30d        30 天内改过（d 天、w 周、m 月、y 年）；created:7d 同理
     is:pinned          置顶的
     has:todo           有没勾的待办（`- [ ]`）
     -词、-#标签 …      前面加 - 是「不要」
 
-归档的笔记不算：智能文件夹在树上，树上只有没归档的。属性块里的 tags 不认（索引里只有正文）。
+归档的笔记不算：智能文件夹在树上，树上只有没归档的。
 ============================================================ */
 
 use super::index::DocRow;
@@ -96,7 +97,7 @@ impl Query {
             let hit = match &cond.term {
                 Term::Text(word) => title.contains(word) || body.contains(word),
                 Term::Title(word) => title.contains(word),
-                Term::Tag(tag) => has_tag(prose, tag),
+                Term::Tag(tag) => has_tag(prose, tag) || in_tags(&row.tags, tag),
                 Term::In(None) => at.is_none(),
                 Term::In(Some(folder)) => at.is_some_and(|at| at == folder || at.starts_with(&format!("{folder}/"))),
                 Term::Updated(span) => row.updated_at >= now - span,
@@ -180,6 +181,13 @@ fn has_tag(body: &str, tag: &str) -> bool {
     })
 }
 
+/// 属性块里写的标签里有没有它：一样的，或者是它底下的一层（`复盘/周` 算 `复盘`）。都已经转小写
+fn in_tags(tags: &[String], tag: &str) -> bool {
+    tags.iter().any(|written| {
+        written.strip_prefix(tag).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
 /// 有没勾的待办：`- [ ]`、`* [ ]`、`+ [ ]`、`1. [ ]`
 fn has_open_task(body: &str) -> bool {
     body.lines().any(|line| {
@@ -223,6 +231,8 @@ mod tests {
             hash: String::new(),
             file_id: None,
             not_utf8: false,
+            tags: Vec::new(),
+            props: String::new(),
         }
     }
 
@@ -248,6 +258,19 @@ mod tests {
         assert!(!hit("#include", &code, None), "代码块里的不算");
         assert!(!hit("has:todo", &code, None), "代码块里举例的待办不算");
         assert!(hit("include", &code, None), "普通的词照样搜得到代码里的");
+    }
+
+    #[test]
+    fn tags_written_in_front_matter_count_too() {
+        let mut note = row("京都", "书店和咖啡");
+        note.tags = vec!["旅行/日本".into(), "书店".into()];
+        assert!(hit("#书店", &note, None));
+        assert!(hit("#旅行", &note, None), "旅行/日本 算 #旅行");
+        assert!(hit("#旅行/日本", &note, None));
+        assert!(!hit("#旅", &note, None), "旅行 不算 #旅");
+        assert!(!hit("#日本", &note, None), "下一层不能单拿出来算");
+        assert!(hit("-#工作", &note, None) && !hit("-#书店", &note, None));
+        assert!(hit("#书店 咖啡", &note, None), "和别的条件一起");
     }
 
     #[test]

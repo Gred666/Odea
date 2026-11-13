@@ -8,6 +8,7 @@ import {
   guideOf,
   newerThan,
 } from "@/content/guide";
+import type { PropertyKey } from "@/lib/bindings";
 import { countWords, makeExcerpt } from "@/lib/plainText";
 import {
   contextLine,
@@ -17,6 +18,8 @@ import {
   sameTitle,
 } from "@/lib/wikilinks";
 import { installedPlugins } from "@/plugins/registry";
+import { primeProperties } from "@/properties/store";
+import { MANAGED, kindOf, kindOfValue, parse as parseProperties } from "@/properties/yaml";
 import type { Backend } from "./backend";
 import {
   UNSORTED,
@@ -118,6 +121,10 @@ interface MockState {
    * 地址带 `?logical` 打开时没有的话当场转一次（调界面用）
    */
   tree?: TreeNode[];
+  /** 属性块里用户自己的那几行（桌面版在文件里），按文档的键（saveKey 那种：note:id、day:日期） */
+  props?: Record<string, string>;
+  /** 记着的属性类型（桌面版是 .obsidian/types.json 或 .odea/types.json） */
+  propTypes?: Record<string, string>;
 }
 
 function load(): MockState {
@@ -209,6 +216,7 @@ function present({ guide: _mark, legacy: _legacy, ...note }: MockNote): Note {
     conflictOf: original?.id ?? null,
     idInFile: note.idInFile ?? true,
     notUtf8: note.notUtf8 ?? false,
+    properties: state.props?.[`note:${note.id}`] ?? "",
   };
 }
 
@@ -528,6 +536,45 @@ function desktopOnly(): never {
   throw { kind: "Invalid", message: "浏览器预览里没有本地文件，桌面版里才能打开笔记文件夹" };
 }
 
+/* ---------------- 属性 ---------------- */
+
+const propKey = (target: DocumentRef) => `${target.type}:${target.key}`;
+
+/** 整个仓库的属性一览（同 vault/properties.rs 的 catalog）：键用了几次、常见的值、多半是什么类型 */
+function mockCatalog(texts: string[]): PropertyKey[] {
+  const keys = new Map<
+    string,
+    { count: number; kinds: Map<string, number>; values: Map<string, number> }
+  >();
+  for (const text of texts) {
+    const seen = new Set<string>();
+    for (const entry of parseProperties(text).entries) {
+      if (MANAGED.includes(entry.key) || seen.has(entry.key)) continue;
+      seen.add(entry.key);
+      const tally = keys.get(entry.key) ?? { count: 0, kinds: new Map(), values: new Map() };
+      keys.set(entry.key, tally);
+      tally.count += 1;
+      if (entry.shape === "complex") continue;
+      const values = entry.shape === "list" ? entry.items : entry.value ? [entry.value] : [];
+      const kind =
+        entry.shape === "list" ? kindOf(entry, {}) : entry.value ? kindOfValue(entry.value) : null;
+      if (kind) tally.kinds.set(kind, (tally.kinds.get(kind) ?? 0) + 1);
+      for (const value of values) tally.values.set(value, (tally.values.get(value) ?? 0) + 1);
+    }
+  }
+  return [...keys.entries()]
+    .map(([key, tally]) => ({
+      key,
+      count: tally.count,
+      kind: [...tally.kinds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "text",
+      values: [...tally.values.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 40)
+        .map(([value]) => value),
+    }))
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+}
+
 /* ---------------- 别处的改动 ----------------
    浏览器里没有别的程序会改文件；只有改标题时改写别处的双链会动到别的文档，照桌面版的样子通知前端 */
 
@@ -780,7 +827,9 @@ export const mockBackend: Backend = {
     await tick();
     const n = state.notes.find((x) => x.id === id);
     if (!n) notFound(`note ${id}`);
-    return present(n);
+    const note = present(n);
+    primeProperties({ type: "note", key: id }, note.properties ?? "", !note.notUtf8);
+    return note;
   },
 
   // 浏览器预览里没有别的程序改文件：base 用不上（版本对不上另存冲突副本是 Rust 的事，见 keep_unseen_edits）
@@ -1053,6 +1102,43 @@ export const mockBackend: Backend = {
 
   async treeFileOpen() {
     desktopOnly();
+  },
+
+  // 浏览器预览里没有仓库文件夹：附件就是站点根目录（public/）里那几个，`![[favicon.svg]]` 配得上；
+  // 另外假装有一份 PDF，`![[说明书.pdf]]` 的卡片能画出来（打开要桌面版）
+  async vaultAttachments() {
+    await tick();
+    return ["favicon.svg", "附件/说明书.pdf"];
+  },
+
+  async vaultAttachmentOpen() {
+    desktopOnly();
+  },
+
+  async exportPick() {
+    throw { kind: "Invalid", message: "浏览器预览里存不了文件，桌面版里才能导出" };
+  },
+
+  async exportHtml() {
+    throw { kind: "Invalid", message: "浏览器预览里存不了文件，桌面版里才能导出" };
+  },
+
+  async exportPdf() {
+    throw { kind: "Invalid", message: "浏览器预览里存不了文件，桌面版里才能导出" };
+  },
+
+  async exportFolderPick() {
+    throw { kind: "Invalid", message: "浏览器预览里存不了文件，桌面版里才能导出" };
+  },
+
+  async exportFolderWrite() {
+    throw { kind: "Invalid", message: "浏览器预览里存不了文件，桌面版里才能导出" };
+  },
+
+  async exportFolderDone() {},
+
+  async exportImage() {
+    return null;
   },
 
   async treeView() {
@@ -1432,6 +1518,48 @@ export const mockBackend: Backend = {
   async vaultReveal() {
     await tick();
     desktopOnly();
+  },
+
+  // 属性（docs/提醒与属性.md §3）：和桌面版一样只存用户自己的那几行，规矩照 vault/properties.rs
+  async docProperties(target) {
+    await tick();
+    return { text: state.props?.[propKey(target)] ?? "", editable: true };
+  },
+
+  async docSetProperties(target, text) {
+    await tick();
+    const lines = text
+      .replace(/\r\n/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/\s+$/, ""));
+    while (lines.length && lines[lines.length - 1] === "") lines.pop();
+    while (lines.length && lines[0] === "") lines.shift();
+    for (const line of lines) {
+      if (line.trim() === "---") throw { kind: "Invalid", message: "属性里不能有单独一行 ---" };
+      const key = /^[^\s#-][^:]*:/.test(line) ? line.slice(0, line.indexOf(":")).trim() : null;
+      if (key && MANAGED.includes(key))
+        throw { kind: "Invalid", message: `「${key}」由 Odea 自己管，换个名字吧` };
+    }
+    const joined = lines.join("\n");
+    state.props = { ...state.props, [propKey(target)]: joined };
+    save(state);
+    announce(target.type === NOTE ? { notes: [target.key] } : { docs: [target] });
+    return { text: joined, editable: true };
+  },
+
+  async propertyCatalog() {
+    await tick();
+    return { keys: mockCatalog(Object.values(state.props ?? {})), types: { ...state.propTypes } };
+  },
+
+  async setPropertyType(key, kind) {
+    await tick();
+    const types = { ...state.propTypes };
+    if (kind) types[key] = kind;
+    else delete types[key];
+    state.propTypes = types;
+    save(state);
+    return { ...types };
   },
 
   // 不是 UTF-8 的笔记（docs/1110审查与研究.md §5.1）。浏览器预览里只有笔记会是这样（调界面时手动标的）

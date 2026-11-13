@@ -19,7 +19,7 @@ import { createElement, useState } from "react";
 
    插件交来的是一棵纯数据的组件树（plugins/sandbox/views.ts 校验过），这里用 Odea 自己的样子画：
    字号、颜色、间距、按钮都是宿主的，插件只能在几档里挑（tone、primary）。动效只有整段第一次出来时
-   淡一下透明度（CLAUDE.md「动效：先对齐再动」），内容换了直接换，不闪。描边用 border。
+   淡一下透明度（docs/PITFALLS/动效.md「先对齐再动」），内容换了直接换，不闪。描边用 border。
 
    点了按钮、提交了表单：交给插件（scripted.ts 的 runSlotAction），做完马上重画这一段；
    这期间这一段的按钮都灰着，免得连点两下改两次。

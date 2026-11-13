@@ -344,7 +344,7 @@ body {
 
 .prose-doc {
   color: var(--color-body);
-  font-size: 17px;
+  font-size: var(--odea-body-size);
   line-height: 1.7;
   letter-spacing: 0.012em;
   text-align: start;
@@ -644,7 +644,7 @@ body {
 }
 
 /* 窗口最上面那条里的「路径 / 标题」（DocumentView 的 TitleStrip）：大标题钻进去才淡进来。
-   只淡 opacity，一直待在自己的图层上（CLAUDE.md 规矩 1、3）。藏起来的时候 visibility 也藏：
+   只淡 opacity，一直待在自己的图层上（docs/PITFALLS/动效.md 规矩 1、3）。藏起来的时候 visibility 也藏：
    字那一层在标题栏（拖动区）上面，看不见的按钮不能挡着拖窗口。出来时立刻可见再淡入；
    收起时先淡完、再藏 */
 .odea-doc-strip {
@@ -849,15 +849,28 @@ body.odea-dragging .odea-row-actions {
    - 减少动效由文件前面的全局规则统一收掉（animation-duration 0.01ms）。
    ============================================================ */
 
+/* 正文字号、正文那一列每行最多几个字。偏好里能改：app/store.ts 的 applyTypography 写在 <html> 上
+   （弹出窗口照着主窗口的 <html> 同步）。编辑器、只读占位、模板预览、正文那一列的宽度都按它们算；
+   列表缩进、列表符号也按正文字号算（calc(var(--odea-body-size) * n)），不跟着所在行的字号走：
+   列表项里的大标题不该把缩进也撑大。档位和依据见 docs/排版规范.md §2 */
+:root {
+  --odea-body-size: 17px;
+  --odea-measure: 44;
+}
+
+/* 正文那一列（DocumentView 的 CenteredColumn，窗口最上面那条里「路径 / 标题」那一列也是它）最宽多少：
+   按「每行多少字」算，字号变了每行的字数不变。两边的内边距（@min-[560px]:px-14，各 56px）算在里面：
+   标准 44 字 × 17px + 112px = 860px，和以前写死的一样 */
+.odea-measure {
+  max-width: calc(var(--odea-measure) * var(--odea-body-size) + 112px);
+}
+
 .odea-editor {
   min-height: 360px;
 }
 
 /* CodeMirror 保留 Markdown 源文，语法标记仅在光标不处于对应语法范围时隐藏。 */
 .odea-editor .cm-editor {
-  /* 正文字号。列表缩进、列表符号这些按它算（calc(var(--odea-body-size) * n)），
-     不跟着所在行的字号走：列表项里的大标题不该把缩进也撑大 */
-  --odea-body-size: 17px;
   min-height: inherit;
   background: transparent;
   color: var(--color-body);
@@ -1018,7 +1031,7 @@ body.odea-dragging .odea-row-actions {
 }
 
 /* ---------- 别人的光标、选区、名字标签（collab/cursors.ts）----------
-   位置直接落位，不过渡（CLAUDE.md 动效规矩第 1 条）。名字标签只淡 opacity，一直待在自己的
+   位置直接落位，不过渡（docs/PITFALLS/动效.md 规矩第 1 条）。名字标签只淡 opacity，一直待在自己的
    图层上（will-change），JS 在每次开始淡之前对齐到整物理像素（规矩第 3 条）；底色是这个人
    自己颜色的实色，不用毛玻璃（第 4 条）。新出现的光标、超时的光标整个淡入淡出 */
 .odea-peer-0 {
@@ -1317,7 +1330,7 @@ body.odea-dragging .odea-row-actions {
 
 /* 标题行左边留白里的那一块（editor/headingFold.ts 的 HeadingGutterWidget）：层级提示 H2 和
    收起箭头，不占位，平时看不见，悬停这一行时淡入；收起的标题箭头常亮。只淡 opacity ——
-   以前 H2 是行上的 ::before，淡入时右移 4px 归位，正好是 CLAUDE.md「动效：先对齐再动」
+   以前 H2 是行上的 ::before，淡入时右移 4px 归位，正好是 docs/PITFALLS/动效.md「先对齐再动」
    第 1 条说的那种。两样都一直待在自己的图层上（will-change），开始淡之前对齐到整物理像素
    （headingFold.ts 的 snapOnHover）。高度是标题第一行的行高（1lh 跟着标题的字号和行高走），
    长标题折成两行时也对着第一行 */
@@ -2178,8 +2191,9 @@ body.odea-dragging .odea-row-actions {
    抓手、「+」、合并胶囊、选区的隐藏输入框都绝对定位浮在它上面，不占高度 */
 .odea-editor .cm-odea-table-block {
   position: relative;
-  /* 和表格同一个字号：上下留白 0.9em 按它算（13.5px）。表格比正文小 2px，见 docs/排版规范.md §5 */
-  font-size: 15px;
+  /* 和表格同一个字号：上下留白 0.9em 按它算（正文 17px 时 13.5px）。表格比正文小 2px、表头比正文小 4px，
+     跟着正文字号的偏好走，见 docs/排版规范.md §5 */
+  font-size: calc(var(--odea-body-size) - 2px);
   padding: 0.9em 0;
 }
 /* 行抓手在表格左边外面、「+」在右边外面：鼠标从表格移过去的路上不能先「离开」表格
@@ -2233,7 +2247,7 @@ body.odea-dragging .odea-row-actions {
   margin: 0;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 15px;
+  font-size: calc(var(--odea-body-size) - 2px);
   line-height: 1.6;
 }
 /* 合并的格子（rowspan / colspan）不一定是一行的第一个、最后一个：分隔线、首列加重
@@ -2262,7 +2276,7 @@ body.odea-dragging .odea-row-actions {
   padding-top: 8px;
   padding-bottom: 8px;
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: calc(var(--odea-body-size) - 4px);
   font-weight: 600;
   letter-spacing: 0.03em;
   line-height: 1.5;
@@ -2342,7 +2356,7 @@ body.odea-dragging .odea-row-actions {
   border-bottom: 1px solid var(--color-line-strong);
   padding: 7px 14px;
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: calc(var(--odea-body-size) - 4px);
   line-height: 1.5;
 }
 .odea-editor .cm-odea-table-caption[hidden] {
@@ -2453,7 +2467,7 @@ body.odea-dragging .odea-row-actions {
 }
 
 /* 浮在表格上的小控件：行 / 列抓手、下边和右边的「+」、两行（列）之间的「+」、合并胶囊。
-   CLAUDE.md「动效：先对齐再动」：只淡 opacity；一直待在自己的图层上（will-change），
+   docs/PITFALLS/动效.md「先对齐再动」：只淡 opacity；一直待在自己的图层上（will-change），
    每次淡之前 tableWidget.ts 对齐到整物理像素。整张表各只有一个，跟着鼠标换位置 */
 .odea-editor
   :is(
@@ -2601,7 +2615,7 @@ body.odea-dragging .odea-row-actions {
   resize: none;
   color: transparent;
   font: inherit;
-  font-size: 15px;
+  font-size: calc(var(--odea-body-size) - 2px);
   line-height: 1.6;
   white-space: pre-wrap;
   caret-color: transparent;
@@ -2620,7 +2634,7 @@ body.odea-dragging .odea-row-actions {
 .odea-editor .cm-odea-table-sink.is-header.is-composing {
   padding-top: 6px;
   padding-bottom: 6px;
-  font-size: 13px;
+  font-size: calc(var(--odea-body-size) - 4px);
   font-weight: 600;
   letter-spacing: 0.03em;
   line-height: 1.5;
@@ -2867,6 +2881,211 @@ body.odea-dragging .odea-row-actions {
   line-height: calc(1.8em + 1px);
 }
 
+/* ---------- 嵌入：`![[笔记]]`、`![[笔记#小节]]`（editor/embed.ts） ----------
+   和下面的图片一样：卡片一直画着，光标碰到这一行时源码在卡片下面露出来一行小字。
+   外层 frame 管上下留白（只用 padding，理由同图片），里层是卡片。这一行源码收着时字号压成 0
+   （同图片：不然光标占位会在卡片下面再撑出一行），卡片自己把字号拿回来。
+   卡片里是只读渲染器画的正文（.prose-doc），字号跟着正文的偏好走 */
+.odea-editor .cm-odea-embed-frame {
+  display: block;
+  padding: 8px 0;
+  font-size: var(--odea-body-size);
+  line-height: 1.7;
+  white-space: normal;
+  cursor: text;
+}
+.odea-editor .cm-line.cm-odea-embed-line:not(.cm-odea-embed-source) {
+  font-size: 0;
+  line-height: 0;
+}
+.odea-editor .cm-odea-embed-frame.is-open {
+  padding-bottom: 4px;
+}
+.odea-editor .cm-line.cm-odea-embed-source {
+  color: var(--color-muted);
+  font-size: 0.86em;
+  line-height: 1.6;
+}
+.odea-editor .cm-odea-embed {
+  display: block;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 8px;
+  padding: 10px 18px 12px;
+}
+/* 光标在这一行上（源码露出来了）：描边换成主色，直接换、不做过渡 */
+.odea-editor .cm-odea-embed-frame.is-open .cm-odea-embed {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+.odea-editor .cm-odea-embed-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+.odea-editor .cm-odea-embed-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.odea-editor .cm-odea-embed-title {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.odea-editor .cm-odea-embed-section {
+  flex: none;
+}
+.odea-editor .cm-odea-embed-body {
+  display: block;
+}
+.odea-editor .cm-odea-embed-note {
+  color: var(--color-muted);
+  font-size: 14px;
+}
+
+/* ---------- 附件卡片：`![[说明书.pdf]]`、`![[录音.m4a]]`（editor/attachmentEmbed.ts） ----------
+   外框和上面的嵌入同一套（cm-odea-embed-frame：留白、源码露出来时的样子）。卡片不铺满一栏：
+   一行图标 + 名字 + 按钮，按钮一直显示、不做悬停淡入；视频卡片按视频的宽度来 */
+.odea-editor .cm-odea-file {
+  --file-kind: var(--color-muted);
+  display: block;
+  box-sizing: border-box;
+  width: min(100%, 520px);
+  border: 1px solid var(--color-line-strong);
+  border-radius: 8px;
+  padding: 10px 10px 10px 12px;
+  cursor: default;
+}
+.odea-editor .cm-odea-file.is-video {
+  width: 100%;
+}
+.odea-editor .cm-odea-file.is-pdf {
+  --file-kind: var(--color-danger);
+}
+.odea-editor .cm-odea-file.is-audio {
+  --file-kind: var(--color-callout-important);
+}
+.odea-editor .cm-odea-file.is-video {
+  --file-kind: var(--color-accent);
+}
+.odea-editor .cm-odea-file.is-missing {
+  --file-kind: var(--color-faint);
+  border-style: dashed;
+}
+.odea-editor .cm-odea-embed-frame.is-open .cm-odea-file {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+.odea-editor .cm-odea-file-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.odea-editor .cm-odea-file-tile {
+  display: flex;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--file-kind) 11%, transparent);
+  color: var(--file-kind);
+}
+.odea-editor .cm-odea-file-icon,
+.odea-editor .cm-odea-file-button-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.odea-editor .cm-odea-file-button-icon {
+  width: 14px;
+  height: 14px;
+}
+.odea-editor .cm-odea-file-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.odea-editor .cm-odea-file-name {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 14.5px;
+  font-weight: 500;
+  line-height: 21px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.odea-editor .cm-odea-file.is-missing .cm-odea-file-name {
+  color: var(--color-muted);
+}
+.odea-editor .cm-odea-file-meta {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: 12.5px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.odea-editor .cm-odea-file-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+.odea-editor .cm-odea-file-button {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 6px;
+  padding: 0 10px 0 8px;
+  background: var(--color-canvas);
+  color: var(--color-body);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.odea-editor .cm-odea-file-button.is-icon {
+  width: 28px;
+  justify-content: center;
+  padding: 0;
+}
+.odea-editor .cm-odea-file-button:hover {
+  background: var(--color-panel);
+  color: var(--color-ink);
+}
+.odea-editor .cm-odea-file-player {
+  display: block;
+  margin-top: 10px;
+}
+.odea-editor .cm-odea-file-media {
+  display: block;
+  width: 100%;
+}
+.odea-editor video.cm-odea-file-media {
+  max-height: 480px;
+  border-radius: 6px;
+  background: #000;
+}
+
 /* ---------- 图片 ----------
    图片一直画着，光标碰到它时源码在图片下面露出来一行（editor/widgets.ts 的 ImageWidget）。
    外层 frame 管上下留白（行内 widget 同样别用 margin：块级子元素的上下 margin 会穿透
@@ -2935,7 +3154,7 @@ body.odea-dragging .odea-row-actions {
 
 /* 源码开着、正在拖大小：隔开 2px 的一圈主色描边，告诉人改的是这一张。和焦点框一样
    直接出现，不做过渡：描边不做动画（docs/技术方案.md §10.1 第 2 条），淡 opacity
-   又会让这一圈在淡完时挪半个像素（CLAUDE.md「动效：先对齐再动」）。
+   又会让这一圈在淡完时挪半个像素（docs/PITFALLS/动效.md「先对齐再动」）。
    用 outline 不用 box-shadow 的扩展：outline 的粗细、偏移浏览器取整到物理像素，box-shadow 不取整，
    1.25 倍屏上 2px 是 2.5 个物理像素，外圈一排实色一排半透明（同表格编辑中的格子） */
 .odea-editor .cm-odea-image-frame:is(.is-open, .is-resizing) .cm-odea-image {
@@ -2957,7 +3176,7 @@ body.odea-dragging .odea-row-actions {
   /* 一直待在自己的图层上：淡入那几帧浏览器本来就会把它提成单独一层，层里和页面里的
      抗锯齿不一样，淡完退回页面里画的那一帧，图标笔画、圆角整体变一下（逐帧对比 536 个
      像素不同）—— 看着就是闪了一下。一直在层上，淡入前后是同一种画法。位置另外对齐到
-     整物理像素（lib/devicePixels.ts），层里画出来才不糊。见 CLAUDE.md「动效：先对齐再动」 */
+     整物理像素（lib/devicePixels.ts），层里画出来才不糊。见 docs/PITFALLS/动效.md「先对齐再动」 */
   will-change: opacity;
 }
 .odea-editor .cm-odea-image-tools {
@@ -3445,7 +3664,7 @@ body.odea-dragging .odea-row-actions {
   border-collapse: collapse;
   border: 1px solid var(--color-line-strong);
   background: var(--color-canvas);
-  font-size: 15px;
+  font-size: calc(var(--odea-body-size) - 2px);
   line-height: 1.6;
 }
 .odea-editor .cm-odea-html-widget :is(th, td) {
@@ -3458,14 +3677,14 @@ body.odea-dragging .odea-row-actions {
   border-bottom-color: var(--color-line-strong);
   background: color-mix(in srgb, var(--color-panel) 55%, var(--color-rail));
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: calc(var(--odea-body-size) - 4px);
   font-weight: 600;
   letter-spacing: 0.03em;
 }
 .odea-editor .cm-odea-html-widget caption {
   padding-bottom: 6px;
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: calc(var(--odea-body-size) - 4px);
   text-align: left;
 }
 .odea-editor .cm-odea-html-widget blockquote {

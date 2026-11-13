@@ -3,7 +3,13 @@ import { openDocument } from "@/app/navigate";
 import { RAIL_WIDTH, hasListColumn, useApp } from "@/app/store";
 import { type GuestCopyState, useGuestCopies } from "@/collab/keep";
 import { useCollab } from "@/collab/store";
-import { attachFiles, attachPaths, documentFolder } from "@/data/attachments";
+import {
+  attachFiles,
+  attachPaths,
+  documentFolder,
+  localAttachmentHost,
+  wikiImageResolver,
+} from "@/data/attachments";
 import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, saveKeyOf, useData } from "@/data/store";
 import {
@@ -18,23 +24,30 @@ import type { EditorOutlineHandle } from "@/editor/MarkdownEditor";
 import type { WikiCandidate } from "@/editor/suggest";
 import { cn } from "@/lib/cn";
 import { snapToDevicePixels } from "@/lib/devicePixels";
+import { FILE_EXTENSIONS } from "@/lib/embeds";
 import { useLingering } from "@/lib/lingering";
-import { registerVisibleDocument } from "@/lib/liveDocuments";
+import { liveEditor, registerVisibleDocument } from "@/lib/liveDocuments";
 import { hasLongRun } from "@/lib/longRun";
 import { buildOutline, renderMarkdown } from "@/lib/markdown";
 import { spring, tween } from "@/lib/motion";
 import { usePaneWindow } from "@/lib/paneWindow";
 import { MOD_KEY } from "@/lib/platform";
 import { win, windowKind } from "@/lib/tauri";
+import { resolveVaultFile } from "@/lib/wikiFiles";
+import { PropertiesPanel } from "@/properties/PropertiesPanel";
 import {
   AlertTriangle,
   Archive,
+  FileCode,
+  FileDown,
+  FileOutput,
   FolderOpen,
   History,
   Maximize2,
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings2,
   Trash2,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -49,6 +62,7 @@ import { NotePath } from "./NotePath";
 import { Outline } from "./Outline";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { PluginSlots } from "./PluginSlots";
+import { ActionMenu } from "./RowMenu";
 import { Segmented } from "./Segmented";
 import { SwapFade } from "./SwapFade";
 import { TeamPresence } from "./TeamPresence";
@@ -159,7 +173,15 @@ export function DocumentView({
   const handleWikiLink = useCallback((title: string, heading?: string, newTab = false) => {
     const wanted = title.trim().toLowerCase();
     if (!wanted) return;
-    const { notes, archived } = useData.getState();
+    const { notes, archived, attachments } = useData.getState();
+    // `[[图.png]]`、`[[说明书.pdf]]` 链的是附件，不是笔记：不新建。在仓库里找得到就用系统的程序打开
+    if (FILE_EXTENSIONS.test(wanted)) {
+      const from = notes.find((note) => note.id === noteIdRef.current)?.relPath ?? null;
+      const rel = resolveVaultFile(title, from, attachments);
+      if (rel) void useData.getState().openAttachment(rel);
+      else useData.setState({ error: `仓库里找不到「${title.trim()}」` });
+      return;
+    }
     const hit =
       notes.find((note) => note.title.trim().toLowerCase() === wanted) ??
       archived.find((note) => note.title.trim().toLowerCase() === wanted);
@@ -266,7 +288,14 @@ export function DocumentView({
   const visibleKey = target && !doc.empty ? saveKey(doc) : "";
   const visibleRef = useRef<ReturnType<typeof registerVisibleDocument> | null>(null);
   const visibleEntry = target
-    ? { ref: target, key: visibleKey, title: doc.title, focused, bodyMd: doc.bodyMd }
+    ? {
+        ref: target,
+        key: visibleKey,
+        title: doc.title,
+        focused,
+        bodyMd: doc.bodyMd,
+        relPath: doc.relPath,
+      }
     : null;
   const visibleEntryRef = useRef(visibleEntry);
   visibleEntryRef.current = visibleEntry;
@@ -296,10 +325,29 @@ export function DocumentView({
         if (popout) void win.focus();
       }
     : undefined;
+  // 导出成 PDF / HTML（export/document.ts，用到才加载）。编辑器里的就是最新的，还没存的也算
+  const handleExport =
+    target && !doc.empty
+      ? (format: "html" | "pdf") => {
+          const markdown = liveEditor(saveKey(doc))?.text() ?? doc.bodyMd;
+          const source = { title: doc.title, markdown, relPath: doc.relPath ?? null };
+          void import("@/export/document").then((module) => module.exportDocument(format, source));
+        }
+      : undefined;
 
   // 附件：粘贴 / 拖进来的文件存进仓库的「附件」，正文里的相对路径以这篇所在的文件夹为基准
   const vaultRoot = useData((s) => s.vaultRoot);
   const imageBase = documentFolder(vaultRoot, doc.relPath);
+  // Obsidian 的 `![[图.png]]`、`![[说明书.pdf]]`：按名字在整个仓库的附件里找（lib/wikiFiles.ts）
+  const vaultAttachments = useData((s) => s.attachments);
+  const wikiImage = useMemo(
+    () => wikiImageResolver(vaultRoot, doc.relPath, vaultAttachments),
+    [vaultRoot, doc.relPath, vaultAttachments],
+  );
+  const attachmentCards = useMemo(
+    () => localAttachmentHost(vaultRoot, doc.relPath, vaultAttachments),
+    [vaultRoot, doc.relPath, vaultAttachments],
+  );
   const handleAttachFiles = useCallback(
     (files: File[]) => (target ? attachFiles(target, files) : Promise.resolve([])),
     [target],
@@ -311,6 +359,19 @@ export function DocumentView({
   // 做客的那一篇（设计 §7.2）：图片从主持人那里要来（解析器换了编辑器就重画那几张）；
   // 粘贴的文件交给主持人存进他的「附件」，插进正文的是从那篇引用它的路径
   const guestImages = useCollab((s) => s.images);
+  // `![[图.png]]`：主持人按名字找了给（要到了换一个新的解析器）；`![[说明书.pdf]]` 点「打开」时才要
+  const guestWikiImage = useMemo(() => {
+    const wiki = guestImages?.wiki;
+    return wiki ? (name: string) => ({ rel: name, src: wiki(name) }) : null;
+  }, [guestImages]);
+  const guestAttachmentCards = useMemo(
+    () => ({
+      resolve: (name: string) => ({ rel: name, src: "" }),
+      open: (name: string) => void useCollab.getState().openAttachment(name),
+      remote: true,
+    }),
+    [],
+  );
   const guestAttachFiles = useCallback(
     (files: File[]) => useCollab.getState().attachFiles(files),
     [],
@@ -531,6 +592,16 @@ export function DocumentView({
                       )}
                     </header>
 
+                    {/* 属性（docs/提醒与属性.md §3）：属性块里用户自己的那几行，没有就不占地方。
+                  做客的那一篇是别人的文档，不画 */}
+                    {target && !shared && (
+                      <PropertiesPanel
+                        target={target}
+                        readOnly={!canEdit}
+                        onWikiLink={handleWikiLink}
+                      />
+                    )}
+
                     {/* 标题下的细分隔线：宽度从 0 展开，是「文档打开了」的一个小信号。
                   只在进这个工作区时播一次；换篇时它留在原地，跟着整块一起淡换 */}
                     <motion.div
@@ -571,6 +642,8 @@ export function DocumentView({
                           onExternalConflict={handleExternalConflict}
                           templateContext={templateContext}
                           imageBase={shared ? guestImages : imageBase}
+                          wikiImage={shared ? guestWikiImage : wikiImage}
+                          attachments={shared ? guestAttachmentCards : attachmentCards}
                           onAttachFiles={shared ? guestAttachFiles : handleAttachFiles}
                           onAttachPaths={shared ? guestAttachPaths : handleAttachPaths}
                           linkTargets={shared ? undefined : linkTargets}
@@ -634,6 +707,7 @@ export function DocumentView({
         onDelete={doc.deletable ? onDelete : undefined}
         onReveal={handleReveal}
         onHistory={handleHistory}
+        onExport={handleExport}
         saving={saving}
         guestCopy={guestCopy}
         saveError={saveError}
@@ -661,7 +735,7 @@ const UNDER_TABS = 26;
  * 笔记的标签栏显示着（开着第二个标签、分屏、弹出窗口）时，最上面那条是标签，这一行改在它底下
  * （underTabs，docs/标签页与分屏.md §18）：同样等大标题整个钻进「标签栏 + 这一行」底下才淡进来，
  * 在顶上时还是一点不多占。两处各是一份，标签栏出来、收起时一个淡出一个淡入，像是往下让了一格
- * （只淡不挪，CLAUDE.md 规矩 1）。
+ * （只淡不挪，docs/PITFALLS/动效.md 规矩 1）。
  *
  * 为什么是到点淡入、不是滚多少淡多少（CSS 滚动时间线）：换篇时正文先拨回顶上、编辑器挂上后再滚回
  * 上次看到的地方，跟着滚动走的话这一行会消失一帧再冒出来。现在看的是「大标题在不在这一条底下」
@@ -672,7 +746,7 @@ const UNDER_TABS = 26;
  * —— 它比 chrome（z-30）高，所以不能像正文画布那样往左多铺一截，不然盖到窄栏的 Logo 上；字那一层在标题栏上面（z-41），整层不接指针，只有路径的几段和标题接 ——
  * 空着的地方照样拖窗口、双击最大化。标签栏底下那一行不在拖动区里，两层都和标签栏的底色一样是 z-29：
  * 比左边的 chrome（z-30）低，列表栏收起时滑走的那一截不被它盖住。
- * 只淡 opacity（CLAUDE.md 规矩 1），一直待在自己的图层上，开始淡之前对齐整物理像素（规矩 3：
+ * 只淡 opacity（docs/PITFALLS/动效.md 规矩 1），一直待在自己的图层上，开始淡之前对齐整物理像素（规矩 3：
  * 分屏时窗格的左缘常落在小数像素上）。给鼠标用的复本：读屏器、Tab 键走正文里那一行（aria-hidden、tabIndex -1）
  */
 function TitleStrip({
@@ -798,7 +872,8 @@ function TitleStrip({
 }
 
 /**
- * 正文那一列（和窗口最上面那条里「路径 / 标题」那一列）：居中、最宽 860。进出专注模式、列表栏收起 / 展开时，它「滑」到新的居中位置，
+ * 正文那一列（和窗口最上面那条里「路径 / 标题」那一列）：居中、最宽按「每行多少字」的偏好算
+ * （.odea-measure，默认 860）。进出专注模式、列表栏收起 / 展开时，它「滑」到新的居中位置，
  * 而不是瞬间跳过去（layout="position"，只动位置不动尺寸 —— 尺寸动画是 scale，会把文字拉变形）。
  * layoutDependency 把重新测量限定在这两样变化的那一次，换笔记、正文变长都不会触发多余的位移动画。
  * 列表栏收起 / 展开时和它的进出场同一个节奏（Shell 里的 tween.base）。
@@ -822,7 +897,7 @@ function CenteredColumn({ className, children }: { className: string; children: 
       layout="position"
       layoutDependency={`${zen}|${panelCollapsed}`}
       transition={last.current.by === "panel" ? tween.base : ZEN_TRANSITION}
-      className={cn("mx-auto flex w-full max-w-[860px] px-8 @min-[560px]:px-14", className)}
+      className={cn("odea-measure mx-auto flex w-full px-8 @min-[560px]:px-14", className)}
     >
       {children}
     </motion.div>
@@ -847,7 +922,7 @@ function ZenToggle({ zen, onToggle }: { zen: boolean; onToggle: () => void }) {
       aria-label={label}
       aria-pressed={zen}
       title={label}
-      // 进出只淡（CLAUDE.md 动效规矩 1、3）：一直待在自己的图层上；右上角是整数位置，不用对齐
+      // 进出只淡（docs/PITFALLS/动效.md 规矩 1、3）：一直待在自己的图层上；右上角是整数位置，不用对齐
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -1130,6 +1205,7 @@ function StatusBar({
   onDelete,
   onReveal,
   onHistory,
+  onExport,
   saving,
   saveError,
   guestCopy,
@@ -1145,6 +1221,8 @@ function StatusBar({
   onReveal?: () => void;
   /** 打开这篇的历史版本 */
   onHistory?: () => void;
+  /** 导出这一篇（PDF / HTML） */
+  onExport?: (format: "html" | "pdf") => void;
   saving?: boolean;
   saveError?: string | null;
   /** 做客：本机留着一份主持人还没存下的字（kept），还是都存下了（synced） */
@@ -1219,6 +1297,30 @@ function StatusBar({
         </span>
       )}
 
+      {onExport && (
+        <ActionMenu
+          trigger={
+            <button
+              type="button"
+              aria-label="导出"
+              title="导出"
+              className={cn(BAR_BUTTON, "hover:bg-raised hover:text-ink")}
+            >
+              <FileOutput size={14} strokeWidth={1.9} />
+            </button>
+          }
+          actions={[
+            { id: "pdf", label: "导出为 PDF…", icon: FileDown, onSelect: () => onExport("pdf") },
+            { id: "html", label: "导出为 HTML…", icon: FileCode, onSelect: () => onExport("html") },
+            {
+              id: "page",
+              label: "PDF 页面设置…",
+              icon: Settings2,
+              onSelect: () => useApp.getState().setExportDialog({ kind: "page" }),
+            },
+          ]}
+        />
+      )}
       {onHistory && (
         <button
           type="button"

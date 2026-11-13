@@ -21,7 +21,10 @@ use crate::plugins::{self, IndexPart};
 /// 3：去掉了全文索引表 doc_fts（2026-10-16，jieba 分词不要了，技术方案 §6）
 /// 4：日程变成插件（P14.1，2026-11-04）：day / horizon / period_start 三列换成通用的 key，kind 是文档类型 id
 /// 5：加 not_utf8（2026-11-10，docs/1110审查与研究.md §5.1）
-const VERSION: i64 = 5;
+/// 6：加 tags（2026-11-11，属性块里写的标签，智能文件夹的 #标签 认它们，TODO.md P15）
+/// 7：日程的 task 表加 remind_at（任务后面的 ⏰）、doc 加 props（属性块里用户自己的键，属性面板的提示从这里算），
+///    2026-11-12，docs/提醒与属性.md
+const VERSION: i64 = 7;
 
 const SCHEMA: &str = "
 CREATE TABLE doc (
@@ -43,7 +46,9 @@ CREATE TABLE doc (
   size           INTEGER NOT NULL,
   hash           TEXT    NOT NULL,          -- 文件内容指纹：磁盘上的是不是索引里这一版
   file_id        TEXT,                      -- 文件属性块里写的 id。和 id 不一样 = 这是别的文件的拷贝（网盘冲突副本）
-  not_utf8       INTEGER NOT NULL           -- 文件不是 UTF-8：content_md 是换过字的，只能看、不能写回
+  not_utf8       INTEGER NOT NULL,          -- 文件不是 UTF-8：content_md 是换过字的，只能看、不能写回
+  tags           TEXT    NOT NULL,          -- 属性块里写的标签（FrontMatter::tags），小写，一行一个
+  props          TEXT    NOT NULL           -- 属性块里用户自己的那几行（FrontMatter::extra），原样
 );
 CREATE UNIQUE INDEX doc_key ON doc(kind, key) WHERE kind != 'note';
 ";
@@ -141,11 +146,15 @@ pub struct DocRow {
     /// 文件不是 UTF-8（GBK、UTF-16 这些）：content_md 里认不出的字换成了 U+FFFD。
     /// 只能看，所有会写回这个文件的操作都拒绝（Vault::read），不然原文就没了
     pub not_utf8: bool,
+    /// 属性块里写的标签（FrontMatter::tags）：小写、不带 #。正文里的 #标签 不在这里（智能文件夹现找）
+    pub tags: Vec<String>,
+    /// 属性块里用户自己的那几行（FrontMatter::extra），原样、换行连起来。属性面板的提示从这里算（vault/properties.rs）
+    pub props: String,
 }
 
 const COLUMNS: &str = "id, kind, rel_path, key, title, content_md, excerpt,
     word_count, is_pinned, is_archived, archive_category, archived_at, created_at, updated_at,
-    mtime, size, hash, file_id, not_utf8";
+    mtime, size, hash, file_id, not_utf8, tags, props";
 
 fn row(r: &Row) -> rusqlite::Result<DocRow> {
     Ok(DocRow {
@@ -168,6 +177,13 @@ fn row(r: &Row) -> rusqlite::Result<DocRow> {
         hash: r.get("hash")?,
         file_id: r.get("file_id")?,
         not_utf8: r.get::<_, i64>("not_utf8")? != 0,
+        tags: r
+            .get::<_, String>("tags")?
+            .split('\n')
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_string)
+            .collect(),
+        props: r.get("props")?,
     })
 }
 
@@ -364,7 +380,7 @@ pub fn put(conn: &Connection, doc: &DocRow, parts: &[&'static dyn IndexPart]) ->
         tx.execute("DELETE FROM doc WHERE id = ?1", params![id])?;
     }
     tx.execute(
-        &format!("INSERT INTO doc ({COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"),
+        &format!("INSERT INTO doc ({COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)"),
         params![
             doc.id,
             doc.kind,
@@ -385,6 +401,8 @@ pub fn put(conn: &Connection, doc: &DocRow, parts: &[&'static dyn IndexPart]) ->
             doc.hash,
             doc.file_id,
             doc.not_utf8 as i64,
+            doc.tags.join("\n"),
+            doc.props,
         ],
     )?;
     tx.commit()?;

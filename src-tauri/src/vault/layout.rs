@@ -668,9 +668,10 @@ pub fn conflict_originals(stem: &str) -> Vec<String> {
         }
         if let Some((base, inner)) = trailing_group(name) {
             let lower = inner.to_lowercase();
-            if inner.contains("冲突") || lower.contains("conflict") {
-                push(base);
-            } else if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+            // 括号里写着「冲突」/ conflict，或者只有数字（网盘撞名时加的序号）
+            let marked = inner.contains("冲突") || lower.contains("conflict");
+            let numbered = !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit());
+            if marked || numbered {
                 push(base);
             }
         }
