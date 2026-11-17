@@ -2579,8 +2579,9 @@ fn renaming_leaves_links_in_files_that_are_not_utf8_alone() {
 fn a_merged_version_that_is_not_utf8_is_kept_byte_for_byte() {
     let mut f = fixture();
     f.vault.note_create("周报", "本机的").unwrap();
-    let copies = f.vault.absorb_merge(&[("笔记/周报.md".into(), GBK.to_vec())]).unwrap();
-    assert_eq!(copies.len(), 1);
+    let kept = f.vault.keep_theirs(&[("笔记/周报.md", GBK)]).unwrap();
+    assert_eq!(kept.names.len(), 1);
+    f.vault.absorb_merge(kept).unwrap();
     let copy = f.files().into_iter().find(|rel| rel.contains("冲突")).unwrap();
     assert_eq!(f.bytes(&copy), GBK, "对方那一版原样另存，不换成 U+FFFD");
 }
@@ -2949,8 +2950,10 @@ fn a_conflict_copy_of_a_long_named_note_still_gets_written() {
     f.write_externally("笔记/短.md", "短的");
     f.vault.rescan().unwrap();
 
-    let theirs = [(long.clone(), "那一版".as_bytes().to_vec()), ("笔记/短.md".to_string(), "短的那一版".as_bytes().to_vec())];
-    assert_eq!(f.vault.absorb_merge(&theirs).unwrap().len(), 2);
+    let theirs = [(long.as_str(), "那一版".as_bytes()), ("笔记/短.md", "短的那一版".as_bytes())];
+    let kept = f.vault.keep_theirs(&theirs).unwrap();
+    assert_eq!(kept.names.len(), 2);
+    f.vault.absorb_merge(kept).unwrap();
 
     let id = f.vault.note_list(false).unwrap().into_iter().find(|note| note.title == stem).unwrap().id;
     f.write_externally(&long, "外面又改了");
@@ -2961,6 +2964,38 @@ fn a_conflict_copy_of_a_long_named_note_still_gets_written() {
     bodies.sort();
     assert_eq!(bodies, ["外面又改了", "我改的", "短的", "短的那一版", "那一版"]);
     assert!(f.files().iter().all(|rel| rel.rsplit('/').next().unwrap().len() <= 255));
+}
+
+/// 同步合并前另存对方那一版，一份存不下来（盘满了、没权限）：这一次已经存下的都收回去、报错，
+/// 同步那边就不合并，下一轮整个重来 —— 不然每失败一轮多一份一模一样的副本（审查 §5.5）
+#[test]
+fn keeping_theirs_rolls_back_when_one_copy_cannot_be_written() {
+    let mut f = fixture();
+    f.vault.note_create("周报", "本机的").unwrap();
+    // 「坏」在磁盘上是个文件：它底下的附件副本建不了文件夹
+    f.write_bytes_externally("坏", b"x");
+    let before = f.files();
+    f.announced.lock().unwrap().clear();
+
+    let theirs: [(&str, &[u8]); 2] = [("笔记/周报.md", "对方的".as_bytes()), ("坏/图.png", &[1, 2, 3])];
+    assert!(f.vault.keep_theirs(&theirs).is_err());
+    assert_eq!(f.files(), before, "先存下的那份笔记副本收回去了");
+    let titles: Vec<String> = f.vault.note_list(false).unwrap().into_iter().map(|note| note.title).collect();
+    assert_eq!(titles, ["周报"], "索引里也没有它");
+    assert!(f.announced.lock().unwrap().is_empty(), "没做成的不通知前端");
+
+    // 进索引时才失败的（文件已经写下了）也收得回去
+    f.vault.fail_conflict_copies(true);
+    assert!(f.vault.keep_theirs(&theirs[..1]).is_err());
+    assert_eq!(f.files(), before);
+    f.vault.fail_conflict_copies(false);
+
+    // 修好了再来一次：照常另存
+    let kept = f.vault.keep_theirs(&theirs[..1]).unwrap();
+    f.vault.absorb_merge(kept).unwrap();
+    let bodies: Vec<String> = f.vault.note_list_full(false).unwrap().into_iter().map(|note| note.content_md).collect();
+    assert_eq!(bodies.len(), 2);
+    assert!(bodies.contains(&"对方的".to_string()), "{bodies:?}");
 }
 
 /// 文件夹里有一篇不是 UTF-8 的：删文件夹先说、一篇都不动。以前删到它才报错，排在前面的已经进了回收站

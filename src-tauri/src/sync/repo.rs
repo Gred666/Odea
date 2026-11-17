@@ -538,8 +538,17 @@ impl SyncRepo {
     }
 
     /// 把 fetch 来的合进当前分支，写进工作区。调用前先 commit_all：
-    /// 工作区里有没提交的改动时，safe 模式的检出会拒绝覆盖
-    pub fn merge_fetched(&self, author: &Author) -> SyncResult<Pulled> {
+    /// 工作区里有没提交的改动时，safe 模式的检出会拒绝覆盖。
+    ///
+    /// 两边都改了的文件原处留本机的，对方那一版交给 `keep` 另存 —— 在检出、合并提交之前：
+    /// `keep` 报错就什么都不动（工作区、HEAD 都是原样），下一轮再合、再交给它。
+    /// 反过来先提交的话，下一轮已经不冲突了，另存失败的那几版只剩在 git 历史里
+    /// （`REVIEWS/2026-11-13-全项目审查.md` §5.5）
+    pub fn merge_fetched(
+        &self,
+        author: &Author,
+        keep: impl FnOnce(&[Conflict]) -> SyncResult<()>,
+    ) -> SyncResult<Pulled> {
         let branch = self.branch();
         let Ok(their_ref) = self
             .repo
@@ -583,6 +592,9 @@ impl SyncRepo {
             }
         }
         let tree = self.repo.find_tree(index.write_tree_to(&self.repo)?)?;
+        if !conflicts.is_empty() {
+            keep(&conflicts)?;
+        }
         self.repo
             .checkout_tree(tree.as_object(), Some(CheckoutBuilder::new().safe()))?;
         let signature = Signature::now(author.name, author.email)?;

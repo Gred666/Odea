@@ -339,7 +339,7 @@ mod tests {
         fs::write(b_root.join("笔记/周报.md"), note("n1", "一\n二\n三\n四\n五（B）\n")).unwrap();
         b.commit_all(&author("B"), LIMIT, describe).unwrap();
         b.fetch(&net).unwrap();
-        assert!(b.merge_fetched(&author("B")).unwrap().merged);
+        assert!(b.merge_fetched(&author("B"), |_| Ok(())).unwrap().merged);
 
         let history = versions(&b_root, "笔记/周报.md", Some("n1"), 100).unwrap();
         let bodies: Vec<String> = history
