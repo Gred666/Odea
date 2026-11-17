@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import { EditorState } from "@codemirror/state";
+import { useData } from "@/data/store";
+import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { typoraDecorations } from "./MarkdownEditor";
@@ -527,6 +528,77 @@ describe("卡片里的录音、视频滚远了接着放", () => {
     expect(barShown()).toBe(false);
     expect(audio.getAttribute("src")).toBeNull();
     expect(keptSlot()).toBeNull();
+  });
+
+  it("says so and folds the bar when 回到卡片 finds the line gone (桌面端验证 §4.7)", async () => {
+    useData.setState({ notice: null });
+    const { parent, view } = mount(LONG("![[录音.m4a]]"), host());
+    const audio = parent.querySelector("audio")!;
+    await play(audio, 2);
+    await far(view);
+    expect(barShown()).toBe(true);
+    // 那一行被删了（自己删的、协作的对方删的），卡片早就藏着
+    view.dispatch({ changes: { from: 0, to: view.state.doc.line(1).to } });
+    await kernel();
+    barButton("回到卡片")!.click();
+    await settle();
+    expect(useData.getState().notice).toBe("这一篇里已经没有这张卡片了");
+    expect(barShown()).toBe(false);
+    expect(audio.paused).toBe(true);
+    // 进度还留着：Ctrl+Z 找回那一行，接上的是同一个
+    expect(audio.currentTime).toBe(2);
+    useData.setState({ notice: null });
+  });
+
+  it("stops a hidden one whose file was deleted or renamed, instead of playing out its buffer (§4.7)", async () => {
+    const files = new Map(Object.entries(FILES));
+    const live = (): AttachmentHost => ({
+      resolve: (name) => {
+        const rel = files.get(name);
+        return rel ? { rel, src: `asset://${rel}` } : null;
+      },
+      open: vi.fn(),
+      remote: false,
+    });
+    const slot = new Compartment();
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const doc = LONG("![[录音.m4a]]\n\n![[访谈.m4a]]");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc,
+        selection: { anchor: doc.length },
+        extensions: [markdownSupport(), typoraDecorations, slot.of(attachmentHost.of(live()))],
+      }),
+    });
+    views.push(view);
+    const recording = mediaOf(parent, "录音.m4a")!;
+    const interview = mediaOf(parent, "访谈.m4a")!;
+    await play(recording, 2);
+    await play(interview, 3);
+    await far(view);
+    expect(keptSlot()?.contains(recording)).toBe(true);
+
+    // 资源管理器里删了「录音.m4a」：附件清单换了一份，藏着的那个停掉、放掉；别的照放
+    files.delete("录音.m4a");
+    view.dispatch({ effects: slot.reconfigure(attachmentHost.of(live())) });
+    await settle();
+    expect(recording.paused).toBe(true);
+    expect(recording.getAttribute("src")).toBeNull();
+    expect(keptSlot()?.contains(recording)).toBe(false);
+    expect(interview.paused).toBe(false);
+
+    // 卡片还在眼前时文件改了名：卡片重画成「找不到」，旧的那个不藏起来接着放
+    await back(view);
+    await play(interview, 3);
+    files.set("访谈（改名）.m4a", files.get("访谈.m4a")!);
+    files.delete("访谈.m4a");
+    view.dispatch({ effects: slot.reconfigure(attachmentHost.of(live())) });
+    await kernel();
+    expect(interview.paused).toBe(true);
+    expect(keptSlot()).toBeNull();
+    expect(barShown()).toBe(false);
   });
 
   it("stops everything when the editor goes away (switching notes)", async () => {
