@@ -10,6 +10,8 @@
 - 一批里全是 .md 文件：只重读这几个；有目录或别的东西（整个文件夹被挪走、改名）：
   整个仓库增量扫一遍（按修改时间和大小，没变的不读）。
 - 应用自己写的文件扫描时指纹对得上，不会被当成外部改动，也不会发通知。
+- 读不了、跳过的 .md（别的程序独占着：网盘、杀毒、别的编辑器）隔一会儿再读，越等越久、最多一分钟一次：
+  有的程序占着不改，放开时没有文件事件（审查 §5.4）。启动时后台读跳过的也记着，下一批一起再读
 - 每处理完一批就调一下 on_batch（不管是谁写的）：同步线程据此知道「有文件变了」，
   停笔一会儿后提交（技术方案 §5.9.6）。.git/ 以点开头，同步自己的 git 操作戳不到这里。
 - 监听对象被丢掉（换了仓库）时通道断开，线程自己退出。
@@ -26,6 +28,10 @@ use super::{fsio, Vault};
 use crate::error::{AppError, Result};
 
 const QUIET: Duration = Duration::from_millis(300);
+/// 读不了的文件（别的程序独占着，放开时不一定有文件事件）隔多久再读：1、2、4……秒，最多一分钟一次。
+/// 一次只是 stat 一下、试着打开，几篇被长时间占着也不费什么（审查 §5.4）
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(60);
 
 /// 持有它监听才在；丢掉就停
 pub struct VaultWatcher {
@@ -52,19 +58,38 @@ pub fn start(vault: Arc<Mutex<Vault>>, on_batch: Option<OnBatch>) -> Result<Vaul
         .name("vault-watch".into())
         .spawn(move || {
             let mut batch = Batch::default();
+            // 上一批里读不了、跳过的（别的程序独占着）：没有新事件也隔一会儿再读
+            let mut unread: Vec<String> = Vec::new();
+            let mut retry_in = RETRY_FIRST;
             loop {
-                match rx.recv() {
-                    Ok(event) => batch.add(&root, event),
-                    Err(_) => return,
+                let first = if unread.is_empty() {
+                    rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+                } else {
+                    rx.recv_timeout(retry_in)
+                };
+                let woken = first.is_ok();
+                match first {
+                    Ok(event) => {
+                        batch.add(&root, event);
+                        loop {
+                            match rx.recv_timeout(QUIET) {
+                                Ok(event) => batch.add(&root, event),
+                                Err(RecvTimeoutError::Timeout) => break,
+                                Err(RecvTimeoutError::Disconnected) => return,
+                            }
+                        }
+                    }
+                    // 到点了：还占着就越等越久，最多 RETRY_MAX
+                    Err(RecvTimeoutError::Timeout) => retry_in = (retry_in * 2).min(RETRY_MAX),
+                    Err(RecvTimeoutError::Disconnected) => return,
                 }
-                loop {
-                    match rx.recv_timeout(QUIET) {
-                        Ok(event) => batch.add(&root, event),
-                        Err(RecvTimeoutError::Timeout) => break,
-                        Err(RecvTimeoutError::Disconnected) => return,
+                let mut work = std::mem::take(&mut batch);
+                let retried = unread.len();
+                for rel in unread.drain(..) {
+                    if !work.files.contains(&rel) {
+                        work.files.push(rel);
                     }
                 }
-                let work = std::mem::take(&mut batch);
                 if work.is_empty() {
                     continue;
                 }
@@ -80,11 +105,17 @@ pub fn start(vault: Arc<Mutex<Vault>>, on_batch: Option<OnBatch>) -> Result<Vaul
                 } else {
                     vault.rescan_paths_and_announce(&work.files)
                 };
+                unread = vault.take_unread();
+                if unread.is_empty() {
+                    retry_in = RETRY_FIRST;
+                }
                 drop(vault);
                 if let Err(error) = result {
                     eprintln!("同步外部改动失败: {error}");
                 }
-                if let Some(on_batch) = &on_batch {
+                // 只是到点再读、一篇都还没读成：什么都没变，不戳同步
+                let changed = woken || unread.len() < retried;
+                if let Some(on_batch) = on_batch.as_ref().filter(|_| changed) {
                     on_batch();
                 }
             }
@@ -204,6 +235,40 @@ mod tests {
 
         batch.add(root, event("/vault/笔记/新文件夹"));
         assert!(batch.full);
+    }
+
+    /// 外面改了一篇、马上被别的程序独占着（同步客户端、杀毒），过一会儿放开 —— 放开时没有文件事件。
+    /// 以前跳过以后要等下一个文件事件（或者重启）才补读，这一篇的外部改动一直进不了索引（审查 §5.4）
+    #[test]
+    fn a_file_held_while_its_change_arrives_is_read_once_it_is_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("笔记")).unwrap();
+        let vault = Arc::new(Mutex::new(Vault::open_in_memory(&root)));
+        let (tx, rx) = mpsc::channel::<VaultChange>();
+        let tx = Mutex::new(tx);
+        vault.lock().unwrap().set_announcer(Arc::new(move |change| {
+            let _ = tx.lock().unwrap().send(change);
+        }));
+        let _watcher = start(vault.clone(), None).unwrap();
+
+        let path = root.join("笔记").join("占着的.md");
+        std::fs::write(&path, "---\nid: held1\n---\n\n外面写的").unwrap();
+        let Some(hold) = crate::vault::tests::hold_exclusively(&path) else {
+            return; // 这台机器上占不住（Unix 上用 root 跑的）：测不了
+        };
+        // 监听处理这一批时它被占着：跳过；占着的这一会儿重读几次也读不了
+        std::thread::sleep(Duration::from_millis(2500));
+        assert!(vault.lock().unwrap().note_get("held1").is_err());
+
+        // 放开（Windows 上关一个只读的句柄没有文件事件）：隔一会儿再读，读进来了
+        drop(hold);
+        let got = (0..20).any(|_| {
+            rx.recv_timeout(Duration::from_millis(500))
+                .is_ok_and(|change| change.notes.contains(&"held1".to_string()))
+        });
+        assert!(got, "放开以后没再读");
+        assert_eq!(vault.lock().unwrap().note_get("held1").unwrap().content_md, "外面写的");
     }
 
     /// 真的起一个监听：外部写文件、改名、删除，索引跟上并发出通知

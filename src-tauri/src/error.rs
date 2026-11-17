@@ -28,6 +28,20 @@ pub enum AppError {
 
 pub type Result<T> = std::result::Result<T, AppError>;
 
+impl AppError {
+    /// 不带「IO 错误:」这类前缀的那一句：拼进另一句话里用（前端显示的也是这一句，`message`）
+    pub fn detail(&self) -> String {
+        match self {
+            AppError::Db(message)
+            | AppError::NotFound(message)
+            | AppError::Invalid(message)
+            | AppError::Io(message)
+            | AppError::Internal(message) => message.clone(),
+            other => other.to_string(),
+        }
+    }
+}
+
 impl From<rusqlite::Error> for AppError {
     fn from(e: rusqlite::Error) -> Self {
         match e {

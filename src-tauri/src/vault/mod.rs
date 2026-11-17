@@ -113,6 +113,9 @@ pub struct Vault {
     tree_build: bool,
     /// 索引和磁盘对齐过一遍了（后台那批读完了）。没读完的时候，索引里找不到的笔记不一定是没了
     indexed_all: bool,
+    /// 扫描时读不了、跳过的 .md（别的程序正独占着它）。文件监听隔一会儿拿去再读（take_unread，watch.rs）：
+    /// 有的程序占着不改、放开时没有文件事件，不再读的话外部改动一直进不了索引（审查 §5.4）
+    unread: Vec<String>,
 }
 
 /// keep_theirs 另存下的冲突副本：合并做成了交给 absorb_merge 通知前端，没做成交给 drop_kept 收回
@@ -260,6 +263,7 @@ impl Vault {
             tree_text: String::new(),
             tree_build: false,
             indexed_all: false,
+            unread: Vec::new(),
         };
         vault.load_tree();
         Ok(vault)
@@ -421,14 +425,26 @@ impl Vault {
     /// 扫描时读一个文件。读不了的（别的程序正独占着它：网盘、杀毒、别的编辑器存到一半，
     /// Windows 上是 os error 32）记一笔、跳过：索引里它还是旧的，下次扫描再读。
     /// 不能让它把整批拦下 —— 排在后面的文件就进不了索引，已经认出来的删除也发不到前端
-    fn read_for_index(&self, rel: &str) -> Option<fsio::Decoded> {
+    fn read_for_index(&mut self, rel: &str) -> Option<fsio::Decoded> {
         match self.read_lossy(rel) {
             Ok(decoded) => decoded,
             Err(error) => {
-                eprintln!("读 {rel} 进索引失败，下次再读: {error}");
+                eprintln!("读 {rel} 进索引失败，等一会儿再读: {error}");
+                self.note_unread(rel);
                 None
             }
         }
+    }
+
+    fn note_unread(&mut self, rel: &str) {
+        if !self.unread.iter().any(|known| known == rel) {
+            self.unread.push(rel.to_string());
+        }
+    }
+
+    /// 上次拿走以后，扫描时读不了、跳过的那些 .md（文件监听隔一会儿再读，见 watch.rs）
+    pub fn take_unread(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.unread)
     }
 
     /// 仓库文件夹整个打不开（移动硬盘拔了、网络盘断了、网盘的文件夹被挪走）：说明不了笔记被删了。
@@ -540,6 +556,7 @@ impl Vault {
             while let Some(rel) = backlog.files.pop_front() {
                 if let Err(error) = vault.index_file(&rel, &mut change) {
                     eprintln!("读 {rel} 进索引失败: {error}");
+                    vault.note_unread(&rel);
                 }
                 if budget.is_some_and(|budget| start.elapsed() >= budget) {
                     break;
@@ -1197,13 +1214,38 @@ impl Vault {
         meta.title = Some(row.title.clone());
         meta.created.get_or_insert(row.created_at);
         meta.trashed_from = Some(row.rel_path.clone());
-        fsio::write_atomic(
-            &fsio::abs(&self.root, &trash_rel(&row.id)),
-            &frontmatter::render(&meta, &body),
-        )?;
-        self.remove_doc(row, change)?;
+        let trashed = fsio::abs(&self.root, &trash_rel(&row.id));
+        fsio::write_atomic(&trashed, &frontmatter::render(&meta, &body))?;
+        if let Err(error) = self.remove_doc(row, change) {
+            // 原文删不掉（别的程序开着它、不许删）：回收站里那一份收回去，不然它在回收站里列着、原文也还在
+            if fsio::abs(&self.root, &row.rel_path).exists() {
+                let _ = std::fs::remove_file(&trashed);
+            }
+            return Err(error);
+        }
         self.log.record("note", &row.id, "deleted");
         Ok(())
+    }
+
+    /// 删文件夹时把底下的笔记一篇篇放进回收站。半路有一篇放不进去（别的程序独占着、盘满了）就把已经放进去的
+    /// 放回原处、报错：文件夹要么整个删了（前端拿到 FolderDeletion、能撤销），要么一篇都没动。
+    /// 以前已经进了回收站的那几篇撤销不了；逻辑目录还更糟，内存里的树已经摘了、磁盘上的清单没写（审查 §5.14）
+    fn trash_all(&mut self, rows: &[DocRow], change: &mut VaultChange) -> Result<Vec<String>> {
+        let mut trashed: Vec<String> = Vec::new();
+        for row in rows {
+            if let Err(error) = self.trash(row, change) {
+                for id in trashed.iter().rev() {
+                    if let Err(undo) = self.note_undelete(id) {
+                        // 两样都出错才会到这里：那一篇还在回收站里，从回收站放得回来
+                        eprintln!("删文件夹半路出错，放回 {id} 也没成（还在回收站里）: {undo}");
+                    }
+                }
+                let name = row.rel_path.rsplit('/').next().unwrap_or(&row.rel_path);
+                return Err(AppError::Io(format!("「{name}」删不了，文件夹没删（{}）", error.detail())));
+            }
+            trashed.push(row.id.clone());
+        }
+        Ok(trashed)
     }
 
     pub fn note_undelete(&mut self, id: &str) -> Result<()> {
@@ -1349,15 +1391,7 @@ impl Vault {
             return Err(not_utf8(&row.rel_path));
         }
         let mut change = VaultChange::default();
-        let mut notes = Vec::new();
-        for row in rows {
-            if let Err(error) = self.trash(&row, &mut change) {
-                // 删到一半出错（文件被别的程序占着之类）：已经进了回收站的告诉前端，别让它还列着
-                self.announce(change);
-                return Err(error);
-            }
-            notes.push(row.id);
-        }
+        let notes = self.trash_all(&rows, &mut change)?;
         let kept = !folders::remove_empty_tree(&fsio::abs(&self.root, &dir));
         self.folders = folders::list(&self.root, &self.layout);
         self.log.record("folder", &dir, "deleted");
