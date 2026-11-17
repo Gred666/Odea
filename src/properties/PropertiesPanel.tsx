@@ -55,6 +55,7 @@ import {
   fitsKind,
   isListKind,
   kindOf,
+  mergeProperties,
   parse,
   removeEntry,
   renameEntry,
@@ -1426,16 +1427,51 @@ function SourceEditor({
   onCommit: (text: string) => void;
   onCancel: () => void;
 }) {
-  const [draft, setDraft] = useState(text);
-  const shown = useRef(text);
-  // 别处改了（另一个窗口、外部程序、协作的对方）：没动过就跟上；改了一半的不冲掉，和文字值一样（存好时以打的为准）
-  useEffect(() => {
-    setDraft((current) => (current === shown.current ? text : current));
-    shown.current = text;
-  }, [text]);
+  // draft 是框里的字，base 是它照着改的那一版（草稿开始时显示的），seen 是上一次看到的外面的
+  const [box, setBox] = useState({ draft: text, base: text, seen: text });
+  // 别处改了（另一个窗口、外部程序、协作的对方）：没动过就跟上；改了一半的不冲掉，和文字值一样
+  if (box.seen !== text) {
+    const clean = box.draft === box.base;
+    setBox({ draft: clean ? text : box.draft, base: clean ? text : box.base, seen: text });
+  }
+  const { draft, base } = box;
+  const setDraft = (next: string) => setBox((current) => ({ ...current, draft: next }));
+  const reset = () => setBox({ draft: text, base: text, seen: text });
+  // 改着的时候外面也改了：存的时候按属性逐个三方合（yaml.ts 的 mergeProperties，桌面端验证 §4.9）
+  const outside = draft !== base && text !== base;
+  const merge = useMemo(
+    () => (outside ? mergeProperties(base, draft, text) : null),
+    [outside, base, draft, text],
+  );
+  const save = () => {
+    const next = merge ? merge.text : draft;
+    // 合出来的就是这一次存的：之后外面变成它时照「没动过」跟上
+    setBox({ draft: next, base: next, seen: text });
+    onCommit(next);
+  };
   const rows = Math.max(2, draft.split("\n").length);
   return (
     <div className="flex flex-col gap-1.5 px-2">
+      {merge && editable && (
+        <div className="flex items-start gap-2 px-1 text-[12px] leading-5">
+          {/* 不挡人：出现时读一遍，框里接着打字不受影响 */}
+          <p role="status" className="min-w-0 flex-1 text-muted">
+            <span className="text-body">这一篇的属性在别处改过了</span>
+            {merge.unreadable
+              ? "。这里的读不出来，存的话外面的改动会被盖掉"
+              : merge.conflicts.length > 0
+                ? `。存的时候两边合起来，${merge.conflicts.map((key) => `「${key}」`).join("")}两边都改了，按这里的`
+                : "。存的时候两边合起来"}
+          </p>
+          <button
+            type="button"
+            onClick={reset}
+            className="-my-1 h-7 shrink-0 rounded-md px-2.5 text-muted hover:bg-raised hover:text-ink"
+          >
+            用外面的
+          </button>
+        </div>
+      )}
       <textarea
         // biome-ignore lint/a11y/noAutofocus: 点了「源码」就是要改
         autoFocus={autoFocus}
@@ -1451,11 +1487,11 @@ function SourceEditor({
           if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
             event.preventDefault();
             leave(event);
-            onCommit(draft);
+            save();
           }
           if (event.key === "Escape") {
             leave(event);
-            setDraft(text);
+            reset();
             onCancel();
           }
         }}
@@ -1468,7 +1504,7 @@ function SourceEditor({
           <button
             type="button"
             onClick={() => {
-              setDraft(text);
+              reset();
               onCancel();
             }}
             className="h-7 rounded-md px-2.5 text-muted hover:bg-raised hover:text-ink"
@@ -1477,7 +1513,7 @@ function SourceEditor({
           </button>
           <button
             type="button"
-            onClick={() => onCommit(draft)}
+            onClick={save}
             disabled={draft === text}
             className="h-7 rounded-md border border-line-strong bg-canvas px-2.5 text-body hover:bg-panel disabled:opacity-50"
           >

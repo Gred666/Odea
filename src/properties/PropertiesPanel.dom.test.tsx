@@ -552,12 +552,58 @@ describe("PropertiesPanel", () => {
     // 没动过：外面改了就跟上
     await changedElsewhere("status: 进行中");
     expect(yaml.value).toBe("status: 进行中");
-    // 改了一半：外面再改，打的字留着，存的是打的
+    // 改了一半：外面再改，打的字留着，上面说一声
+    expect(container.querySelector('[role="status"]')).toBeNull();
     await type(yaml, "status: 进行中\n截止: 2026-11-20");
     await changedElsewhere("status: 已完成");
     expect(yaml.value).toBe("status: 进行中\n截止: 2026-11-20");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      "这一篇的属性在别处改过了。存的时候两边合起来",
+    );
+    // 存的时候按属性合：框里没动的 status 用外面的，框里加的截止留着（桌面端验证 §4.9）
     await press(yaml, "Enter", { ctrlKey: true });
-    expect(writes.map((write) => write.text)).toEqual(["status: 进行中\n截止: 2026-11-20"]);
+    expect(writes.map((write) => write.text)).toEqual(["status: 已完成\n截止: 2026-11-20"]);
+  });
+
+  it("the source box names the keys both sides changed, and 用外面的 takes the outside version", async () => {
+    await mount("status: 草稿\n截止: 2026-11-20");
+    const open = container.querySelector<HTMLButtonElement>('button[title="直接改 YAML"]')!;
+    await act(async () => open.click());
+    const yaml = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="属性（YAML）"]',
+    )!;
+    const changedElsewhere = async (text: string) => {
+      stored = text;
+      const listen = api.onVaultChanged.mock.calls.at(-1)?.[0];
+      await act(async () => listen!({ notes: [target.key], docs: [] }));
+      await flush();
+    };
+    const status = () => container.querySelector('[role="status"]')?.textContent;
+    await type(yaml, "status: 进行中\n截止: 2026-11-20");
+    await changedElsewhere("status: 已完成\n截止: 2026-11-20\n负责人: 小王");
+    expect(status()).toBe(
+      "这一篇的属性在别处改过了。存的时候两边合起来，「status」两边都改了，按这里的",
+    );
+    // 框里写成读不出来的：说外面的会被盖掉
+    await type(yaml, "status: 进行中\n随手写的一行");
+    expect(status()).toBe("这一篇的属性在别处改过了。这里的读不出来，存的话外面的改动会被盖掉");
+
+    // 用外面的：框里换成外面现在的，提示收起，没写文件
+    const useTheirs = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "用外面的",
+    )!;
+    await act(async () => useTheirs.click());
+    expect(yaml.value).toBe("status: 已完成\n截止: 2026-11-20\n负责人: 小王");
+    expect(status()).toBeUndefined();
+    expect(writes).toEqual([]);
+
+    // 再改、两边都改了 status：存的是框里的 status，外面改的截止、加的负责人都在
+    await type(yaml, "status: 搁置\n截止: 2026-11-20\n负责人: 小王");
+    await changedElsewhere("status: 取消\n截止: 2026-11-21\n负责人: 小王");
+    await press(yaml, "Enter", { ctrlKey: true });
+    expect(writes.map((write) => write.text)).toEqual([
+      "status: 搁置\n截止: 2026-11-21\n负责人: 小王",
+    ]);
   });
 
   it("typing a whole existing name and Enter keeps that name, not a longer one that starts with it", async () => {
