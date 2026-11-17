@@ -70,6 +70,26 @@ async fn frames_cut_in_the_middle_and_oversized_ones_are_errors() {
     ));
 }
 
+/// 只读帧头：正文还没到也回得来（主持人收附件先占位子、再读正文，审查 §5.6）
+#[tokio::test]
+async fn a_frame_head_is_read_without_waiting_for_the_body() {
+    let (mut a, mut b) = tokio::io::duplex(1024);
+    // 声称 1MB 的 ATTACH_PUT，正文一个字节都还没发
+    tokio::io::AsyncWriteExt::write_all(&mut a, &[0x81, 0x80, 0x40, kind::ATTACH_PUT])
+        .await
+        .unwrap();
+    let head = tokio::time::timeout(
+        Duration::from_secs(1),
+        protocol::read_frame_head(&mut b, protocol::MAX_ATTACH_FRAME),
+    )
+    .await
+    .expect("帧头不该等正文");
+    assert_eq!(head.unwrap(), Some((kind::ATTACH_PUT, (1 << 20))));
+    let body = tokio::spawn(async move { tokio::io::AsyncWriteExt::write_all(&mut a, &vec![5u8; 1 << 20]).await });
+    assert_eq!(protocol::read_frame_body(&mut b, 1 << 20).await.unwrap(), vec![5u8; 1 << 20]);
+    body.await.unwrap().unwrap();
+}
+
 #[test]
 fn proof_is_bound_to_the_secret_and_the_connection() {
     let secret = [1u8; 32];
@@ -2232,6 +2252,88 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
             .map(|_| ())
     })
     .await;
+    relay.leave().await;
+    host.stop().await;
+}
+
+/// 经人转来的访客同时要的附件也按他自己算，最多 ATTACH_STREAMS 个。以前转来的每条流一个新计数器，
+/// 等于不限：一位有编辑权限的转来的访客同时开几十条 50 MB 的 ATTACH_PUT，主持人要先收下几 GB（审查 §5.6）
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_guest_gets_the_same_attachment_limit_as_everyone() {
+    let (host, mut host_events) = start_host("转发的附件").await;
+    let (relay, _relay_events, _relay_member) =
+        admitted(&host, &mut host_events, "B", Permission::Edit).await;
+    let made = relay.callbacks().forward_link().await;
+    let mut invite = Invite::parse(&made.link).unwrap();
+    invite.addrs = relay
+        .bound_sockets()
+        .into_iter()
+        .filter(|addr| addr.is_ipv4())
+        .map(|addr| SocketAddr::from((Ipv4Addr::LOCALHOST, addr.port())))
+        .collect();
+    let (far, mut far_events) = join("C", invite).await;
+    let request = expect(&mut host_events, "经由 B 的加入请求", |event| match event {
+        Event::Control(Control::JoinRequest { request, name, .. }) if name == "C" => Some(*request),
+        _ => None,
+    })
+    .await;
+    assert!(host.answer(request, Decision::Allow(Permission::Edit)));
+    let far_member = expect(&mut far_events, "C 进来了", |event| match status_of(event) {
+        Some(Status::Connected { member, .. }) => Some(member),
+        _ => None,
+    })
+    .await;
+
+    // C 一下子要 12 个：主持人那边只排进 8 个，另外 4 个当场说太多了
+    let wanted = 12;
+    let fetches: Vec<_> = (0..wanted)
+        .map(|n| {
+            let files = far.attachments();
+            tokio::spawn(async move { files.fetch(DOC, &format!("../附件/{n}.png")).await })
+        })
+        .collect();
+    let mut requests = Vec::new();
+    while requests.len() < host::ATTACH_STREAMS as usize {
+        let request = expect(&mut host_events, "C 要附件", |event| match event {
+            Event::AttachGet { request, from, .. } if *from == far_member => Some(*request),
+            _ => None,
+        })
+        .await;
+        requests.push(request);
+    }
+    expect_none(&mut host_events, "第 9 个", |event| matches!(event, Event::AttachGet { .. })).await;
+    let mut refused = 0;
+    for fetch in &fetches {
+        if fetch.is_finished() {
+            refused += 1;
+        }
+    }
+    assert_eq!(refused, wanted - host::ATTACH_STREAMS as usize);
+
+    // 办完了位子还回来：再要一个照常
+    for request in requests {
+        assert!(host.answer_attachment(request, Ok(AttachReply::Data(b"png".to_vec()))));
+    }
+    let mut results = Vec::new();
+    for fetch in fetches {
+        results.push(fetch.await.unwrap());
+    }
+    assert_eq!(results.iter().filter(|result| result.as_deref() == Ok(&b"png"[..])).count(), host::ATTACH_STREAMS as usize);
+    assert!(results
+        .iter()
+        .filter_map(|result| result.as_ref().err())
+        .all(|error| error == "同时要的文件太多了"));
+    let files = far.attachments();
+    let fetch = tokio::spawn(async move { files.fetch(DOC, "../附件/again.png").await });
+    let request = expect(&mut host_events, "再要一个", |event| match event {
+        Event::AttachGet { request, from, .. } if *from == far_member => Some(*request),
+        _ => None,
+    })
+    .await;
+    host.answer_attachment(request, Ok(AttachReply::Data(b"again".to_vec())));
+    assert_eq!(fetch.await.unwrap().unwrap(), b"again");
+
+    far.leave().await;
     relay.leave().await;
     host.stop().await;
 }

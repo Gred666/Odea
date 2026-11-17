@@ -265,6 +265,19 @@ pub async fn read_frame_up_to<R: AsyncRead + Unpin>(
     reader: &mut R,
     max: usize,
 ) -> Result<Option<(u8, Vec<u8>)>, FrameError> {
+    let Some((kind, length)) = read_frame_head(reader, max).await? else {
+        return Ok(None);
+    };
+    Ok(Some((kind, read_frame_body(reader, length).await?)))
+}
+
+/// 只读帧头：帧类型和正文有多少字节（最多 max - 1）。正文还在流里，要的话接着 read_frame_body。
+/// 主持人收附件流先看帧头、占上这位访客的一个位子才读正文：一帧最多 50 MB，读了再数就已经收下了
+/// （`REVIEWS/2026-11-13-全项目审查.md` §5.6）
+pub async fn read_frame_head<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> Result<Option<(u8, usize)>, FrameError> {
     let Some(length) = read_varint(reader).await? else {
         return Ok(None);
     };
@@ -276,9 +289,16 @@ pub async fn read_frame_up_to<R: AsyncRead + Unpin>(
         return Err(FrameError::TooLarge(length));
     }
     let kind = reader.read_u8().await?;
-    let mut payload = vec![0; length - 1];
+    Ok(Some((kind, length - 1)))
+}
+
+pub async fn read_frame_body<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    length: usize,
+) -> Result<Vec<u8>, FrameError> {
+    let mut payload = vec![0; length];
     reader.read_exact(&mut payload).await?;
-    Ok(Some((kind, payload)))
+    Ok(payload)
 }
 
 fn write_varint(buffer: &mut Vec<u8>, mut value: u64) {
