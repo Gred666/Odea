@@ -50,10 +50,10 @@ pub fn decode_legacy(bytes: &[u8]) -> Option<(&'static str, String)> {
         if !rest.len().is_multiple_of(2) {
             return None;
         }
-        let units: Vec<u16> = rest
-            .chunks_exact(2)
-            .map(|pair| if little { u16::from_le_bytes([pair[0], pair[1]]) } else { u16::from_be_bytes([pair[0], pair[1]]) })
-            .collect();
+        // 长度是偶数，余下的那一截是空的
+        let (pairs, _) = rest.as_chunks::<2>();
+        let units: Vec<u16> =
+            pairs.iter().map(|&pair| if little { u16::from_le_bytes(pair) } else { u16::from_be_bytes(pair) }).collect();
         String::from_utf16(&units).ok()
     };
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {

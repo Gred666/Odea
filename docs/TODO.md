@@ -350,7 +350,8 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
   - [x] **需要你**：GitHub 仓库 Settings → Secrets 里的 `GITEE_TOKEN` 用不上了，可以删（2026-10-21 删了）
   - [ ] 代码签名（Windows Authenticode、macOS 公证），以后再说
 - [x] 每次推送都跑的检查（2026-11-10，`docs/REVIEWS/2026-11-10-审查与竞品调研.md` §6.1）：`.github/workflows/ci.yml`，推到任何分支都跑，Ubuntu 上前端 lint、tsc、vitest 和 Rust 的 `cargo test --no-default-features --lib` 两个任务并行。上之前在 WSL 里照着跑，Linux 上挂了一条网盘检测的测试（写死了反斜杠路径），改成反斜杠的只在 Windows 上查
-  - [ ] 推上去看第一次在 GitHub 上跑的结果
+  - [x] 推上去看第一次在 GitHub 上跑的结果（2026-11-17 看的）：前端、绑定、Rust 测试都过，clippy 从 2026-11-13 起一直挂 —— CI 用最新 stable（1.100），本机 1.96，新规则只在那边报。
+    修了（`fsio.rs` 的 `chunks_exact(2)` → `as_chunks::<2>()`），在 WSL 里用 1.100 跑过两遍 clippy；怎么复现见 `PITFALLS/工程.md`「CI 的 clippy 比本机新」
 - [x] 清理旧代码：没用的依赖（`@dnd-kit/*`、`fractional-indexing`、`marked`、Radix dialog / popover / tooltip，Rust 的 `r2d2`、`rrule`、`chrono-tz`）；旧数据模型留下的字段（笔记的 `icon`、恒为空的 `actionGroup`、任务的 `priority` / `goalId` / `sortKey` / `completedAt`）、没人调的 `note_list`、用不上的 `NoteIcon` 组件；日历当日安排从 `ActionGroup` 简化成 `DayTasks`
 - [x] 标题收起（2026-10-17 用户要的，像 Obsidian：悬停标题出箭头，点了这一节收成一行；技术方案 §11.4.5）
   - [x] `editor/headingFold.ts`：`headingFolds` 状态（收起的标题 + 按语法树算的每一节范围）、改动时映射、自动展开、跨过收起的一节的光标规则（`transactionFilter`）
