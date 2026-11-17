@@ -80,6 +80,8 @@ class CollabBinding {
   private caretTimer: unknown = null;
   private caretsScheduled = false;
   private destroyed = false;
+  /** 等这次组字结束（攒着的派发进编辑器以后）要做的：换下这个绑定（whenCollabComposed） */
+  private afterComposing: (() => void)[] = [];
 
   constructor(
     private readonly view: EditorView,
@@ -320,6 +322,20 @@ class CollabBinding {
     this.session.timers.clearTimeout(this.endTimer);
     this.flushDeferred();
     this.session.flushHeld();
+    for (const run of this.afterComposing.splice(0)) run();
+  }
+
+  /** 正在组字（含 compositionend 之后、最后一次组字改动读进来之前） */
+  isComposing(): boolean {
+    return !this.destroyed && this.composing;
+  }
+
+  /** 这次组字结束、攒着的远端改动派发进编辑器以后 run。返回取消 */
+  afterComposition(run: () => void): () => void {
+    this.afterComposing.push(run);
+    return () => {
+      this.afterComposing = this.afterComposing.filter((pending) => pending !== run);
+    };
   }
 
   /* ---------------- 远端光标 ---------------- */
@@ -412,6 +428,20 @@ const bindings = new WeakMap<EditorView, CollabBinding>();
 /** 编辑器要拆了：协作中攒着的远端改动先派发进来（见 CollabBinding.settle）。没挂协作的什么都不做 */
 export function settleCollab(view: EditorView): void {
   bindings.get(view)?.settle();
+}
+
+/**
+ * 要换下编辑器上的绑定（会话收掉、换一份会话）。正在组字的话等组完字、攒着的远端改动派发进编辑器以后再换（run）：
+ * 当场换下，攒着的那几个字这边编辑器里就没了（会话里、主持人那里有）；当场派发又会打断输入法
+ * （docs/协同编辑.md §27.5）。没在组字、没挂协作就当场 run。返回取消（又换了一次、编辑器卸了）
+ */
+export function whenCollabComposed(view: EditorView, run: () => void): () => void {
+  const binding = bindings.get(view);
+  if (!binding?.isComposing()) {
+    run();
+    return () => {};
+  }
+  return binding.afterComposition(run);
 }
 
 /** before → after 的改动（细到字，external.ts 的 fineEdits），相对 before */

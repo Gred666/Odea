@@ -1,5 +1,6 @@
 import syntaxGuide from "@/content/guide/syntax.md?raw";
 import { MarkdownEditor } from "@/editor/MarkdownEditor";
+import { untilEditorsComposed } from "@/editor/saveBus";
 import { merge3 } from "@/lib/merge3";
 import { EditorView } from "@codemirror/view";
 import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
@@ -105,6 +106,8 @@ function openRoom(
   // 再把会话交给编辑器
   const joinLate = async (delay = 300) => {
     if (!late || members.some((member) => member.peer.id === "lab-guest-1")) return;
+    // 和 join 的 io.flush（flushEditorsComposed）一样：正在组字就等组完再记本机的正文（协同编辑.md §27.5）
+    await untilEditorsComposed();
     const dom = document.querySelector<HTMLElement>('[data-lab-peer="lab-guest-1"] .cm-editor');
     const origin = dom ? EditorView.findFromDOM(dom)?.state.doc.toString() : undefined;
     const member = hub.join(makePeer(1));

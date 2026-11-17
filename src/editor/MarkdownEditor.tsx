@@ -1,4 +1,4 @@
-import { collab as collabBinding, settleCollab } from "@/collab/binding";
+import { collab as collabBinding, settleCollab, whenCollabComposed } from "@/collab/binding";
 import type { CollabSession } from "@/collab/session";
 import type { Attachment, MatchAnchor, OutlineItem } from "@/data/types";
 import { registerEditorCommands } from "@/lib/editorCommands";
@@ -482,7 +482,7 @@ export function MarkdownEditor({
       // 输入法正在组字：正文里是拼音，等上屏（或者取消）再存
       () => !!live.view?.compositionStarted,
     );
-    const unregisterFlush = registerEditorFlush(saver.flush);
+    const unregisterFlush = registerEditorFlush(saver.flush, () => !!live.view?.compositionStarted);
     saverRef.current = saver;
 
     // 目录树不需要逐帧精确。每次按键都往上抛正文的话，
@@ -1065,13 +1065,16 @@ export function MarkdownEditor({
 
   // 编辑器挂着时开始 / 结束协作：换上、换下绑定。会话是照本机某一版建的（之后这里可能又打了字、
   // 会话里也可能有了别人的字），绑定挂上时照会话的 origin 对齐（collab/binding.ts 的 align，
-  // docs/协同编辑.md §27）；撤销历史留着（主持人的历史都是自己的改动）
+  // docs/协同编辑.md §27）；撤销历史留着（主持人的历史都是自己的改动）。
+  // 换下的那一刻正在组字：等组完、攒着的别人的字进了编辑器再换（whenCollabComposed，§27.5）
   useEffect(() => {
     if (collabRef.current === collab) return;
     collabRef.current = collab;
     const view = viewRef.current;
     if (!view) return;
-    view.dispatch({ effects: collabSlot.reconfigure(collab ? collabBinding(collab) : []) });
+    return whenCollabComposed(view, () =>
+      view.dispatch({ effects: collabSlot.reconfigure(collab ? collabBinding(collab) : []) }),
+    );
   }, [collab]);
 
   useEffect(() => {

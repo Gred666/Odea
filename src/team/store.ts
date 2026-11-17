@@ -5,7 +5,7 @@ import type { CollabSession } from "@/collab/session";
 import { conflictOriginalTitle } from "@/data/conflicts";
 import { saveKeyOf, useData } from "@/data/store";
 import { type DocumentModel, type DocumentRef, NOTE, isShared } from "@/data/types";
-import { flushAllEditors, registerBeforeClose } from "@/editor/saveBus";
+import { flushEditorsComposed, registerBeforeClose } from "@/editor/saveBus";
 import { type Firewall, type TeamPeer, type TeamRelay, commands } from "@/lib/bindings";
 import { isTauri } from "@/lib/tauri";
 import { documentType } from "@/plugins/registry";
@@ -218,7 +218,8 @@ function bodyNow(target: DocumentRef): string | undefined {
 const keyOf = saveKeyOf;
 
 const io: TeamIO = {
-  flush: flushAllEditors,
+  // 加入、接手主持之前存：等组完字，不然拼音当本机那一版三方合进会话（docs/协同编辑.md §27.5）
+  flush: flushEditorsComposed,
   load: bodyOf,
   save: (target, text, seen) => {
     // 会话没见过磁盘上的那一版（加入时没合进去）：照着 seen 存，磁盘上不是它就先另存冲突副本
