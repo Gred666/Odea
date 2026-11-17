@@ -98,7 +98,7 @@ function prepared(tex: string) {
     pieces: rows.map((row) =>
       [...row.children]
         .filter((part) => !part.classList.contains("katex-tag"))
-        .map((part) => part.textContent?.replace(/​/g, "") ?? ""),
+        .map((part) => part.textContent?.replace(/\u200b/g, "") ?? ""),
     ),
   };
 }
@@ -117,9 +117,9 @@ describe("折行之前的准备", () => {
     const { pieces } = prepared(String.raw`f(x)=f(x_0)+f'(x_0)(x-x_0)+O((x-x_0)^n)`);
     expect(pieces).toHaveLength(1);
     for (const piece of pieces[0]!) expect(balanced(piece), piece).toBe(true);
-    expect(pieces[0]!.some((piece) => piece.includes("(x−x0​)") || piece.includes("(x−x0)"))).toBe(
-      true,
-    );
+    expect(
+      pieces[0]!.some((piece) => piece.includes("(x−x0\u200b)") || piece.includes("(x−x0)")),
+    ).toBe(true);
   });
 
   it("绝对值的两条竖线之间不断；括号里的竖线（条件概率）不当成一对", () => {

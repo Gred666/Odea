@@ -1,10 +1,11 @@
 import { backend } from "@/data/backend";
 import { folderLabel, nameOf, smartQuery } from "@/data/folders";
 import { cn } from "@/lib/cn";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard } from "@/lib/motion";
 import { ListFilter } from "lucide-react";
-import { motion } from "motion/react";
-import { useEffect, useRef, useState } from "react";
+import { motion, useIsPresent } from "motion/react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /* ============================================================
    智能文件夹（docs/仓库与启动器.md §7.2）：起个名字、写一行条件，打开时按条件把笔记筛一遍。
@@ -40,9 +41,19 @@ export function SmartFolderEditor({
   const [name, setName] = useState(path ? nameOf(path) : "");
   const [query, setQuery] = useState((path && smartQuery(path)) ?? "");
   const [count, setCount] = useState<number | null>(null);
-  const panel = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement | null>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const queryInput = useRef<HTMLInputElement>(null);
+  // 和文件夹选择器一样：Tab 留在卡片里（写到一半 Tab 出去，卡片还开着、盖着焦点去的地方）；
+  // 关掉时焦点还给打开它的那个按钮（lib/modalFocus.ts）
+  const modalRef = useModalFocus(useIsPresent());
+  const setPanel = useCallback(
+    (el: HTMLDivElement | null) => {
+      panel.current = el;
+      modalRef(el);
+    },
+    [modalRef],
+  );
 
   useEffect(() => {
     (path ? queryInput : nameInput).current?.focus();
@@ -87,17 +98,21 @@ export function SmartFolderEditor({
     if (event.key === "Enter") {
       event.preventDefault();
       submit();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
     }
   };
 
   return (
     <motion.div
-      ref={panel}
+      ref={setPanel}
       role="dialog"
+      aria-modal="true"
+      // Esc 挂在卡片上：焦点在下面的示例、「取消」「建好」上时也关得掉（以前只有两个输入框认）
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}
       aria-label={path ? "改智能文件夹" : "新建智能文件夹"}
       variants={popoverCard}
       custom={40}

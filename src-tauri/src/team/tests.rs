@@ -173,6 +173,60 @@ async fn a_device_not_in_the_list_is_refused() {
     stranger.net.stop().await;
 }
 
+/// 仓库里的设备名单写成这几台（git 同步拉下来的那一份）
+fn write_list(root: &std::path::Path, devices: &[Device]) {
+    let rows: Vec<crate::vault::team::Device> = devices
+        .iter()
+        .map(|device| crate::vault::team::Device {
+            key: data_encoding::HEXLOWER.encode(&device.key),
+            account: device.account.clone(),
+            updated: 1,
+            name: device.name.clone(),
+        })
+        .collect();
+    let path = root.join(crate::vault::team::DEVICES_FILE);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, crate::vault::team::render(&rows)).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_member_removed_while_someone_new_dials_in_is_still_disconnected() {
+    // 同一次同步里：李四被移出、王五加进来。王五先拨进来，张三为认他重读了名单 ——
+    // 那一次重读也得把已经连着的李四断开，不能留给下一轮拨号（那时名单已经「没变」了）
+    let dir = tempfile::tempdir().unwrap();
+    let (a, _) = device().await;
+    let (b, _) = device().await;
+    let (c, _) = device().await;
+    let [la, lb, lc]: [Device; 3] = listed(&[&a, &b, &c]).try_into().unwrap();
+    write_list(dir.path(), &[la.clone(), lb.clone()]);
+    let (a_addr, b_addr) = (a.addr(), b.addr());
+    let (tx, _a_events) = unbounded_channel();
+    a.join(
+        TeamSpec {
+            id: TEAM.into(),
+            name: "张三".into(),
+            account: la.account.clone(),
+            devices: vec![la.clone(), lb.clone()],
+            root: Some(dir.path().to_path_buf()),
+        },
+        tx,
+    );
+    let b = join(b, "李四", vec![la.clone(), lb.clone()]);
+    a.learn(&b_addr);
+    b.net.learn(&a_addr);
+    until("张三和李四连上", || a.online(TEAM) == 1 && b.net.online(TEAM) == 1).await;
+    settle().await;
+
+    write_list(dir.path(), &[la.clone(), lc.clone()]);
+    let c = join(c, "王五", vec![la, lc]);
+    c.net.learn(&a_addr);
+    until("王五连上", || a.peers(TEAM).iter().any(|peer| peer.online && peer.name == "王五")).await;
+    until("李四被断开", || b.net.online(TEAM) == 0 && a.online(TEAM) == 1).await;
+    a.stop().await;
+    b.net.stop().await;
+    c.net.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_doc_session_runs_through_the_host() {
     let mut devices = team(&["张三", "李四", "王五"]).await;

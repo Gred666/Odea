@@ -2,7 +2,13 @@ import { type SavedSnapshot, mergeExternal, snapshot } from "@/collab/external";
 import type { KeepGuard } from "@/collab/keep";
 import { type SessionLink, ackSaved, linkSession } from "@/collab/link";
 import { type Frame, PIPE } from "@/collab/net";
-import { type CollabScheduler, type CollabSession, type Peer, peerColor } from "@/collab/session";
+import {
+  type CollabScheduler,
+  type CollabSession,
+  type Peer,
+  peerColor,
+  toLF,
+} from "@/collab/session";
 import type { DocumentRef } from "@/data/types";
 import type { PresenceDoc, TeamControl, TeamPeer, TeamSelf } from "@/lib/bindings";
 import { merge3 } from "@/lib/merge3";
@@ -44,7 +50,11 @@ export interface TeamIO {
   flush(): Promise<void>;
   /** 数据层里这一篇现在的正文（磁盘上的；某一天没写过时是延续来的） */
   load(target: DocumentRef): Promise<string | undefined>;
-  save(target: DocumentRef, text: string): Promise<void>;
+  /**
+   * seen：这段正文是照着哪一版改的。给了的话，磁盘上不是那一版（有会话没见过的本机改动）就先另存冲突副本
+   * 再写（data 层的 markConflict，后端 keep_unseen_edits），见 Entry.unseen
+   */
+  save(target: DocumentRef, text: string, seen?: string): Promise<void>;
   /** 这一篇被别处改了（git 拉来的、别的程序）：给磁盘上的新正文 */
   onExternal(target: DocumentRef, listener: (disk: string) => void): () => void;
   /**
@@ -94,6 +104,11 @@ export interface TeamDocSession {
   session: CollabSession;
   /** 别人主持：这边不存盘 */
   remote: boolean;
+  /**
+   * 加入时本机那一版没合进会话、编辑器里换成了这位（主持人）的那一版：他的名字，标题上方据此说一声（docs/协同编辑.md §28）。
+   * 没有这回事、或者这一次加入里关掉了提示时没有。正文不放在这里（每次 emit 都会带一份），要看时 unseenText
+   */
+  unseenFrom?: string;
 }
 
 export interface TeamSnapshot {
@@ -141,6 +156,25 @@ interface Entry {
   retryAt: number;
   /** 正在做一个转换（加入、主持、接手、交接）：做完之前不再按 Presence 判断，做完再判断一次 */
   busy: boolean;
+  /**
+   * 加入时本机那一版有没合进会话的（没有 base、三方合有撞上的段、文档太大合不了），写过一次、会话收掉了
+   * （磁盘没动，git 下一轮自己合）就清掉（docs/协同编辑.md §27、§28）
+   */
+  unseen: Unseen | null;
+}
+
+interface Unseen {
+  /**
+   * 会话是照着这一版（主持人的）建的。本机磁盘上那一版会话从没见过 —— 这台下一次把会话的正文写回磁盘
+   * （接手主持、换到另一份会话）时拿它当 base，磁盘上不是它就先另存冲突副本
+   */
+  seen: string;
+  /** 加入时本机那一版（磁盘上的，做客期间这台不存盘）：「看我的那一版」看的是它 */
+  mine: string;
+  /** 主持人的名字：「现在显示的是 X 的」 */
+  from: string;
+  /** 这一次加入里关掉了提示 */
+  hidden: boolean;
 }
 
 const randomId = () =>
@@ -159,6 +193,8 @@ export class TeamController {
   private lastPresence = "";
   /** 每份会话的本机留底（TeamIO.keep） */
   private readonly guards = new WeakMap<SessionLink, KeepGuard>();
+  /** 收掉会话时还在写的本机留的那几份：destroy（关窗口）等它们写完 */
+  private readonly keeping = new Set<Promise<void>>();
 
   constructor(
     private readonly net: TeamNet,
@@ -291,9 +327,27 @@ export class TeamController {
     const sessions: Record<string, TeamDocSession> = {};
     for (const entry of this.entries.values()) {
       if (!entry.link || entry.role === "joining" || entry.role === "solo") continue;
-      sessions[entry.doc] = { session: entry.link.session, remote: entry.role !== "host" };
+      const unseen = entry.unseen;
+      sessions[entry.doc] = {
+        session: entry.link.session,
+        remote: entry.role !== "host",
+        ...(unseen && !unseen.hidden ? { unseenFrom: unseen.from } : {}),
+      };
     }
     return { peers: this.peers, sessions };
+  }
+
+  /** 加入时没合进会话的本机那一版（docs/协同编辑.md §28）：没有（或者已经另存、会话收了）是 null */
+  unseenText(doc: string): string | null {
+    return this.entries.get(doc)?.unseen?.mine ?? null;
+  }
+
+  /** 「知道了」：这一次加入期间不再提示。本机那一版照旧留着、照旧另存 */
+  hideUnseen(doc: string): void {
+    const unseen = this.entries.get(doc)?.unseen;
+    if (!unseen || unseen.hidden) return;
+    unseen.hidden = true;
+    this.emit();
   }
 
   /** 窗口关了、换了仓库：主持着的存下去、不主持 */
@@ -305,7 +359,7 @@ export class TeamController {
       else this.drop(entry);
     }
     this.entries.clear();
-    await this.net.presence([]).catch(() => {});
+    await Promise.all([this.net.presence([]).catch(() => {}), ...this.keeping]);
   }
 
   /* ---------------- 按 Presence 定 ---------------- */
@@ -528,6 +582,8 @@ export class TeamController {
     const text = (await this.io.load(entry.target)) ?? "";
     if (entry.epoch !== epoch) return;
     entry.link = this.newLink(entry, { initialText: text });
+    // 读正文到编辑器挂上之间还在打的字：挂上时照这一版对齐（docs/协同编辑.md §27）
+    entry.link.session.markOrigin(text);
     entry.lineage = randomId();
     await this.startHosting(entry, false);
   }
@@ -564,9 +620,15 @@ export class TeamController {
       const shot = snapshot(session);
       // 和正文是同一刻的：存盘这一会儿里别人的字可能又到了
       const vector = session.stateVector();
+      const unseen = entry.unseen;
       try {
-        await this.io.save(entry.target, shot.text);
+        await this.io.save(entry.target, shot.text, unseen?.seen);
         saved = shot;
+        // 本机那一版另存过了（或者磁盘上本来就不是它了）：之后照常存，提示收起
+        if (unseen && entry.unseen === unseen) {
+          entry.unseen = null;
+          this.emit();
+        }
       } catch {
         // 存失败的提示由数据层给；下次改动再存
         return;
@@ -654,8 +716,10 @@ export class TeamController {
     const epoch = this.setRole(entry, "joining");
     entry.host = host.member;
     if (previous) {
-      // 存进去了：那份会话里的字在自己磁盘上了，不用另留
-      await this.io.save(entry.target, previous.session.toString()).then(
+      // 存进去了：那份会话里的字在自己磁盘上了，不用另留。那份会话加入时没合进去的本机那一版先另存（unseen）
+      const unseen = entry.unseen;
+      entry.unseen = null;
+      await this.io.save(entry.target, previous.session.toString(), unseen?.seen).then(
         () => this.guards.get(previous)?.owner(),
         () => {},
       );
@@ -665,7 +729,9 @@ export class TeamController {
       this.emit();
     }
     await this.io.flush();
-    const local = await this.io.load(entry.target);
+    // 会话的换行是 \n（toLF）：本机和 base 是 \r\n 的，三方合之前先换，不然每一行都算改了
+    const loaded = await this.io.load(entry.target);
+    const local = loaded === undefined ? undefined : toLF(loaded);
     if (entry.epoch !== epoch) return;
     const link = this.newLink(entry, {});
     entry.link = link;
@@ -698,15 +764,25 @@ export class TeamController {
       this.later(entry, this.timing.retryAfter);
       return;
     }
-    const base = await this.net.base(entry.target).catch(() => null);
+    const fetched = await this.net.base(entry.target).catch(() => null);
+    const base = fetched === null ? null : toLF(fetched);
     if (entry.epoch !== epoch) return;
     const theirs = link.session.toString();
+    // 本机那一版有合不进会话的（没有 base 就不知道哪些是本机改的；三方合撞上了；太大合不了）：记下会话照着的那一版
+    let unmerged = local !== undefined && local !== theirs && base === null;
     if (base !== null && local !== undefined && local !== base) {
       const merged = merge3(base, local, theirs);
       if (merged && merged.text !== theirs) {
         mergeExternal(link.session, snapshot(link.session), merged.text);
       }
+      unmerged = !merged || merged.skipped > 0;
     }
+    entry.unseen =
+      unmerged && local !== undefined
+        ? { seen: theirs, mine: local, from: host.name, hidden: false }
+        : null;
+    // 读本机正文以后、编辑器挂上之前还在打的字：挂上时照 local 对齐（docs/协同编辑.md §27）
+    if (local !== undefined) link.session.markOrigin(local);
     this.setRole(entry, "guest");
     this.guards.get(link)?.guest(host.member);
     entry.lineage = lineage ?? this.lineageOf(host, entry.doc);
@@ -792,6 +868,8 @@ export class TeamController {
     entry.link = null;
     entry.lineage = null;
     entry.host = null;
+    // 会话收掉了、本机磁盘没动：本机那一版还在，git 下一轮自己合
+    entry.unseen = null;
   }
 
   private toSolo(entry: Entry): void {
@@ -825,6 +903,7 @@ export class TeamController {
       strandedSince: 0,
       holds: 0,
       pending: null,
+      unseen: null,
     };
   }
 
@@ -849,7 +928,11 @@ export class TeamController {
   /** 收掉一份会话：做客时主持人还没存下的字，本机留着那一份（keep.ts 的 stop） */
   private destroyLink(link: SessionLink | null | undefined): void {
     if (!link) return;
-    this.guards.get(link)?.stop();
+    const kept = this.guards.get(link)?.stop();
+    if (kept) {
+      this.keeping.add(kept);
+      void kept.finally(() => this.keeping.delete(kept));
+    }
     link.destroy();
   }
 

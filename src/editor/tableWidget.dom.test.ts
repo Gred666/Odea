@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 
-import { history } from "@codemirror/commands";
-import { EditorState } from "@codemirror/state";
+import { cursorLineDown, cursorLineUp, history, redo, undo } from "@codemirror/commands";
+import { EditorSelection, EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { typoraDecorations } from "./MarkdownEditor";
 import { markdownSupport } from "./markdownParser";
+import { spotBelowTable } from "./tableClipboard";
+import { pendingGaps, tableGap } from "./tableGap";
 import { EMPTY_TABLE, insertEmptyTable, mapOffset, shiftedAt } from "./tableWidget";
 
 const views: EditorView[] = [];
@@ -19,7 +21,7 @@ function mount(doc: string) {
     state: EditorState.create({
       doc,
       selection: { anchor: doc.length },
-      extensions: [markdownSupport(), typoraDecorations, history()],
+      extensions: [markdownSupport(), typoraDecorations, tableGap, history()],
     }),
   });
   views.push(view);
@@ -672,10 +674,297 @@ describe("新建表格", () => {
     const { parent, view } = mount("前面一段");
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     insertEmptyTable(view);
-    expect(view.state.doc.toString()).toBe(`前面一段\n\n${EMPTY_TABLE}\n`);
+    // 表格下面留一个空行：紧贴着表格打的字会成为表格的一行
+    expect(view.state.doc.toString()).toBe(`前面一段\n\n${EMPTY_TABLE}\n\n`);
     expect(editing(parent)).toBe(cellAt(parent, 0, 0));
     typeIn(editing(parent)!, "名字");
     expect(view.state.doc.line(3).text).toBe("| 名字 |     |     |");
+  });
+
+  it("从最后一行回车出来，落在和表格隔着一个空行的那一行，接着打的字不进表格（体验轮 §4.43）", () => {
+    const { parent, view } = mount("前面一段");
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    insertEmptyTable(view);
+    const rows = EMPTY_TABLE.split("\n").length - 1;
+    for (let row = 0; row < rows; row++) press(editing(parent)!, { key: "Enter" });
+    expect(editing(parent)).toBeNull();
+    const { head } = view.state.selection.main;
+    const line = view.state.doc.lineAt(head);
+    expect(line.text).toBe("");
+    expect(view.state.doc.line(line.number - 1).text).toBe("");
+    expect(view.state.doc.line(line.number - 2).text.startsWith("|")).toBe(true);
+    expect(view.state.doc.toString()).toBe(`前面一段\n\n${EMPTY_TABLE}\n\n`);
+  });
+
+  it("方向键从表格里走出来不为留空行改正文；粘贴进来的表在中间也和下面那一段隔开（§4.43）", () => {
+    const source = "| a |\n|---|\n| 1 |\n\n后";
+    const { parent, view } = mount(source);
+    click(cellAt(parent, 1, 0));
+    press(editing(parent)!, { key: "ArrowDown" });
+    expect(editing(parent)).toBeNull();
+    expect(view.state.doc.toString()).toBe(source);
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(4);
+
+    expect(spotBelowTable(Text.of(["| a |", "|---|", "| 1 |", "", "后"]), 17, true)).toEqual({
+      anchor: 19,
+      insert: { from: 18, insert: "\n\n" },
+    });
+    expect(spotBelowTable(Text.of(["| a |", "|---|", "| 1 |", "", "", "后"]), 17, true)).toEqual({
+      anchor: 19,
+      insert: { from: 19, insert: "\n" },
+    });
+    expect(spotBelowTable(Text.of(["| a |", "|---|", "| 1 |", "", "", ""]), 17, true)).toEqual({
+      anchor: 19,
+    });
+    expect(spotBelowTable(Text.of(["| a |", "|---|", "| 1 |", "# 标题"]), 17, true)).toEqual({
+      anchor: 18,
+    });
+  });
+});
+
+describe("表格下面紧贴的那一行（表格.md §13）", () => {
+  const T = "| a |\n|---|\n| 1 |";
+  /** 表格还是渲染好的替身，没有哪一行是表格的源码行 */
+  const rendered = (parent: HTMLElement) =>
+    !!parent.querySelector(".cm-odea-table-block") &&
+    !parent.querySelector(".cm-line.cm-odea-table");
+  /** 照 CodeMirror 读 DOM 改动时的样子派发一次输入：pos 处插 text，光标在它后面 */
+  const input = (view: EditorView, pos: number, text: string, userEvent = "input.type") =>
+    view.dispatch({
+      changes: { from: pos, insert: text },
+      selection: { anchor: pos + text.length },
+      userEvent,
+    });
+  /** 紧贴表格的那一行的行首 */
+  const sticky = (doc: string) => doc.indexOf("\n", doc.lastIndexOf("|")) + 1;
+  const docOf = (view: EditorView) => view.state.doc.toString();
+  /** 从格子里最后一行回车走出来 */
+  const enterOut = (parent: HTMLElement) => {
+    click(cellAt(parent, 1, 0));
+    press(editing(parent)!, { key: "Enter" });
+    expect(editing(parent)).toBeNull();
+  };
+
+  it("回车走出表格：落点和表格隔一个空行，没有就补出来，接着打的字不进表格", () => {
+    // ▌ 是回车以后光标的位置
+    for (const [source, after] of [
+      [T, `${T}\n\n▌`],
+      [`${T}\n`, `${T}\n\n▌`],
+      [`${T}\n\n后`, `${T}\n\n▌\n后`],
+      [`${T}\n# 标题`, `${T}\n\n▌\n# 标题`],
+      [`${T}\n\n\n后`, `${T}\n\n▌\n后`],
+    ] as const) {
+      const { parent, view } = mount(`前\n\n${source}`);
+      view.dispatch({ selection: { anchor: 0 } });
+      enterOut(parent);
+      const head = `前\n\n${after}`.indexOf("▌");
+      const text = `前\n\n${after}`.replace("▌", "");
+      expect(docOf(view)).toBe(text);
+      expect(view.state.selection.main.head).toBe(head);
+      // 回车补的那一下撤销一次就回去
+      undo(view);
+      expect(docOf(view)).toBe(`前\n\n${source}`);
+      redo(view);
+      expect(docOf(view)).toBe(text);
+      input(view, head, "字");
+      expect(docOf(view)).toBe(`${text.slice(0, head)}字${text.slice(head)}`);
+      expect(rendered(parent)).toBe(true);
+    }
+  });
+
+  it("回车走出引用、列表项里的表格：补的行带着 `> `、缩进", () => {
+    const quoted = "> | a |\n> |---|\n> | 1 |\n> \n> 后";
+    const { parent, view } = mount(quoted);
+    enterOut(parent);
+    expect(docOf(view)).toBe("> | a |\n> |---|\n> | 1 |\n> \n> \n> 后");
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(5).to);
+    expect(
+      spotBelowTable(Text.of(["- x", "", "  | a |", "  |---|", "  | 1 |"]), 28, "enter"),
+    ).toEqual({ anchor: 34, insert: { from: 28, insert: "\n  \n  " } });
+  });
+
+  it("直接在那一行打字、粘贴、拖进来：同一个事务里先补一个空行，撤销一次连空行一起回去", () => {
+    for (const userEvent of ["input.type", "input.paste", "input.drop"]) {
+      for (const [source, after] of [
+        [`${T}\n`, `${T}\n\n字`],
+        [`${T}\n\n后`, `${T}\n\n字\n后`],
+        [`${T}\n\n\n后`, `${T}\n\n字\n\n后`],
+      ] as const) {
+        const { parent, view } = mount(source);
+        const at = sticky(source);
+        view.dispatch({ selection: { anchor: at }, userEvent: "select.pointer" });
+        input(view, at, "字", userEvent);
+        expect(docOf(view)).toBe(after);
+        expect(view.state.selection.main.head).toBe(after.indexOf("字") + 1);
+        expect(rendered(parent)).toBe(true);
+        undo(view);
+        expect(docOf(view)).toBe(source);
+        views.splice(views.indexOf(view), 1)[0]!.destroy();
+        parent.remove();
+      }
+    }
+  });
+
+  it("光是点一下、方向键经过、Esc 走出来，正文一个字不变", () => {
+    const source = `前面\n\n${T}\n\n后`;
+    const { parent, view } = mount(source);
+    view.dispatch({ selection: { anchor: sticky(source) }, userEvent: "select.pointer" });
+    expect(rendered(parent)).toBe(true);
+    cursorLineUp(view);
+    cursorLineDown(view);
+    cursorLineDown(view);
+    click(cellAt(parent, 1, 0));
+    press(editing(parent)!, { key: "Escape" });
+    press(sink(parent), { key: "Escape" });
+    expect(editing(parent)).toBeNull();
+    expect(docOf(view)).toBe(source);
+  });
+
+  it("引用、列表项里的表格：照抄空行的 `> `、缩进；连着两张表；多光标各补一次", () => {
+    const quoted = "> | a |\n> |---|\n> | 1 |\n> \n> 后";
+    let { view } = mount(quoted);
+    input(view, quoted.indexOf("> \n") + 2, "字");
+    expect(docOf(view)).toBe("> | a |\n> |---|\n> | 1 |\n> \n> 字\n> 后");
+
+    const listed = "- 项\n\n  | a |\n  |---|\n  | 1 |\n  \n  后";
+    ({ view } = mount(listed));
+    input(view, listed.indexOf("  \n  后") + 2, "字");
+    expect(docOf(view)).toBe("- 项\n\n  | a |\n  |---|\n  | 1 |\n  \n  字\n  后");
+
+    const two = `${T}\n\n| b |\n|---|\n| 2 |\n\n后`;
+    const mounted = mount(two);
+    view = mounted.view;
+    // 两个光标各在一张表下面紧贴的空行上，一起打一个字
+    const first = sticky(`${T}\n`);
+    const second = two.indexOf("\n\n后") + 1;
+    view.dispatch({
+      changes: [
+        { from: first, insert: "字" },
+        { from: second, insert: "字" },
+      ],
+      selection: EditorSelection.create(
+        [EditorSelection.cursor(first + 1), EditorSelection.cursor(second + 2)],
+        0,
+      ),
+      userEvent: "input.type",
+    });
+    expect(docOf(view)).toBe(`${T}\n\n字\n| b |\n|---|\n| 2 |\n\n字\n后`);
+    expect(mounted.parent.querySelectorAll(".cm-odea-table-block").length).toBe(2);
+  });
+
+  it("不是放进内容的不补：回车、空格、别人的改动、紧贴的那一行本来就有字、插进来的表自己带着换行", () => {
+    const source = `${T}\n\n后`;
+    const at = sticky(source);
+    let { view } = mount(source);
+    input(view, at, "\n", "input");
+    expect(docOf(view)).toBe(`${T}\n\n\n后`);
+
+    ({ view } = mount(source));
+    input(view, at, " ");
+    expect(docOf(view)).toBe(`${T}\n \n后`);
+
+    // 协作的对方、外部改动：不带 userEvent
+    ({ view } = mount(source));
+    view.dispatch({ changes: { from: at, insert: "字" } });
+    expect(docOf(view)).toBe(`${T}\n字\n后`);
+
+    // 已经是表格的一行（用户写的）：在它后面接着打
+    const row = `${T}\n已有`;
+    ({ view } = mount(row));
+    input(view, row.length, "字");
+    expect(docOf(view)).toBe(`${row}字`);
+
+    // 下面是标题：在标题里打字
+    const heading = `${T}\n# 标题`;
+    ({ view } = mount(heading));
+    input(view, heading.length, "字");
+    expect(docOf(view)).toBe(`${heading}字`);
+
+    // 在紧贴的空行上插一张表：表格自己前后都带着换行，不再多补
+    ({ view } = mount(`${T}\n`));
+    insertEmptyTable(view);
+    expect(docOf(view)).toBe(`${T}\n\n${EMPTY_TABLE}\n\n`);
+  });
+
+  describe("组字", () => {
+    const compose = (view: EditorView, type: "compositionstart" | "compositionend") =>
+      view.contentDOM.dispatchEvent(new CompositionEvent(type, { bubbles: true }));
+    /** 等 compositionend 之后排的那两拍（tableGap.ts 的 gapSettler） */
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+    /** 组字期间 CodeMirror 读到的一次改动：[from, to) 换成 text */
+    const composeInput = (
+      view: EditorView,
+      from: number,
+      to: number,
+      text: string,
+      first = false,
+    ) =>
+      view.dispatch({
+        changes: { from, to, insert: text },
+        selection: { anchor: from + text.length },
+        userEvent: first ? "input.type.compose.start" : "input.type.compose",
+      });
+
+    it("组字期间不改正文、表格照样画着，组完补空行；撤销一次回到原样", async () => {
+      const source = `前面\n\n${T}\n\n后`;
+      const { parent, view } = mount(source);
+      const at = sticky(source);
+      view.dispatch({ selection: { anchor: at }, userEvent: "select.pointer" });
+      const block = parent.querySelector(".cm-odea-table-block");
+      compose(view, "compositionstart");
+      expect(view.compositionStarted).toBe(true);
+      composeInput(view, at, at, "n", true);
+      composeInput(view, at, at + 1, "ni");
+      await settle();
+      // 拼音还在紧贴表格的那一行（语法树里它和「后」都并进了表格），可表格还是原来那个替身，
+      // 这两行都不是表格的源码行
+      expect(docOf(view)).toBe(`前面\n\n${T}\nni\n后`);
+      expect(view.state.field(pendingGaps)).toEqual([{ from: at, text: "" }]);
+      expect(parent.querySelector(".cm-odea-table-block")).toBe(block);
+      expect(rendered(parent)).toBe(true);
+      expect(parent.querySelectorAll(".cm-odea-table-widget tbody tr").length).toBe(1);
+
+      composeInput(view, at, at + 2, "你好");
+      compose(view, "compositionend");
+      await settle();
+      expect(docOf(view)).toBe(`前面\n\n${T}\n\n你好\n后`);
+      expect(view.state.selection.main.head).toBe(at + 3);
+      expect(view.state.field(pendingGaps)).toEqual([]);
+      expect(parent.querySelector(".cm-odea-table-block")).toBe(block);
+      expect(rendered(parent)).toBe(true);
+      undo(view);
+      expect(docOf(view)).toBe(source);
+    });
+
+    it("组字取消了：一个字不变，不补空行", async () => {
+      const source = `${T}\n\n后`;
+      const { parent, view } = mount(source);
+      const at = sticky(source);
+      view.dispatch({ selection: { anchor: at }, userEvent: "select.pointer" });
+      compose(view, "compositionstart");
+      composeInput(view, at, at, "n", true);
+      composeInput(view, at, at + 1, "");
+      expect(view.state.field(pendingGaps)).toEqual([]);
+      compose(view, "compositionend");
+      await settle();
+      expect(docOf(view)).toBe(source);
+      expect(rendered(parent)).toBe(true);
+    });
+
+    it("组字结束时还没补就有了下一次更新（最后那次组字改动后读进来）：一样补上", async () => {
+      const source = `${T}\n`;
+      const { view } = mount(source);
+      const at = sticky(source);
+      view.dispatch({ selection: { anchor: at }, userEvent: "select.pointer" });
+      compose(view, "compositionstart");
+      composeInput(view, at, at, "h", true);
+      compose(view, "compositionend");
+      composeInput(view, at, at + 1, "好");
+      await settle();
+      expect(docOf(view)).toBe(`${T}\n\n好`);
+      undo(view);
+      expect(docOf(view)).toBe(source);
+    });
   });
 });
 

@@ -264,7 +264,9 @@ impl Config {
             .unwrap_or_default()
     }
 
-    pub fn save(&self, data_dir: &Path) -> Result<()> {
+    /// 不公开：读 - 改 - 写都得走 edit_config 拿着锁。命令层自己 load、改、save 的话，两个窗口同时改
+    /// 会盖掉对方（2026-11-14 的审查：8 处这样写的，并发 150 + 150 次丢了 108 次）
+    fn save(&self, data_dir: &Path) -> Result<()> {
         fsio::write_atomic(
             &data_dir.join("config.json"),
             &serde_json::to_string_pretty(self)?,
@@ -526,6 +528,35 @@ pub fn move_vault(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_edits_from_several_threads_all_land() {
+        // 一个窗口在记仓库，另一个在记「记住的人」：谁的改动都不能被对方那次写回盖掉
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let vaults = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                for i in 0..100 {
+                    edit_config(&path, |config| {
+                        config.remember_vault(&path.join(format!("v{i}")), i);
+                        Ok(())
+                    })
+                    .unwrap();
+                }
+            })
+        };
+        for i in 0..100 {
+            edit_config(&path, |config| {
+                config.collab_trusted.push(SavedPeer { id: format!("p{i}"), ..SavedPeer::default() });
+                Ok(())
+            })
+            .unwrap();
+        }
+        vaults.join().unwrap();
+        let config = Config::load(&path);
+        assert_eq!((config.vaults.len(), config.collab_trusted.len()), (100, 100));
+    }
 
     #[test]
     fn fresh_install_seeds_once() {

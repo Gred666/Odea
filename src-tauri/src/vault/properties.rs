@@ -157,10 +157,10 @@ fn kind_of_value(value: &str) -> &'static str {
         "number"
     } else if value.len() == 10 && date(value) {
         "date"
-    } else if value.len() >= 16
-        && date(&value[..10])
-        && matches!(value.as_bytes()[10], b'T' | b' ')
-        && chrono::NaiveTime::parse_from_str(&value[11..16], "%H:%M").is_ok()
+    } else if value.get(..10).is_some_and(date)
+        && matches!(value.as_bytes().get(10), Some(b'T' | b' '))
+        // 按字节取：值里有汉字时第 10、16 个字节可能落在一个字中间，`&value[..10]` 会 panic
+        && value.get(11..16).is_some_and(|time| chrono::NaiveTime::parse_from_str(time, "%H:%M").is_ok())
     {
         "datetime"
     } else {
@@ -231,8 +231,10 @@ pub fn catalog(props: impl Iterator<Item = String>) -> Vec<PropertyKey> {
     out
 }
 
-/// 写回来的属性块内容：去掉末尾的空行；不能有 `---`（会把属性块提前收尾）、不能冒充应用自己的键
-pub fn validate(text: &str) -> Result<Vec<String>> {
+/// 写回来的属性块内容：去掉末尾的空行；不能有 `---`（会把属性块提前收尾）、不能冒充应用自己的键。
+/// `kept` 是文件里现在的那几行：别的工具写的 `created: "[[2024-01-05]]"`、`archived: false` 这种
+/// 应用认不出值的行本来就留在 extra 里，原样带回来的不算冒充 —— 不然这一篇别的属性也一条都改不了
+pub fn validate(text: &str, kept: &[String]) -> Result<Vec<String>> {
     let text = text.replace("\r\n", "\n");
     let mut lines: Vec<String> = text.split('\n').map(|line| line.trim_end().to_string()).collect();
     while lines.last().is_some_and(|line| line.is_empty()) {
@@ -248,13 +250,38 @@ pub fn validate(text: &str) -> Result<Vec<String>> {
         if !line.starts_with([' ', '\t', '#', '-']) {
             if let Some((key, _)) = line.split_once(':') {
                 let key = unquote(key);
-                if MANAGED.contains(&key.as_str()) {
+                if MANAGED.contains(&key.as_str()) && !kept.iter().any(|old| old.trim_end() == line) {
                     return Err(AppError::Invalid(format!("「{key}」由 Odea 自己管，换个名字吧")));
                 }
             }
         }
     }
     Ok(lines)
+}
+
+/// 属性块最多几行（两条 `---` 之间）：frontmatter.rs 的 find_block 往下找 59 行，收尾的 `---` 占一行
+const MAX_BLOCK_LINES: usize = 58;
+
+const NEEDS_KEY_LINE: &str = "没有一行是「名字: 值」的样子，存下去 Odea 认不出这是属性。\
+     名字用字母、汉字或下划线开头，中间不带空格，冒号用半角的（比如 截止: 2026-11-20）";
+
+/// 属性那几行自己认不认得出是属性块：空的不算，至少一行 `键: 值`（frontmatter::is_yaml_key：
+/// 键以 Unicode 字母或下划线开头，`截止: 2026-11-20` 也算。认不出的是 `标签：旅行` 这种全角冒号、带空格的键、只有列表项）
+fn recognisable(extra: &[String]) -> bool {
+    extra.is_empty() || extra.iter().any(|line| super::frontmatter::is_yaml_key(line))
+}
+
+/// 写下去会认不出来的属性块，为什么
+fn unreadable_block(rendered: &str, extra: &[String]) -> String {
+    // extra 里没有单独一行 `---`（validate 查过），开头那条之后的第一条就是收尾
+    let lines = rendered.lines().skip(1).take_while(|line| line.trim_end() != "---").count();
+    if lines > MAX_BLOCK_LINES {
+        format!("属性太多了：属性块最多 {MAX_BLOCK_LINES} 行，现在 {lines} 行。列表可以在源码里写成一行 [a, b]")
+    } else if !recognisable(extra) {
+        NEEDS_KEY_LINE.into()
+    } else {
+        "这样改完属性块就认不出来了，在源码里看看哪一行不对".into()
+    }
 }
 
 fn types_rel(vault: &Vault) -> &'static str {
@@ -280,12 +307,12 @@ impl Vault {
 
     /// 换掉一篇的属性：只动属性块里用户自己的那几行，应用的键、正文一个字不动
     pub fn set_doc_properties(&mut self, target: &DocRef, text: &str) -> Result<DocProperties> {
-        let lines = validate(text)?;
         let rel = self.target_rel(target)?;
         let file = self
             .read(&rel)?
             .ok_or_else(|| AppError::NotFound("这一篇还没写过，先写点什么再加属性".into()))?;
         let (mut meta, body) = super::frontmatter::split(&file);
+        let lines = validate(text, &meta.extra)?;
         if meta.extra == lines {
             return self.doc_properties(target);
         }
@@ -295,9 +322,20 @@ impl Vault {
             let row = self.note_row(&target.key)?;
             meta.id = Some(row.id.clone());
             meta.created.get_or_insert(row.created_at);
+        } else if !recognisable(&meta.extra) {
+            // 某一天、目标没有 id 这样一直在的键：属性那几行得自己认得出来。不能指望某一天的 `title:` ——
+            // 标题一清空那一行就没了（save_typed），冲突副本也不带标题，那时这一块就成了正文开头的几行字
+            return Err(AppError::Invalid(NEEDS_KEY_LINE.into()));
+        }
+        let rendered = super::frontmatter::render(&meta, &body);
+        // 写下去的得读得回来。属性块是照 frontmatter.rs 的规矩认的（60 行以内收尾、至少一行 `键: 值`），
+        // 认不出来的话整块会被当成正文：下次打开，属性成了正文开头的几行字
+        let (back, back_body) = super::frontmatter::split(&rendered);
+        if back.extra != meta.extra || back_body != body {
+            return Err(AppError::Invalid(unreadable_block(&rendered, &meta.extra)));
         }
         let mut change = VaultChange::default();
-        let saved = self.write_and_index(&rel, &super::frontmatter::render(&meta, &body), &mut change)?;
+        let saved = self.write_and_index(&rel, &rendered, &mut change)?;
         let entity = self.entity_of(&saved);
         self.log.record(entity, &saved.id, "updated");
         self.announce(change);
@@ -406,11 +444,15 @@ mod tests {
 
     #[test]
     fn writing_back_cannot_break_the_block_or_pose_as_the_app() {
-        assert_eq!(validate("\nstatus: 进行中\n\n").unwrap(), vec!["status: 进行中"]);
-        assert!(validate("status: 进行中\n---\ntitle: x").is_err());
-        assert!(validate("title: 换个标题").is_err());
+        assert_eq!(validate("\nstatus: 进行中\n\n", &[]).unwrap(), vec!["status: 进行中"]);
+        assert!(validate("status: 进行中\n---\ntitle: x", &[]).is_err());
+        assert!(validate("title: 换个标题", &[]).is_err());
         // 缩进的续行里出现同名的字不算
-        assert_eq!(validate("备注:\n  id: 1").unwrap().len(), 2);
+        assert_eq!(validate("备注:\n  id: 1", &[]).unwrap().len(), 2);
+        // 文件里本来就有的（应用认不出值、留在 extra 里的）原样带回来不算冒充；改了它的值就算
+        let kept = ["archived: false".to_string()];
+        assert_eq!(validate("archived: false\nstatus: 进行中", &kept).unwrap().len(), 2);
+        assert!(validate("archived: 2026-11-20", &kept).is_err());
     }
 
     #[test]
@@ -422,5 +464,16 @@ mod tests {
         assert_eq!(kind_of_value("2026-11-20 15:30"), "datetime");
         assert_eq!(kind_of_value("进行中"), "text");
         assert_eq!(kind_of_value("+86"), "text");
+    }
+
+    #[test]
+    fn long_values_that_are_not_ascii_are_just_text() {
+        // 第 10、16 个字节落在一个汉字中间：按字节切会 panic（release 是 panic = "abort"，整个应用就没了）
+        assert_eq!(kind_of_value("这是一篇关于发版的笔记"), "text");
+        assert_eq!(kind_of_value("2026-11-20 下午三点开会"), "text");
+        assert_eq!(kind_of_value("2026-11-20T下午三点"), "text");
+        assert_eq!(kind_of_value("2026-11-2０ 15:30"), "text");
+        let keys = catalog(["摘要: 这是一篇关于发版的笔记\n开会: 2026-11-20 下午三点开会".to_string()].into_iter());
+        assert!(keys.iter().all(|entry| entry.kind == "text"));
     }
 }

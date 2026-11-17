@@ -1,7 +1,7 @@
 import { saveKeyOf, useData } from "@/data/store";
 import type { DocumentRef } from "@/data/types";
 import { liveEditor } from "@/lib/liveDocuments";
-import { useJournal } from "./store";
+import { syncToday, useJournal } from "./store";
 import { DAY } from "./types";
 
 /* ============================================================
@@ -32,7 +32,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** 记一行进今日TODO。没记上抛出原因（快捷键小窗里显示） */
 export async function captureToToday(text: string): Promise<void> {
-  const date = useJournal.getState().todayDate;
+  // 先对一次表：窗口在后台过了零点（最小化着、电脑睡了一夜），todayDate 可能还是昨天，
+  // 这一行就记进昨天那一篇了
+  const date = syncToday();
   const ref: DocumentRef = { type: DAY, key: date };
   // 编辑器正在组字（输入法）时改不了：等它组完，最多等 3 秒
   for (let tries = 0; tries < 10; tries += 1) {

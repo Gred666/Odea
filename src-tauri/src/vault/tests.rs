@@ -1837,6 +1837,206 @@ fn obsidian_daily_notes_show_up_as_days() {
     assert_eq!(note[0].title, "随便");
 }
 
+/* ---------------- 重建索引时外来笔记的 id 不变（技术方案 §5.3.1，审查 §6.6） ---------------- */
+
+/// 把索引的版本改小：下次打开当它是旧版本的索引，整个清空重建（应用升级时就是这样）
+fn age_index(index: &Path) {
+    let conn = Connection::open(index).unwrap();
+    conn.pragma_update(None, "user_version", 6).unwrap();
+}
+
+/// 索引里每篇笔记：路径 → id
+fn note_ids(vault: &Vault) -> std::collections::BTreeMap<String, String> {
+    let mut stmt = vault.db.prepare("SELECT rel_path, id FROM doc WHERE kind = 'note'").unwrap();
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    rows.map(|row| row.unwrap()).collect()
+}
+
+/// 留着等重新认的 id 还有哪几个路径的
+fn kept_paths(vault: &Vault) -> Vec<String> {
+    let mut stmt = vault.db.prepare("SELECT rel_path FROM kept_ids ORDER BY rel_path").unwrap();
+    let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+    rows.map(|row| row.unwrap()).collect()
+}
+
+/// 关着应用的时候改仓库标记里的一个开关（别的设备开关了日程，同步过来）
+fn switch_on_disk(root: &Path, id: &str, on: bool) {
+    let path = fsio::abs(root, layout::VAULT_MARKER);
+    let marker = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).ok();
+    let marker = layout::marker_with_switch(marker, id, on);
+    fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker).unwrap()).unwrap();
+}
+
+#[test]
+fn foreign_notes_keep_their_ids_when_the_index_version_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let index = dir.path().join("index.db");
+    let (vault, _) = Vault::open_quick(&root, &index).unwrap();
+    let before = note_ids(&vault);
+    assert_eq!(before.len(), 3);
+    assert_eq!(before["工作/周报.md"], "weekly");
+    drop(vault);
+
+    age_index(&index);
+    let (vault, backlog) = Vault::open_quick(&root, &index).unwrap();
+    assert!(backlog.is_empty());
+    assert_eq!(note_ids(&vault), before, "随手记、日记那篇的属性块里没有 id，id 也和原来一样");
+    assert!(kept_paths(&vault).is_empty(), "用掉的都删了");
+    assert!(!fsio::walk_markdown(&root).iter().any(|file| {
+        std::fs::read_to_string(fsio::abs(&root, &file.rel)).unwrap().contains(&before["随手记.md"])
+    }), "id 没写进用户的文件");
+}
+
+#[test]
+fn foreign_notes_keep_their_ids_when_the_layout_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let index = dir.path().join("index.db");
+    let (mut vault, _) = Vault::open_quick(&root, &index).unwrap();
+    let before = note_ids(&vault);
+
+    // 开日程：日记那篇成了某一天，别的照旧是笔记、id 不变
+    vault.set_plugin(journal::ID, true).unwrap();
+    let on = note_ids(&vault);
+    assert_eq!(on.len(), 2);
+    assert!(on.iter().all(|(rel, id)| before[rel] == *id), "{on:?}");
+    // 再关：日记那篇又是笔记，还是原来的 id（开着的时候它不是笔记，那一行留着没清）
+    vault.set_plugin(journal::ID, false).unwrap();
+    assert_eq!(note_ids(&vault), before);
+    assert!(kept_paths(&vault).is_empty());
+
+    // 关着应用的时候另一台设备开了日程：打开时摆法就不一样了
+    drop(vault);
+    switch_on_disk(&root, journal::ID, true);
+    let (vault, _) = Vault::open_quick(&root, &index).unwrap();
+    assert!(vault.layout.has_plugin(journal::ID));
+    assert!(note_ids(&vault).iter().all(|(rel, id)| before[rel] == *id));
+}
+
+/// 开着日程时日记留着的那几行（关日程时还给它们）一直在；文件真没了才清。索引里有这一天的不去磁盘上挨个看
+/// （以前每次读完都 stat 一遍，一年的日记每次启动多 15 ms，REVIEWS/2026-11-15-桌面端验证.md §2.4）
+#[test]
+fn kept_ids_of_plugin_docs_stay_until_their_files_are_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let index = dir.path().join("index.db");
+    let (mut vault, _) = Vault::open_quick(&root, &index).unwrap();
+    vault.set_plugin(journal::ID, true).unwrap();
+    let diary = "日记/2026/2026-10-20.md";
+    assert_eq!(kept_paths(&vault), [diary]);
+    drop(vault);
+
+    let (vault, _) = Vault::open_quick(&root, &index).unwrap();
+    assert_eq!(kept_paths(&vault), [diary], "这一天还在，留着");
+    drop(vault);
+
+    // 应用关着的时候这一天的文件被删了：打开、读完以后那一行清掉
+    std::fs::remove_file(fsio::abs(&root, diary)).unwrap();
+    let (vault, _) = Vault::open_quick(&root, &index).unwrap();
+    assert!(kept_paths(&vault).is_empty(), "文件不在了，那一行不留");
+}
+
+#[test]
+fn ids_survive_two_rebuilds_in_a_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    write_notes(&root, 240);
+    let index = dir.path().join("index.db");
+    let (mut vault, mut backlog) = Vault::open_quick(&root, &index).unwrap();
+    drain(&mut vault, &mut backlog);
+    let before = note_ids(&vault);
+    assert_eq!(before.len(), 243);
+    drop(vault);
+
+    // 升了版本、摆法也变了（另一台设备开了日程）：打开时连着清两次
+    age_index(&index);
+    switch_on_disk(&root, journal::ID, true);
+    let (mut vault, mut backlog) = Vault::open_quick(&root, &index).unwrap();
+    assert!(backlog.total() > 200, "多，交给后台读");
+    // 后台才读了一篇，用户又把日程关了：第三次清空
+    vault.index_backlog(&mut backlog, Some(Duration::ZERO));
+    assert!(!backlog.is_empty());
+    let mut backlog = vault.set_plugin(journal::ID, false).unwrap();
+    drain(&mut vault, &mut backlog);
+    assert_eq!(note_ids(&vault), before);
+    assert!(kept_paths(&vault).is_empty());
+}
+
+#[test]
+fn a_kept_id_is_not_handed_to_another_note_later() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    fsio::write_atomic(&fsio::abs(&root, "乙.md"), "乙").unwrap();
+    let index = dir.path().join("index.db");
+    let (vault, _) = Vault::open_quick(&root, &index).unwrap();
+    let before = note_ids(&vault);
+    drop(vault);
+
+    // 应用关着的时候：随手记被删了；另有一个文件属性块里写着乙的 id，扫描时排在乙前面
+    age_index(&index);
+    std::fs::remove_file(root.join("随手记.md")).unwrap();
+    let squatter = "一个占着乙的 id 的.md";
+    assert!(squatter < "乙.md");
+    fsio::write_atomic(&fsio::abs(&root, squatter), &format!("---\nid: {}\n---\n\n别处", before["乙.md"])).unwrap();
+    let (mut vault, _) = Vault::open_quick(&root, &index).unwrap();
+    let after = note_ids(&vault);
+    assert!(!after.contains_key("随手记.md"));
+    assert!(kept_paths(&vault).is_empty(), "文件不在了，那一行不留");
+    assert_eq!(after[squatter], before["乙.md"], "属性块里写的 id 优先");
+    assert_ne!(after["乙.md"], before["乙.md"], "留着的 id 已经被别的文件占了，不抢");
+    assert_eq!(after["日记/2026/2026-10-20.md"], before["日记/2026/2026-10-20.md"]);
+
+    // 后来在同一个位置新建了另一篇：不捡随手记的旧 id
+    fsio::write_atomic(&fsio::abs(&root, "随手记.md"), "另一篇").unwrap();
+    vault.rescan().unwrap();
+    assert_ne!(note_ids(&vault)["随手记.md"], before["随手记.md"]);
+}
+
+#[test]
+fn kept_ids_wait_for_files_that_could_not_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    write_notes(&root, 240);
+    let index = dir.path().join("index.db");
+    let (mut vault, mut backlog) = Vault::open_quick(&root, &index).unwrap();
+    drain(&mut vault, &mut backlog);
+    let before = note_ids(&vault);
+    drop(vault);
+    age_index(&index);
+
+    // 后台读的时候仓库文件夹没了（移动硬盘拔了）：一篇都没读进来，也不能当成「文件都不在了」把留着的 id 清掉
+    let (mut vault, mut backlog) = Vault::open_quick(&root, &index).unwrap();
+    let away = root.with_file_name("拔掉了");
+    std::fs::rename(&root, &away).unwrap();
+    drain(&mut vault, &mut backlog);
+    assert_eq!(kept_paths(&vault).len(), 243);
+    std::fs::rename(&away, &root).unwrap();
+    drop(vault);
+
+    // 插回来以后打开，一篇被别的程序独占着：别的照常认回原来的 id，它那一行留到读得了的时候
+    let held = fsio::abs(&root, "随手记.md");
+    let mut vault = {
+        let Some(_hold) = hold_exclusively(&held) else {
+            return; // 这台机器上占不住（Unix 上用 root 跑的）：这一半测不了
+        };
+        let (mut vault, mut backlog) = Vault::open_quick(&root, &index).unwrap();
+        drain(&mut vault, &mut backlog);
+        assert_eq!(kept_paths(&vault), ["随手记.md"]);
+        vault
+    };
+    // 放开了，下次扫描读进来
+    vault.rescan().unwrap();
+    assert_eq!(note_ids(&vault), before);
+    assert!(kept_paths(&vault).is_empty());
+}
+
 /* ---------------- 逻辑目录（docs/仓库与启动器.md §7） ---------------- */
 
 /// 每个 .md 的 (路径, 修改时间, 大小)：只改清单的操作一个都不该动
@@ -2015,6 +2215,28 @@ fn deleting_a_logical_folder_trashes_its_notes_and_undo_puts_everything_back() {
     assert_eq!(placed[&b], "交易");
     let queries: Vec<_> = vault.tree_view().unwrap().into_iter().filter_map(|node| node.query).collect();
     assert_eq!(queries, vec!["updated:7d"], "智能文件夹也回来了");
+}
+
+/// 逻辑目录也一样：底下有一篇不是 UTF-8 的，删文件夹一点都不动，清单也不动
+#[test]
+fn deleting_a_logical_folder_with_a_note_that_is_not_utf8_touches_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    vault.folder_create("", "交易").unwrap();
+    let a = vault.note_create_in("交易", "甲", "").unwrap();
+    std::fs::write(root.join("乙.md"), GBK).unwrap();
+    vault.rescan().unwrap();
+    let gbk = vault.note_list(false).unwrap().into_iter().find(|note| note.title == "乙").unwrap().id;
+    vault.note_move(&gbk, "交易").unwrap();
+    let manifest = std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap();
+
+    assert!(vault.folder_delete("交易").is_err());
+    assert!(vault.note_get(&a).is_ok(), "甲没进回收站");
+    assert_eq!(vault.folders(), ["交易"]);
+    assert_eq!(placements(&vault)[&a], "交易");
+    assert_eq!(std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap(), manifest);
 }
 
 #[test]
@@ -2521,4 +2743,273 @@ fn property_types_live_with_obsidian_when_it_is_there() {
     assert!(written.contains("\"other\": 1") && written.contains("\"截止\": \"datetime\""));
     f.vault.set_property_type("pages", None).unwrap();
     assert!(!f.vault.property_types().contains_key("pages"));
+}
+
+#[test]
+fn properties_that_would_not_read_back_are_not_written() {
+    let mut f = fixture();
+    // 某一天没有应用的键：属性那几行里没有一行是 `键: 值`（全角冒号、只有列表项），属性块认不出来，
+    // 写下去就成了正文开头的几行字
+    f.vault.save_day("2026-09-25", "", "- [ ] 买菜").unwrap();
+    let day = DocRef::new(journal::DAY, "2026-09-25");
+    let before = f.read("日记/2026/2026-09-25.md");
+    for text in ["标签：旅行", "- 列表项", "1a: x"] {
+        let error = f.vault.set_doc_properties(&day, text).unwrap_err();
+        assert!(error.to_string().contains("名字: 值"), "{text}: {error}");
+        assert_eq!(f.read("日记/2026/2026-09-25.md"), before, "{text}: 没写");
+    }
+    // 只有中文名字的认得出来（docs/提醒与属性.md §3.3，以前要先加一条英文名字的）
+    let saved = f.vault.set_doc_properties(&day, "截止: 2026-11-20").unwrap();
+    assert_eq!(saved.text, "截止: 2026-11-20");
+    assert_eq!(f.read("日记/2026/2026-09-25.md"), format!("---\n截止: 2026-11-20\n---\n\n{before}"), "正文一个字不动");
+    assert_eq!(f.vault.day("2026-09-25", false).unwrap().note_md, "- [ ] 买菜");
+
+    // 起了标题的那一天，属性块里有 `title:`，照样不收认不出来的：标题一清空那一行就没了，
+    // 剩下的认不出来（存正文的那条路不能拒绝，只能在这里先拦住）
+    f.vault.save_day("2026-09-26", "周六", "- [ ] 洗车").unwrap();
+    let titled = DocRef::new(journal::DAY, "2026-09-26");
+    assert!(f.vault.set_doc_properties(&titled, "标签：旅行").is_err());
+    f.vault.set_doc_properties(&titled, "截止: 2026-11-20\n标签：旅行").unwrap();
+    f.vault.save_day("2026-09-26", "", "- [ ] 洗车").unwrap();
+    assert_eq!(f.vault.doc_properties(&titled).unwrap().text, "截止: 2026-11-20\n标签：旅行");
+    assert_eq!(f.vault.day("2026-09-26", false).unwrap().note_md, "- [ ] 洗车");
+
+    // 笔记有 id、created，中文名字照常
+    let id = f.vault.note_create("发版", "正文").unwrap();
+    let target = DocRef::note(&id);
+    assert_eq!(f.vault.set_doc_properties(&target, "截止: 2026-11-20").unwrap().text, "截止: 2026-11-20");
+
+    // 超过属性块能认的行数：不写（写了整块变成正文，置顶、标题这些也跟着丢）
+    let many = std::iter::once("tags:".to_string()).chain((0..70).map(|i| format!("  - t{i}"))).collect::<Vec<_>>().join("\n");
+    let error = f.vault.set_doc_properties(&target, &many).unwrap_err();
+    assert!(error.to_string().contains("属性太多"), "{error}");
+    assert_eq!(f.vault.doc_properties(&target).unwrap().text, "截止: 2026-11-20");
+    assert_eq!(f.vault.note_get(&id).unwrap().content_md, "正文");
+    // 正好到上限的可以：id、created 两行 + 56 行
+    let fits = std::iter::once("tags:".to_string()).chain((0..55).map(|i| format!("  - t{i}"))).collect::<Vec<_>>().join("\n");
+    assert_eq!(f.vault.set_doc_properties(&target, &fits).unwrap().text, fits);
+    assert_eq!(f.vault.note_get(&id).unwrap().content_md, "正文");
+}
+
+#[test]
+fn leftover_app_keys_from_other_tools_do_not_lock_the_other_properties() {
+    let mut f = fixture();
+    // 别的工具写的 created、archived：值应用认不出，留在 extra 里
+    f.write_externally("笔记/外来.md", "---\ncreated: \"[[2024-01-05]]\"\narchived: false\nstatus: 草稿\n---\n\n正文");
+    f.vault.rescan().unwrap();
+    let id = f.vault.note_list(false).unwrap().remove(0).id;
+    let target = DocRef::note(&id);
+    let props = f.vault.doc_properties(&target).unwrap();
+    assert_eq!(props.text, "created: \"[[2024-01-05]]\"\narchived: false\nstatus: 草稿");
+
+    // 改别的那一条：以前整篇被拒（「created」由 Odea 自己管）
+    let saved = f.vault.set_doc_properties(&target, &props.text.replace("草稿", "进行中")).unwrap();
+    assert_eq!(saved.text, "created: \"[[2024-01-05]]\"\narchived: false\nstatus: 进行中");
+    let text = f.read("笔记/外来.md");
+    assert!(text.contains("created: \"[[2024-01-05]]\"\narchived: false\nstatus: 进行中\n---\n\n正文"), "{text}");
+    let note = f.vault.note_get(&id).unwrap();
+    assert!(!note.is_archived && note.content_md == "正文");
+
+    // 把那一行改成应用认得的值就是冒充了；删掉可以
+    assert!(f.vault.set_doc_properties(&target, "archived: 2026-11-20\nstatus: 进行中").is_err());
+    assert_eq!(f.vault.set_doc_properties(&target, "status: 进行中").unwrap().text, "status: 进行中");
+}
+
+/// 从别处搬来的、键全是中文的笔记（docs/提醒与属性.md §3.3）：以前属性块当正文，存一次在前面再加一块
+#[test]
+fn a_foreign_note_with_only_chinese_keys_has_properties() {
+    let mut f = fixture();
+    f.write_externally("笔记/京都.md", "---\n标签: 旅行\n截止: 2026-11-20\n---\n\n# 行程\n\n正文");
+    f.write_externally("笔记/分隔线.md", "---\n\n一段话\n\n---\n\n另一段");
+    f.vault.rescan().unwrap();
+    let notes = f.vault.note_list(false).unwrap();
+    let kyoto = notes.iter().find(|note| note.title == "京都").unwrap().id.clone();
+    let target = DocRef::note(&kyoto);
+    assert_eq!(f.vault.doc_properties(&target).unwrap().text, "标签: 旅行\n截止: 2026-11-20");
+    assert_eq!(f.vault.note_get(&kyoto).unwrap().content_md, "# 行程\n\n正文");
+    assert!(f.vault.property_catalog().unwrap().keys.iter().any(|key| key.key == "截止" && key.kind == "date"));
+
+    // 改一条：只动那一行（笔记写回时补上 id、created，和 note_save 一样），正文一个字不动，前面没有再加一块
+    f.vault.set_doc_properties(&target, "标签: 旅行\n截止: 2026-11-21").unwrap();
+    let text = f.read("笔记/京都.md");
+    assert!(text.ends_with("\n标签: 旅行\n截止: 2026-11-21\n---\n\n# 行程\n\n正文"), "{text}");
+    assert_eq!(text.matches("---").count(), 2, "{text}");
+    assert_eq!(f.vault.note_get(&kyoto).unwrap().content_md, "# 行程\n\n正文");
+
+    // 以分隔线开头、后面没有 `键: 值` 的普通笔记：整篇是正文，没有属性
+    let rule = notes.iter().find(|note| note.title == "分隔线").unwrap().id.clone();
+    assert_eq!(f.vault.doc_properties(&DocRef::note(&rule)).unwrap().text, "");
+    assert_eq!(f.vault.note_get(&rule).unwrap().content_md, "---\n\n一段话\n\n---\n\n另一段");
+}
+
+#[test]
+fn a_vault_folder_that_is_gone_for_a_while_keeps_its_index() {
+    let mut f = fixture();
+    let ours = f.vault.note_create("周报", "正文").unwrap();
+    // 不是应用写的：id 只在索引里
+    f.write_externally("笔记/外来.md", "外面写的");
+    f.vault.rescan().unwrap();
+    let outside = f.vault.note_list(false).unwrap().into_iter().find(|note| note.title == "外来").unwrap().id;
+
+    // 外面又改过、还没读进来的时候盘没了
+    f.write_externally("笔记/外来.md", "外面又改了");
+    let mut backlog = Backlog { root: f.root.clone(), files: ["笔记/外来.md".to_string()].into(), total: 1 };
+
+    // 移动硬盘拔了、网络盘断了：文件监听报错，整个扫一遍；这一批只有几篇 .md 时只重读那几篇；后台还在读
+    let away = f.root.with_file_name("拔掉了");
+    std::fs::rename(&f.root, &away).unwrap();
+    f.announced.lock().unwrap().clear();
+    assert!(f.vault.rescan_and_announce().is_err());
+    assert!(f.vault.rescan_paths_and_announce(&["笔记/外来.md".to_string(), "笔记/周报.md".to_string()]).is_err());
+    f.vault.index_backlog(&mut backlog, None);
+    assert_eq!(f.vault.note_list(false).unwrap().len(), 2, "索引没被清空");
+    assert!(f.announced.lock().unwrap().is_empty(), "没告诉前端「都删了」");
+
+    // 插回来：还是原来那两篇、原来的 id
+    std::fs::rename(&away, &f.root).unwrap();
+    f.vault.rescan_and_announce().unwrap();
+    let mut ids: Vec<String> = f.vault.note_list(false).unwrap().into_iter().map(|note| note.id).collect();
+    ids.sort();
+    let mut expected = vec![ours, outside.clone()];
+    expected.sort();
+    assert_eq!(ids, expected);
+    assert_eq!(f.vault.note_get(&outside).unwrap().content_md, "外面又改了");
+}
+
+/// 别的程序独占着一个文件（网盘、杀毒、别的编辑器正在存）：这一个跳过，别的照常进索引、照常通知
+#[test]
+fn a_file_another_program_holds_does_not_stop_the_rest_of_the_scan() {
+    let mut f = fixture();
+    let gone = f.vault.note_create("要删的", "正文").unwrap();
+    f.write_externally("笔记/甲.md", "甲");
+    f.write_externally("笔记/乙.md", "乙");
+    std::fs::remove_file(f.root.join("笔记").join("要删的.md")).unwrap();
+    let held = f.root.join("笔记").join("乙.md");
+    let Some(_hold) = hold_exclusively(&held) else {
+        return; // 这台机器上占不住（Unix 上用 root 跑的）：这条测不了
+    };
+    let titles = |f: &Fixture| {
+        let mut titles: Vec<String> = f.vault.note_list(false).unwrap().into_iter().map(|note| note.title).collect();
+        titles.sort();
+        titles
+    };
+
+    // 文件监听：只重读这几篇（被占着的排在最前面）
+    f.announced.lock().unwrap().clear();
+    let batch = ["笔记/乙.md", "笔记/甲.md", "笔记/要删的.md"].map(String::from);
+    f.vault.rescan_paths_and_announce(&batch).unwrap();
+    assert_eq!(titles(&f), ["甲"]);
+    assert!(f.announced.lock().unwrap().iter().any(|change| change.notes.contains(&gone)), "删掉的那篇通知了前端");
+
+    // 整个扫一遍也一样不报错
+    f.vault.rescan_and_announce().unwrap();
+    assert_eq!(titles(&f), ["甲"]);
+
+    // 放开以后下次扫描读进来
+    drop(_hold);
+    f.vault.rescan_and_announce().unwrap();
+    assert_eq!(titles(&f), ["乙", "甲"]);
+}
+
+/// 让这个文件读不了，返回的东西拿着就一直读不了。占不住返回 None
+#[cfg(windows)]
+fn hold_exclusively(path: &Path) -> Option<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // 不和任何人共享：别的进程（和本进程别处）再打开都是 os error 32
+    std::fs::OpenOptions::new().read(true).share_mode(0).open(path).ok()
+}
+
+#[cfg(unix)]
+fn hold_exclusively(path: &Path) -> Option<Unreadable> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).ok()?;
+    let guard = Unreadable(path.to_path_buf());
+    std::fs::read(path).is_err().then_some(guard)
+}
+
+#[cfg(unix)]
+struct Unreadable(PathBuf);
+
+#[cfg(unix)]
+impl Drop for Unreadable {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o644));
+    }
+}
+
+/// 名字很长的一篇（别的工具建的；ext4 上八十个汉字的标题也是）：冲突副本的名字接上「 (冲突 …)」超了文件名的上限，
+/// 以前另存失败 —— 同步合并时对方那一版只剩在历史里（同一批后面的也不另存了），保存时这一篇一直存不进去
+#[test]
+fn a_conflict_copy_of_a_long_named_note_still_gets_written() {
+    let mut f = fixture();
+    let stem = "a".repeat(240);
+    let long = format!("笔记/{stem}.md");
+    f.write_externally(&long, "外面写的");
+    f.write_externally("笔记/短.md", "短的");
+    f.vault.rescan().unwrap();
+
+    let theirs = [(long.clone(), "那一版".as_bytes().to_vec()), ("笔记/短.md".to_string(), "短的那一版".as_bytes().to_vec())];
+    assert_eq!(f.vault.absorb_merge(&theirs).unwrap().len(), 2);
+
+    let id = f.vault.note_list(false).unwrap().into_iter().find(|note| note.title == stem).unwrap().id;
+    f.write_externally(&long, "外面又改了");
+    let saved = f.vault.note_save(&id, "我改的", Some(&fsio::fingerprint("外面写的"))).unwrap();
+    assert_eq!(saved.content_md, "我改的");
+
+    let mut bodies: Vec<String> = f.vault.note_list_full(false).unwrap().into_iter().map(|note| note.content_md).collect();
+    bodies.sort();
+    assert_eq!(bodies, ["外面又改了", "我改的", "短的", "短的那一版", "那一版"]);
+    assert!(f.files().iter().all(|rel| rel.rsplit('/').next().unwrap().len() <= 255));
+}
+
+/// 文件夹里有一篇不是 UTF-8 的：删文件夹先说、一篇都不动。以前删到它才报错，排在前面的已经进了回收站
+#[test]
+fn deleting_a_folder_with_a_note_that_is_not_utf8_touches_nothing() {
+    let mut f = fixture();
+    f.vault.folder_create("", "工作").unwrap();
+    f.vault.note_create_in("工作", "甲", "甲的正文").unwrap();
+    f.write_bytes_externally("笔记/工作/乙.md", GBK);
+    f.vault.note_create_in("工作", "丙", "丙的正文").unwrap();
+    f.vault.rescan().unwrap();
+    let before = f.files();
+
+    let error = f.vault.folder_delete("工作").unwrap_err().to_string();
+    assert!(error.contains("乙.md"), "{error}");
+    assert_eq!(f.files(), before);
+    assert!(f.vault.trash_list().unwrap().is_empty());
+}
+
+/// 前端、访客（协作时新建一篇交的文件夹）、同步来的配置和文件里写的路径，拼进仓库之前每一段都得是普通的名字。
+/// Windows 上 `D:` 是盘符：`笔记/D:` 以前过得了 folder_dir，fsio::abs 拼出来是「D 盘的当前目录」，在仓库外面
+#[test]
+fn paths_from_outside_cannot_point_out_of_the_vault() {
+    let mut f = fixture();
+    #[cfg(windows)]
+    {
+        for folder in ["D:", "工作/D:", "Z:/Users"] {
+            assert!(f.vault.layout.folder_dir(folder).is_err(), "{folder}");
+        }
+        assert!(layout::clean_dir("D:/附件").is_none(), "Obsidian、仓库标记里写的文件夹");
+        assert!(f.vault.tree_file_path("D:/x.png").is_err());
+    }
+    assert!(f.vault.layout.folder_dir("工作:流").is_ok(), "名字里有冒号、不是盘符的照旧");
+
+    // 回收站里的文件（网盘也同步它）写着的原处在仓库外面：放回「笔记」
+    let id = f.vault.note_create("周报", "正文").unwrap();
+    f.vault.note_delete(&id).unwrap();
+    let trash = trash_rel(&id);
+    let text: String = f
+        .read(&trash)
+        .lines()
+        .map(|line| if line.starts_with("trashed-from:") { "trashed-from: ../外面/周报.md
+".to_string() } else { format!("{line}
+") })
+        .collect();
+    assert!(text.contains("../外面"), "{text}");
+    fsio::write_atomic(&fsio::abs(&f.root, &trash), &text).unwrap();
+    f.vault.note_undelete(&id).unwrap();
+    assert!(!f.root.with_file_name("外面").exists());
+    assert_eq!(f.vault.note_get(&id).unwrap().content_md.trim_end(), "正文");
+    assert!(f.files().iter().all(|rel| rel.starts_with("笔记/")), "{:?}", f.files());
 }

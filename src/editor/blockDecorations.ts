@@ -28,6 +28,7 @@ import { selectionTouchesRange, widgetByNode } from "./markdownStyleRegistry";
 import { type MarkdownTableModel, parseDelimitedTable, parseMarkdownTable } from "./markdownTable";
 import { MathWidget } from "./math";
 import { revealRanges } from "./reveal";
+import { gapsChanged, tableCut } from "./tableGap";
 import { TableWidget } from "./tableWidget";
 import {
   CalloutFoldWidget,
@@ -375,14 +376,17 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       }
 
       if (widgetByNode.get(name) === "table") {
-        if (!touches(node.from, node.to)) {
-          const tableSource = state.sliceDoc(node.from, node.to);
+        // 正在组字、还没和表格隔开的那一行（连同被它带进来的下面那几行）不算表格的（tableGap.ts）：
+        // 表格照样画着，光标在那一行不算进了表格
+        const to = tableCut(state, node.from, node.to);
+        if (!touches(node.from, to)) {
+          const tableSource = state.sliceDoc(node.from, to);
           const table = parsedTable(`md\u0000${tableSource}`, () =>
             parseMarkdownTable(tableSource),
           );
           const indent = node.from - state.doc.lineAt(node.from).from;
           if (table)
-            foldRange(node.from, node.to, new TableWidget(table, "markdown", tableSource, indent));
+            foldRange(node.from, to, new TableWidget(table, "markdown", tableSource, indent));
         }
         return false;
       }
@@ -583,8 +587,13 @@ export const typoraBlockDecorations = StateField.define<TyporaBlockState>({
   // 初次构建（刚打开这篇）没有 changes：替身全都算新出现，照常播入场动画
   create: (state) => buildBlockDecorations(state, null),
   update(value, transaction) {
-    // 收起 / 展开了标题（不只是跟着改动平移）、插件登记的提示块换了（开关了插件）：整篇重建
-    if (!foldsOnlyMoved(transaction) || value.callouts !== calloutsVersion()) {
+    // 收起 / 展开了标题（不只是跟着改动平移）、插件登记的提示块换了（开关了插件）、
+    // 表格下面正在组字的那一行记上 / 收掉了（tableGap.ts，表格的范围跟着变）：整篇重建
+    if (
+      !foldsOnlyMoved(transaction) ||
+      value.callouts !== calloutsVersion() ||
+      gapsChanged(transaction.startState, transaction.state)
+    ) {
       return buildBlockDecorations(transaction.state, transaction.changes);
     }
     // 折叠与否取决于光标在不在块里，所以选区变化也要重算；

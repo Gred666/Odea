@@ -220,6 +220,14 @@ export function setGrants(id: string, grants: Grants): void {
   loadInstalled();
 }
 
+/**
+ * 装一份清单（新装或者升级）时，之前的授权哪些还算数：同一个来源的升级照旧留着（只问多要的）；
+ * 换了来源（官方目录装的，又从一份文件装了同一个 id）脚本是另一个人写的，之前同意的不能转给它，全部重问
+ */
+export function carriedGrants(before: InstalledPlugin | undefined, source: InstallSource): Grants {
+  return before && before.source === source ? before.grants : NO_GRANTS;
+}
+
 /** 清单里申请了、这台设备上还没问过的那几项：问过之前不启动 */
 export function undecided(plugin: InstalledPlugin): Capability[] {
   const decided = new Set([...plugin.grants.granted, ...plugin.grants.denied]);

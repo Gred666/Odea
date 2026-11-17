@@ -65,6 +65,15 @@ pub(crate) fn provider_of(key: &str) -> Result<Provider> {
     Provider::parse(key).ok_or_else(|| AppError::Invalid(format!("不认识的托管方: {key}")))
 }
 
+/// 前端给的仓库地址得是这家托管方的 https 地址：推拉、clone 时这家的令牌就当密码交给它
+pub(crate) fn check_remote(provider: Provider, url: &str) -> Result<()> {
+    if provider.owns_remote(url) {
+        Ok(())
+    } else {
+        Err(AppError::Invalid(format!("这不是 {} 上的仓库地址：{url}", provider.key())))
+    }
+}
+
 /// 这个托管方登录的是哪个账号
 pub(crate) fn login_of(data_dir: &std::path::Path, provider: Provider) -> Result<String> {
     boot::Config::load(data_dir)
@@ -97,11 +106,10 @@ fn remember_account(
     provider: Provider,
     login: String,
 ) -> Result<SyncAccount> {
-    let mut config = boot::Config::load(data_dir);
-    config
-        .sync_accounts
-        .insert(provider.key().to_string(), login.clone());
-    config.save(data_dir)?;
+    boot::edit_config(data_dir, |config| {
+        config.sync_accounts.insert(provider.key().to_string(), login.clone());
+        Ok(())
+    })?;
     Ok(SyncAccount { provider: provider.key().to_string(), login })
 }
 
@@ -217,12 +225,12 @@ pub async fn sync_logout(state: State<'_, AppState>, provider: String) -> Result
     let provider = provider_of(&provider)?;
     let data_dir = state.data_dir.clone();
     blocking(move || {
-        let mut config = boot::Config::load(&data_dir);
-        if let Some(login) = config.sync_accounts.remove(provider.key()) {
-            account::logout(provider, &login)?;
-            config.save(&data_dir)?;
-        }
-        Ok(())
+        boot::edit_config(&data_dir, |config| {
+            if let Some(login) = config.sync_accounts.remove(provider.key()) {
+                account::logout(provider, &login)?;
+            }
+            Ok(())
+        })
     })
     .await
 }
@@ -283,9 +291,14 @@ pub async fn sync_proxy(state: State<'_, AppState>) -> Result<SyncProxy> {
 #[specta::specta]
 pub async fn sync_set_proxy(state: State<'_, AppState>, proxy: Option<String>) -> Result<SyncProxy> {
     let configured = proxy.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
-    let mut config = boot::Config::load(&state.data_dir);
-    config.sync_proxy = configured.clone();
-    config.save(&state.data_dir)?;
+    let (data_dir, saved) = (state.data_dir.clone(), configured.clone());
+    blocking(move || {
+        boot::edit_config(&data_dir, |config| {
+            config.sync_proxy = saved;
+            Ok(())
+        })
+    })
+    .await?;
     let effective = proxy::resolve(configured.as_deref());
     Ok(SyncProxy { configured, effective })
 }
@@ -300,6 +313,7 @@ pub async fn sync_inspect(
     clone_url: String,
 ) -> Result<SyncPlan> {
     let provider = provider_of(&provider)?;
+    check_remote(provider, &clone_url)?;
     let data_dir = state.data_dir.clone();
     let root = with_vault(&ws, |v| Ok(v.root().to_path_buf())).await?;
     blocking(move || {
@@ -338,6 +352,7 @@ pub async fn sync_enable<R: Runtime>(
     bring_local: bool,
 ) -> Result<bool> {
     let provider = provider_of(&provider)?;
+    check_remote(provider, &clone_url)?;
     let data_dir = state.data_dir.clone();
     let root = with_vault(&ws, |v| Ok(v.root().to_path_buf())).await?;
     if let Some(drive) = setup::cloud_drive_of(&root) {

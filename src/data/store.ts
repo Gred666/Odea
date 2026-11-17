@@ -124,9 +124,11 @@ interface DataState {
   /**
    * 外部改动到的时候编辑器里正有没存的修改（编辑器发现的）：它们是照着外部改动之前那一版改的。
    * 记下那一版，下一次保存把它当 base 带上 —— 后端一看磁盘上已经不是那一版，先把磁盘上的另存成
-   * 冲突副本，再写编辑器里的，两边都不丢（判断在后端，见 staleBases）
+   * 冲突副本，再写编辑器里的，两边都不丢（判断在后端，见 staleBases）。
+   * seen：直接说下一次要存的是照着哪一版改的（团队仓库接手主持时，会话是照主持人那一版建的，
+   * 本机磁盘上没合进去的那一版要留下，team/controller.ts 的 unseen）
    */
-  markConflict: (target: DocumentRef) => void;
+  markConflict: (target: DocumentRef, seen?: string) => void;
   /** 仓库里别处发生的变化（文件监听、勾任务改了别的文档）：刷新受影响的缓存 */
   applyVaultChange: (change: VaultChange) => Promise<void>;
   /**
@@ -781,9 +783,9 @@ export const useData = create<DataState>((set, get) => ({
       return messageOf(error);
     }
   },
-  markConflict: (target) => {
+  markConflict: (target, seen) => {
     const key = saveKeyOf(target);
-    const base = basesBeforeExternal.get(key);
+    const base = seen !== undefined ? fingerprint(seen) : basesBeforeExternal.get(key);
     // 连着来了两次外部改动：留最早那一版（编辑器就是照着它改的）
     if (base !== undefined && !staleBases.has(key)) staleBases.set(key, base);
   },
@@ -1243,10 +1245,6 @@ export const useData = create<DataState>((set, get) => ({
       // 编辑器里没存的先存掉：恢复之前的样子要是最新的，晚到的保存也不会把旧正文写回来
       const { flushAllEditors } = await import("@/editor/saveBus");
       await flushAllEditors();
-      if (target.type === NOTE) await get().loadBody(target.key);
-      else await documentType(target.type)?.load(target.key);
-      const before = conflictOriginalContent(target, get());
-      if (before === undefined || before === body) return;
       const key = saveKeyOf(target);
       const replace = async (content: string) => {
         const previous = conflictOriginalContent(target, get());
@@ -1256,18 +1254,34 @@ export const useData = create<DataState>((set, get) => ({
           externalRevisions: externalBump(state.externalRevisions, key, previous),
         }));
       };
-      await replace(body);
-      set({
-        lastDeleted: null,
-        undoable: {
-          key: `history:${key}:${Date.now()}`,
-          kind: "history",
-          message: `已恢复到 ${when} 的版本`,
-          undo: async () => {
-            await (await import("@/editor/saveBus")).flushAllEditors();
-            await replace(before);
+      const restored = (undo: () => Promise<void>) =>
+        set({
+          lastDeleted: null,
+          undoable: {
+            key: `history:${key}:${Date.now()}`,
+            kind: "history",
+            message: `已恢复到 ${when} 的版本`,
+            undo,
           },
-        },
+        });
+      // 团队仓库里别人在主持这一篇：写进会话（大家都看到、他存），不写自己的磁盘（审查 2026-11-13 §5.8）
+      const team = await (await import("@/team/store")).restoreInTeam(target, body);
+      if (team) {
+        if (team.before === body) return;
+        restored(async () => {
+          // 会话已经收掉了：照一个人编辑时的做法换回去
+          if (!team.undo()) await replace(team.before);
+        });
+        return;
+      }
+      if (target.type === NOTE) await get().loadBody(target.key);
+      else await documentType(target.type)?.load(target.key);
+      const before = conflictOriginalContent(target, get());
+      if (before === undefined || before === body) return;
+      await replace(body);
+      restored(async () => {
+        await (await import("@/editor/saveBus")).flushAllEditors();
+        await replace(before);
       });
     } catch (error) {
       set({ error: messageOf(error) });
@@ -1873,8 +1887,23 @@ export const useData = create<DataState>((set, get) => ({
     if (!copy?.conflictOf) return null;
     const target = conflictTarget(copy.conflictOf);
     // 原文是笔记、已经不在了：横幅本来就不显示
-    if (conflictOriginalTitle(target, get()) === undefined) return null;
+    const title = conflictOriginalTitle(target, get());
+    if (title === undefined) return null;
+    const key = saveKeyOf(target);
+    // 原文换成 content；开着它的编辑器（或者切走时缓存的状态）当成一次外部改动，换上新正文
+    const replace = async (content: string) => {
+      const previous = conflictOriginalContent(target, get());
+      await get().saveDocument(target, content);
+      set((state) => ({
+        externalRevisions: externalBump(state.externalRevisions, key, previous),
+      }));
+    };
     try {
+      // 编辑器里没存的先存掉：副本上刚并进去的几个字要跟着进原文（副本删了以后晚到的保存就没处落了），
+      // 原文开在别的窗格里刚打的字也算在「替换前的那一版」里，撤销时一起回来
+      const { flushAllEditors } = await import("@/editor/saveBus");
+      await flushAllEditors();
+      let before: string | null = null;
       if (keep === "copy") {
         // 插件的文档是按需取的：没取回来时 saveDocument 什么都不写
         if (target.type === NOTE) await get().loadBody(target.key);
@@ -1883,19 +1912,36 @@ export const useData = create<DataState>((set, get) => ({
         const copyBody = await get().loadBody(copy.id);
         if (current === undefined || copyBody === undefined) return null;
         if (current !== copyBody) {
-          await get().saveDocument(target, copyBody);
-          // 原文的编辑器状态可能缓存着（切走时留的）：当成一次外部改动，下次打开换成新正文
-          set((state) => ({
-            externalRevisions: externalBump(state.externalRevisions, saveKeyOf(target), current),
-          }));
+          await replace(copyBody);
+          before = current;
         }
       }
-      if (copy.isArchived) {
-        // 归档里的副本：deleteNote 只管笔记列表，这里直接删
-        await (await backend()).noteDelete(copy.id);
-        set((state) => ({ archived: state.archived.filter((note) => note.id !== copy.id) }));
-      } else {
-        await get().deleteNote(copy.id);
+      // 归档里的副本 deleteNote 也认（从归档那个列表删，撤销放回归档）
+      await get().deleteNote(copy.id);
+      if (before !== null) {
+        // 删除的那条提示条只撤得回副本：原文已经被盖掉了（没开同步的仓库没有历史版本）。换成撤整个操作的这一条
+        const original = before;
+        const present = () =>
+          get().notes.some((note) => note.id === copy.id) ||
+          get().archived.some((note) => note.id === copy.id);
+        set({
+          lastDeleted: null,
+          undoable: {
+            key: `conflict:${copy.id}:${Date.now()}`,
+            kind: "history",
+            message: `已用冲突副本替换了「${title.trim() || NEW_NOTE_TITLE}」`,
+            undo: async () => {
+              try {
+                await flushAllEditors();
+                await replace(original);
+                if (!present()) await get().restoreTrashed(copy.id);
+              } catch (error) {
+                set({ error: messageOf(error) });
+              }
+            },
+            reopen: copy.id,
+          },
+        });
       }
       return target;
     } catch (error) {

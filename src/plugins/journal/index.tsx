@@ -13,7 +13,7 @@ import {
 import { CalendarPanel } from "./CalendarView";
 import { JournalEffects } from "./Effects";
 import { journalSwitchNext } from "./JournalSwitcher";
-import { openReminderSettings } from "./ReminderSettings";
+import { REMINDER_DIALOG, openReminderSettings } from "./ReminderSettings";
 import { captureToToday } from "./capture";
 import { useJournalDocument } from "./documents";
 import { useJournal } from "./store";
@@ -163,6 +163,7 @@ export const journalPlugin: Plugin = {
       label: "提醒设置…",
       hint: "任务写了几点，到点弹通知、响一声；提前多久、用什么声音",
       keywords: "reminder notification alarm sound 提醒 通知 到点 闹钟 声音 提示音 提前 勿扰 ⏰",
+      dialog: REMINDER_DIALOG,
       run: openReminderSettings,
     },
   ],

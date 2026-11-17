@@ -1,6 +1,8 @@
 import type { OutlineItem } from "@/data/types";
+import { isFrontMatterKey } from "@/editor/frontMatter";
 import { type MarkdownTableModel, parseMarkdownTable } from "@/editor/markdownTable";
 import { animatedEmojiText } from "@/lib/emojiText";
+import { isOpenableUrl, openExternal } from "@/lib/openExternal";
 import { type ReactNode, createElement } from "react";
 
 /* ============================================================
@@ -200,8 +202,19 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
       );
     } else if (tok.startsWith("[")) {
       const lm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok)!;
+      const url = lm[2]!.trim();
+      // 用系统浏览器开，不在应用的窗口里跳走（审查 2026-11-13 §4.33，和 §4.11 同一类）：
+      // 只给能开的那几种协议 href，点的时候拦下来交给 openExternal
       out.push(
-        <a key={k} href={lm[2]} target="_blank" rel="noreferrer noopener">
+        <a
+          key={k}
+          href={isOpenableUrl(url) ? url : undefined}
+          rel="noreferrer noopener"
+          onClick={(event) => {
+            event.preventDefault();
+            void openExternal(url);
+          }}
+        >
           {lm[1]}
         </a>,
       );
@@ -327,7 +340,7 @@ function frontMatterLines(lines: string[]): number {
   let sawKey = false;
   for (let index = 1; index < Math.min(lines.length, 60); index += 1) {
     if (/^---\s*$/.test(lines[index]!)) return sawKey ? index + 1 : 0;
-    if (/^[A-Za-z_][\w-]*\s*:/.test(lines[index]!)) sawKey = true;
+    if (isFrontMatterKey(lines[index]!)) sawKey = true;
   }
   return 0;
 }

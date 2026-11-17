@@ -5,7 +5,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { collab } from "./binding";
-import { mergeExternal, snapshot, textEdits } from "./external";
+import { fineEdits, mergeExternal, snapshot, textEdits } from "./external";
 import { LoopbackHub, ManualScheduler } from "./loopback";
 import { type Peer, peerColor } from "./session";
 
@@ -95,6 +95,95 @@ describe("磁盘上的改动拆成编辑", () => {
       const before = lines.join("\n");
       const after = changedLines.join("\n");
       expect(apply(before, after)).toBe(after);
+    }
+  });
+});
+
+describe("细到字的改动（fineEdits，docs/协同编辑.md §27）", () => {
+  const applyFine = (before: string, after: string) => {
+    let text = before;
+    for (const edit of fineEdits(before, after).reverse()) {
+      text = text.slice(0, edit.from) + edit.insert + text.slice(edit.to);
+    }
+    return text;
+  };
+
+  it("同一段里隔开的两处改动分开（textEdits 是一整个替换）", () => {
+    const before = "今天开会讨论预算。";
+    const after = "明天开会讨论人事。";
+    expect(textEdits(before, after)).toHaveLength(1);
+    expect(fineEdits(before, after)).toEqual([
+      { from: 0, to: 1, insert: "明" },
+      { from: 6, to: 8, insert: "人事" },
+    ]);
+  });
+
+  it("不切开代理对：换了一个 emoji，改的是整个 emoji", () => {
+    expect(fineEdits("表情😀在这", "表情😁在这")).toEqual([{ from: 2, to: 4, insert: "😁" }]);
+    expect(fineEdits("a😀b😀c", "a😀Xb😀c")).toEqual([{ from: 3, to: 3, insert: "X" }]);
+  });
+
+  it("整句换掉：不拿碰巧一样的几个散字东拼西凑", () => {
+    // LCS 只对得上一个「d」：夹在两大段改动中间，并进改动
+    expect(fineEdits("abcdefgh", "xxdxxxxx")).toEqual([{ from: 0, to: 8, insert: "xxdxxxxx" }]);
+    // 真的一样的一段（比两边的改动长）留着
+    expect(fineEdits("甲，我们今天开会，乙", "丙，我们今天开会，丁")).toEqual([
+      { from: 0, to: 1, insert: "丙" },
+      { from: 9, to: 10, insert: "丁" },
+    ]);
+  });
+
+  it("很多段整段改写的长文：逐字比有总量上限，超出的几处整处替换，打回去照样对", () => {
+    let seed = 7;
+    const paragraph = () =>
+      Array.from({ length: 800 }, () => {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return String.fromCodePoint(0x4e00 + (seed % 2000));
+      }).join("");
+    // 60 段、段和段之间隔着空行，每段隔 40 个字改一个：textEdits 给 60 处，每处 800 × 800 个格子，
+    // 加起来 3800 万（没有上限时主线程上算两三百毫秒）
+    const paragraphs = Array.from({ length: 60 }, paragraph);
+    const before = paragraphs.join("\n\n");
+    const after = paragraphs.map((text) => text.replace(/(.{39})./gu, "$1改")).join("\n\n");
+    const coarse = textEdits(before, after);
+    expect(coarse).toHaveLength(60);
+    const edits = fineEdits(before, after);
+    expect(applyFine(before, after)).toBe(after);
+    // 前面几处细分了（一段 20 处），用完以后的和 textEdits 一样是一整个替换
+    expect(edits.slice(0, 20).every((edit) => edit.insert === "改")).toBe(true);
+    expect(edits.at(-1)).toEqual(coarse.at(-1));
+  });
+
+  it("随机改：打回去总能得到改后的正文，改动按位置排好、不叠、不落在代理对中间", () => {
+    let seed = 11;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const chars = [..."的一是ab 😀😁\n"];
+    const pick = () => chars[Math.floor(random() * chars.length)]!;
+    const word = () => Array.from({ length: Math.floor(random() * 10) }, pick).join("");
+    const mutate = (text: string) => {
+      const points = Array.from(text);
+      for (let edits = Math.floor(random() * 4); edits > 0; edits -= 1) {
+        const at = Math.floor(random() * (points.length + 1));
+        const remove = random() < 0.5 ? Math.floor(random() * 3) : 0;
+        points.splice(at, remove, ...Array.from(word()));
+      }
+      return points.join("");
+    };
+    const inside = (text: string, at: number) =>
+      at > 0 && at < text.length && /[\uDC00-\uDFFF]/.test(text[at]!);
+    for (let round = 0; round < 2000; round += 1) {
+      const before = Array.from({ length: Math.floor(random() * 6) }, word).join("\n");
+      const after = mutate(before);
+      const edits = fineEdits(before, after);
+      expect(applyFine(before, after)).toBe(after);
+      for (const [index, edit] of edits.entries()) {
+        expect(edit.from).toBeLessThanOrEqual(edit.to);
+        if (index > 0) expect(edit.from).toBeGreaterThanOrEqual(edits[index - 1]!.to);
+        expect(inside(before, edit.from) || inside(before, edit.to)).toBe(false);
+      }
     }
   });
 });

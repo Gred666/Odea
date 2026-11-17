@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use regex::{Regex, RegexBuilder};
 
 pub use super::model::FindOptions;
@@ -199,19 +201,20 @@ fn front_matter_len(lines: &[&str]) -> usize {
     0
 }
 
-fn is_yaml_key(line: &str) -> bool {
-    let mut chars = line.chars();
-    if !chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-    {
-        return false;
-    }
-    chars
-        .as_str()
-        .trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        .trim_start()
-        .starts_with(':')
+/// `is_yaml_key` 的正则，和编辑器的 editor/frontMatter.ts::KEY_RE 一字不差（那边带 `u` 标志）。
+/// Unicode 表的版本两边不一样：regex-syntax 0.8.11 是 16.0，WebView2 151（ICU 78）是 17.0 ——
+/// 键全是 17.0 新加的字（CJK 扩展 J 等）的块，编辑器认、这里不认。实测和影响见 docs/提醒与属性.md §3.3 的实现记录
+static YAML_KEY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[\p{Alphabetic}_][\p{Alphabetic}\p{M}\p{N}_-]*\s*:").expect("键的正则写死在这里")
+});
+
+/// 这一行是不是 `键: 值` 的样子：键的第一个字是 Unicode 字母（中文、日文的字也算）或下划线，
+/// 后面是字母、组合符号（拆开写的重音、印地文的半音符、泰文的声调号）、数字、`_`、`-`，再是半角的 `:`。
+/// 全角冒号、带空格的键不算（YAML 本来就不认）。
+/// 属性块认不认得出来就看有没有这样一行：vault/frontmatter.rs 用的也是它，
+/// 编辑器的 editor/frontMatter.ts::KEY_RE 是同一条正则。docs/提醒与属性.md §3.3
+pub fn is_yaml_key(line: &str) -> bool {
+    YAML_KEY.is_match(line)
 }
 
 /// 整行都是标记、没有可读文字的行。
@@ -575,6 +578,31 @@ mod tests {
     #[test]
     fn leading_rule_is_not_front_matter() {
         assert_eq!(make_excerpt("---\n正文\n---\n后面", 200), "正文 后面");
+    }
+
+    /// 键是中文、日文的也算（docs/提醒与属性.md §3.3）。同一组样例 vault/frontmatter.rs、editor/frontMatter.test.ts 也测，结论要一样
+    #[test]
+    fn keys_may_start_with_any_letter() {
+        // 后半截是刁钻的（editor/frontMatter.test.ts 同一组）：带声调的拼音、全角字母、々（Lm）算；
+        // 全角数字开头、emoji、零宽空格（Cf，不是组合符号）不算。
+        // 组合符号在字母后面的算（2026-11-17 放宽）：拆开写的重音 e + U+0301、印地文 kya（带半音符 U+094D）、
+        // 泰文 chue（带声调号 U+0E48）、NFD 写的 タグ（ク + 浊点 U+3099）；组合符号开头的不算
+        for line in [
+            "标签: 旅行", "截止: 2026-11-20", "_x: 1", "タグ: a", "status: 草稿", "my-key : x",
+            "é: x", "nǚ-ér: x", "Ａｂｃ: x", "a１: x", "々: x", "key-名_2: x",
+            "e\u{301}: x", "\u{915}\u{94d}\u{92f}\u{93e}: 1", "\u{e0a}\u{e37}\u{e48}\u{e2d}: a",
+            "\u{30bf}\u{30af}\u{3099}: a",
+        ] {
+            assert!(is_yaml_key(line), "{line}");
+            assert_eq!(make_excerpt(&format!("---\n{line}\n---\n正文"), 200), "正文", "{line}");
+        }
+        for line in [
+            "标签：旅行", "1a: x", "- 列表项", "my key: x", "  缩进: x", ": x",
+            "１a: x", "😀: x", "a😀: x", "\u{200b}key: x", "ke\u{200b}y: x", "\u{301}e: x",
+        ] {
+            assert!(!is_yaml_key(line), "{line}");
+            assert_ne!(make_excerpt(&format!("---\n{line}\n---\n正文"), 200), "正文", "{line}");
+        }
     }
 
     #[test]

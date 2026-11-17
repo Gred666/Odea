@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   type Entry,
+  KINDS,
+  type Kind,
   appendEntry,
-  convertValue,
   entryLines,
+  fitsKind,
   kindOf,
   parse,
   removeEntry,
   renameEntry,
   replaceEntry,
+  singleValue,
+  valueFits,
 } from "./yaml";
 
 /** 找不到就让测试失败 */
@@ -109,11 +113,49 @@ describe("属性块里的几行", () => {
     expect(entryLines("tags", "tags", ["a, b"], true)).toEqual(['tags: ["a, b"]']);
   });
 
-  it("keeps what it can when the kind changes", () => {
-    const { entries } = parse("截止: 2026-11-20\ntags: [a, b]\nn: 12");
-    expect(convertValue(pick(entries, "截止"), "date", "datetime")).toBe("2026-11-20T09:00");
-    expect(convertValue(pick(entries, "tags"), "tags", "text")).toBe("a, b");
-    expect(convertValue(pick(entries, "截止"), "date", "multitext")).toEqual(["2026-11-20"]);
-    expect(convertValue(pick(entries, "n"), "number", "checkbox")).toBe("false");
+  it("tells whether a kind's control can show a value as it is (审查 §6.8)", () => {
+    const { entries } = parse(
+      [
+        "s: 草稿",
+        "截止: 2026-11-20",
+        "at: 2026-11-20T15:30",
+        "坏的: 2026-13-45",
+        "n: 12",
+        "ok: true",
+        "大写: True",
+        "空的:",
+        "tags: [a, b]",
+        "one: [2026-11-20]",
+      ].join("\n"),
+    );
+    const fits = (key: string, kind: Kind) => fitsKind(pick(entries, key), kind);
+    // 列表、文字什么都读得了；「草稿」不是日期、数字、勾选
+    for (const kind of ["text", "multitext", "tags", "aliases"] as Kind[]) {
+      expect(fits("s", kind)).toBe(true);
+    }
+    for (const kind of ["date", "datetime", "number", "checkbox"] as Kind[]) {
+      expect(fits("s", kind)).toBe(false);
+    }
+    // 日期当日期时间读得了；日期时间当日期读不了（日期控件会把时间丢了）
+    expect(fits("截止", "datetime")).toBe(true);
+    expect(fits("at", "date")).toBe(false);
+    expect(fits("at", "datetime")).toBe(true);
+    expect(fits("坏的", "date")).toBe(false);
+    expect(fits("n", "number")).toBe(true);
+    expect(fits("n", "checkbox")).toBe(false);
+    expect(fits("ok", "checkbox")).toBe(true);
+    // 勾选只认 true、false：别的画成框会被一点盖掉
+    expect(fits("大写", "checkbox")).toBe(false);
+    // 空着的哪种都读得了
+    for (const kind of KINDS) expect(fits("空的", kind)).toBe(true);
+    // 两项的列表当不了一个值；一项的当得了
+    expect(fits("tags", "text")).toBe(false);
+    expect(fits("tags", "tags")).toBe(true);
+    expect(fits("one", "date")).toBe(true);
+    expect(singleValue(pick(entries, "one"))).toBe("2026-11-20");
+    // 改进去的值：读得了照这种类型写，读不了照文字写
+    expect(valueFits("2026-11-20", "date")).toBe(true);
+    expect(valueFits("soon", "date")).toBe(false);
+    expect(valueFits("", "checkbox")).toBe(true);
   });
 });

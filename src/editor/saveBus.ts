@@ -15,7 +15,10 @@ export async function flushAllEditors(): Promise<void> {
   await Promise.all([...flushers].map((flush) => flush()));
 }
 
-/** 关窗口前（编辑器存完以后）还要做的：团队仓库里主持着的先说一声不主持了（team/store.ts） */
+/**
+ * 关窗口前（编辑器存完以后）还要做的：团队仓库里主持着的先说一声不主持了（team/store.ts）；
+ * 做客的几篇把本机留的那份写完（collab/store.ts）
+ */
 const beforeClose = new Set<() => Promise<void>>();
 
 export function registerBeforeClose(run: () => Promise<void>): () => void {
@@ -23,8 +26,8 @@ export function registerBeforeClose(run: () => Promise<void>): () => void {
   return () => beforeClose.delete(run);
 }
 
-/** 最多等 2 秒：卡住了也照样关 */
-function runBeforeClose(): Promise<unknown> {
+/** 最多等 2 秒：卡住了也照样关。导出给测试 */
+export function runBeforeClose(): Promise<unknown> {
   return Promise.race([
     Promise.all([...beforeClose].map((run) => run().catch(() => undefined))),
     new Promise((resolve) => setTimeout(resolve, 2000)),

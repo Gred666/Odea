@@ -90,4 +90,42 @@ describe("EditableDocumentTitle", () => {
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith("要这个");
   });
+
+  // 审查 2026-11-13 §4.34：光标还在标题里按 Ctrl+Tab / Ctrl+W 换篇，标题框整个拆掉、不发 blur
+  it("saves the edit when it is taken away while still focused", async () => {
+    const onSave = vi.fn(async () => {});
+    const field = render(onSave);
+    act(() => field.focus());
+    typeInto(field, "周末采购Q");
+
+    act(() => root.render(<EditableDocumentTitle key="另一篇" title="别的" onSave={vi.fn()} />));
+    await act(async () => {});
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith("周末采购Q");
+  });
+
+  it("is saved before the window closes, and only once", async () => {
+    const { flushAllEditors } = await import("@/editor/saveBus");
+    let finish: () => void = () => {};
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const field = render(onSave);
+    act(() => field.focus());
+    typeInto(field, "周末采购清单");
+
+    const flushed = flushAllEditors();
+    expect(onSave).toHaveBeenCalledWith("周末采购清单");
+    // 还在存的时候失焦、被拆掉：不再存第二次
+    act(() => field.blur());
+    finish();
+    await act(async () => {
+      await flushed;
+    });
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
 });

@@ -160,6 +160,50 @@ export async function holdTeamDoc(
   };
 }
 
+/** 这一篇现在在团队的哪一份会话里（主持着的、做客的）；不在会话里是 undefined */
+function teamSessionOf(target: DocumentRef): TeamDocSession | undefined {
+  const note =
+    target.type === NOTE
+      ? [...useData.getState().notes, ...useData.getState().archived].find(
+          (item) => item.id === target.key,
+        )
+      : undefined;
+  const doc =
+    viewing?.key === keyOf(target)
+      ? viewing.doc
+      : teamIdOf(target, note?.relPath, note?.idInFile ?? false);
+  return doc ? useTeam.getState().sessions[doc] : undefined;
+}
+
+/**
+ * 历史版本的「恢复」（data/store.ts 的 restoreVersion，审查 2026-11-13 §5.8）：团队仓库里别人在主持这一篇时，
+ * 正文的真相是会话、存盘的是他 —— 只写自己的磁盘的话正文不动、别人看不到，git 下一轮还可能把别人后来的字合没。
+ * 把「现在 → 旧版」当一个从会话现在的版本分叉出去的协作者合进会话（collab/external.ts，和外部改动一样），大家都看到。
+ * 撤销从恢复后那一刻的版本分叉、把「恢复后 → 恢复前」合进去：只撤恢复那一下，之后谁打的字都还在；
+ * 会话已经收掉了返回 false（调用方照一个人编辑时的做法换回去）。
+ * 不是别人主持的（自己主持的外部改动本来就合进会话；没在会话里）返回 null：照旧写自己的磁盘
+ */
+export async function restoreInTeam(
+  target: DocumentRef,
+  body: string,
+): Promise<{ before: string; undo: () => boolean } | null> {
+  const shared = teamSessionOf(target);
+  if (!shared?.remote) return null;
+  const { mergeExternal, snapshot } = await import("@/collab/external");
+  const { session } = shared;
+  const before = session.toString();
+  if (before !== body) mergeExternal(session, snapshot(session), body);
+  const after = snapshot(session);
+  return {
+    before,
+    undo: () => {
+      if (teamSessionOf(target)?.session !== session) return false;
+      mergeExternal(session, after, before);
+      return true;
+    },
+  };
+}
+
 /** 数据层里这一篇现在的正文（插件的文档在插件的缓存里） */
 async function bodyOf(target: DocumentRef): Promise<string | undefined> {
   if (target.type === NOTE) return useData.getState().loadBody(target.key);
@@ -176,7 +220,11 @@ const keyOf = saveKeyOf;
 const io: TeamIO = {
   flush: flushAllEditors,
   load: bodyOf,
-  save: (target, text) => useData.getState().saveDocument(target, text),
+  save: (target, text, seen) => {
+    // 会话没见过磁盘上的那一版（加入时没合进去）：照着 seen 存，磁盘上不是它就先另存冲突副本
+    if (seen !== undefined) useData.getState().markConflict(target, seen);
+    return useData.getState().saveDocument(target, text);
+  },
   // 做客时主持人还没存下的字本机另留一份（docs/协同编辑.md §24）：放在应用数据目录，按仓库 + 文档认
   keep: (link, target, doc, host) => {
     const vault = useData.getState().vaultRoot;
@@ -239,6 +287,19 @@ export async function initTeam(net: TeamNet = tauriTeamNet): Promise<void> {
     started = false;
     console.error("团队：起不来", error);
   }
+}
+
+/**
+ * 加入这一篇时没合进会话的本机那一版（docs/协同编辑.md §28）：快照里只说有没有（`unseenFrom`），
+ * 正文点「看我的那一版」时才从 controller 取。没有了（另存成冲突副本、会话收了）是 null
+ */
+export function teamUnseenText(doc: string): string | null {
+  return controller?.unseenText(doc) ?? null;
+}
+
+/** 「知道了」：这一次加入期间不再提示 */
+export function hideTeamUnseen(doc: string): void {
+  controller?.hideUnseen(doc);
 }
 
 /** 编辑器里现在是哪一篇（正文到了才算） */

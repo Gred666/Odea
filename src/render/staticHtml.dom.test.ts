@@ -69,6 +69,28 @@ describe("静态渲染：行内", () => {
     expect(html).toContain("&lt;b&gt;粗 &lt;u&gt;未闭合");
   });
 
+  it("puts an image address into an HTML block as plain text, whatever it contains", async () => {
+    // 以前用 String.replace 把记号换成地址：地址里的 $` 被当成「记号前面的那一段」展开，
+    // 前面那段 HTML 整个塞进了 src 的引号里，title 里的字就成了 <img> 自己的属性（onerror）
+    const html = await render(
+      '<div><abbr title="onerror=alert(1) ">x</abbr><img src="https://e.com/a$`"><img src="https://e.com/b$\'$&"></div>',
+      { image: (source) => source },
+    );
+    const holder = document.createElement("div");
+    holder.innerHTML = html;
+    const handlers = [...holder.querySelectorAll("*")].flatMap((element) =>
+      [...element.attributes].filter((attribute) => attribute.name.startsWith("on")),
+    );
+    expect(handlers).toEqual([]);
+    expect([...holder.querySelectorAll("img")].map((image) => image.getAttribute("src"))).toEqual([
+      "https://e.com/a$`",
+      "https://e.com/b$'$&",
+    ]);
+    // 正文里写着长得像记号的字：不会被换成图片地址
+    const fake = await render('<div><p title="@@IMG0@@">@@IMG0@@</p><img src="a.png"></div>');
+    expect(fake).toContain('<p title="@@IMG0@@">@@IMG0@@</p><img src="img:a.png"');
+  });
+
   it("resolves images, Obsidian image embeds and sizes", async () => {
     const html = await render(
       '![图|300x200](../附件/a.png "说明")\n\n![[图.png|240]]\n\n![[没有.png]]',
@@ -94,6 +116,9 @@ describe("静态渲染：块", () => {
   it("drops the front matter", async () => {
     expect(stripFrontMatter("---\ntitle: x\n---\n正文")).toBe("正文");
     expect(stripFrontMatter("---\n不是属性\n---\n正文")).toBe("---\n不是属性\n---\n正文");
+    // 键是中文的也是属性块；全角冒号的不是（docs/提醒与属性.md §3.3）
+    expect(stripFrontMatter("---\n标签: 旅行\n---\n正文")).toBe("正文");
+    expect(stripFrontMatter("---\n标签：旅行\n---\n正文")).toBe("---\n标签：旅行\n---\n正文");
     expect(await render("---\ntitle: x\ntags: [a]\n---\n\n正文")).toBe("<p>正文</p>");
   });
 

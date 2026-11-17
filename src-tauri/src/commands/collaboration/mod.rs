@@ -282,17 +282,18 @@ pub(in crate::commands) fn save_relay(data_dir: &std::path::Path, relay: &Relay)
             let _ = secret::remove(&account);
         }
     }
-    let mut config = boot::Config::load(data_dir);
     let saved = boot::SavedRelay {
         url: relay.url.clone(),
         name: relay.name.clone(),
         fingerprint: relay.fingerprint.map(|pin| data_encoding::HEXLOWER.encode(&pin)),
     };
-    match config.collab_relays.iter_mut().find(|item| item.url == relay.url) {
-        Some(item) => *item = saved,
-        None => config.collab_relays.push(saved),
-    }
-    config.save(data_dir).map_err(|error| AppError::Io(error.to_string()))
+    boot::edit_config(data_dir, |config| {
+        match config.collab_relays.iter_mut().find(|item| item.url == relay.url) {
+            Some(item) => *item = saved,
+            None => config.collab_relays.push(saved),
+        }
+        Ok(())
+    })
 }
 
 fn relay_infos(data_dir: &std::path::Path) -> Vec<RelayInfo> {
@@ -659,10 +660,11 @@ pub async fn collab_identity(state: State<'_, AppState>) -> Result<CollabIdentit
 pub async fn collab_set_name(state: State<'_, AppState>, name: String) -> Result<()> {
     let data_dir = state.data_dir.clone();
     blocking(move || {
-        let mut config = boot::Config::load(&data_dir);
         let name = name.trim().chars().take(40).collect::<String>();
-        config.collab_name = (!name.is_empty()).then_some(name);
-        config.save(&data_dir).map_err(|error| AppError::Io(error.to_string()))
+        boot::edit_config(&data_dir, |config| {
+            config.collab_name = (!name.is_empty()).then_some(name);
+            Ok(())
+        })
     })
     .await?;
     // 正在协作：别人那里的成员表跟着换、「附近」广播的昵称也换

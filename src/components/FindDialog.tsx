@@ -12,6 +12,7 @@ import {
 } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { documentType } from "@/plugins/registry";
 import { Archive, ArrowDown, ArrowUp, CornerDownLeft, FileText, TextSearch } from "lucide-react";
@@ -57,6 +58,7 @@ export function FindDialog() {
   const seed = useApp((s) => s.findSeed);
   const setOpen = useApp((s) => s.setFindOpen);
   const back = usePaletteBack("find", open, () => setOpen(false));
+  const panel = useModalFocus(open);
   const notes = useData((s) => s.notes);
   const archived = useData((s) => s.archived);
 
@@ -78,7 +80,8 @@ export function FindDialog() {
   /* ---- 全局快捷键 ---- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
+      // 组字时的按键归输入法（同命令面板）
+      if (e.defaultPrevented || e.isComposing) return;
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         if (useApp.getState().findOpen) {
@@ -199,6 +202,7 @@ export function FindDialog() {
                        pt-[12vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="全局搜索"

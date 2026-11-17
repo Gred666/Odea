@@ -44,6 +44,21 @@ describe("mock backend", () => {
     expect(note.relPath).toBe("笔记/测试／斜杠：标题.md");
     expect(folderOf(note)).toBe("");
   });
+
+  // 同 vault/tests.rs::properties_that_would_not_read_back_are_not_written：某一天没有 id 这样一直在的键，
+  // 属性那几行里得有一行 `键: 值`；只有中文名字的现在认得出来（docs/提醒与属性.md §3.3）
+  it("takes a day's properties whose keys are Chinese, and refuses ones with no key line", async () => {
+    const mockBackend = await reopen();
+    const day = { type: "journal.day", key: "2026-09-25" };
+    for (const text of ["标签：旅行", "- 列表项", "1a: x"]) {
+      await expect(mockBackend.docSetProperties(day, text)).rejects.toMatchObject({
+        kind: "Invalid",
+      });
+    }
+    expect((await mockBackend.docSetProperties(day, "截止: 2026-11-20")).text).toBe(
+      "截止: 2026-11-20",
+    );
+  });
 });
 
 describe("mock backend：使用指南", () => {

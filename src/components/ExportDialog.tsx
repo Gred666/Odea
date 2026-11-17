@@ -18,6 +18,7 @@ import {
   today,
 } from "@/export/pageSetup";
 import { cn } from "@/lib/cn";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import {
   AlignCenter,
@@ -52,6 +53,7 @@ export function ExportDialog() {
   const open = state !== null;
   const close = () => setState(null);
   const back = usePaletteBack("export", open, close);
+  const panel = useModalFocus(open);
   // 收起动画那 0.2 秒里还画关之前的样子
   const [shown, setShown] = useState<ExportDialogState | null>(state);
   if (state && state !== shown) setShown(state);
@@ -94,6 +96,7 @@ export function ExportDialog() {
             className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[10vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label={title}

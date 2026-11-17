@@ -101,7 +101,9 @@ export function ActionMenu({
         <DropdownMenu.Content
           align={align}
           sideOffset={5}
-          onCloseAutoFocus={(e) => e.preventDefault()}
+          // 收起以后的焦点交给 Radix：Esc、选完一项都回到触发按钮；点了菜单外面的、动作自己把焦点放到了别处的
+          // （改名的输入框、打开的对话框、换过去的那一篇）它不抢（非模态时焦点出去就算「碰了外面」）。
+          // 以前在这里 preventDefault，焦点一律掉在 body 上（体验轮 §4.51）
           className="odea-menu z-50 min-w-[142px] overflow-hidden rounded-lg bg-canvas p-1
                      shadow-float outline-none ring-1 ring-line-strong"
         >

@@ -23,6 +23,8 @@ interface Device {
   snapshot: TeamSnapshot;
   disk: Map<string, string>;
   saves: number;
+  /** 另存的冲突副本：存的时候说了照着哪一版（seen），磁盘上又不是那一版（后端 keep_unseen_edits 的规矩） */
+  copies: string[];
   external: Set<(disk: string) => void>;
 }
 
@@ -31,13 +33,19 @@ function device(hub: MockTeamHub, id: string, name: string, text = ORIGINAL): De
   const out = {
     disk: new Map([["n1", text]]),
     saves: 0,
+    copies: [] as string[],
     external: new Set<(disk: string) => void>(),
   } as Device;
   const io: TeamIO = {
     flush: async () => {},
     load: async (target) => (target.type === NOTE ? out.disk.get(target.key) : undefined),
-    save: async (target, text) => {
-      if (target.type === NOTE) out.disk.set(target.key, text);
+    save: async (target, text, seen) => {
+      if (target.type === NOTE) {
+        const disk = out.disk.get(target.key);
+        if (seen !== undefined && disk !== undefined && disk !== seen && disk !== text)
+          out.copies.push(disk);
+        out.disk.set(target.key, text);
+      }
       out.saves += 1;
     },
     onExternal: (_target, listener) => {
@@ -125,6 +133,124 @@ describe("团队：同一篇谁主持（设计 §22.4）", () => {
     });
     await until("两边一样", () => textOf(a) === textOf(b));
     expect(textOf(a)!.split("\n- 李四").length).toBe(2);
+  });
+
+  it("没有 base、本机和对方不一样：本机那一版不进会话，接手主持把会话存回来之前另存一份冲突副本", async () => {
+    const hub = createMockTeamHub();
+    const hostText = `${ORIGINAL}\n- 张三那边写的`;
+    const localText = `${ORIGINAL}\n- 李四这边写的（还没进 git）`;
+    const a = device(hub, "a1", "张三", hostText);
+    const b = device(hub, "b2", "李四", localText);
+    // b2 的 git 里没有这一篇（新建的、改了名还没提交）：team_base 是 null
+    open(a);
+    open(b);
+    await until("李四加入了", () => sessionOf(b)?.remote === true);
+    // 没有 base 合不了：会话是对方那一版；做客不存，本机的那一版还在自己磁盘上
+    expect(textOf(b)).toBe(hostText);
+    expect(b.disk.get("n1")).toBe(localText);
+    expect(b.copies).toEqual([]);
+
+    // 主持人走了，李四接手：会话的正文存回本机 —— 磁盘上那一版会话从没见过，先另存
+    a.controller.view(null);
+    await until(
+      "李四接手、存盘",
+      () => sessionOf(b)?.remote === false && b.disk.get("n1") === hostText,
+    );
+    expect(b.copies).toEqual([localText]);
+    // 之后照常存，不再另存
+    append(b, "\n- 接手以后写的");
+    await until("又存了一次", () => b.disk.get("n1")?.endsWith("接手以后写的") === true);
+    expect(b.copies).toEqual([localText]);
+  });
+
+  it("有 base、本机的改动和对方撞在同一行（三方合跳过了）：接手时也另存；全合进去的不另存", async () => {
+    const hub = createMockTeamHub();
+    const hostText = ORIGINAL.replace("- 李四：界面", "- 李四：界面和文档");
+    const localText = ORIGINAL.replace("- 李四：界面", "- 李四：界面（周三前）");
+    const a = device(hub, "a1", "张三", hostText);
+    const b = device(hub, "b2", "李四", localText);
+    hub.setBase("b2", TARGET, ORIGINAL);
+    open(a);
+    open(b);
+    await until("李四加入了", () => sessionOf(b)?.remote === true);
+    expect(textOf(b)).toBe(hostText);
+    a.controller.view(null);
+    await until(
+      "李四接手、存盘",
+      () => sessionOf(b)?.remote === false && b.disk.get("n1") === hostText,
+    );
+    expect(b.copies).toEqual([localText]);
+
+    // 本机的改动全合进去了：会话里都有，接手时照常存
+    const hub2 = createMockTeamHub();
+    const c = device(hub2, "a1", "张三", ORIGINAL.replace("- 发版", "- 发版\n- 张三补的"));
+    const d = device(hub2, "b2", "李四", localText);
+    hub2.setBase("b2", TARGET, ORIGINAL);
+    open(c);
+    open(d);
+    await until(
+      "合好了",
+      () => textOf(d)?.includes("（周三前）") === true && textOf(d)?.includes("张三补的") === true,
+    );
+    c.controller.view(null);
+    await until(
+      "李四接手、存盘",
+      () => sessionOf(d)?.remote === false && d.disk.get("n1") === textOf(d),
+    );
+    expect(d.copies).toEqual([]);
+  });
+
+  it("本机那一版没合进去：快照里只带主持人的名字，正文要看时再取；关掉以后不带，接手存成冲突副本以后都没了（§28）", async () => {
+    // 没有 base
+    const hub = createMockTeamHub();
+    const hostText = `${ORIGINAL}\n- 张三那边写的`;
+    const localText = `${ORIGINAL}\n- 李四这边写的（还没进 git）`;
+    const a = device(hub, "a1", "张三", hostText);
+    const b = device(hub, "b2", "李四", localText);
+    open(a);
+    open(b);
+    await until("李四加入了", () => sessionOf(b)?.remote === true);
+    expect(sessionOf(b)?.unseenFrom).toBe("张三");
+    expect(b.controller.unseenText(DOC)).toBe(localText);
+    // 主持人那边没有这回事；快照里没有正文
+    expect(sessionOf(a)?.unseenFrom).toBeUndefined();
+    expect(JSON.stringify({ ...sessionOf(b), session: null })).not.toContain("李四这边写的");
+    // 关掉：快照不带了，正文还在（接手时照旧另存）
+    b.controller.hideUnseen(DOC);
+    expect(sessionOf(b)?.unseenFrom).toBeUndefined();
+    expect(b.controller.unseenText(DOC)).toBe(localText);
+    a.controller.view(null);
+    await until("李四接手、存盘", () => b.disk.get("n1") === hostText);
+    expect(b.copies).toEqual([localText]);
+    expect(b.controller.unseenText(DOC)).toBeNull();
+
+    // 有 base、三方合撞上：一样带；接手存成冲突副本以后快照里没了
+    const hub2 = createMockTeamHub();
+    const hostText2 = ORIGINAL.replace("- 李四：界面", "- 李四：界面和文档");
+    const localText2 = ORIGINAL.replace("- 李四：界面", "- 李四：界面（周三前）");
+    const c = device(hub2, "a1", "张三", hostText2);
+    const d = device(hub2, "b2", "李四", localText2);
+    hub2.setBase("b2", TARGET, ORIGINAL);
+    open(c);
+    open(d);
+    await until("李四加入了", () => sessionOf(d)?.remote === true);
+    expect(sessionOf(d)?.unseenFrom).toBe("张三");
+    expect(d.controller.unseenText(DOC)).toBe(localText2);
+    c.controller.view(null);
+    await until("李四接手、存盘", () => d.disk.get("n1") === hostText2);
+    await until("快照里没了", () => sessionOf(d)?.remote === false && !sessionOf(d)?.unseenFrom);
+    expect(d.copies).toEqual([localText2]);
+
+    // 合得进去的：没有
+    const hub3 = createMockTeamHub();
+    const e = device(hub3, "a1", "张三", ORIGINAL.replace("- 发版", "- 发版\n- 张三补的"));
+    const f = device(hub3, "b2", "李四", localText2);
+    hub3.setBase("b2", TARGET, ORIGINAL);
+    open(e);
+    open(f);
+    await until("合好了", () => textOf(f)?.includes("（周三前）") === true);
+    expect(sessionOf(f)?.unseenFrom).toBeUndefined();
+    expect(f.controller.unseenText(DOC)).toBeNull();
   });
 
   it("三台：访客之间经主持人看到彼此的字", async () => {

@@ -1,8 +1,10 @@
-import { DialogLead } from "@/components/PaletteBack";
+import type { PluginDialog } from "@/app/store";
+import { DialogLead, usePaletteBack } from "@/components/PaletteBack";
 import { Segmented } from "@/components/Segmented";
 import { messageOf } from "@/data/store";
 import { type ReminderSettings, type ReminderState, commands } from "@/lib/bindings";
 import { cn } from "@/lib/cn";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { isTauri } from "@/lib/tauri";
 import { Bell, Play, X } from "lucide-react";
@@ -17,10 +19,42 @@ import { create } from "zustand";
 
 const HEADER = 52;
 
-const useDialog = create<{ open: boolean }>(() => ({ open: false }));
+/** 命令面板里「提醒设置…」那一条的 dialog（index.tsx）：从面板开的能回到面板 */
+export const REMINDER_DIALOG: PluginDialog = "plugin:odea.journal.reminders";
 
+interface DialogState {
+  open: boolean;
+  /** 打开那一刻取到的设置 */
+  loaded: ReminderState;
+  /** 没取到：为什么（对话框照默认的样子开，底下说一句） */
+  failed: string | null;
+}
+
+/** 没取到设置、浏览器预览里：默认的样子 */
+const PREVIEW: ReminderState = {
+  settings: { enabled: true, leadMinutes: 0, sound: "chime" },
+  quiet: false,
+  actions: true,
+};
+
+const useDialog = create<DialogState>(() => ({ open: false, loaded: PREVIEW, failed: null }));
+
+/**
+ * 先取设置再开（一次本机的 IPC，几毫秒）：对话框一出来就是真的内容。先开、里面放一块占位再取的话，
+ * 展开动画（popoverCard 的 height: auto）是照占位的高度走的，内容到了比占位高出一截，动画走完那一下再跳到真的高度
+ */
 export function openReminderSettings(): void {
-  useDialog.setState({ open: true });
+  if (!isTauri) {
+    useDialog.setState({ open: true, loaded: PREVIEW, failed: null });
+    return;
+  }
+  void commands.reminderSettings().then((result) => {
+    useDialog.setState(
+      result.status === "ok"
+        ? { open: true, loaded: result.data, failed: null }
+        : { open: true, loaded: PREVIEW, failed: messageOf(result.error) },
+    );
+  });
 }
 
 const LEADS: { value: string; label: string }[] = [
@@ -39,27 +73,33 @@ const SOUNDS = [
   { value: "off", name: "不响", detail: "只弹通知" },
 ] as const;
 
-const PREVIEW: ReminderState = {
-  settings: { enabled: true, leadMinutes: 0, sound: "chime" },
-  quiet: false,
-  actions: true,
-};
+/** 「写法」里第一个例子几点响：18:00 减去提前量 */
+function leadExample(leadMinutes: number): string {
+  if (!leadMinutes) return "18:00 响";
+  const at = 18 * 60 - leadMinutes;
+  const time = `${Math.floor(at / 60)}:${String(at % 60).padStart(2, "0")}`;
+  const lead = LEADS.find((item) => item.value === String(leadMinutes))?.label;
+  return `${time} 响（提前 ${lead ?? `${leadMinutes} 分钟`}）`;
+}
 
 export function ReminderSettingsDialog() {
   const open = useDialog((s) => s.open);
   const close = () => useDialog.setState({ open: false });
+  const back = usePaletteBack(REMINDER_DIALOG, open, close);
+  const panel = useModalFocus(open);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !e.isComposing) {
         e.preventDefault();
-        useDialog.setState({ open: false });
+        if (back) back();
+        else useDialog.setState({ open: false });
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [open]);
+  }, [open, back]);
 
   return (
     <AnimatePresence>
@@ -83,6 +123,7 @@ export function ReminderSettingsDialog() {
             className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[10vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="提醒"
@@ -91,14 +132,15 @@ export function ReminderSettingsDialog() {
               initial="hidden"
               animate="shown"
               exit="gone"
-              className="pointer-events-auto relative flex w-[560px] max-w-[calc(100vw-48px)] flex-col
-                         overflow-clip rounded-2xl bg-canvas shadow-modal ring-1 ring-line-strong"
+              // 上面留了 10vh：再高就超出窗口底，底下的「发一条试试」够不着（矮的窗口、1.5 倍缩放，体验轮 §4.54）
+              className="pointer-events-auto relative flex max-h-[calc(90vh-12px)] w-[560px] max-w-[calc(100vw-48px)]
+                         flex-col overflow-clip rounded-2xl bg-canvas shadow-modal ring-1 ring-line-strong"
             >
               <div
                 className="flex shrink-0 items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
-                <DialogLead icon={Bell} back={null} />
+                <DialogLead icon={Bell} back={back} />
                 <p className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">提醒</p>
                 <button
                   type="button"
@@ -120,21 +162,12 @@ export function ReminderSettingsDialog() {
 }
 
 function ReminderBody() {
-  const [state, setState] = useState<ReminderState | null>(null);
-  const [status, setStatus] = useState<{ text: string; tone: "muted" | "danger" } | null>(null);
-
-  useEffect(() => {
-    if (!isTauri) {
-      setState(PREVIEW);
-      return;
-    }
-    void commands.reminderSettings().then((result) => {
-      if (result.status === "ok") setState(result.data);
-      else setStatus({ text: messageOf(result.error), tone: "danger" });
-    });
-  }, []);
-
-  if (!state) return <div className="h-[420px]" />;
+  // 打开那一刻取到的（openReminderSettings）；之后这里自己改、自己存
+  const [state, setState] = useState<ReminderState>(() => useDialog.getState().loaded);
+  const [status, setStatus] = useState<{ text: string; tone: "muted" | "danger" } | null>(() => {
+    const { failed } = useDialog.getState();
+    return failed === null ? null : { text: failed, tone: "danger" };
+  });
   const { settings } = state;
 
   const save = async (next: ReminderSettings) => {
@@ -157,7 +190,7 @@ function ReminderBody() {
     const result = await commands.reminderTest();
     setStatus(
       result.status === "ok"
-        ? { text: "发了一条，看看屏幕右下角", tone: "muted" }
+        ? { text: `发了一条，看看${state.actions ? "屏幕右下角" : "通知中心"}`, tone: "muted" }
         : { text: messageOf(result.error), tone: "danger" },
     );
   };
@@ -166,7 +199,7 @@ function ReminderBody() {
   const off = !settings.enabled;
 
   return (
-    <div className="flex flex-col gap-5 px-5 pt-4 pb-5">
+    <div className="scroll-thin flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pt-4 pb-5">
       <label className="flex cursor-pointer items-start gap-2.5">
         <input
           type="checkbox"
@@ -182,10 +215,8 @@ function ReminderBody() {
         </span>
       </label>
 
-      <div
-        className={cn("flex flex-col gap-5", off && "pointer-events-none opacity-45")}
-        aria-disabled={off}
-      >
+      {/* 关着时这一块整个不能用：inert 连键盘一起挡住。只挡鼠标的话 Tab 还走得进来、空格还改得动 */}
+      <div className={cn("flex flex-col gap-5", off && "opacity-45")} inert={off}>
         <div className="flex items-center gap-3">
           <span className="w-[52px] shrink-0 text-[13px] text-muted">提前</span>
           <Segmented
@@ -258,9 +289,7 @@ function ReminderBody() {
           <span className="w-[52px] shrink-0 pt-2 text-[13px] text-muted">写法</span>
           <dl className="grid min-w-0 flex-1 grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-1.5 rounded-lg bg-panel px-3.5 py-3 text-[12px]">
             <dt className="font-mono text-body">- [ ] 交周报 @2026-11-12 18:00</dt>
-            <dd className="text-muted">
-              18:00{settings.leadMinutes ? `（提前 ${settings.leadMinutes} 分钟）` : ""}响
-            </dd>
+            <dd className="text-muted">{leadExample(settings.leadMinutes)}</dd>
             <dt className="font-mono text-body">- [ ] 交周报 @2026-11-13 ⏰ 17:30</dt>
             <dd className="text-muted">就这个时刻响</dd>
             <dt className="font-mono text-body">- [ ] 健身 @2026-11-12 下午</dt>

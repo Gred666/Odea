@@ -191,6 +191,64 @@ const SCENES = {
     settle: 200,
   },
 };
+/**
+ * 卡片里的录音在放、卡片滚远了：这一栏底部的播放条（editor/mediaKeeper.ts）。这一页没有后端，声音在页面里
+ * 生成一段 WAV 换上去，静音放；先真的点一下页面（gesture），不然 play() 不让放。先让条出来、收起一次，
+ * 要截的那一块才在页面上。mediabar 量淡入（滚远），mediabar-out 量淡出（滚回来）
+ */
+const mediaBarSetup = (end) => `(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // 开发服务器开着时改过的模块，页面加载的地址带 ?t=：照页面实际用的地址 import，才是同一份 store
+  const loaded = performance.getEntriesByType('resource').map((e) => e.name);
+  const { useData } = await import(loaded.find((u) => u.includes('/src/data/store.ts')) ?? '/src/data/store.ts');
+  useData.setState({ attachments: [...useData.getState().attachments, '附件/测试录音.wav'] });
+  await wait(300);
+  const { EditorView } = await import('/node_modules/.vite/deps/@codemirror_view.js');
+  const view = EditorView.findFromDOM(document.querySelector('.cm-editor'));
+  const body = Array.from({ length: 300 }, (_, i) => '第 ' + (i + 1) + ' 段：一边听录音一边在下面记。').join('\\n\\n');
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '![[测试录音.wav]]\\n\\n' + body } });
+  const scroller = document.querySelector('[data-doc-scroller]');
+  scroller.scrollTop = 0;
+  await wait(500);
+  const rate = 8000, n = rate * 60, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.sin((2 * Math.PI * 440 * i) / rate) * 3000, true);
+  const audio = document.querySelector('.cm-odea-file-media');
+  audio.src = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  audio.muted = true;
+  window.__mediabarAudio = audio;
+  await audio.play();
+  scroller.scrollTop = 8 * scroller.clientHeight;
+  await wait(800);
+  ${end === "far" ? "" : "scroller.scrollTop = 0; await wait(800);"}
+})()`;
+SCENES.mediabar = {
+  gesture: true,
+  setup: mediaBarSetup("near"),
+  target: ".odea-media-bar",
+  // 条一出来就暂停（条留着）：不然时间、进度一直在走，和最终帧永远对不上
+  trigger: `(async () => {
+    document.querySelector('[data-doc-scroller]').scrollTop = 8 * 860;
+    const bar = document.querySelector('.odea-media-bar');
+    while (!bar.classList.contains('is-shown')) await new Promise((r) => requestAnimationFrame(r));
+    window.__mediabarAudio.pause();
+  })()`,
+  capture: 3000,
+  settle: 600,
+};
+SCENES["mediabar-out"] = {
+  gesture: true,
+  setup: mediaBarSetup("far"),
+  target: ".odea-media-bar",
+  trigger: "document.querySelector('[data-doc-scroller]').scrollTop = 0",
+  capture: 3000,
+  settle: 600,
+};
+
 const SCENE = SCENES[process.argv[3] ?? "image"];
 if (!SCENE) {
   throw new Error(`没有这个场景：${process.argv[3]}（有 ${Object.keys(SCENES).join(" / ")}）`);
@@ -211,6 +269,18 @@ try {
     await sleep(100);
   }
   await sleep(1500);
+  // 要放声音的场景：先真的点一下页面（用户激活），之后 play() 才放得了
+  if (SCENE.gesture) {
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await send("Input.dispatchMouseEvent", {
+        type,
+        x: 640,
+        y: 400,
+        button: "left",
+        clickCount: 1,
+      });
+    }
+  }
   if (SCENE.setup) await evaluate(SCENE.setup);
   else
     await evaluate(`(async () => {

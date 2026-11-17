@@ -632,6 +632,21 @@ describe("外部改动撞上没存的修改", () => {
       fingerprint("编辑器里的"),
     );
   });
+
+  it("说了照着哪一版（团队仓库接手主持）：带它当 base，用过一次就不再用", async () => {
+    // 本机磁盘上是没合进会话的那一版，会话是照主持人那一版建的（team/controller.ts 的 unseen）
+    put({ notes: [note("本机那一版")] });
+    api.noteSave.mockImplementation(async (_id: string, contentMd: string) => note(contentMd));
+    useData.getState().markConflict(noteRef("n-1"), "主持人那一版");
+    await useData.getState().saveDocument(noteRef("n-1"), "会话的正文");
+    expect(api.noteSave).toHaveBeenLastCalledWith("n-1", "会话的正文", fingerprint("主持人那一版"));
+    await useData.getState().saveDocument(noteRef("n-1"), "会话的正文，又改了");
+    expect(api.noteSave).toHaveBeenLastCalledWith(
+      "n-1",
+      "会话的正文，又改了",
+      fingerprint("会话的正文"),
+    );
+  });
 });
 
 describe("revealDocument", () => {
@@ -820,6 +835,72 @@ describe("resolveConflict（冲突副本的原文是一篇笔记）", () => {
     expect(await useData.getState().resolveConflict("copy", "original")).toEqual(noteRef("n-1"));
     expect(api.noteSave).not.toHaveBeenCalled();
     expect(api.noteDelete).toHaveBeenCalledWith("copy");
+  });
+
+  it("saves what is still in the copy's editor before taking its version", async () => {
+    put({ notes: [note("本机的"), copy] });
+    const { registerEditorFlush } = await import("@/editor/saveBus");
+    // 副本上刚并进去一句，防抖还没到
+    const off = registerEditorFlush(async () => {
+      await useData.getState().saveDocument(noteRef("copy"), "另一台的，又并进来一句");
+    });
+    api.noteSave.mockImplementation(async (id: string, contentMd: string) => ({
+      ...(id === "copy" ? copy : note("")),
+      contentMd,
+    }));
+    api.noteDelete.mockResolvedValue(undefined);
+    try {
+      await useData.getState().resolveConflict("copy", "copy");
+    } finally {
+      off();
+    }
+    expect(api.noteSave).toHaveBeenLastCalledWith(
+      "n-1",
+      "另一台的，又并进来一句",
+      fingerprint("本机的"),
+    );
+  });
+
+  it("undo after replacing puts the original's old version back, not only the copy", async () => {
+    put({ notes: [note("本机的"), copy] });
+    api.noteSave.mockImplementation(async (_id: string, contentMd: string) => note(contentMd));
+    api.noteDelete.mockResolvedValue(undefined);
+    await useData.getState().resolveConflict("copy", "copy");
+
+    // 提示条撤的是整个替换，不是那条只拿回副本的删除提示
+    const { lastDeleted, undoable } = useData.getState();
+    expect(lastDeleted).toBeNull();
+    expect(undoable?.message).toBe("已用冲突副本替换了「笔记」");
+    expect(undoable?.reopen).toBe("copy");
+
+    api.noteUndelete.mockResolvedValue(undefined);
+    api.noteGet.mockResolvedValue({ ...copy, contentMd: "另一台的" });
+    api.folderList.mockResolvedValue([]);
+    await undoable?.undo();
+
+    expect(api.noteSave).toHaveBeenLastCalledWith("n-1", "本机的", fingerprint("另一台的"));
+    expect(useData.getState().bodies["n-1"]).toBe("本机的");
+    expect(api.noteUndelete).toHaveBeenCalledWith("copy");
+    expect(
+      useData
+        .getState()
+        .notes.map((item) => item.id)
+        .sort(),
+    ).toEqual(["copy", "n-1"]);
+    // 开着原文的编辑器两次都换上新正文
+    expect(useData.getState().externalRevisions["note:n-1"]).toBe(2);
+    expect(useData.getState().error).toBeNull();
+  });
+
+  it("an archived copy is deleted with an undo too", async () => {
+    put({ notes: [note("本机的")], archived: [{ ...copy, isArchived: true }] });
+    api.noteDelete.mockResolvedValue(undefined);
+
+    await useData.getState().resolveConflict("copy", "original");
+
+    expect(api.noteDelete).toHaveBeenCalledWith("copy");
+    expect(useData.getState().archived).toEqual([]);
+    expect(useData.getState().lastDeleted).toMatchObject({ note: { id: "copy" }, archived: true });
   });
 
   it("does nothing when the original note is gone", async () => {

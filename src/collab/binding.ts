@@ -9,6 +9,7 @@ import {
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type { LoroEventBatch } from "loro-crdt";
 import { type RemoteCaret, remoteCarets, remoteCursorLayers, setRemoteCarets } from "./cursors";
+import { fineEdits } from "./external";
 import { BINDING_ORIGIN, CURSOR_TIMEOUT_MS, type CollabSession } from "./session";
 
 /* ============================================================
@@ -34,6 +35,9 @@ import { BINDING_ORIGIN, CURSOR_TIMEOUT_MS, type CollabSession } from "./session
 
    撤销：留着 CodeMirror 自己的 history()。远端事务标了 addToHistory: false，history 把已有的
    撤销记录映射过去，Ctrl+Z 只撤自己的。撤销出来的是一次普通的本地改动，照常发出去
+
+   挂上来时编辑器和会话不一样（§27）：编辑器早就开着、会话是照本机某一版（session 的 origin）建的，
+   中间打的字映射过会话那边的改动写进正文，编辑器收另一半（align）；没有 origin 的以会话为准
    ============================================================ */
 
 /** CodeMirror 内部的 DOM 观察者（view.observer，没有公开类型）里用到的几样 */
@@ -81,6 +85,7 @@ class CollabBinding {
     private readonly view: EditorView,
     private readonly session: CollabSession,
   ) {
+    bindings.set(view, this);
     this.stopText = session.text.subscribe(this.onText);
     this.detach = session.attach({
       composing: () => this.composing,
@@ -91,24 +96,49 @@ class CollabBinding {
     this.stopApplied = session.onApplied(() => {
       if (session.remoteCursors().size) this.scheduleCarets();
     });
-    // 编辑器是拿会话现在的正文建的；万一不一样（建的时候正好有更新到了），以会话为准
-    const text = session.toString();
-    if (view.state.doc.toString() !== text) {
-      queueMicrotask(() => {
-        if (this.destroyed) return;
-        this.view.dispatch({
-          changes: { from: 0, to: this.view.state.doc.length, insert: session.toString() },
-          annotations: [
-            collabSync.of(true),
-            Transaction.remote.of(true),
-            Transaction.addToHistory.of(false),
-          ],
-        });
-      });
-    }
+    this.align(session.takeOrigin());
     if (session.remoteCursors().size) this.scheduleCarets();
     const { main } = view.state.selection;
-    session.setLocalCursor(main.anchor, main.head);
+    const toText = (position: number) => this.deferred?.mapPos(position, 1) ?? position;
+    session.setLocalCursor(toText(main.anchor), toText(main.head));
+  }
+
+  /**
+   * 挂上来时编辑器和会话不一样（docs/协同编辑.md §27）。构造函数在一次更新里跑，不能当场派发：
+   * 编辑器还差的那一半先记成 deferred（从这里起 正文 = 编辑器 ∘ deferred，派发之前的本地改动照 write 映射过去），
+   * 微任务里派发（settleAttach）。
+   * - 会话照本机的 origin 建的、编辑器又多打（删）了字：origin → 编辑器、origin → 会话两份改动，
+   *   本机那份映射过会话那份写进正文、发出去，编辑器收另一半。CodeMirror 保证
+   *   local ∘ remote.map(local) = remote ∘ local.map(remote, true)：两边对到同一个结果，同一处都插了字本机的在前
+   * - 没有 origin（之后再挂上来的编辑器）、编辑器就是 origin：以会话为准，只换不一样的那几处
+   */
+  private align(origin: string | null) {
+    const have = this.view.state.doc.toString();
+    const want = this.session.toString();
+    if (have === want) return;
+    let editorSide: ChangeSet;
+    if (origin !== null && origin !== have) {
+      const local = changesOf(origin, have);
+      const remote = changesOf(origin, want);
+      if (!this.writeChanges(local.map(remote, true))) return;
+      editorSide = remote.map(local);
+    } else {
+      editorSide = changesOf(have, want);
+    }
+    if (editorSide.empty) return;
+    this.deferred = editorSide;
+    queueMicrotask(() => this.settleAttach());
+  }
+
+  /** 挂上时攒着的那一半派发进编辑器。正在组字：读得了 DOM、又不碰组字那一行才派发，不然等组字结束（finishComposition） */
+  private settleAttach() {
+    if (this.destroyed || !this.deferred) return;
+    if (this.composing) {
+      if (!this.readPendingInput()) return;
+      // 读进来的组字改动已经映射过 deferred（write）
+      if (!this.deferred || this.touchesComposition(this.deferred)) return;
+    }
+    this.flushDeferred();
   }
 
   update(update: ViewUpdate) {
@@ -133,7 +163,6 @@ class CollabBinding {
 
   /** 一个本地事务写进正文：commit 一次，出一个更新包 */
   private write(transaction: Transaction) {
-    const text = this.session.text;
     let changes = transaction.changes;
     if (this.deferred) {
       // 正文 = 编辑器 ∘ deferred：本地改动映射到正文上再写；deferred 跟着映射过本地改动。
@@ -142,7 +171,14 @@ class CollabBinding {
       changes = local.map(this.deferred, true);
       this.deferred = this.deferred.map(local);
     }
+    this.writeChanges(changes);
+  }
+
+  /** 一份相对正文的改动写进正文、commit 一次（出一个更新包）。写不进去返回 false，编辑器对齐到正文 */
+  private writeChanges(changes: ChangeSet): boolean {
+    const text = this.session.text;
     let shift = 0;
+    let written = true;
     try {
       changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
         const insert = inserted.sliceString(0, inserted.length, "\n");
@@ -157,9 +193,11 @@ class CollabBinding {
       // 编辑器整篇对齐到正文
       console.error("协作：本地改动写不进正文，编辑器对齐到正文", error);
       this.deferred = null;
+      written = false;
       queueMicrotask(() => this.realign());
     }
     this.session.doc.commit({ origin: BINDING_ORIGIN });
+    return written;
   }
 
   /** 编辑器对齐到正文（写不进正文以后）：只换不一样的那一段 */
@@ -344,7 +382,19 @@ class CollabBinding {
       : null;
   }
 
+  /**
+   * 编辑器要拆了（MarkdownEditor 卸载、最后一次存盘之前）：DOM 里没读的组字改动读完，攒着的远端改动派发进编辑器。
+   * 主持人的编辑器自己也存盘，拆的时候存的那一版要是缺了攒着的字，磁盘上就退回去了（审查 2026-11-13 §5.7）。
+   * 编辑器马上就拆，输入法也跟着没了，不用再等组字结束
+   */
+  settle() {
+    if (this.destroyed) return;
+    if (this.composing) this.readPendingInput();
+    this.flushDeferred();
+  }
+
   destroy() {
+    if (bindings.get(this.view) === this) bindings.delete(this.view);
     this.destroyed = true;
     this.stopText();
     this.session.timers.clearTimeout(this.endTimer);
@@ -354,6 +404,19 @@ class CollabBinding {
     this.session.setLocalCursor(null);
     this.detach();
   }
+}
+
+/** 编辑器 → 挂着的绑定（settleCollab 找它） */
+const bindings = new WeakMap<EditorView, CollabBinding>();
+
+/** 编辑器要拆了：协作中攒着的远端改动先派发进来（见 CollabBinding.settle）。没挂协作的什么都不做 */
+export function settleCollab(view: EditorView): void {
+  bindings.get(view)?.settle();
+}
+
+/** before → after 的改动（细到字，external.ts 的 fineEdits），相对 before */
+function changesOf(before: string, after: string): ChangeSet {
+  return ChangeSet.of(fineEdits(before, after), before.length);
 }
 
 function sameCarets(a: readonly RemoteCaret[], b: readonly RemoteCaret[]) {
@@ -373,8 +436,8 @@ function sameCarets(a: readonly RemoteCaret[], b: readonly RemoteCaret[]) {
 }
 
 /**
- * 把一个编辑器接到协作会话上。编辑器要用 session.toString() 的正文建，
- * 撤销用编辑器自己的 history()
+ * 把一个编辑器接到协作会话上。编辑器用 session.toString() 的正文建；早就开着的编辑器换上它时，
+ * 和会话不一样的地方按会话的 origin 对齐（align）。撤销用编辑器自己的 history()
  */
 export function collab(session: CollabSession): Extension {
   const plugin = ViewPlugin.define((view) => new CollabBinding(view, session));

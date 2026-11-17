@@ -65,6 +65,26 @@ impl Provider {
         format!("{}:{login}", self.key())
     }
 
+    /// 这个地址是不是这家托管方的 https 仓库地址。推拉时这家的令牌就当密码交给这个地址，
+    /// 别家的、http 的不给
+    pub fn owns_remote(self, url: &str) -> bool {
+        let host = match self {
+            Provider::GitHub => "github.com",
+            Provider::Gitee => "gitee.com",
+        };
+        let url = url.trim();
+        let Some(rest) = url
+            .get(..8)
+            .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+            .and_then(|_| url.get(8..))
+        else {
+            return false;
+        };
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        // `github.com@evil.example`、`github.com:8443` 都不算
+        authority.eq_ignore_ascii_case(host) && rest.len() > authority.len()
+    }
+
     /// 这个令牌是谁的（顺便验证令牌能用）
     pub fn login_of(self, http: &Http, token: &str) -> SyncResult<String> {
         #[derive(Deserialize)]
@@ -657,6 +677,28 @@ mod tests {
         .unwrap();
         let urls: Vec<String> = gitee.into_iter().map(|repo| RemoteRepo::from(repo).clone_url).collect();
         assert_eq!(urls, vec!["https://gitee.com/me/notes.git", "https://gitee.com/me/other.git"]);
+        assert!(urls.iter().all(|url| Provider::Gitee.owns_remote(url)));
+        assert!(Provider::GitHub.owns_remote(&repo.clone_url));
+    }
+
+    #[test]
+    fn the_token_only_goes_to_its_own_host() {
+        // 令牌会当密码交给这个地址：前端给的 clone_url 不是这家的就不给（纵深防御，见 2026-11-13 审查 §4.31）
+        assert!(Provider::GitHub.owns_remote("HTTPS://GitHub.com/me/notes"));
+        for url in [
+            "https://gitee.com/me/notes.git",
+            "http://github.com/me/notes.git",
+            "https://github.com.evil.example/me/notes.git",
+            "https://github.com@evil.example/me/notes.git",
+            "https://evil.example/github.com/notes.git",
+            "https://github.com:8443/me/notes.git",
+            "https://github.com",
+            "ssh://git@github.com/me/notes.git",
+            "D:/repos/notes",
+            "",
+        ] {
+            assert!(!Provider::GitHub.owns_remote(url), "{url}");
+        }
     }
 
     #[test]

@@ -267,22 +267,43 @@ export function renameEntry(parsed: Parsed, entry: Entry, key: string): string {
   return splice(parsed, entry.start, entry.start + 1, [`${keyText(key)}${first.slice(colon)}`]);
 }
 
-/** 把一条的值转成另一种类型时，能留的留着（列表 ↔ 文字、日期 ↔ 日期时间） */
-export function convertValue(entry: Entry, from: Kind, to: Kind): string | string[] {
-  const values = entry.shape === "list" ? entry.items : entry.value === "" ? [] : [entry.value];
-  if (isListKind(to)) return values;
-  const first = values[0] ?? "";
-  switch (to) {
-    case "checkbox":
-      return first === "true" ? "true" : "false";
+/* ---------------- 类型对不对得上（docs/提醒与属性.md §3.4） ----------------
+   换类型只记 types.json、不改文件里的值，所以值和记着的类型可能对不上（「草稿」记成日期，
+   别的工具写的 `截止: soon`）。对不上的那一行显示原来的字、标「类型不符」，点进去按文字改 */
+
+/** 这一条当一个值读：列表只有一项（或者空的）时是那一项；两项以上当不了一个值 */
+export function singleValue(entry: Entry): string | null {
+  if (entry.shape === "complex") return null;
+  if (entry.shape === "scalar") return entry.value;
+  return entry.items.length <= 1 ? (entry.items[0] ?? "") : null;
+}
+
+/** 一个值，这种类型的控件能不能照原样显示（空着的哪种都行） */
+export function valueFits(value: string, kind: Kind): boolean {
+  if (value === "" || kind === "text" || isListKind(kind)) return true;
+  const validDate = (v: string) => !Number.isNaN(Date.parse(v.replace(" ", "T")));
+  switch (kind) {
     case "number":
-      return /^-?\d+(\.\d+)?$/.test(first) ? first : "";
+      return /^-?\d+(\.\d+)?$/.test(value);
+    // 只认 true、false：别的（True、yes、草稿）画成一个框，一点就被盖成 true
+    case "checkbox":
+      return value === "true" || value === "false";
+    // 日期时间当日期读不了：日期控件看不见时间，一改就把时间丢了
     case "date":
-      return /^\d{4}-\d{2}-\d{2}/.test(first) ? first.slice(0, 10) : "";
+      return DATE.test(value) && validDate(value);
+    // 日期当日期时间读得了（选择器里时间补 09:00，不动就不写）
     case "datetime":
-      if (DATETIME.test(first)) return first.replace(" ", "T").slice(0, 16);
-      return DATE.test(first) ? `${first}T09:00` : "";
+      return (DATE.test(value) || DATETIME.test(value)) && validDate(value);
     default:
-      return from === "checkbox" && first === "" ? "" : values.join(", ");
+      return true;
   }
+}
+
+/** 这一条，这种类型的控件能不能如实显示：读得了的照这种类型画，读不了的画原文 + 「类型不符」 */
+export function fitsKind(entry: Entry, kind: Kind): boolean {
+  if (entry.shape === "complex") return false;
+  // 单个值当列表就是一项
+  if (isListKind(kind)) return true;
+  const value = singleValue(entry);
+  return value !== null && valueFits(value, kind);
 }

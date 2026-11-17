@@ -3,6 +3,7 @@ import { type CalloutKind, calloutIcon, parseCalloutHead } from "@/editor/callou
 import { codeHighlightStyle } from "@/editor/codeHighlight";
 import { emojiFor } from "@/editor/emoji";
 import { decodeEntity } from "@/editor/entities";
+import { isFrontMatterKey } from "@/editor/frontMatter";
 import { INLINE_HTML_TAGS, inlineStyleOf, parseTag, safeHref, sanitizeHtml } from "@/editor/html";
 import { parseImage } from "@/editor/images";
 import { normalizeLabel, splitWikiTarget } from "@/editor/links";
@@ -26,7 +27,7 @@ import { parser as baseParser } from "@lezer/markdown";
 
    认语法和编辑器是同一套：同一个 Lezer 解析器配置（editor/markdownParser.ts）；装饰层里按正则认的
    （callout、脚注、双链、==高亮==、定义列表、缩写、[TOC]、合并单元格 `<` `^`、智能标点）照着
-   MarkdownEditor.tsx 的规矩来；行内 HTML、块级 HTML 走同一份白名单（editor/html.ts）。编辑器里
+   编辑器装饰层（blockDecorations.ts、inlineDecorations.ts）的规矩来；行内 HTML、块级 HTML 走同一份白名单（editor/html.ts）。编辑器里
    看到什么，导出来就是什么：
 
    - 段落里的换行就是换行（编辑器里一行源码就是一行），不并成空格
@@ -70,7 +71,7 @@ export interface StaticOptions {
 
 const parser = baseParser.configure(markdownExtensions);
 
-/* ---------------- 正则（和 MarkdownEditor.tsx 的一样） ---------------- */
+/* ---------------- 正则（和编辑器装饰层的一样，editor/decorationKit.ts） ---------------- */
 
 const TOC_RE = /^\s*\[\[?toc\]?\]\s*$/i;
 const HTML_COMMENT_RE = /^\s*<!--[\s\S]*-->\s*$/;
@@ -111,7 +112,7 @@ export function escapeHtml(text: string): string {
 /** 开头的 YAML 属性块（和编辑器的 frontMatter.ts 一个规矩：里面至少有一个 `键:`）去掉 */
 export function stripFrontMatter(markdown: string): string {
   const match = FRONT_MATTER_RE.exec(markdown);
-  if (!match || !/^[A-Za-z_][\w-]*\s*:/m.test(match[0])) return markdown;
+  if (!match?.[0].split("\n").some(isFrontMatterKey)) return markdown;
   return markdown.slice(match[0].length);
 }
 
@@ -610,15 +611,19 @@ function htmlBlock(cx: Context, source: string): string {
   // 块级 HTML 里的 <img>：先记下地址换成记号，序列化以后再换成解析好的（导出时嵌成 data:）
   const images = [...holder.querySelectorAll("img")];
   const sources = images.map((image) => rawSourceOf(image.getAttribute("src") ?? ""));
+  // 记号带着这一次渲染的随机数：正文里写不出一样的（写了 `@@IMG0@@` 也只是字）
+  const mark = (index: number) => `@@img${cx.nonce}#${index}@@`;
   images.forEach((image, index) => {
-    image.setAttribute("src", `@@IMG${index}@@`);
+    image.setAttribute("src", mark(index));
     // 净化时给的懒加载去掉：屏幕外的图不加载，打印成 PDF 时就缺了
     image.removeAttribute("loading");
   });
-  let html = holder.innerHTML;
-  sources.forEach((raw, index) => {
-    html = html.replace(`@@IMG${index}@@`, imageSrc(cx, raw));
-  });
+  // 换的时候给函数、不给字符串：字符串里的 `$&`、`` $` ``、`$'` 会被 replace 展开成记号本身、记号前后的那一段，
+  // 图片地址里写上它们就能把周围的 HTML 塞进 src 的引号里，净化过的属性值跑出来成了 <img> 的属性（onerror）
+  const html = holder.innerHTML.replace(
+    new RegExp(`@@img${cx.nonce}#(\\d+)@@`, "g"),
+    (_, index: string) => imageSrc(cx, sources[Number(index)] ?? ""),
+  );
   return `<div class="html-block">${html}</div>`;
 }
 
@@ -823,7 +828,7 @@ function inlineRange(
 const isShortcut = (link: SyntaxNode) => !link.getChild("URL") && !link.getChild("LinkLabel");
 
 /**
- * `==高亮==`：只在同一层的字里配对（MarkdownEditor.tsx 的 markdownSourceStyleRules 的规矩）——
+ * `==高亮==`：只在同一层的字里配对（editor/markdownStyleRegistry.ts 的 markdownSourceStyleRules 的规矩）——
  * 里面不能是空的、头尾不能是空白、不能隔空行。跨过的子节点（粗体、代码）整个包在里面，标签一定成对
  */
 function pairHighlights(src: string, pieces: Piece[], state: InlineState): void {

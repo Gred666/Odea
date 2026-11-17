@@ -23,6 +23,7 @@ import {
   htmlCellMarkdown,
   insertTableBlock,
   rectSources,
+  spotBelowTable,
   writeCopy,
 } from "./tableClipboard";
 import {
@@ -128,7 +129,7 @@ const key = (row: number, col: number) => `${row}:${col}`;
 /** 能不能改（正文只读时只能选、复制） */
 const editable = (state: TableState) => !state.view.state.readOnly;
 /** 选区用的隐藏输入框里放一个零宽字符并全选：Ctrl+C 才会发 copy 事件，打的字会替换掉它 */
-const SINK_TEXT = "​";
+const SINK_TEXT = "\u200b";
 
 export class TableWidget extends OtwWidget {
   private readonly key: string;
@@ -919,19 +920,21 @@ function showSource(view: EditorView, block: HTMLElement) {
 /**
  * 离开表格回到正文：after 放到表格下一行开头，before 放到上一行末尾。
  * 表格是文档的最后（最前）一块时先补一个空行，不然光标只能落在表格里 ——
- * 那样整张表会退回源码。
+ * 那样整张表会退回源码。enter：最后一行回车走出来，回车本来就是换行，落点和表格隔一个空行、
+ * 没有就补出来；方向键、Esc 走出来不为它改正文（spotBelowTable）
  */
-function leave(view: EditorView, block: HTMLElement, side: "before" | "after") {
+function leave(view: EditorView, block: HTMLElement, side: "before" | "after", enter = false) {
   deactivate(block);
   const info = view.lineBlockAt(positionOf(view, block));
   const { doc } = view.state;
   if (side === "after") {
-    if (info.to < doc.length) view.dispatch({ selection: { anchor: info.to + 1 } });
-    else
-      view.dispatch({
-        changes: { from: doc.length, insert: "\n" },
-        selection: { anchor: doc.length + 1 },
-      });
+    // 不落在紧贴表格的那一行：在那里打字会成为表格的新一行（spotBelowTable）
+    const below = spotBelowTable(doc, info.to, enter && "enter");
+    view.dispatch({
+      changes: below.insert,
+      selection: { anchor: below.anchor },
+      scrollIntoView: true,
+    });
   } else if (info.from > 0) {
     view.dispatch({ selection: { anchor: info.from - 1 } });
   } else {
@@ -2280,7 +2283,7 @@ function listenSink(view: EditorView, block: HTMLElement, sink: HTMLTextAreaElem
   });
   sink.addEventListener("input", (event) => {
     if ((event as InputEvent).isComposing) return;
-    const text = sink.value.replace(/​/g, "");
+    const text = sink.value.replace(/\u200b/g, "");
     resetSink(sink);
     typeIntoSelection(block, text);
   });
@@ -2293,7 +2296,7 @@ function listenSink(view: EditorView, block: HTMLElement, sink: HTMLTextAreaElem
     sink.classList.add("is-composing");
   });
   sink.addEventListener("compositionend", () => {
-    const text = sink.value.replace(/​/g, "");
+    const text = sink.value.replace(/\u200b/g, "");
     sink.classList.remove("is-composing");
     if (text) typeIntoSelection(block, text);
     else resetSink(sink);
@@ -2383,7 +2386,7 @@ function editKeys(block: HTMLElement, cell: HTMLTableCellElement): KeyBinding[] 
     {
       key: "Enter",
       run: run((state) => {
-        if (!go(state.widget.grid.step(at(), "down"))) leave(state.view, block, "after");
+        if (!go(state.widget.grid.step(at(), "down"))) leave(state.view, block, "after", true);
         return true;
       }),
     },

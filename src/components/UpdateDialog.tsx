@@ -5,11 +5,12 @@ import { useData } from "@/data/store";
 import type { UpdateInfo } from "@/data/types";
 import { formatMonthDayCN } from "@/lib/date";
 import { renderMarkdown } from "@/lib/markdown";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { openExternal } from "@/lib/openExternal";
 import { CircleFadingArrowUp, LoaderCircle, ScrollText, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { type MouseEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { version as APP_VERSION } from "../../package.json";
 import { DialogLead, usePaletteBack } from "./PaletteBack";
 
@@ -76,6 +77,7 @@ export function UpdateDialog() {
     if (mode === "notes") clearUpgrade();
   };
   const palette = usePaletteBack("update", open, close);
+  const panel = useModalFocus(open);
   // 正在装：哪儿也不去（同 close）
   const back = installing ? null : palette;
 
@@ -127,6 +129,7 @@ export function UpdateDialog() {
             className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[14vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label={title}
@@ -283,22 +286,10 @@ function NotesBody({ releases, onDone }: { releases: Release[]; onDone: () => vo
 
 /* ---------------- 小零件 ---------------- */
 
-/** 更新说明的正文。链接用系统浏览器打开，不在应用的窗口里跳走 */
+/** 更新说明的正文。链接用系统浏览器打开，不在应用的窗口里跳走（lib/markdown.tsx 的链接自己拦） */
 function Notes({ markdown, ns }: { markdown: string; ns: string }) {
   const body = useMemo(() => renderMarkdown(markdown, ns), [markdown, ns]);
-  const onClick = (e: MouseEvent) => {
-    const link = (e.target as HTMLElement).closest("a");
-    if (!link) return;
-    e.preventDefault();
-    void openExternal(link.getAttribute("href") ?? "");
-  };
-  // 只是拦下正文里链接的点击，链接自己能用键盘触发
-  return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: 链接聚焦时按回车也是一次 click，冒泡到这里一样拦下
-    <div className="prose-doc prose-notes mt-3.5" onClick={onClick}>
-      {body}
-    </div>
-  );
+  return <div className="prose-doc prose-notes mt-3.5">{body}</div>;
 }
 
 function Footer({ hint, children }: { hint?: string; children: ReactNode }) {

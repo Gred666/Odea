@@ -332,20 +332,30 @@ export const useJournal = create<JournalState>((set, get) => ({
 }));
 
 /**
- * 零点翻页：把 todayDate 刷成新的一天，并把日历上还停在昨天的选择带过去。
- * 用 setTimeout 对准下一个零点，而不是每分钟轮询；睡眠唤醒后 setTimeout
- * 可能晚点，所以醒来（visibilitychange）时再对一次表。
+ * 对一次表：墙上的钟已经是新的一天了就把 todayDate 刷过去，日历上还停在昨天的选择一起带过去。
+ * 返回今天。要按「今天」写东西的地方（速记记进今日TODO）先叫它，别只信 todayDate ——
+ * 零点那一下的定时器在窗口最小化、电脑睡着时会晚到
+ */
+export function syncToday(): ISODate {
+  const now = today();
+  const state = useJournal.getState();
+  if (state.todayDate !== now) {
+    const followed = state.selectedDate === state.todayDate;
+    useJournal.setState({ todayDate: now, ...(followed ? { selectedDate: now } : {}) });
+  }
+  return now;
+}
+
+/**
+ * 零点翻页。用 setTimeout 对准下一个零点，而不是每分钟轮询；睡眠唤醒后 setTimeout
+ * 可能晚点，所以醒来（visibilitychange）、窗口拿回焦点（一直显示着、只是切到别的程序去了，
+ * 没有 visibilitychange）时再对一次表。
  */
 export function startTodayTicker(): () => void {
   let timer = 0;
 
   const sync = () => {
-    const now = today();
-    const state = useJournal.getState();
-    if (state.todayDate !== now) {
-      const followed = state.selectedDate === state.todayDate;
-      useJournal.setState({ todayDate: now, ...(followed ? { selectedDate: now } : {}) });
-    }
+    syncToday();
     schedule();
   };
 
@@ -360,10 +370,12 @@ export function startTodayTicker(): () => void {
     if (document.visibilityState === "visible") sync();
   };
   document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("focus", sync);
   schedule();
 
   return () => {
     window.clearTimeout(timer);
     document.removeEventListener("visibilitychange", onVisible);
+    window.removeEventListener("focus", sync);
   };
 }

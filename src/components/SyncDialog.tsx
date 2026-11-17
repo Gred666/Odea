@@ -10,7 +10,10 @@ import type {
   SyncRemoteRepo,
   SyncStatus,
 } from "@/data/types";
+import { flushAllEditors } from "@/editor/saveBus";
 import { cn } from "@/lib/cn";
+import { type DeviceLogin, githubLogin, loginCancelled, useLoginAttempt } from "@/lib/githubLogin";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { openExternal } from "@/lib/openExternal";
 import { describeSync, formatBytes, formatSyncedAt } from "@/lib/syncText";
@@ -44,6 +47,7 @@ export function SyncDialog() {
   const open = useApp((s) => s.syncOpen);
   const setOpen = useApp((s) => s.setSyncOpen);
   const back = usePaletteBack("sync", open, () => setOpen(false));
+  const panel = useModalFocus(open);
 
   // 关掉对话框时，正在等浏览器确认的 GitHub 登录也停掉（没有在等的话什么都不做）
   useEffect(() => {
@@ -86,6 +90,7 @@ export function SyncDialog() {
             className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[14vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="同步"
@@ -131,19 +136,12 @@ function SyncBody() {
 
 /* ---------------- 开启同步 ---------------- */
 
-/**
- * GitHub 设备码登录：领一个码（交给 onCode 显示）→ 等用户在浏览器里确认。
- * 在点击里调，不放进 effect：StrictMode 下 effect 会跑两次，第二次去等时那次登录已经被第一次拿走了
- */
-async function githubLogin(onCode: (code: SyncDeviceCode) => void): Promise<SyncAccount> {
-  const api = await backend();
-  const code = await api.syncGithubLoginStart();
-  onCode(code);
-  return api.syncGithubLoginWait();
-}
-
-/** 等登录时被取消（点了返回、关了对话框、又开始了一次新的）：不算错 */
-const cancelled = (message: string) => message.includes("取消");
+/** GitHub 设备码登录（lib/githubLogin.ts，和启动器共用）接仓库窗口的后端 */
+const GITHUB: DeviceLogin<SyncAccount> = {
+  start: async () => (await backend()).syncGithubLoginStart(),
+  wait: async () => (await backend()).syncGithubLoginWait(),
+  cancel: async () => (await backend()).syncLoginCancel(),
+};
 
 type Step =
   | { kind: "provider" }
@@ -157,6 +155,7 @@ function SetupFlow() {
   const [accounts, setAccounts] = useState<SyncAccount[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const attempt = useLoginAttempt();
 
   useEffect(() => {
     void backend()
@@ -193,22 +192,34 @@ function SetupFlow() {
     } else {
       setBusy("正在向 GitHub 要验证码…");
       setError(null);
-      githubLogin((code) => {
-        setBusy(null);
-        setStep({ kind: "github", code });
-      })
+      const wanted = attempt.begin();
+      githubLogin(
+        GITHUB,
+        (code) => {
+          setBusy(null);
+          setStep({ kind: "github", code });
+        },
+        wanted,
+      )
         .then(loggedIn)
         .catch((cause) => {
+          if (!wanted()) return;
           setBusy(null);
           const message = messageOf(cause);
-          if (!cancelled(message)) setError(message);
+          if (loginCancelled(message)) return;
+          // 验证码过期、在浏览器里点了拒绝、断网：码作废了，回到选托管方，别停在「等你确认」
+          setStep({ kind: "provider" });
+          setError(message);
         });
     }
   };
 
   const back = () => {
     setError(null);
-    if (step.kind === "github") void backend().then((api) => api.syncLoginCancel());
+    if (step.kind === "github") {
+      attempt.drop();
+      void backend().then((api) => api.syncLoginCancel());
+    }
     setStep({ kind: "provider" });
   };
 
@@ -530,6 +541,11 @@ function ConfirmStep({
   const [bringLocal, setBringLocal] = useState(false);
   const enable = () =>
     run(plan.connectHere ? "正在开启同步…" : "正在下载云端的笔记…", async () => {
+      // 换到新文件夹要整页重载，编辑器里没存的、存失败留在内存里的草稿都会没：先落进现在的仓库
+      // （和 changeVaultRoot 一样）。只能在 syncEnable 之前存 —— 它一返回，后端已经换到新文件夹了。
+      // 存不下去就报错、不换
+      await flushAllEditors();
+      await useData.getState().flushDrafts();
       const switched = await (await backend()).syncEnable(
         account.provider,
         repo.cloneUrl,
@@ -599,6 +615,7 @@ function StatusView({ status }: { status: SyncStatus }) {
   const [relogin, setRelogin] = useState<SyncDeviceCode | "gitee" | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const attempt = useLoginAttempt();
   const setSyncStatus = useCallback(
     (syncStatus: SyncStatus) => useData.setState({ syncStatus }),
     [],
@@ -632,10 +649,36 @@ function StatusView({ status }: { status: SyncStatus }) {
     void backend().then((api) => api.syncNow());
   }, []);
 
+  const reloginGithub = () => {
+    setBusy("正在向 GitHub 要验证码…");
+    setError(null);
+    const wanted = attempt.begin();
+    void githubLogin(
+      GITHUB,
+      (code) => {
+        setBusy(null);
+        setRelogin(code);
+      },
+      wanted,
+    )
+      .then(reloggedIn)
+      .catch((cause) => {
+        if (!wanted()) return;
+        setBusy(null);
+        // 码作废了：回到状态页，别停在「等你确认」
+        setRelogin(null);
+        const message = messageOf(cause);
+        if (!loginCancelled(message)) setError(message);
+      });
+  };
+
   if (relogin === "gitee") {
     return (
       <div>
         <GiteeLogin busy={busy} run={run} onDone={reloggedIn} />
+        <div className="mt-3">
+          <SecondaryButton onClick={() => setRelogin(null)}>取消</SecondaryButton>
+        </div>
         {error && <ErrorBox>{error}</ErrorBox>}
       </div>
     );
@@ -644,14 +687,17 @@ function StatusView({ status }: { status: SyncStatus }) {
     return (
       <div>
         <GitHubLogin code={relogin} />
-        <SecondaryButton
-          onClick={() => {
-            setRelogin(null);
-            void backend().then((api) => api.syncLoginCancel());
-          }}
-        >
-          取消
-        </SecondaryButton>
+        <div className="mt-3">
+          <SecondaryButton
+            onClick={() => {
+              attempt.drop();
+              setRelogin(null);
+              void backend().then((api) => api.syncLoginCancel());
+            }}
+          >
+            取消
+          </SecondaryButton>
+        </div>
         {error && <ErrorBox>{error}</ErrorBox>}
       </div>
     );
@@ -719,16 +765,7 @@ function StatusView({ status }: { status: SyncStatus }) {
         {status.state === "auth" && provider ? (
           <PrimaryButton
             disabled={!!busy}
-            onClick={() =>
-              provider === "gitee"
-                ? setRelogin("gitee")
-                : void githubLogin((code) => setRelogin(code))
-                    .then(reloggedIn)
-                    .catch((cause) => {
-                      const message = messageOf(cause);
-                      if (!cancelled(message)) setError(message);
-                    })
-            }
+            onClick={() => (provider === "gitee" ? setRelogin("gitee") : reloginGithub())}
           >
             重新登录
           </PrimaryButton>

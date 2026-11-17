@@ -477,6 +477,10 @@ fn with_search_db<T: Default>(
             &path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        // 每次搜都把全部正文读一遍：默认的 2 MB 页缓存装不下，每次都从系统缓存一页页拷进来。
+        // 映射进来直接读，3000 篇（13 MB）一次 33 → 19 ms（REVIEWS/2026-11-15-桌面端验证.md §3.6）。
+        // 映射的是文件页（系统缓存里本来就有），不算进程的专用内存；和应用数据库（db/pragma.rs）一样 256 MB 封顶
+        conn.pragma_update(None, "mmap_size", 268_435_456i64)?;
         *slot = Some((path, conn));
     }
     let (_, conn) = slot.as_ref().expect("刚放进去");

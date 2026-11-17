@@ -22,6 +22,7 @@ use crate::boot::{self, SavedVault};
 use crate::commands::{self, CollabLink, Indexing};
 use crate::error::{AppError, Result};
 use crate::domain::model::PluginVault;
+use crate::navigation;
 use crate::state::{AppState, Caller, Workspace};
 use crate::sync::engine::SyncHub;
 use crate::sync::repo::{Net, SyncRepo};
@@ -130,7 +131,8 @@ fn build_vault_window<R: Runtime>(
         .visible(false)
         .background_color(BACKGROUND)
         // 表格格子里右键菜单的「粘贴」读剪贴板（navigator.clipboard.readText）：不开的话 WebView2 每次都弹权限框
-        .enable_clipboard_access();
+        .enable_clipboard_access()
+        .on_navigation(navigation::guard(app, label, navigation::Window::Vault));
     // 把标签拖成独立窗口（docs/标签页与分屏.md §16）：页面 window.open 的空白页由 popout 接住
     #[cfg(feature = "desktop-runtime")]
     let builder = builder.on_new_window({
@@ -297,6 +299,7 @@ pub fn show_launcher<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
         .decorations(false)
         .visible(false)
         .background_color(BACKGROUND)
+        .on_navigation(navigation::guard(app, LAUNCHER, navigation::Window::Launcher))
         .build()?;
     Ok(())
 }
@@ -607,6 +610,7 @@ pub fn show_guest<R: Runtime>(app: &AppHandle<R>, link: Option<String>) -> Resul
         .background_color(BACKGROUND)
         // 和仓库窗口一样：表格右键菜单的「粘贴」读剪贴板
         .enable_clipboard_access()
+        .on_navigation(navigation::guard(app, GUEST, navigation::Window::Guest))
         .build()?;
     Ok(())
 }
@@ -826,6 +830,7 @@ pub async fn launcher_clone<R: Runtime>(
     name: String,
 ) -> Result<()> {
     let provider = commands::provider_of(&provider)?;
+    commands::check_remote(provider, &clone_url)?;
     let root = new_vault_root(&parent, &name)?;
     if let Some(drive) = setup::cloud_drive_of(&root) {
         return Err(AppError::Invalid(format!(
@@ -897,6 +902,10 @@ pub async fn launcher_forget(state: State<'_, AppState>, path: String) -> Result
 #[specta::specta]
 pub async fn launcher_reveal(path: String) -> Result<()> {
     blocking(move || {
+        // 只开文件夹：open_path 给一个文件就是用默认程序打开它（.exe 就是运行），前端给的路径别这样用
+        if !Path::new(&path).is_dir() {
+            return Err(AppError::NotFound(format!("找不到这个文件夹了：{path}")));
+        }
         tauri_plugin_opener::open_path(&path, None::<&str>)
             .map_err(|error| AppError::Io(format!("打开文件夹失败: {error}")))
     })

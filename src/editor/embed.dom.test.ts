@@ -74,6 +74,32 @@ describe("![[笔记]] 嵌入", () => {
     expect(parent.querySelector(".cm-odea-embed-line")?.textContent).not.toContain("![[");
   });
 
+  it("keeps the card when the cursor comes onto the line: no empty flash, an opened callout stays open", async () => {
+    useData.setState({ bodies: { n1: "# 周报\n> [!NOTE]- 细节\n> 收起来的字\n\n做完了两件事" } });
+    const { parent, view } = mount("![[周报]]\n\n末尾", host());
+    await settle();
+    const card = cards(parent)[0]!;
+    const details = card.querySelector("details")!;
+    details.open = true;
+
+    // 点卡片的空白处、方向键路过：光标进这一行，源码露出来
+    await act(async () => {
+      view.dispatch({ selection: { anchor: 3 } });
+    });
+    expect(parent.querySelector(".cm-odea-embed-source")).not.toBeNull();
+    expect(parent.querySelector(".cm-odea-embed-frame")?.classList.contains("is-open")).toBe(true);
+    // 还是那一张：以前这里换了一张新的，正文要等下一轮才排出来（卡片先塌成只剩标题那一条），展开的 callout 也收回去了
+    expect(cards(parent)[0]).toBe(card);
+    expect(card.textContent).toContain("做完了两件事");
+    expect(card.querySelector("details")?.open).toBe(true);
+
+    await act(async () => {
+      view.dispatch({ selection: { anchor: view.state.doc.length } });
+    });
+    expect(cards(parent)[0]).toBe(card);
+    expect(parent.querySelector(".cm-odea-embed-frame")?.classList.contains("is-open")).toBe(false);
+  });
+
   it("follows the embedded note when it changes", async () => {
     useData.setState({ bodies: { n1: WEEKLY } });
     const { parent } = mount("![[周报#本周]]\n\n末尾", host());

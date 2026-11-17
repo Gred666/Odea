@@ -5,6 +5,7 @@ import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, useData } from "@/data/store";
 import { cn } from "@/lib/cn";
 import { snapToDevicePixels } from "@/lib/devicePixels";
+import { offerEditorFocus } from "@/lib/focusHandoff";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { usePaneWindow } from "@/lib/paneWindow";
 import { MOD_KEY, isMac } from "@/lib/platform";
@@ -849,7 +850,8 @@ export function useTabKeys(
     };
     const alive = (id: string) => useData.getState().notes.some((note) => note.id === id);
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || busy()) return;
+      // 输入法正在组字时的按键是输入法的：这时换篇，组着的拼音会被当成字留在正文里、存下去
+      if (event.defaultPrevented || event.repeat || event.isComposing || busy()) return;
       const app = useApp.getState();
       const pane = popout
         ? app.popouts.find((other) => other.id === popout.paneId)
@@ -872,7 +874,18 @@ export function useTabKeys(
 
       if (mod && plain && event.code === "KeyW") {
         // 弹出窗口里关掉最后一个就是关这个窗口（像浏览器）；主窗口里不关窗口
-        if (popout || tabs.length > 1 || app.notePanes.length > 1) app.closeTab(pane.activeTab);
+        if (popout || tabs.length > 1 || app.notePanes.length > 1) {
+          const active = document.activeElement;
+          app.closeTab(pane.activeTab);
+          // 关的是这一栏最后一个标签、这一栏收掉了：正文里的焦点交给成了当前栏的那一栏。
+          // 它的编辑器早就挂着，等不到 lib/focusHandoff.ts 的交接
+          const next = useApp.getState().activePane;
+          if (!popout && next !== pane.id && active?.closest(".cm-content")) {
+            document
+              .querySelector<HTMLElement>(`[data-pane="${next}"] .cm-content`)
+              ?.focus({ preventScroll: true });
+          }
+        }
       } else if (mod && !event.altKey && event.shiftKey && event.code === "KeyT") {
         app.reopenTab(alive);
       } else if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "Tab") {
@@ -883,7 +896,18 @@ export function useTabKeys(
         const tab = digit === 9 ? tabs[tabs.length - 1] : tabs[digit - 1];
         if (tab) app.switchTab(tab.id);
       } else if (!popout && mod && plain && event.code === "Backslash") {
+        const active = document.activeElement;
         app.splitTab(pane.activeTab, pane.id, "right", true);
+        // 拆出来的一栏成了当前栏：正文里的焦点跟过去（lib/focusHandoff.ts），不然打的字还落在原来那一栏。
+        // 新的一栏这时还没画出来，它的编辑器挂上时接
+        if (
+          useApp.getState().activePane !== pane.id &&
+          active instanceof HTMLElement &&
+          active.classList.contains("cm-content")
+        ) {
+          active.blur();
+          offerEditorFocus(document);
+        }
       } else if (back || forward) {
         app.walkTab(back ? -1 : 1, alive, popout?.paneId);
       } else return;

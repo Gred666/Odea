@@ -6,7 +6,7 @@ import { folderOf } from "@/data/folders";
 import { useData } from "@/data/store";
 import { noteRef } from "@/data/types";
 import type { ImageResolver } from "@/editor/html";
-import { flushAllEditors } from "@/editor/saveBus";
+import { flushAllEditors, registerBeforeClose } from "@/editor/saveBus";
 import type {
   Attachment,
   CollabCallback,
@@ -38,7 +38,7 @@ import {
 } from "./attachments";
 import { peerColor } from "./colors";
 import type { SavedSnapshot } from "./external";
-import { keepGuestCopy } from "./keep";
+import { type KeepGuard, keepGuestCopy } from "./keep";
 import type { FrameSender, SessionLink } from "./link";
 import {
   type CollabNet,
@@ -308,6 +308,8 @@ interface DocLink {
   cleanup: () => void;
   /** 访客：这一篇正文里的图片 */
   images: GuestImages | null;
+  /** 访客：主持人还没存下的字本机留的那一份（关窗口前要等它写完） */
+  keep?: KeepGuard;
   /** 主持人：附件引用、状态再交一遍（Rust 那边会话刚挂上：之前交的没地方放） */
   announce?: () => void;
 }
@@ -327,6 +329,19 @@ interface Runtime {
 }
 
 const runtimes = new Map<number, Runtime>();
+
+/**
+ * 关窗口（编辑器存完以后、窗口没了之前）：做客的几篇主持人还没存下的字，当场写进本机留的那份、写完再关。
+ * 平时节流 0.8 秒写一次，不等的话最后打的几个字跟着窗口没了（docs/协同编辑.md §24「会话收掉」）。
+ * Rust 在 win_force_close 里收掉协作，前端的 cleanup 来不及跑
+ */
+registerBeforeClose(async () => {
+  const keeps = [...runtimes.values()].flatMap((runtime) =>
+    [...runtime.docs.values()].flatMap((entry) => (entry.keep ? [entry.keep.stop()] : [])),
+  );
+  await Promise.all(keeps);
+});
+
 /** 所有会话共用一条字节管道（帧里带着会话号）：第一个会话开始时开，一个都不剩了关 */
 let stopPipe: (() => void) | null = null;
 let opening: Promise<void> | null = null;
@@ -627,10 +642,11 @@ function guestDoc(id: number, doc: string): DocLink | undefined {
   const entry: DocLink = {
     link,
     images,
+    keep,
     cleanup: () => {
       stop();
       stopPersist();
-      keep.stop();
+      void keep.stop();
     },
   };
   runtime.docs.set(doc, entry);
@@ -880,6 +896,8 @@ async function hostDoc(id: number, doc: string, resumeState?: Uint8Array): Promi
   if (resumeState && disk !== link.session.toString()) {
     external.mergeExternal(link.session, external.snapshot(link.session), disk);
   }
+  // 存盘、读正文到编辑器挂上之间还在打的字：挂上时照磁盘上这一版对齐（docs/协同编辑.md §27）
+  link.session.markOrigin(disk);
   link.setMembers(sessionOf(id)?.members ?? []);
   const hosted = watchHosted(id, link.session, doc, current, external);
   const stopPersist = watchPersist(id, doc, link.session, current);
@@ -957,6 +975,11 @@ async function answerCreate(id: number, request: number, folder: string, title: 
     return;
   }
   const clean = folder.replace(/^\/+|\/+$/g, "");
+  // 访客给的文件夹只能往范围里面走：`..`、`.`、反斜杠、盘符这种段后端也挡（审查 2026-11-13 §4.25），这里先不交过去
+  if (clean.split("/").some((part) => part === "." || part === ".." || /[\\:]/.test(part))) {
+    await current.answerCreate(id, request, null, "不能建在共享范围外面").catch(() => {});
+    return;
+  }
   const place = scope.kind === "folder" ? [scope.doc, clean].filter(Boolean).join("/") : clean;
   try {
     const data = useData.getState();

@@ -88,4 +88,48 @@ describe("debounced save", () => {
 
     expect(writes).toEqual(["new"]);
   });
+
+  // 输入法组字时正文里是拼音：到点也先不存，组完再存上屏的字（桌面端验证 §3.2）
+  it("waits while hold() says so, then writes the latest text once it clears", async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    let composing = true;
+    const saver = createDebouncedSaver(
+      async (value) => {
+        writes.push(value);
+      },
+      400,
+      () => composing,
+    );
+    saver.schedule("甲ni");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(writes).toEqual([]);
+    expect(saver.pending()).toBe(true);
+    saver.schedule("甲你");
+    composing = false;
+    await vi.advanceTimersByTimeAsync(400);
+    expect(writes).toEqual(["甲你"]);
+  });
+
+  it("an explicit flush does not wait for hold(), and holding gives up after 30 seconds", async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    const saver = createDebouncedSaver(
+      async (value) => {
+        writes.push(value);
+      },
+      400,
+      () => true,
+    );
+    // 换篇、关窗时还在组字：照样存（不然丢字）
+    saver.schedule("换篇时");
+    await saver.flush();
+    expect(writes).toEqual(["换篇时"]);
+    // 组字状态卡住了：最多等 30 秒
+    saver.schedule("卡住了");
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(writes).toEqual(["换篇时"]);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(writes).toEqual(["换篇时", "卡住了"]);
+  });
 });

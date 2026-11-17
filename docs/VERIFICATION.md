@@ -54,12 +54,12 @@ node scripts/a11y-names.mjs --check
 
 | 要查什么 | 脚本 | 说明 |
 |---|---|---|
-| 常用操作的性能回归（启动、切换、打字、滚动、命令面板、分屏、内存） | `perf.mjs` + `compare.mjs` | 无头 Chrome、mock 后端，默认 4 倍 CPU 降速 + 2x 屏；量生产构建。改之前、改之后各跑一次再对比 |
+| 常用操作的性能回归（启动、切换、打字、方向键、滚动、命令面板、左侧导航、分屏、内存） | `perf.mjs` + `compare.mjs` | 无头 Chrome、mock 后端，默认 4 倍 CPU 降速 + 2x 屏；量生产构建。改之前、改之后各跑一次再对比。`--only tabs,props` 两个默认不跑：Ctrl+Tab 换篇（含焦点进到新正文的时刻）、长文属性面板里打字和回车存，改了这两处时加上。`--only collab`（协作时访客一直在打字、主持人打字）也默认不跑。同一边两次之间也差 5–10%，要下结论就两边交替各跑 3–5 次、比中位数（`REVIEWS/2026-11-13-全项目审查.md` §3.7） |
 | 每种窗口打开要加载多少 JS、多久画出来 | `entry.mjs` | 给它构建目录，自己起静态服务（`REVIEWS/2026-11-10-审查与竞品调研.md` §5.3.1） |
 | 淡入淡出结束那一帧闪不闪 | `fade-frames.mjs` | 逐帧和终帧比，找「平台」；场景名和读法见下面「逐帧对比」 |
 | 窗口级的动画（开窗、关窗、两个窗口交接） | `window-frames.py` | WebView 里量不到，抓屏幕；量窗口的边，不只量亮度 |
-| 协作时用输入法打字 | `collab-ime.mjs` | 真 Chrome 里走一遍组字：不丢字、不重复、对方看不到拼音 |
-| 表格格子里用输入法打字 | `table-ime.mjs` | 同上，格子里的子编辑器（`表格.md`） |
+| 协作时用输入法打字 | `collab-ime.mjs` | 真 Chrome 里走一遍组字：不丢字、不重复、对方看不到拼音。加 `near`：对方打在同一行；加 `attach`：挂上会话的那一刻正在组字（实验台 `late=1`，`协同编辑.md` §27） |
+| 表格格子里用输入法打字 | `table-ime.mjs` | 同上，格子里的子编辑器（`表格.md`）。加 `same`：访客打在主持人这一格；加 `below`：在表格下面紧贴的那一行组字，字不进表格、表格一帧都不塌成源码（`表格.md` §13） |
 | 插件沙箱的拒绝测试 | `plugin-sandbox.mjs` | 真的 iframe 和 Worker；`--cdp` 接到开着的桌面端（`插件与跨端.md` §15） |
 | 白板的几个实验 | `board/` | `白板.md` §9 |
 | 中继的压测 | `relay-load/` | 本机起一台中继，N 个客户端两两互发，量延迟和丢包（`协同编辑.md` §18） |
@@ -80,7 +80,8 @@ node scripts/perf/fade-frames.mjs http://localhost:1420/ image
 修之后一路收敛，117ms 起和终帧完全一致。要查别的控件，在脚本的 `SCENES` 里加一个场景，
 第二个参数换成它的名字（标题的层级提示和收起箭头是 `heading`，右侧目录树的收起箭头是 `outline`，
 协作时别人的名字标签是 `remote`，开在协作实验台 `/?lab=collab` 里；文件列表里文件夹那一行是 `folder`，
-置顶那一行是 `pinned`；表格的行抓手是 `table`）。
+置顶那一行是 `pinned`；表格的行抓手是 `table`；卡片里的录音滚远了、底部的播放条淡入是 `mediabar`、淡出是 `mediabar-out`）。
+场景里要放声音的写 `gesture: true`：先真的点一下页面，不然 `play()` 不让放。
 
 验证的坑（2026-10-29）：
 
@@ -89,6 +90,28 @@ node scripts/perf/fade-frames.mjs http://localhost:1420/ image
   `fade-frames.mjs` 找「平台」不受影响
 - 窗口级的动画（系统的开窗、关窗）WebView 里量不到，要抓屏幕：`scripts/perf/window-frames.py`。
   要量窗口的边，别只量亮度 —— 以前只看亮度，把边淡边缩、最后一跳的关窗动画判成了「每帧都合成了，很顺」
+
+### 量后端（Rust）和桌面端的启动、内存
+
+`REVIEWS/2026-11-15-桌面端验证.md` §2.4 是一次完整的做法（基线 `a159a2e` 对现在），数在 `技术方案.md` §13.3。
+
+- **核心基准（不起界面）**：在 `src-tauri/src/vault/` 下临时写一个 `#[test] #[ignore]` 的模块（要碰私有函数就在那个文件末尾 `#[cfg(test)] #[path = "xxx.rs"] mod xxx;`），
+  环境变量给模板仓库、工作目录；每次先把模板仓库拷到工作目录（不计时），量完打印一行 JSON。`CARGO_TARGET_DIR` 放 `%TEMP%`，
+  `cargo test --release --no-default-features --lib --no-run` 编出测试程序，之后直接跑 `odea_lib-*.exe <测试名> --ignored --nocapture --test-threads=1`，源码删了也能跑。
+  **用完删掉那个模块和那一两行**，`git status --short -- src-tauri` 里不留
+- **比基线**：`git archive <提交> src-tauri | tar -x -C %TEMP%\…\base` 解一份后端，同一个基准模块拷进两边，各编一份（两个 `CARGO_TARGET_DIR`）；两边**交替**跑、每项 5–6 次取中位数，写最小–最大
+- **绑一个大核**（这台是大小核，不绑时一整轮慢 40–50%，`PITFALLS/性能.md`）：`cmd /c start /b /wait /affinity 10 <exe> …`；从 node 里起用 `spawnSync("cmd", ["/c","start","/b","/wait","/affinity","10",exe,…])` 才拿得到输出
+- **测试仓库**：脚本造（笔记数、日记天数、长文篇数、随机种子固定），几百篇和几千篇各一个，带属性块（中英文键）、任务、链接、代码块、表格
+- **端到端（桌面端的发布构建）**：`pnpm tauri build --no-bundle --config <只写 {"identifier":"dev.odea.xxx"} 的 json>`，`CARGO_TARGET_DIR` 放 `%TEMP%`。
+  经 WMI 在 MSIX 容器外起一个 .cmd（`Invoke-CimMethod Win32_Process Create`，`PITFALLS/桌面端实测.md`），里面设 `ODEA_DATA_DIR`、`ODEA_VAULT`、`WEBVIEW2_USER_DATA_FOLDER`（都在 `%TEMP%`）
+  和 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<端口>`，数据目录里先放好 `config.json`（关速记，免得抢全局快捷键）。
+  经 DevTools 协议连上页面，「ready」取 `ipc.localhost/ready` 那条 resource timing 的 `responseEnd + timeOrigin`，减 `Win32_Process` 的 `CreationDate`；
+  「编辑器可输入」轮询 `.cm-content` 的 `isContentEditable`。每次 `Stop-Process -Force`，等命令行带那个数据目录的 WebView2 进程都走了再起下一次。
+  第一次起要建 WebView2 的配置目录，算热身不计
+- **内存**：专用工作集（任务管理器的「内存」），`Win32_PerfRawData_PerfProc_Process.WorkingSetPrivate`，odea.exe（按路径认）+ 命令行带那个数据目录的 WebView2 进程；
+  一个 CIM 会话反复用、进程列表隔几次才刷新，0.3 秒采一次。PowerShell 的 `-f` 格式串里 `{0:F1}}}` 会输出字面的 `F1`，右花括号前面空一格
+- **收尾**：关掉自己起的进程；删 `%TEMP%` 里的构建目录（几个 GB）、测试仓库；那个 identifier 的 `HKCU\Software\Classes\AppUserModelId\<identifier>`、
+  `%APPDATA%`、`%LOCALAPPDATA%` 下以它命名的目录（容器里外各一份，经 WMI 在容器外删）
 
 ### 量的规矩
 

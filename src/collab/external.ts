@@ -1,6 +1,6 @@
 import { commonEnds, diffLines } from "@/lib/lineDiff";
 import type { Frontiers, LoroDoc } from "loro-crdt";
-import { type CollabSession, TEXT_NAME } from "./session";
+import { type CollabSession, TEXT_NAME, toLF } from "./session";
 
 /* ============================================================
    外部改动进协作会话（docs/协同编辑.md §4.4、§20.5）。
@@ -36,7 +36,9 @@ export function snapshot(session: CollabSession): SavedSnapshot {
  * 磁盘上变成了 disk：作为一个从 base 分叉出去的协作者的编辑，合进会话。
  * 返回有没有合进去（磁盘和上次保存的一样、或者 base 坏了就是 false）
  */
-export function mergeExternal(session: CollabSession, base: SavedSnapshot, disk: string): boolean {
+export function mergeExternal(session: CollabSession, base: SavedSnapshot, file: string): boolean {
+  // 会话里的换行是 \n（session.ts 的 toLF）：别的程序存成 \r\n 的不算改了每一行
+  const disk = toLF(file);
   if (disk === base.text) return false;
   let fork: LoroDoc;
   try {
@@ -130,3 +132,124 @@ function refine(a: string, b: string, fromA: number, toA: number, fromB: number,
 }
 
 const changed = (edit: TextEdit) => edit.to > edit.from || edit.insert.length > 0;
+
+/** 一处改动里逐字比的上限（两边码点数乘起来）：再大就不细分，整处当一个替换 */
+const MAX_CHAR_CELLS = 1_000_000;
+/**
+ * 一次 fineEdits 逐字比的总量上限（各处加起来，约 15 ms）。两份分叉很久的长文（很多段整段改写了，段和段之间隔着
+ * 没动的空行）一处一处都不到上限，加起来能在主线程上算一秒（200 段 × 900 字实测 800 ms）；用完了剩下的几处不细分，
+ * 和 textEdits 一样是一整个替换（不丢字，只是同一段里两边都改了时对方的字挪到替换的边上）
+ */
+const MAX_TOTAL_CELLS = 4_000_000;
+
+/**
+ * before → after 的改动，细到字（docs/协同编辑.md §27）：textEdits 的每一处里再逐字比。
+ * 编辑器带着自己的改动挂上会话时，两边各自从同一版改过来的要互相映射（ChangeSet.map）：同一段里隔开的
+ * 两处改动并成一整个替换的话，对方落在中间的字会被挪到替换的边上。按码点比，不切开代理对（Loro 不收）
+ */
+export function fineEdits(before: string, after: string): TextEdit[] {
+  const budget = { cells: MAX_TOTAL_CELLS };
+  return textEdits(before, after).flatMap((edit) =>
+    charEdits(before.slice(edit.from, edit.to), edit.insert, budget).map((part) => ({
+      from: edit.from + part.from,
+      to: edit.from + part.to,
+      insert: part.insert,
+    })),
+  );
+}
+
+/**
+ * a → b 逐字（码点）的最长公共子序列，相同的那几段之外是改动。再做一次语义清理：夹在两处改动中间的一小段
+ * 相同的字，不比两边的改动长就并进改动 —— 不然整句换掉时 LCS 会东拼西凑对上几个散字（「的」「了」），
+ * 映射过来的字落在莫名其妙的地方（diff-match-patch 的 cleanupSemantic 是同一个意思）
+ */
+function charEdits(a: string, b: string, budget: { cells: number }): TextEdit[] {
+  const whole = [{ from: 0, to: a.length, insert: b }];
+  if (!a || !b) return whole;
+  const x = Array.from(a);
+  const y = Array.from(b);
+  const cells = (x.length + 1) * (y.length + 1);
+  if (cells > MAX_CHAR_CELLS || cells > budget.cells) return whole;
+  budget.cells -= cells;
+  const width = y.length + 1;
+  const lcs = new Uint32Array((x.length + 1) * width);
+  for (let i = x.length - 1; i >= 0; i -= 1) {
+    for (let j = y.length - 1; j >= 0; j -= 1) {
+      lcs[i * width + j] =
+        x[i] === y[j]
+          ? lcs[(i + 1) * width + j + 1]! + 1
+          : Math.max(lcs[(i + 1) * width + j]!, lcs[i * width + j + 1]!);
+    }
+  }
+  // 一段段：相同的（same 个码点）、改的（删 x 里 del 个、换成 y 里 ins 个）交替
+  const runs: { same: number; del: number; ins: number }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < x.length || j < y.length) {
+    const run = runs[runs.length - 1];
+    if (i < x.length && j < y.length && x[i] === y[j]) {
+      if (run?.same) run.same += 1;
+      else runs.push({ same: 1, del: 0, ins: 0 });
+      i += 1;
+      j += 1;
+      continue;
+    }
+    const target = run && !run.same ? run : runs[runs.push({ same: 0, del: 0, ins: 0 }) - 1]!;
+    if (i < x.length && (j >= y.length || lcs[(i + 1) * width + j]! >= lcs[i * width + j + 1]!)) {
+      target.del += 1;
+      i += 1;
+    } else {
+      target.ins += 1;
+      j += 1;
+    }
+  }
+  // 语义清理：改 · 小段相同 · 改 → 一整处改
+  let merged = true;
+  while (merged) {
+    merged = false;
+    for (let k = 1; k + 1 < runs.length; k += 1) {
+      const [before, equal, after] = [runs[k - 1]!, runs[k]!, runs[k + 1]!];
+      if (before.same || after.same || !equal.same) continue;
+      if (
+        equal.same > Math.max(before.del, before.ins) ||
+        equal.same > Math.max(after.del, after.ins)
+      )
+        continue;
+      runs.splice(k - 1, 3, {
+        same: 0,
+        del: before.del + equal.same + after.del,
+        ins: before.ins + equal.same + after.ins,
+      });
+      merged = true;
+      break;
+    }
+  }
+  // 码点换回 UTF-16 下标
+  const edits: TextEdit[] = [];
+  let atX = 0;
+  let atY = 0;
+  let posA = 0;
+  let posB = 0;
+  const span = (chars: string[], from: number, count: number) => {
+    let length = 0;
+    for (let k = from; k < from + count; k += 1) length += chars[k]!.length;
+    return length;
+  };
+  for (const run of runs) {
+    if (run.same) {
+      posA += span(x, atX, run.same);
+      posB += span(y, atY, run.same);
+      atX += run.same;
+      atY += run.same;
+      continue;
+    }
+    const removed = span(x, atX, run.del);
+    const added = span(y, atY, run.ins);
+    edits.push({ from: posA, to: posA + removed, insert: b.slice(posB, posB + added) });
+    posA += removed;
+    posB += added;
+    atX += run.del;
+    atY += run.ins;
+  }
+  return edits;
+}

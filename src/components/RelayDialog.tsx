@@ -2,6 +2,7 @@ import { relayCheckText } from "@/collab/reach";
 import { isRelayCode, useRelays } from "@/collab/relayStore";
 import type { RelayInfo } from "@/lib/bindings";
 import { cn } from "@/lib/cn";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { openExternal } from "@/lib/openExternal";
 import { refreshTeamRelays, shareTeamRelay, useTeam } from "@/team/store";
@@ -28,6 +29,7 @@ export function RelayDialog() {
   const open = useRelays((s) => s.open);
   const close = useRelays((s) => s.close);
   const back = usePaletteBack("relays", open, close);
+  const panel = useModalFocus(open);
 
   useEffect(() => {
     if (open) void refreshTeamRelays();
@@ -68,6 +70,7 @@ export function RelayDialog() {
             className="pointer-events-none fixed inset-0 z-[55] flex items-start justify-center pt-[14vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="协作中继"

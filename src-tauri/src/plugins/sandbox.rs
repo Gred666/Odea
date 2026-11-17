@@ -18,6 +18,8 @@ IPC：Windows 上 wry 把 Tauri 的初始化脚本一律注入子框架，这一
 
 /// 自定义协议的名字（前端 host.ts 的 SANDBOX_SCHEME）
 pub const SCHEME: &str = "odea-plugin";
+/// 这个协议上唯一的一页（仓库窗口的导航名单也放行它，navigation.rs）
+pub const PATH: &str = "/sandbox.html";
 
 const PAGE: &str = include_str!("../../../src/plugins/sandbox/sandbox.html");
 
@@ -26,7 +28,7 @@ const CSP: &str =
 
 /// 回一个请求：只有 /sandbox.html，别的都是 404
 pub fn respond(path: &str) -> (u16, Vec<(&'static str, &'static str)>, &'static [u8]) {
-    if path != "/sandbox.html" {
+    if path != PATH {
         return (404, vec![("Content-Type", "text/plain; charset=utf-8")], b"not found");
     }
     (

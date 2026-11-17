@@ -9,6 +9,7 @@
 // 选项：--cpu 4  --notes 400（仓库里有多少篇笔记）  --port 9333（Chrome 调试端口）
 //       --only startup,switch,typing,arrows,scroll,palette,nav,split,memory
 //       --only collab：协作实验台的长文里，访客每秒打 20 个字时主持人打字（默认不跑，单独量）
+//       --only tabs,props：Ctrl+Tab 在三个标签之间换篇、长文的属性面板里打字和回车存（默认不跑，改了这两处时量）
 //
 // 按键的延迟是页面里量的「keydown（面板里打字是 input）→ 下一帧画完」（rAF 里再 setTimeout 0）：Event Timing 的按键条目
 // 在无头模式下按键之后没有新画面时会一直算到下一次绘制，长尾全是假的。点击（切换笔记、切区）
@@ -246,7 +247,10 @@ try {
   }
 
   if (ONLY.includes("typing")) {
-    // 在长文中间 / 末尾打字：16 个字、回车、6 个退格
+    // 在长文中间 / 末尾打字：16 个字、回车、6 个退格。
+    // 「中间」那一行正好是语法全览里一张表的表头，表格画成替身，打第一个字时光标落到表格下面紧贴的那一行。
+    // 2026-11-16 以前那里打的字并进表格、整张表变回源码，量的是「在表格源码里打字」；之后先补一个空行，
+    // 量的是表格下面的一段普通的字（docs/表格.md §13），和以前的数不能直接比
     for (const [label, where] of [
       ["typingMiddle", 0.5],
       ["typingEnd", 1],
@@ -340,12 +344,12 @@ try {
   if (ONLY.includes("nav")) {
     // 左侧导航挨个点一遍，最后回到笔记
     const labels = await evaluate(
-      `[...document.querySelectorAll('nav[aria-label="主导航"] button')].map((b) => b.textContent.trim()).filter(Boolean)`,
+      `[...document.querySelectorAll('nav[aria-label="主导航"] ul button')].map((b) => b.getAttribute("aria-label")).filter(Boolean)`,
     );
     out.nav = [];
     for (const label of [...labels.slice(1, 4), labels[0]]) {
       const at = await pointOf(
-        `[...document.querySelectorAll('nav[aria-label="主导航"] button')].find((b) => b.textContent.trim() === ${JSON.stringify(label)})`,
+        `[...document.querySelectorAll('nav[aria-label="主导航"] ul button')].find((b) => b.getAttribute("aria-label") === ${JSON.stringify(label)})`,
       );
       if (!at) continue;
       await sleep(200);
@@ -385,6 +389,90 @@ try {
         });
       }
     }
+  }
+
+  if (ONLY.includes("tabs")) {
+    // 键盘换篇（审查 2026-11-13 §4.46）：长文 + 两篇短笔记开在三个标签里（Ctrl+点列表），正文里按 Ctrl+Tab 换 9 次。
+    // 按键有画面变化，看 Event Timing；ready 是按键到新的正文拿到焦点、能接着打字的那一帧（没交接上就是 -1）
+    await openSession(STRESS_ID);
+    await reload();
+    await idle(1000);
+    const rows = await evaluate(
+      `[...document.querySelectorAll('[data-list-scroller] [data-note-row]')].map((e) => e.getAttribute('data-note-row'))`,
+    );
+    const shorts = rows.filter((id) => id !== STRESS_ID).slice(0, 30);
+    for (const id of [shorts[3], shorts[10]]) {
+      const at = await pointOf(`document.querySelector('[data-note-row="${id}"]')`);
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...at });
+      for (const type of ["mousePressed", "mouseReleased"])
+        await send("Input.dispatchMouseEvent", { type, ...at, button: "left", clickCount: 1, modifiers: 2 });
+      await idle(500);
+    }
+    await evaluate(`(() => { ${VIEW}.focus(); return true; })()`);
+    await idle();
+    out.tabs = { inp: [], longestFrame: [], ready: [] };
+    for (let i = 0; i < 9; i++) {
+      await sleep(200);
+      await resetProbes();
+      await evaluate(`(() => { const from = document.activeElement; const t0 = performance.now(); __perf.ready = null;
+        const tick = () => { const a = document.activeElement;
+          if (a !== from && a?.classList.contains("cm-content")) __perf.ready = performance.now() - t0;
+          else if (performance.now() - t0 < 3000) requestAnimationFrame(tick); };
+        requestAnimationFrame(tick); return true; })()`);
+      await key("Tab", "Tab", 9, { modifiers: 2 });
+      await idle(600);
+      const { events, frames } = await probes();
+      out.tabs.inp.push(
+        Math.round(Math.max(0, ...events.filter((e) => e.name === "keydown").map((e) => e.duration))),
+      );
+      out.tabs.longestFrame.push(Math.round(Math.max(0, ...frames)));
+      const ready = await evaluate("__perf.ready");
+      out.tabs.ready.push(ready === null ? -1 : Math.round(ready));
+      // 没交接上（基线）：点一下正文接着按，不然后面的 Ctrl+Tab 落在 body 上也照样换篇，只是量不到 ready
+      if (ready === null) await evaluate(`(() => { ${VIEW}.focus(); return true; })()`);
+    }
+  }
+
+  if (ONLY.includes("props")) {
+    // 属性面板（P15，审查 2026-11-13 §4.4–§4.8、§4.47、§4.49）：长文开头的属性，在「author」的值里打 8 个字、回车存，三遍。
+    // 打字看「input → 下一帧」；回车存：mock 记下属性、通知这一篇改了（桌面端是写回文件、文件监听通知），这一篇跟着重取，
+    // 看回车那一下的 Event Timing 和之后最长的一帧。
+    // mock 的属性不在正文里、单独存在 state.props（桌面端是后端从文件里拆出来的），seed 没造：照长文的属性块补上再重新加载。
+    // 量的时候页面不让写 odea.mock.v5（PROBES），这一下先放开，重新加载以后又是拦着的
+    const yaml = /^---\n([\s\S]*?)\n---/.exec(
+      state.notes.find((n) => n.id === STRESS_ID).contentMd.replace(/\r\n/g, "\n"),
+    )?.[1];
+    await evaluate(`(() => { window.__perfSeeded = false; const s = JSON.parse(localStorage.getItem("odea.mock.v5"));
+      s.props = { ...s.props, ${JSON.stringify(`note:${STRESS_ID}`)}: ${JSON.stringify(yaml ?? "")} };
+      localStorage.setItem("odea.mock.v5", JSON.stringify(s)); return true; })()`);
+    await openSession(STRESS_ID);
+    await reload();
+    await idle(1000);
+    const INPUT = `[...document.querySelectorAll('section[aria-label="属性"] input[aria-label="值"]')].find((e) => e.closest('[aria-label^="author"]') || e.value === "Odea")`;
+    out.props = { typing: [], commit: [], commitFrame: [] };
+    for (let round = 0; round < 3; round++) {
+      const at = await pointOf(INPUT);
+      if (!at) break;
+      await click(at);
+      await idle();
+      await evaluate(`(() => { const e = ${INPUT}; e.setSelectionRange(e.value.length, e.value.length); return true; })()`);
+      await resetProbes();
+      for (const ch of ["团", "队", "a", "b", "c", "第", String(round), "版"]) {
+        await send("Input.insertText", { text: ch });
+        await sleep(110);
+      }
+      await idle(300);
+      out.props.typing.push(...(await probes()).inputs);
+      await resetProbes();
+      await key("Enter", "Enter", 13, { text: "\r" });
+      await idle(800);
+      const { events, frames } = await probes();
+      out.props.commit.push(
+        Math.round(Math.max(0, ...events.filter((e) => e.name === "keydown").map((e) => e.duration))),
+      );
+      out.props.commitFrame.push(Math.round(Math.max(0, ...frames)));
+    }
+    out.props.typing = stats(out.props.typing);
   }
 
   if (ONLY.includes("collab")) {

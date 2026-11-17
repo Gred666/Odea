@@ -112,8 +112,11 @@ export interface KeepGuard {
   guest(upstream: number): void;
   /** 自己写盘了（接手当了主持人、回到一个人编辑）：这边的字在自己磁盘上，留的那份删掉，不再管 */
   owner(): void;
-  /** 会话收掉了：没盖住的话把最后的样子写下来、留着；盖住了就删掉 */
-  stop(): void;
+  /**
+   * 会话收掉了：没盖住的话把最后的样子写下来、留着；盖住了就删掉。
+   * 写完才 resolve（关窗口前要等它，不然最后几个字没落盘窗口就没了）；写失败也 resolve（已经报过）
+   */
+  stop(): Promise<void>;
 }
 
 /** 写一次的节流 */
@@ -189,13 +192,14 @@ export function keepGuestCopy(link: SessionLink, options: KeepOptions): KeepGuar
       setState(session, null);
     },
     stop() {
-      if (stopped) return;
+      if (stopped) return Promise.resolve();
       const unsaved = upstream !== null && !covered();
+      let last = Promise.resolve();
       if (unsaved) {
-        // 最后几下可能还在节流里：现在就写
+        // 最后几下可能还在节流里：现在就写（write 在第一个 await 之前就查过 stopped，下面再置）
         if (timer) clearTimeout(timer);
         timer = null;
-        void write();
+        last = write();
       } else {
         drop();
       }
@@ -203,6 +207,7 @@ export function keepGuestCopy(link: SessionLink, options: KeepOptions): KeepGuar
       stopVectors();
       stopChanges();
       setState(session, null);
+      return last;
     },
   };
 }

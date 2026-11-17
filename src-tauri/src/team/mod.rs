@@ -187,6 +187,8 @@ impl Team {
         self.numbers.iter().find(|(_, number)| **number == member).map(|(key, _)| *key)
     }
 
+    /// 换上新读到的名单，不在名单里了的当场断开。断开放在这里、不放在调用的地方：
+    /// 拨号前和有人拨进来时都会重读，名单的一次变化只有先读到的那一处看得到（之后都是「没变」）
     fn set_devices(&mut self, devices: Vec<Device>) -> bool {
         let next: HashMap<[u8; 32], Device> = devices.into_iter().map(|device| (device.key, device)).collect();
         if next == self.devices {
@@ -196,6 +198,11 @@ impl Team {
         let keys: Vec<[u8; 32]> = self.devices.keys().copied().collect();
         for key in keys {
             self.number(&key);
+        }
+        for (key, link) in &self.links {
+            if !self.devices.contains_key(key) {
+                link.conn.close(VarInt::from_u32(2), b"removed");
+            }
         }
         true
     }
@@ -735,13 +742,6 @@ impl Inner {
             for (id, devices) in read {
                 if let Some(team) = teams.get_mut(&id) {
                     if team.set_devices(devices) {
-                        // 不在名单里了的断开
-                        let gone: Vec<[u8; 32]> = team.links.keys().filter(|key| !team.devices.contains_key(*key)).copied().collect();
-                        for key in gone {
-                            if let Some(link) = team.links.get(&key) {
-                                link.conn.close(VarInt::from_u32(2), b"removed");
-                            }
-                        }
                         team.emit(TeamEvent::Peers);
                     }
                 }
@@ -927,6 +927,11 @@ impl Inner {
                 conn.close(VarInt::from_u32(0), b"bye");
                 return;
             };
+            // 握手的这一会儿名单又变了、他被移出了（set_devices 断的只是已经登记的连接）
+            if !team.devices.contains_key(&device) {
+                conn.close(VarInt::from_u32(2), b"removed");
+                return;
+            }
             if let Some(existing) = team.links.get(&device) {
                 // 两边同时互拨：留拨号一方公钥小的那条（两边挑的一样）。同一边拨的（断了重连）留新的
                 let preferred = self.me.min(device);

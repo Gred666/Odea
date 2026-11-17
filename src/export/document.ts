@@ -346,13 +346,12 @@ async function renderNote(source: ExportSource, run: RenderRun, idPrefix = ""): 
 }
 
 /**
- * 包成一整页。print：给 PDF 用（按页面设置排纸、不许脚本）；网页里也带着 @page，
+ * 包成一整页（不许脚本，见下面的 CSP）。PDF、网页是同一份：网页里也带着 @page，
  * 在浏览器里打印出来一样。marginTitle 是页眉页脚的 {标题}
  */
 async function pageShell(
   title: string,
   main: string,
-  print: boolean,
   setup: PageSetup,
   marginTitle = title,
   mainClass = "",
@@ -361,10 +360,9 @@ async function pageShell(
   const chars = MEASURES.find((item) => item.id === measure)?.chars ?? null;
   const styles = [TOKENS, layoutCss(bodySize, chars), pageCss(setup, marginTitle), staticCss];
   if (main.includes('class="katex')) styles.push(await katexStylesheet());
-  // 打印用的那一页只是拿来印的：不许脚本、不许连外面（网络图片除外）
-  const csp = print
-    ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:">\n`
-    : "";
+  // 导出的页面里只有字、样式和图：不许脚本、不许连外面（网络图片除外）。打印用的那一页、存成网页的都带着 ——
+  // 正文是照白名单排的，这是第二层（应用里的第二层是窗口的 CSP，导出的文件在别人的浏览器里打开，得自己带）
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https: http:; style-src 'unsafe-inline'; font-src data:">\n`;
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -385,14 +383,14 @@ ${main}
 `;
 }
 
-/** 排成一整页 HTML。print：给 PDF 用（收起的展开、按纸张排、不许脚本） */
+/** 排成一整页 HTML。print：给 PDF 用（收起的 callout 展开） */
 export async function buildExportHtml(
   source: ExportSource,
   print: boolean,
   setup: PageSetup = loadPageSetup(),
 ): Promise<string> {
   const main = await renderNote(source, { print, read: imageReader() });
-  return pageShell(shownTitle(source.title), main, print, setup);
+  return pageShell(shownTitle(source.title), main, setup);
 }
 
 const say = (notice: string | null) => useData.setState({ notice });
@@ -633,7 +631,7 @@ async function folderPdf(name: string, entries: FolderEntry[], toc: boolean): Pr
     chapters.push(`<article class="odea-chapter" id="chapter-${at + 1}">${body}</article>`);
   }
   const head = toc ? tocHtml(name, entries, (at) => `#chapter-${at + 1}`, "h1") : "";
-  const html = await pageShell(name, head + chapters.join("\n"), true, setup, name, "odea-book");
+  const html = await pageShell(name, head + chapters.join("\n"), setup, name, "odea-book");
   say(`正在写「${name}」的 PDF…`);
   if (!(await writePdf(path, name, html, setup))) {
     say("在打印对话框里选「存储为 PDF」");
@@ -675,11 +673,11 @@ async function folderSite(name: string, entries: FolderEntry[]): Promise<void> {
       await api.exportFolderWrite(
         root,
         here,
-        await pageShell(shownTitle(source.title), main, false, setup),
+        await pageShell(shownTitle(source.title), main, setup),
       );
     }
     const toc = tocHtml(name, entries, (at) => relativeHref("index.html", paths[at]!), "h1");
-    await api.exportFolderWrite(root, "index.html", await pageShell(name, toc, false, setup));
+    await api.exportFolderWrite(root, "index.html", await pageShell(name, toc, setup));
   } finally {
     await api.exportFolderDone(root).catch(() => {});
   }

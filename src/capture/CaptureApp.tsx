@@ -30,8 +30,16 @@ export function CaptureApp() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const inputRef = useRef<HTMLInputElement>(null);
   const savingRef = useRef(false);
+  /** 「记下了」以后过一会儿自己收起来的那个定时器 */
+  const hideTimer = useRef(0);
+  /** 不收了：记下一条之后紧接着又打字（连着记几条）、又按快捷键叫出来 */
+  const stay = useCallback(() => {
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = 0;
+  }, []);
 
   const refresh = useCallback(() => {
+    stay();
     void commands.captureTarget().then((result) => {
       setTarget(result.status === "ok" ? result.data : null);
     });
@@ -40,7 +48,7 @@ export function CaptureApp() {
       inputRef.current?.focus();
       inputRef.current?.select();
     });
-  }, []);
+  }, [stay]);
 
   useEffect(() => {
     refresh();
@@ -53,8 +61,9 @@ export function CaptureApp() {
     return () => {
       void shown.then((off) => off());
       window.removeEventListener("blur", onBlur);
+      stay();
     };
-  }, [refresh]);
+  }, [refresh, stay]);
 
   const submit = async () => {
     if (savingRef.current || !text.trim()) return;
@@ -68,8 +77,8 @@ export function CaptureApp() {
     if (result.status === "ok") {
       setText("");
       setStatus({ kind: "saved", vault: result.data });
-      // 看一眼「记下了」再收起来
-      setTimeout(() => void commands.captureHide(), 650);
+      // 看一眼「记下了」再收起来。这期间又打字了（连着记下一条）就不收，见 onChange
+      hideTimer.current = window.setTimeout(() => void commands.captureHide(), 650);
     } else {
       setStatus({ kind: "error", message: errorText(result.error) });
       inputRef.current?.focus();
@@ -106,6 +115,7 @@ export function CaptureApp() {
           placeholder="记一条待办…"
           aria-label="记一条待办"
           onChange={(event) => {
+            stay();
             setText(event.target.value);
             if (status.kind === "error" || status.kind === "saved") setStatus({ kind: "idle" });
           }}

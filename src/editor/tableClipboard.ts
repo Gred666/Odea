@@ -1,3 +1,4 @@
+import { ChangeSet, type Text } from "@codemirror/state";
 import { type EditorView, EditorView as View } from "@codemirror/view";
 import { sanitizeHtml } from "./html";
 import { htmlCellSource } from "./htmlTable";
@@ -381,11 +382,76 @@ export function insertTableBlock(
   // 后面至少换一行，光标停在表格下面那一行（停在表格里的话整张表显示成源码）
   const tail = after.trim() ? "\n\n" : "\n";
   const start = range.from + head.length;
+  const placed = state.changes({
+    from: range.from,
+    to: range.to,
+    insert: `${head}${table}${tail}`,
+  });
+  const doc = placed.apply(state.doc);
+  const below = spotBelowTable(doc, start + table.length, true);
   view.dispatch({
-    changes: { from: range.from, to: range.to, insert: `${head}${table}${tail}` },
-    selection: { anchor: start + table.length + 1 },
+    changes: below.insert ? placed.compose(ChangeSet.of(below.insert, doc.length)) : placed,
+    selection: { anchor: below.anchor },
     userEvent,
     scrollIntoView: true,
   });
   return start;
+}
+
+/**
+ * 表格下面接着写的那个位置（`end` 是表格最后一行的行尾）。GFM 的表格要到空行才结束：
+ * 紧贴着表格的那一行打字（输入法的第一个拼音字母也算）就成了表格的新一行，整张表当场变回源码。
+ * 所以光标落在和表格隔着一个空行的地方。表格在文末时补出这一行（本来就要补一行给光标落）；
+ * `room` 时（刚放进来一张表）在中间也补，并且不贴着下面那一段（不然打的字并进那一段）。
+ * 只是从表格里走出来（方向键、Esc）不为它改正文，没有现成的空行就照旧落在紧贴着的那一行
+ * （在那里放进内容时 tableGap.ts 再补）。紧接着的是标题、列表这些能打断表格的块时落在它开头。
+ * `"enter"`（回车走出表格）见 spotAfterEnter
+ */
+export function spotBelowTable(
+  doc: Text,
+  end: number,
+  room: boolean | "enter" = false,
+): { anchor: number; insert?: { from: number; insert: string } } {
+  if (room === "enter") return spotAfterEnter(doc, end);
+  if (end >= doc.length) return { anchor: end + 2, insert: { from: end, insert: "\n\n" } };
+  const gap = doc.lineAt(end + 1);
+  if (gap.text.trim()) return { anchor: gap.from };
+  if (gap.number === doc.lines)
+    return { anchor: gap.to + 1, insert: { from: gap.to, insert: "\n" } };
+  const spot = doc.line(gap.number + 1);
+  if (spot.text.trim())
+    return room
+      ? { anchor: gap.to + 1, insert: { from: gap.to, insert: "\n\n" } }
+      : { anchor: gap.from };
+  const next = spot.number < doc.lines ? doc.line(spot.number + 1) : null;
+  return room && next?.text.trim()
+    ? { anchor: spot.from, insert: { from: spot.to, insert: "\n" } }
+    : { anchor: spot.from };
+}
+
+/** 只有空白和引用符号（引用、列表里的空行带着 `> `、缩进） */
+const BLANK_LINE_RE = /^[\s>]*$/;
+
+/**
+ * 回车走出表格：回车本来就是换行，落点和表格隔一个空行，没有就补出来 —— 表格在文末、下面只有
+ * 一个空行、空行下面紧跟一段字、紧跟着标题这些能打断表格的块，都补到「表格、空行、光标这一行」；
+ * 下面已经有两个空行就落在第二个上，不改正文。补的行照抄表格最后一行前面的缩进、引用符号，
+ * 还在同一个列表项、引用里
+ */
+function spotAfterEnter(
+  doc: Text,
+  end: number,
+): { anchor: number; insert?: { from: number; insert: string } } {
+  const last = doc.lineAt(end);
+  const prefix = /^[\s>]*/.exec(last.text)![0];
+  const line = `\n${prefix}`;
+  const gap = end < doc.length ? doc.line(last.number + 1) : null;
+  if (!gap || !BLANK_LINE_RE.test(gap.text)) {
+    return { anchor: end + line.length * 2, insert: { from: end, insert: line + line } };
+  }
+  const spot = gap.number < doc.lines ? doc.line(gap.number + 1) : null;
+  if (!spot || !BLANK_LINE_RE.test(spot.text)) {
+    return { anchor: gap.to + line.length, insert: { from: gap.to, insert: line } };
+  }
+  return { anchor: spot.to };
 }

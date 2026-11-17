@@ -57,11 +57,14 @@ export async function completeTask(action: ReminderAction): Promise<void> {
       .split("\n")
       .slice(0, index)
       .reduce((sum, line) => sum + line.length + 1, 0);
-    const checked = checkedLine(action.raw);
-    if (checked === null) return;
+    const box = CHECKBOX.exec(action.raw)?.[1]?.length;
+    if (box === undefined) return;
+    // 只换勾选框里那一个字符：整行换掉的话，停在这一行中间的光标会被甩到行首（编辑器照着改动挪光标），
+    // 撤销历史、发给协作那一头的也是整行
+    const at = from + box;
     const outcome = editor.edit(
       editor.revision(),
-      [{ from, to: from + action.raw.length, insert: checked }],
+      [{ from: at, to: at + 1, insert: "x" }],
       "reminder",
     );
     if (outcome.ok) return;

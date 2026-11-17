@@ -89,6 +89,25 @@ pub fn decode(bytes: Vec<u8>) -> Decoded {
     }
 }
 
+/// 一个文件名（不是整条路径）最多这么多字节。ext4 这些按 UTF-8 字节算 255；NTFS、APFS 按字符算 255 ——
+/// 一个字的 UTF-8 字节数不少于它占的 UTF-16 单元数，按字节卡住，哪个盘上都放得下
+const MAX_NAME_BYTES: usize = 255;
+
+/// 在一个已有的名字后面接东西（「 (冲突 2026-11-14 1030)」、序号、扩展名，一共 `tail_bytes` 字节）时，
+/// 原名最多留多长：接上以后超了上限就从后面截（按字截，不切开一个字）。80 个汉字的标题在 ext4 上
+/// 是 240 字节，再接一截「 (冲突 …)」就超了；别的工具建的文件名更可能本来就很长
+pub fn fit_stem(stem: &str, tail_bytes: usize) -> &str {
+    let room = MAX_NAME_BYTES.saturating_sub(tail_bytes);
+    if stem.len() <= room {
+        return stem;
+    }
+    let mut end = room;
+    while !stem.is_char_boundary(end) {
+        end -= 1;
+    }
+    &stem[..end]
+}
+
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
@@ -103,18 +122,20 @@ pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let temp = dir.join(format!(
-        ".{name}.{}-{}.tmp",
-        std::process::id(),
-        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    {
+    let tail = format!(".{}-{}.tmp", std::process::id(), TEMP_COUNTER.fetch_add(1, Ordering::Relaxed));
+    // 临时文件的名字比原名多十几个字节：原名已经快到上限的（ext4 上 80 个汉字的标题，别的工具建的长名字）
+    // 截短一点，不然连临时文件都建不了，这一篇就怎么也存不进去
+    let temp = dir.join(format!(".{}{tail}", fit_stem(&name, 1 + tail.len())));
+    let written = (|| {
         use std::io::Write;
         let mut file = fs::File::create(&temp)?;
         file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-    if let Err(error) = fs::rename(&temp, path) {
+        file.sync_all()
+    })()
+    .and_then(|()| fs::rename(&temp, path));
+    // 哪一步没成（盘满了写到一半、目标被占着改不了名）都把临时文件收掉：不然每失败一次，
+    // 用户的文件夹里就多一个写了一半的隐藏文件
+    if let Err(error) = written {
         let _ = fs::remove_file(&temp);
         return Err(error.into());
     }
@@ -146,6 +167,17 @@ pub fn set_mtime(path: &Path, ms: i64) -> Result<()> {
 /// 以点开头的文件和目录：应用自己的东西、临时文件、别的工具的配置（.obsidian、.git）
 pub fn is_hidden_name(name: &str) -> bool {
     name.starts_with('.')
+}
+
+/// 仓库里相对路径的一段是不是一个普通的名字：不空、不以点开头（`.`、`..`、隐藏的）、没有反斜杠，
+/// 操作系统也只把它当成一个名字。Windows 上 `D:` 是盘符：`abs` 往下 push 它，前面的整条路径就被换掉了，
+/// `笔记/D:/x.md` 落到 D 盘上去。前端、访客、配置文件、文件内容里来的路径，拼进 `abs` 之前每一段都过它
+pub fn is_plain_name(part: &str) -> bool {
+    use std::path::Component;
+    !part.is_empty()
+        && !is_hidden_name(part)
+        && !part.contains('\\')
+        && matches!(Path::new(part).components().collect::<Vec<_>>()[..], [Component::Normal(name)] if name == part)
 }
 
 pub fn is_markdown(name: &str) -> bool {
@@ -277,6 +309,50 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names.len(), 1);
+    }
+
+    #[test]
+    fn a_write_that_fails_leaves_no_temp_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        // 目标的位置上是个文件夹：临时文件写好了，改名改不过去
+        let path = dir.path().join("占着");
+        fs::create_dir_all(path.join("里面")).unwrap();
+        assert!(write_atomic(&path, "x").is_err());
+        let names: Vec<_> = fs::read_dir(dir.path()).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("占着")]);
+    }
+
+    /// 名字快到上限的文件（ext4 上 80 个汉字的标题是 243 字节）：临时文件的名字也得放得下
+    #[test]
+    fn a_name_close_to_the_limit_can_still_be_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("{}.md", "a".repeat(250)));
+        write_atomic(&path, "x").unwrap();
+        let names: Vec<_> = fs::read_dir(dir.path()).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(names, vec![path.file_name().unwrap().to_owned()]);
+    }
+
+    #[test]
+    fn a_stem_is_cut_by_whole_characters_to_leave_room_for_what_follows() {
+        assert_eq!(fit_stem("周报", 30), "周报");
+        let long = "长".repeat(85);
+        let cut = fit_stem(&long, 30);
+        assert_eq!(cut, "长".repeat(75), "225 字节里放得下 75 个字");
+        assert_eq!(fit_stem(&long, 400), "");
+    }
+
+    #[test]
+    fn plain_names_are_single_ordinary_path_parts() {
+        for name in ["周报", "a b", "工作:流", "v1.2"] {
+            assert!(is_plain_name(name), "{name}");
+        }
+        for name in ["", ".", "..", ".odea", "a\\b"] {
+            assert!(!is_plain_name(name), "{name}");
+        }
+        #[cfg(windows)]
+        for name in ["D:", "c:", "Z:x"] {
+            assert!(!is_plain_name(name), "{name}");
+        }
     }
 
     #[test]

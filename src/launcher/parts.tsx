@@ -8,12 +8,15 @@ export function Button({
   children,
   primary,
   disabled,
+  autoFocus,
   onClick,
   type = "button",
 }: {
   children: ReactNode;
   primary?: boolean;
   disabled?: boolean;
+  /** 挂上时接焦点（启动器从别的屏回到首页，焦点回到打开那一屏的按钮） */
+  autoFocus?: boolean;
   onClick?: () => void;
   type?: "button" | "submit";
 }) {
@@ -21,6 +24,8 @@ export function Button({
     <button
       type={type}
       disabled={disabled}
+      // biome-ignore lint/a11y/noAutofocus: 只在从别的屏返回时给，把焦点还给打开那一屏的按钮
+      autoFocus={autoFocus}
       onClick={onClick}
       className={cn(
         "h-8 min-w-[72px] shrink-0 rounded-md px-3.5 text-[13px] font-medium transition-colors duration-[120ms]",
@@ -42,6 +47,7 @@ export function PanelHeader({ title, onBack }: { title: string; onBack: () => vo
         type="button"
         onClick={onBack}
         aria-label="返回"
+        data-panel-back
         className="-ml-2 grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
       >
         <ChevronLeft size={18} strokeWidth={1.8} />

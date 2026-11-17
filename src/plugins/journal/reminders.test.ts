@@ -1,5 +1,6 @@
 import type { ReminderAction } from "@/lib/bindings";
 import { type LiveEditor, type TextChange, registerLiveEditor } from "@/lib/liveDocuments";
+import { EditorState } from "@codemirror/state";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const taskComplete = vi.fn();
@@ -66,6 +67,27 @@ describe("提醒上点了「完成」", () => {
     await completeTask(action("- [ ] 交周报 @2026-11-12 18:00", 1));
     expect(editor.value()).toBe("加了一行\n# 本周\n- [x] 交周报 @2026-11-12 18:00\n");
     expect(taskComplete).not.toHaveBeenCalled();
+  });
+
+  it("changes only the character in the box, so a cursor on that line stays where it was", async () => {
+    const doc = "# 本周\n- [ ] 交周报 @2026-11-12 18:00\n末尾";
+    const editor = fakeEditor(doc);
+    const seen: TextChange[] = [];
+    const edit = editor.edit.bind(editor);
+    editor.edit = (base, changes, origin) => {
+      seen.push(...changes);
+      return edit(base, changes, origin);
+    };
+    unregister = registerLiveEditor("note:n1", editor);
+    await completeTask(action("- [ ] 交周报 @2026-11-12 18:00", 1));
+    const box = doc.indexOf("[ ]") + 1;
+    expect(seen).toEqual([{ from: box, to: box + 1, insert: "x" }]);
+    // 编辑器照着改动挪光标：整行换掉的话，停在这一行中间的光标会被甩到行首
+    const cursor = doc.indexOf("周报");
+    const state = EditorState.create({ doc, selection: { anchor: cursor } });
+    const next = state.update({ changes: seen }).state;
+    expect(next.doc.toString()).toBe(doc.replace("[ ]", "[x]"));
+    expect(next.selection.main.head).toBe(cursor);
   });
 
   it("does nothing when it was already checked here", async () => {

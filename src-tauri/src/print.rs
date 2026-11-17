@@ -430,9 +430,12 @@ async fn print_dialog<R: Runtime>(app: &AppHandle<R>, title: &str, page: &Path) 
 
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let tx = Mutex::new(Some(tx));
-    let window = WebviewWindowBuilder::new(app, next_label(), WebviewUrl::External(page_url(page)?))
+    let (label, url) = (next_label(), page_url(page)?);
+    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
         .title(format!("{title} — 打印"))
         .inner_size(820.0, 960.0)
+        // 这个窗口用户看得见、点得到正文里的链接：只许留在这一页
+        .on_navigation(crate::navigation::guard(app, &label, crate::navigation::Window::Print(url)))
         .on_page_load(move |_, payload| {
             if matches!(payload.event(), PageLoadEvent::Finished) {
                 if let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) {
@@ -480,12 +483,14 @@ mod webview2 {
     ) -> Result<()> {
         let (tx, rx) = oneshot::channel::<()>();
         let tx = Mutex::new(Some(tx));
-        let window = WebviewWindowBuilder::new(app, next_label(), WebviewUrl::External(page_url(page)?))
+        let (label, url) = (next_label(), page_url(page)?);
+        let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
             .title("Odea 导出")
             .visible(false)
             .focused(false)
             .skip_taskbar(true)
             .inner_size(816.0, 1056.0)
+            .on_navigation(crate::navigation::guard(app, &label, crate::navigation::Window::Print(url)))
             .on_page_load(move |_, payload| {
                 if matches!(payload.event(), PageLoadEvent::Finished) {
                     if let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) {

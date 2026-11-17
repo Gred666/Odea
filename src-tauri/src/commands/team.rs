@@ -554,12 +554,13 @@ pub async fn team_relay_answer(ws: Ws, state: State<'_, AppState>, url: String, 
             .filter_map(|code| Relay::parse_code(code).ok())
             .find(|relay| relay.url == url)
             .ok_or_else(|| AppError::NotFound("仓库里已经没有这台中继了".into()))?;
-        let mut config = boot::Config::load(&data_dir);
-        config.declined_team_relays.retain(|known| *known != relay.url);
-        if !accept {
-            config.declined_team_relays.push(relay.url.clone());
-        }
-        config.save(&data_dir).map_err(|error| AppError::Io(error.to_string()))?;
+        boot::edit_config(&data_dir, |config| {
+            config.declined_team_relays.retain(|known| *known != relay.url);
+            if !accept {
+                config.declined_team_relays.push(relay.url.clone());
+            }
+            Ok(())
+        })?;
         if accept {
             save_relay(&data_dir, &relay)?;
         }

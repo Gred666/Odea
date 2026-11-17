@@ -346,7 +346,12 @@ pub async fn update_install<R: Runtime>(
     }
     // 和关窗口一样：窗口都先藏起来，开着同步的仓库各自把最后的改动推上去（一起推），最多等 3 秒。
     // 别的仓库窗口里编辑器的自动保存是停手 400ms 就存的，用户在这个窗口里点的「重启」，那边早存完了
-    let windows: Vec<_> = app.webview_windows().into_values().collect();
+    // 只藏、装不上时只放回本来就显示着的：速记小窗用过一次就一直藏着在（置顶），一起 show 出来就平白多一个窗口
+    let windows: Vec<_> = app
+        .webview_windows()
+        .into_values()
+        .filter(|other| other.is_visible().unwrap_or(false))
+        .collect();
     for other in &windows {
         let _ = other.hide();
     }

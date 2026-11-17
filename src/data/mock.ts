@@ -8,6 +8,7 @@ import {
   guideOf,
   newerThan,
 } from "@/content/guide";
+import { isFrontMatterKey } from "@/editor/frontMatter";
 import type { PropertyKey } from "@/lib/bindings";
 import { countWords, makeExcerpt } from "@/lib/plainText";
 import {
@@ -1534,12 +1535,29 @@ export const mockBackend: Backend = {
       .map((line) => line.replace(/\s+$/, ""));
     while (lines.length && lines[lines.length - 1] === "") lines.pop();
     while (lines.length && lines[0] === "") lines.shift();
+    // 本来就有的（别的工具留下的 created、archived）原样带回来不算冒充
+    const kept = new Set((state.props?.[propKey(target)] ?? "").split("\n"));
     for (const line of lines) {
-      if (line.trim() === "---") throw { kind: "Invalid", message: "属性里不能有单独一行 ---" };
+      if (line.trim() === "---" || line.trim() === "...")
+        throw { kind: "Invalid", message: "属性里不能有单独一行 ---" };
       const key = /^[^\s#-][^:]*:/.test(line) ? line.slice(0, line.indexOf(":")).trim() : null;
-      if (key && MANAGED.includes(key))
+      if (key && MANAGED.includes(key) && !kept.has(line))
         throw { kind: "Invalid", message: `「${key}」由 Odea 自己管，换个名字吧` };
     }
+    // 某一天、目标没有 id 这样一直在的键：属性那几行里得有一行 `键: 值`，不然桌面版认不出这一块（properties.rs 的 recognisable）
+    if (target.type !== NOTE && lines.length > 0 && !lines.some(isFrontMatterKey))
+      throw {
+        kind: "Invalid",
+        message:
+          "没有一行是「名字: 值」的样子，存下去 Odea 认不出这是属性。名字用字母、汉字或下划线开头，中间不带空格，冒号用半角的（比如 截止: 2026-11-20）",
+      };
+    // 属性块最多 58 行（笔记的 id、created 占两行），再多桌面版就认不出这一块了
+    const total = lines.length + (target.type === NOTE ? 2 : 0);
+    if (total > 58)
+      throw {
+        kind: "Invalid",
+        message: `属性太多了：属性块最多 58 行，现在 ${total} 行。列表可以在源码里写成一行 [a, b]`,
+      };
     const joined = lines.join("\n");
     state.props = { ...state.props, [propKey(target)]: joined };
     save(state);

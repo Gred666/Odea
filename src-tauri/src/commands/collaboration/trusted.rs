@@ -20,9 +20,10 @@ pub(in crate::commands) fn update_trusted(
     data_dir: &std::path::Path,
     change: impl FnOnce(&mut Vec<boot::SavedPeer>),
 ) -> Result<Vec<TrustedPeer>> {
-    let mut config = boot::Config::load(data_dir);
-    change(&mut config.collab_trusted);
-    config.save(data_dir).map_err(|error| AppError::Io(error.to_string()))?;
+    boot::edit_config(data_dir, |config| {
+        change(&mut config.collab_trusted);
+        Ok(())
+    })?;
     Ok(load_trusted(data_dir))
 }
 

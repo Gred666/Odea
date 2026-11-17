@@ -1,7 +1,8 @@
-import { collab as collabBinding } from "@/collab/binding";
+import { collab as collabBinding, settleCollab } from "@/collab/binding";
 import type { CollabSession } from "@/collab/session";
 import type { Attachment, MatchAnchor, OutlineItem } from "@/data/types";
 import { registerEditorCommands } from "@/lib/editorCommands";
+import { claimEditorFocus, offerEditorFocus } from "@/lib/focusHandoff";
 import { registerLiveEditor, touched } from "@/lib/liveDocuments";
 import { usePaneWindow } from "@/lib/paneWindow";
 import { rememberSpot, spotOf } from "@/lib/viewMemory";
@@ -20,7 +21,15 @@ import {
 import { EditorView, type ViewUpdate, keymap, placeholder } from "@codemirror/view";
 import { Link2, Plus } from "lucide-react";
 import { AnimatePresence } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createPortal } from "react-dom";
 import { EmojiPicker, type EmojiPickerAnchor } from "./EmojiPicker";
 import { SuggestMenu, type SuggestMenuHandle, type SuggestRow } from "./SuggestMenu";
@@ -45,6 +54,7 @@ import {
 import { hoverCard } from "./hoverCard";
 import { type ImageBase, type WikiImageResolver, imageBaseDir, wikiImages } from "./html";
 import { linkTargetAt, modKeyCursor, openExternal, splitWikiTarget, wikiTargetAt } from "./links";
+import { closeFenceOnInput } from "./markdownCommands";
 import { markdownKeymap } from "./markdownKeymap";
 import { markdownSupport } from "./markdownParser";
 import { createRevisionLog, rebaseEdit, recordRevision, revisionOf } from "./pluginEdits";
@@ -67,6 +77,7 @@ import {
   wikiItems,
 } from "./suggest";
 import { tablePasteHandler } from "./tableClipboard";
+import { tableGap } from "./tableGap";
 import { insertEmptyTable } from "./tableWidget";
 import {
   type DocTemplate,
@@ -103,6 +114,37 @@ const externalSync = Annotation.define<boolean>();
    协作中的不转：协作的绑定一个编辑器一份，正文以会话为准（窗格那边也只让一个窗格编辑它） */
 const mirrorSync = Annotation.define<boolean>();
 const liveEditors = new Map<string, Set<EditorView>>();
+
+/* ---------------- 自己存盘的回音 ----------------
+   交给 onSave 的每一版记下来，等 store 换成它（存盘回来了）。store 换成其中一版是自己的回音：
+   编辑器里的总比它交出去的新，只记一下「和 store 对上了」，正文不动。光比「现在的正文和上次对上的
+   那一版一不一样」分不出来：存盘还在路上时把刚打的字删了（或者撤销了），正文正好又等于上次对上的
+   那一版，回音一到就被当成别处来的新正文整篇换上 —— 删掉的字回来了，光标跳走（审查 2026-11-13 §4.32）。
+   一个编辑器一份：同一篇开在两个窗格里时，一边交出去的也记进另一边的（回音两边都会收到），
+   后挂上的那个抄一份先挂着的。编辑器拆了就跟着没了：重新挂上的是照 store 那一版建的，那时再到的回音就该换上 */
+const unconfirmedSaves = new WeakMap<EditorView, string[]>();
+const UNCONFIRMED_LIMIT = 16;
+
+function noteSent(views: Iterable<EditorView>, markdown: string) {
+  for (const view of views) {
+    let list = unconfirmedSaves.get(view);
+    if (!list) {
+      list = [];
+      unconfirmedSaves.set(view, list);
+    }
+    list.push(markdown);
+    if (list.length > UNCONFIRMED_LIMIT) list.shift();
+  }
+}
+
+/** markdown 是不是这个编辑器交出去还没回来的某一版；是的话它和它之前的都算回来了（同一篇的保存排着队，回音按先后到） */
+function confirmSent(view: EditorView, markdown: string): boolean {
+  const list = unconfirmedSaves.get(view);
+  const at = list ? list.indexOf(markdown) : -1;
+  if (!list || at < 0) return false;
+  list.splice(0, at + 1);
+  return true;
+}
 
 function twinsOf(key: string, view: EditorView): EditorView[] {
   return [...(liveEditors.get(key) ?? [])].filter((other) => other !== view);
@@ -428,11 +470,20 @@ export function MarkdownEditor({
     const host = hostRef.current;
     if (!host) return;
 
-    const saver = createDebouncedSaver((markdown) => onSaveRef.current(markdown), 400);
-    const unregisterFlush = registerEditorFlush(saver.flush);
-    saverRef.current = saver;
     /** 这篇文档的键：缓存编辑器状态、记住看到哪都用它 */
     const key = cacheKeyRef.current;
+    const saver = createDebouncedSaver(
+      (markdown) => {
+        const view = live.view;
+        if (view) noteSent(key ? (liveEditors.get(key) ?? [view]) : [view], markdown);
+        return onSaveRef.current(markdown);
+      },
+      400,
+      // 输入法正在组字：正文里是拼音，等上屏（或者取消）再存
+      () => !!live.view?.compositionStarted,
+    );
+    const unregisterFlush = registerEditorFlush(saver.flush);
+    saverRef.current = saver;
 
     // 目录树不需要逐帧精确。每次按键都往上抛正文的话，
     // 上层要对整篇文档重扫一遍标题，长文档下这笔开销比排版本身还大。
@@ -831,7 +882,10 @@ export function MarkdownEditor({
             search({ top: true, createPanel: createSearchPanel, scrollToMatch }),
             searchPhrases,
             keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
+            closeFenceOnInput,
             typoraDecorations,
+            // 表格下面紧贴的那一行放进内容时先和表格隔开一个空行（打字、粘贴当场补，组字等组完再补）
+            tableGap,
             // 焦点不在正文、鼠标正按着时不按光标展开源码（reveal.ts）
             trackEditing,
             selectionLayer,
@@ -858,6 +912,9 @@ export function MarkdownEditor({
     if (host.ownerDocument !== document) view.setRoot(host.ownerDocument);
     viewRef.current = view;
     live.view = view;
+    // 先挂着的那一边交出去还没回来的，这边也会收到回音
+    const twinSent = twin && unconfirmedSaves.get(twin);
+    if (twinSent?.length) unconfirmedSaves.set(view, [...twinSent]);
     if (key) {
       const views = liveEditors.get(key) ?? new Set<EditorView>();
       views.add(view);
@@ -906,6 +963,8 @@ export function MarkdownEditor({
 
     onOutlineHandle(handle);
     host.dataset.editorReady = "true";
+    // 换篇：拆掉的那个编辑器手里有焦点，这个接着（lib/focusHandoff.ts）。不动选区、不滚
+    if (claimEditorFocus(host.ownerDocument)) view.focus();
     // 它返回的闭包握着 view（同上），停掉后就扔掉
     let stopFileDrops: (() => void) | null = watchDesktopFileDrops(view, () => attachRef.current);
 
@@ -936,6 +995,8 @@ export function MarkdownEditor({
     return () => {
       const view = live.view;
       if (!view) return;
+      // 协作中组字时攒着的远端改动先派发进来：下面最后那次存盘存的才是全的（collab/binding.ts 的 settle）
+      settleCollab(view);
       unregisterLive?.();
       stopFileDrops?.();
       stopFileDrops = null;
@@ -966,6 +1027,18 @@ export function MarkdownEditor({
     };
   }, [onOutlineHandle, closeTemplateMenu, closeSuggest, openEmojiPicker]);
 
+  // 拆掉时焦点在这里：交给接着挂上的编辑器（lib/focusHandoff.ts）。得是 layout effect：
+  // 它的收尾在 React 摘 DOM 之前跑，这时还看得出焦点在不在；上面那个 effect 收尾时 DOM 已经摘了，焦点早掉到 body 上
+  useLayoutEffect(
+    () => () => {
+      // 焦点在表格格子的小编辑器、正文里的输入框上也算
+      const view = viewRef.current;
+      const doc = view?.dom.ownerDocument;
+      if (view && doc && view.dom.contains(doc.activeElement)) offerEditorFocus(doc);
+    },
+    [],
+  );
+
   // 文档所在的文件夹变了（改名挪了位置、仓库路径刚取回来）：相对路径的图片按新基准重画
   useEffect(() => {
     imageBaseRef.current = imageBase;
@@ -990,8 +1063,9 @@ export function MarkdownEditor({
     view.dispatch({ effects: attachmentSlot.reconfigure(attachmentHost.of(attachments)) });
   }, [attachments]);
 
-  // 编辑器挂着时开始 / 结束协作：换上、换下绑定。开始时会话是拿编辑器里现在的正文建的，
-  // 两边一致；撤销历史留着（主持人的历史都是自己的改动）
+  // 编辑器挂着时开始 / 结束协作：换上、换下绑定。会话是照本机某一版建的（之后这里可能又打了字、
+  // 会话里也可能有了别人的字），绑定挂上时照会话的 origin 对齐（collab/binding.ts 的 align，
+  // docs/协同编辑.md §27）；撤销历史留着（主持人的历史都是自己的改动）
   useEffect(() => {
     if (collabRef.current === collab) return;
     collabRef.current = collab;
@@ -1043,7 +1117,9 @@ export function MarkdownEditor({
     // 协作中：正文的真相是会话。整篇替换 = 在 CRDT 里删光再插一遍，所有人的光标塌到一处
     if (!view || collabRef.current) return;
     const current = view.state.doc.toString();
-    if (initialMarkdown === current) {
+    // 自己存盘的回音：和 store 对上了，正文不动（见 unconfirmedSaves）
+    const echoed = !external && confirmSent(view, initialMarkdown);
+    if (echoed || initialMarkdown === current) {
       syncedMarkdownRef.current = initialMarkdown;
       return;
     }

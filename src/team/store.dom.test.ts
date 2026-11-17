@@ -155,4 +155,62 @@ describe("团队仓库的窗口", () => {
     expect(saved).toEqual([]);
     await host.destroy();
   });
+
+  it("别人在主持这一篇：历史版本「恢复」写进会话，大家都看得到；「撤销」只撤恢复那一下（审查 §5.8）", async () => {
+    const hub = createMockTeamHub();
+    const other = hub.device("a1", "张三");
+    const disk = new Map([["n1", TEXT]]);
+    const host = new TeamController(
+      other.net,
+      other.self(),
+      {
+        flush: async () => {},
+        load: async () => disk.get("n1"),
+        save: async (_target, text) => {
+          disk.set("n1", text);
+        },
+        onExternal: () => () => {},
+      },
+      () => {},
+      { saveDelay: 10, aloneGrace: 100000 },
+      scheduler,
+    );
+    void other.net.openPipe((frame) => host.receive(frame));
+    void other.net.onControl((control) => host.control(control));
+    const mine = hub.device("b2", "李四");
+    await initTeam(mine.net);
+    function Probe() {
+      const doc = useCurrentDocument();
+      const id = teamDocId(doc);
+      const target = doc.editor?.target;
+      if (id && target && !isShared(target)) setTeamView({ doc: id, target });
+      return null;
+    }
+    const container = document.createElement("div");
+    root = createRoot(container);
+    act(() => root!.render(createElement(Probe)));
+    host.view({ doc: DOC, target: noteRef("n1") });
+    await until("做客", () => useTeam.getState().sessions[DOC]?.remote === true);
+    const mineSession = () => useTeam.getState().sessions[DOC]!.session;
+    const hostSession = () => host.snapshot().sessions[DOC]!.session;
+
+    const old = "# 周会\n\n- 张三：接口（旧的一版）";
+    await useData.getState().restoreVersion(noteRef("n1"), old, "昨天");
+    // 进了会话：对面看得到、对面存盘；这边不写自己的磁盘
+    expect(mineSession().toString()).toBe(old);
+    await until("对面拿到", () => hostSession().toString() === old);
+    await until("对面存盘", () => disk.get("n1") === old);
+    expect(saved).toEqual([]);
+    expect(useData.getState().undoable?.message).toBe("已恢复到 昨天 的版本");
+
+    // 恢复以后对面又写了一行；撤销只撤恢复那一下，这一行留着
+    hostSession().insertText(hostSession().toString().length, "\n- 恢复以后写的");
+    await until("这边收到", () => mineSession().toString().endsWith("恢复以后写的"));
+    await useData.getState().undoable!.undo();
+    const back = `${TEXT}\n- 恢复以后写的`;
+    expect(mineSession().toString()).toBe(back);
+    await until("对面也撤了", () => hostSession().toString() === back);
+    expect(saved).toEqual([]);
+    await host.destroy();
+  });
 });

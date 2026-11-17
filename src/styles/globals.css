@@ -151,6 +151,16 @@
   }
 }
 
+/* 原生控件（日期框的日历图标和弹出的日历、下拉框的列表、勾选框）跟着应用的明暗走。
+   index.html 的 <meta name="color-scheme" content="light dark"> 只认系统：手动选了和系统相反的那一种，
+   亮色里的日历图标是白的（看不见），暗色里是黑的 */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 :root[data-theme="dark"] {
   --color-peer-0: #ff7b72;
   --color-peer-1: #ff9d4d;
@@ -325,6 +335,10 @@ body {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
     border-radius: var(--radius-sm);
+  }
+  /* 模态对话框打开时聚焦的是面板本身（lib/modalFocus.ts），给键盘接着 Tab 进去用：整块不画框 */
+  [role="dialog"][tabindex="-1"]:focus-visible {
+    outline: none;
   }
 }
 
@@ -956,12 +970,16 @@ body.odea-dragging .odea-row-actions {
 /* 选区由 editor/selectionLayer.ts 按行画在文字上面，原生选区藏掉（原生的按每段文字自己的
    字号画底色，标题的 `#`、正文的 `**` 这些小字号标记底下矮一截、高低不齐）。字色也不换：
    全局的 ::selection 把选中的字染成墨色，淡灰的标记一选中就变黑，所以它不管正文区。
-   格子里改表格这类自己获得焦点的可编辑块还用原生选区（和 CodeMirror 自带的 drawSelection 一样） */
+   正文里自己获得焦点的输入框、文本域还用原生选区。
+   只写 `:focus::selection`（选区在得焦点的那个元素自己身上），不写 CodeMirror drawSelection 那样的
+   `:focus ::selection`（后代）：`:focus` 后面跟后代，Chrome 只能在焦点每变一次时把那个元素的整棵子树
+   作废样式 —— 正文 .cm-content 每得一次、失一次焦点（开关命令面板、点侧栏、切窗口）整篇重算一遍，
+   长文 4 倍降速下 26–39ms（审查 2026-11-13 §4.59）。格子里的编辑器是 CodeMirror，选区自己画（selectionLayer），
+   不靠这条 */
 .odea-editor .cm-content ::selection {
   background: transparent;
 }
-.odea-editor .cm-content :focus::selection,
-.odea-editor .cm-content :focus ::selection {
+.odea-editor .cm-content :focus::selection {
   background: color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
 /* 选区层盖在文字上面，鼠标得穿过去：以前点在选区上（全选后点一下、在选区里点一下取消）
@@ -3084,6 +3102,150 @@ body.odea-dragging .odea-row-actions {
   max-height: 480px;
   border-radius: 6px;
   background: #000;
+}
+
+/* ---------- 播放条：卡片里的录音、视频在放、卡片不在眼前（editor/mediaKeeper.ts，技术方案 §11.4.6） ----------
+   叠在这一栏正文可视区（[data-swap-host]）的底部、底下那条渐隐（z-6）之上，居中对着正文栏
+   （fixed / absolute 居中用 margin: auto，不用 translate(-50%)：宽度是奇数时落在半个像素上）。
+   不进文档流：正文最后本来就留着 64px + 72px 的空白。浮层那一套：canvas 底、line-strong 边、radius-lg、
+   shadow-float。只淡 opacity，will-change 一直在层上，淡之前 JS 对齐整物理像素（PITFALLS/动效.md 规矩 1、3）；
+   进 140ms ease-out-quint、出 100ms；减少动效走全局那条规则 */
+.odea-media-bar {
+  --media-kind: var(--color-callout-important);
+  position: absolute;
+  right: 0;
+  bottom: 12px;
+  left: 0;
+  z-index: 7;
+  display: flex;
+  box-sizing: border-box;
+  width: min(560px, calc(100% - 32px));
+  height: 40px;
+  align-items: center;
+  gap: 2px;
+  margin: 0 auto;
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-lg);
+  padding: 0 5px 0 12px;
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-float);
+  color: var(--color-body);
+  font-family: var(--font-sans);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms var(--ease-in-out-sub);
+  will-change: opacity;
+}
+.odea-media-bar.is-shown {
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 140ms var(--ease-out-quint);
+}
+.odea-media-bar.is-video {
+  --media-kind: var(--color-accent);
+}
+.odea-media-bar-kind {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-right: 6px;
+  fill: none;
+  stroke: var(--media-kind);
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.odea-media-bar-name {
+  min-width: 0;
+  max-width: 36%;
+  flex: 0 1 auto;
+  margin-right: 4px;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.odea-media-bar-button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  transition: background-color 80ms linear, color 80ms linear;
+}
+.odea-media-bar-button:hover {
+  background: var(--color-raised);
+  color: var(--color-ink);
+}
+.odea-media-bar-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.odea-media-bar-icon.is-solid {
+  fill: currentColor;
+  stroke-width: 1.2;
+}
+/* 进度：自己画的 slider（能拖、点哪跳哪、键盘）。整条 28px 高都接得住指针，看得见的是中间 4px 的轨道 */
+.odea-media-bar-track {
+  --progress: 0;
+  position: relative;
+  min-width: 48px;
+  height: 28px;
+  flex: 1 1 auto;
+  margin: 0 8px 0 6px;
+  cursor: pointer;
+  touch-action: none;
+}
+.odea-media-bar-rail {
+  position: absolute;
+  top: 12px;
+  right: 0;
+  left: 0;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-muted) 22%, transparent);
+}
+.odea-media-bar-rail::after {
+  position: absolute;
+  inset: 0;
+  background: var(--media-kind);
+  content: "";
+  transform: scaleX(var(--progress));
+  transform-origin: left center;
+}
+.odea-media-bar-thumb {
+  position: absolute;
+  top: 9px;
+  left: calc(var(--progress) * 100% - 5px);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--media-kind);
+  box-shadow: 0 0 0 2px var(--color-canvas);
+}
+.odea-media-bar-time {
+  flex: none;
+  margin-right: 4px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
 }
 
 /* ---------- 图片 ----------

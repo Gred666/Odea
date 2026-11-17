@@ -10,6 +10,8 @@
    脚注引用、HTML 标签去掉，强调 / 删除线 / 高亮的符号去掉。
    ============================================================ */
 
+import { isFrontMatterKey } from "@/editor/frontMatter";
+
 /** 正文摘要：纯文本前 n 个字符，截断了加省略号。 */
 export function makeExcerpt(markdown: string, n = 60): string {
   const chars = [...plainText(markdown)];
@@ -62,7 +64,7 @@ function frontMatterLength(lines: string[]): number {
   let sawKey = false;
   for (let index = 1; index < Math.min(lines.length, 60); index += 1) {
     if (isFence(lines[index]!)) return sawKey ? index + 1 : 0;
-    if (/^[A-Za-z_][\w-]*\s*:/.test(lines[index]!)) sawKey = true;
+    if (isFrontMatterKey(lines[index]!)) sawKey = true;
   }
   return 0;
 }

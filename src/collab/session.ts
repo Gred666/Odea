@@ -108,12 +108,21 @@ export const browserScheduler: CollabScheduler = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
+/**
+ * 会话的正文一律用 \n 换行：CodeMirror 的文档就是这样（读进来时 \r\n、\r 都当成一个换行），会话里留着 \r 的话
+ * 两边的下标对不上 —— 编辑器以会话为准对齐时，插进来的 \r 在 CodeMirror 里又成了一个换行（访客那边每行多一个空行）。
+ * 从磁盘来的正文进会话之前都过一遍（建会话、origin、外部改动）；存回去的是 \n，和不协作时编辑器存盘一样
+ */
+export function toLF(text: string): string {
+  return text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text;
+}
+
 export interface CollabSessionOptions {
   self: Peer;
   transport: CollabTransport;
   /**
    * 主持人：文档现在的正文。访客不给，从主持人那里同步（两边各自用同一段文字建文档
-   * 的话，合并后正文会重复一遍）
+   * 的话，合并后正文会重复一遍）。换行换成 \n（toLF）
    */
   initialText?: string;
   /**
@@ -163,6 +172,8 @@ export class CollabSession {
   private heartbeatTimer: unknown = null;
   private readonly stopLocalUpdates: () => void;
   private destroyed = false;
+  /** 建这份会话时拿的本机正文（markOrigin），第一个挂上来的编辑器取走（takeOrigin） */
+  private origin: string | null = null;
 
   constructor(options: CollabSessionOptions) {
     this.self = options.self;
@@ -178,7 +189,7 @@ export class CollabSession {
         this.onError(error);
       }
     } else if (options.initialText) {
-      this.text.insert(0, options.initialText);
+      this.text.insert(0, toLF(options.initialText));
       this.doc.commit();
     }
     // 建好之后才开始往外发：初始正文由同步（Sync2）带过去
@@ -208,6 +219,22 @@ export class CollabSession {
   }
 
   /* ---------------- 编辑器 ---------------- */
+
+  /**
+   * 这份会话是照本机的哪一版正文建的（docs/协同编辑.md §27）：团队加入时读的本机正文、接手主持时读的那一版、
+   * 协作主持一篇时磁盘上的那一版。编辑器早就开着、这期间还在打字：挂上来的时候拿它算出自己多打了什么，
+   * 映射过会话这边的改动写进来（binding.ts 的 align），不丢字
+   */
+  markOrigin(text: string): void {
+    this.origin = toLF(text);
+  }
+
+  /** 只用一次：第一个挂上来的编辑器取走（用不用都清），之后再挂上来的以会话为准 */
+  takeOrigin(): string | null {
+    const origin = this.origin;
+    this.origin = null;
+    return origin;
+  }
 
   /** 编辑器挂上来。同一时刻只挂一个；返回的函数是摘下 */
   attach(editor: CollabEditor): () => void {

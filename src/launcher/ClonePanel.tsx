@@ -1,4 +1,5 @@
 import { cn } from "@/lib/cn";
+import { type DeviceLogin, githubLogin, loginCancelled, useLoginAttempt } from "@/lib/githubLogin";
 import { openExternal } from "@/lib/openExternal";
 import { Copy, Github, Globe, LoaderCircle, Lock, Users } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -40,6 +41,13 @@ type Step =
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/** GitHub 设备码登录（lib/githubLogin.ts，和仓库窗口的同步对话框共用）接启动器的后端 */
+const GITHUB: DeviceLogin = {
+  start: () => api.githubLoginStart(),
+  wait: () => api.githubLoginWait(),
+  cancel: () => api.loginCancel(),
+};
+
 export function ClonePanel({
   target,
   busy,
@@ -57,6 +65,7 @@ export function ClonePanel({
   const [accounts, setAccounts] = useState<SyncAccount[]>([]);
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const attempt = useLoginAttempt();
 
   useEffect(() => {
     void api
@@ -96,26 +105,47 @@ export function ClonePanel({
     setError(null);
     if (account) return setStep({ kind: "repos", account });
     if (provider === "gitee") return setStep({ kind: "gitee" });
-    // 在点击里调，不放进 effect：StrictMode 下 effect 会跑两次（同 SyncDialog 的 githubLogin）
     setWorking("正在向 GitHub 要验证码…");
-    void api
-      .githubLoginStart()
-      .then((code) => {
+    const wanted = attempt.begin();
+    void githubLogin(
+      GITHUB,
+      (code) => {
         setWorking(null);
         setStep({ kind: "github", code });
-        return api.githubLoginWait();
-      })
+      },
+      wanted,
+    )
       .then(loggedIn)
       .catch((cause) => {
+        if (!wanted()) return;
         setWorking(null);
         const message = messageOf(cause);
-        if (!message.includes("取消")) setError(message);
+        if (loginCancelled(message)) return;
+        // 验证码过期、在浏览器里点了拒绝、断网：码作废了，回到选托管方，别停在「等你确认」
+        setStep({ kind: "provider" });
+        setError(message);
       });
   };
 
+  // 换了一步（点了托管方、登录完、Esc 退回一步）：按过的按钮、打字的框跟着那一步拆掉，焦点落在 body 上，
+  // 再按 Esc 就退不回去了（Esc 挂在这一屏上）。焦点没处去时放到「返回」上；
+  // 那一步自己要接焦点的（「放在哪」的名字框、Gitee 的令牌框）先接了，这里不抢。
+  // 开始忙（「正在向 GitHub 要验证码…」）也一样：按下的那个按钮跟着变成 disabled，焦点被浏览器挪到 body 上，
+  // 没登录、没开代理时要等好几秒，这期间 Esc 退不出去，失败了焦点也还在 body 上（桌面端验证第二段）
+  const rootRef = useRef<HTMLDivElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 换一步、忙起来、忙完都查一次
+  useEffect(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body && !(active as HTMLButtonElement).disabled) return;
+    rootRef.current?.querySelector<HTMLButtonElement>("button[data-panel-back]")?.focus();
+  }, [step.kind, working]);
+
   const back = () => {
     setError(null);
-    if (step.kind === "github") void api.loginCancel().catch(() => {});
+    if (step.kind === "github") {
+      attempt.drop();
+      void api.loginCancel().catch(() => {});
+    }
     if (step.kind === "provider") return onBack();
     setStep(
       step.kind === "place" ? { kind: "repos", account: step.account } : { kind: "provider" },
@@ -124,6 +154,7 @@ export function ClonePanel({
 
   return (
     <div
+      ref={rootRef}
       onKeyDown={(event) => {
         if (event.key === "Escape") back();
       }}

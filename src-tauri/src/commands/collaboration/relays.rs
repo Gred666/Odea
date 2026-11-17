@@ -56,9 +56,10 @@ pub async fn collab_relay_add(
 pub async fn collab_relay_remove(state: State<'_, AppState>, url: String) -> Result<Vec<RelayInfo>> {
     let data_dir = state.data_dir.clone();
     blocking(move || {
-        let mut config = boot::Config::load(&data_dir);
-        config.collab_relays.retain(|item| item.url != url);
-        config.save(&data_dir).map_err(|error| AppError::Io(error.to_string()))?;
+        boot::edit_config(&data_dir, |config| {
+            config.collab_relays.retain(|item| item.url != url);
+            Ok(())
+        })?;
         let _ = crate::sync::secret::remove(&format!("{RELAY_TOKEN}{url}"));
         Ok(relay_infos(&data_dir))
     })

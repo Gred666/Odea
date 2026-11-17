@@ -22,6 +22,7 @@ import { useInstalled } from "@/extensions/installed";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
 import { runEditorCommand } from "@/lib/editorCommands";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, spring, tween } from "@/lib/motion";
 import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/paletteSearch";
 import { isMac } from "@/lib/platform";
@@ -164,6 +165,7 @@ export function CommandPalette({
 }) {
   const open = useApp((s) => s.paletteOpen);
   const setOpen = useApp((s) => s.setPaletteOpen);
+  const panel = useModalFocus(open);
   const workspace = useApp((s) => s.workspace);
   const setWorkspace = useApp((s) => s.setWorkspace);
   const theme = useApp((s) => s.theme);
@@ -229,6 +231,8 @@ export function CommandPalette({
   const hostedIn = useCollab((s) => s.hostedIn);
 
   const [query, setQuery] = useState("");
+  /** 输入框里的字。组字时是拼音：列表、正文搜索照 query（上屏以后的字）来，不跟着拼音一个字母一个字母地跳（同全局搜索） */
+  const [typed, setTyped] = useState("");
   const searched = useTextSearch(open ? query : "", NOTE_RESULTS * 2);
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -239,7 +243,8 @@ export function CommandPalette({
   /* ---- 全局快捷键 ---- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
+      // 组字时的按键归输入法（焦点一走，组着的拼音就成了正文里的字）
+      if (e.defaultPrevented || e.isComposing) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setOpen(!useApp.getState().paletteOpen);
@@ -263,6 +268,7 @@ export function CommandPalette({
       if (restore) useApp.setState({ paletteRestore: null });
       restoring.current = restore && { query: restore.query, itemId: restore.itemId };
       setQuery(restore?.query ?? "");
+      setTyped(restore?.query ?? "");
       setCursor(0);
       // 等入场动画的第一帧过去再聚焦，避免 iOS/WebKit 上的滚动跳动
       requestAnimationFrame(() => inputRef.current?.focus());
@@ -416,6 +422,7 @@ export function CommandPalette({
       ...pluginNavItems()
         .filter((item) => plugins.includes(item.plugin))
         .map((item) => nav(item.id, item.label, item.icon, item.keywords)),
+      // 带着 dialog 的（日程的「提醒设置…」）照核心命令一样记 paletteBack（execute），那边能返回
       ...pluginCommands.map((command) => ({ ...command }) satisfies Item),
       ...scriptedItems,
       ...(archiveOn ? [nav("archive", "归档", Archive, "archive 存档")] : []),
@@ -1105,6 +1112,7 @@ export function CommandPalette({
                 lib/motion.ts 的 popoverCard）。以前是 scale 0.97 + 下落 + 淡入：
                 字在动画里被当位图拉伸，前 200ms 发虚，结束那一帧才跳清楚 */}
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="命令面板"
@@ -1141,11 +1149,13 @@ export function CommandPalette({
                   aria-expanded="true"
                   aria-controls="palette-results"
                   aria-activedescendant={results[cursor] ? `palette-option-${cursor}` : undefined}
-                  value={query}
+                  value={typed}
                   onChange={(e) => {
                     restoring.current = null;
-                    setQuery(e.target.value);
+                    setTyped(e.target.value);
+                    if (!(e.nativeEvent as InputEvent).isComposing) setQuery(e.target.value);
                   }}
+                  onCompositionEnd={(e) => setQuery(e.currentTarget.value)}
                   placeholder="搜索笔记、命令…"
                   aria-label="搜索笔记、命令"
                   spellCheck={false}
@@ -1354,8 +1364,9 @@ function Marked({ text, ranges }: { text: string; ranges?: Range[] }) {
 }
 
 export function KeyHint({ keys, label }: { keys: (string | LucideIcon)[]; label: string }) {
+  // 不让右边长的状态字（全局搜索的「正则有误：…」）把它挤窄：中文的最小宽度是一个字，挤了就竖着折成两行
   return (
-    <span className="flex items-center gap-1">
+    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap">
       {keys.map((Key, index) => (
         <kbd
           // biome-ignore lint/suspicious/noArrayIndexKey: 固定的一两个键，不会重排

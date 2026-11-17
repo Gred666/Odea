@@ -8,6 +8,7 @@ import {
 import { Facet } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { VaultFile } from "./html";
+import { type MediaCard, dropMedia, mediaKeeper, mountMedia } from "./mediaKeeper";
 import { OtwWidget, jumpToSource, positionOf } from "./widgets";
 
 /* ============================================================
@@ -35,9 +36,13 @@ export interface AttachmentHost {
   remote: boolean;
 }
 
-/** DocumentView 按仓库给；没给（浏览器的实验台）就不画卡片，照旧显示源码 */
+/**
+ * DocumentView 按仓库给；没给（浏览器的实验台）就不画卡片，照旧显示源码。
+ * 带着卡片里播放器的保管处（mediaKeeper.ts）：卡片滚远了、整张重画了，录音、视频接着放
+ */
 export const attachmentHost = Facet.define<AttachmentHost | null, AttachmentHost | null>({
   combine: (values) => values[0] ?? null,
+  enables: mediaKeeper,
 });
 
 const ICONS: Record<AttachmentKind, string> = {
@@ -78,15 +83,32 @@ export class AttachmentWidget extends OtwWidget {
     super();
   }
 
-  eq(other: AttachmentWidget) {
+  /** 画出来是不是同一张卡片（光标在不在这一行不算） */
+  private sameCard(other: AttachmentWidget) {
     return (
       other.target.name === this.target.name &&
       other.target.label === this.target.label &&
       other.file?.rel === this.file?.rel &&
       other.file?.src === this.file?.src &&
-      other.open === this.open &&
       other.remote === this.remote
     );
+  }
+
+  eq(other: AttachmentWidget) {
+    return this.sameCard(other) && other.open === this.open;
+  }
+
+  /**
+   * 光标进出这一行只是 is-open 变了：卡片留着，只换这个类。不这样的话每次都重画一张 ——
+   * 卡片里正在放的录音、视频就断了、从头来（点一下卡片的空白处、方向键路过这一行都算）
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    const before = drawn.get(dom);
+    if (!before || !this.sameCard(before)) return false;
+    dom.classList.toggle("is-open", this.open);
+    drawn.set(dom, this);
+    this.fresh = false;
+    return true;
   }
 
   private get kind(): AttachmentKind {
@@ -176,16 +198,25 @@ export class AttachmentWidget extends OtwWidget {
     card.append(row);
 
     if (this.playable) {
-      const media = element(kind === "video" ? "video" : "audio", "cm-odea-file-media");
-      media.controls = true;
-      media.preload = "metadata";
-      media.src = this.file!.src;
-      // 视频的尺寸要等元数据到了才知道：这一行变高了，叫 CodeMirror 重新量
-      media.addEventListener("loadedmetadata", () => {
-        if (frame.isConnected) view.requestMeasure();
-      });
+      const src = this.file!.src;
+      const media = kind === "video" ? "video" : "audio";
       const holder = element("span", "cm-odea-file-player");
-      holder.append(media);
+      // 播放器向保管处要（mediaKeeper.ts）：滚远了藏起来接着放的，滚回来拿回这一个；没有才新建
+      const about: MediaCard = {
+        src,
+        name,
+        title: label || baseName(name),
+        kind: media,
+        icon: ICONS[media],
+        height: () => this.estimatedHeight,
+      };
+      mountMedia(view, frame, holder, about, () => {
+        const player = element(media, "cm-odea-file-media");
+        player.controls = true;
+        player.preload = "metadata";
+        player.src = src;
+        return player;
+      });
       card.append(holder);
     }
     frame.append(card);
@@ -208,10 +239,20 @@ export class AttachmentWidget extends OtwWidget {
       row.dataset.odeaTip = "";
       row.dataset.odeaTipHint = `${MOD_KEY}+点击打开`;
     }
+    drawn.set(frame, this);
     return this.settle(frame);
   }
 
   override ignoreEvent() {
     return true;
   }
+
+  /** 卡片被拆（滚远了、整张重画、这一行删了）：里面正在放的播放器交给保管处 */
+  override destroy(dom: HTMLElement) {
+    dropMedia(dom);
+    super.destroy(dom);
+  }
 }
+
+/** 卡片的 DOM 是照哪个替身画的（updateDOM 看它是不是同一张卡片） */
+const drawn = new WeakMap<HTMLElement, AttachmentWidget>();

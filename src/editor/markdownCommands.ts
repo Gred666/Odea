@@ -5,7 +5,7 @@ import {
   EditorState,
   type TransactionSpec,
 } from "@codemirror/state";
-import type { Command, EditorView } from "@codemirror/view";
+import { type Command, EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
 
 interface CommandTarget {
@@ -153,6 +153,74 @@ export function insertFencedBlock(): Command {
     return true;
   };
 }
+
+/** `pos` 所在的顶层围栏代码块（列表、引用里的交给 lang-markdown 的续行）；只看 Markdown 这一层的树，不进代码里的语言 */
+function topLevelFence(state: EditorState, pos: number): SyntaxNode | null {
+  for (let node: SyntaxNode | null = syntaxTree(state).resolve(pos, -1); node; node = node.parent) {
+    if (node.name === "FencedCode") return node.parent?.name === "Document" ? node : null;
+  }
+  return null;
+}
+
+/** 开头那道围栏：前面的缩进、用的字符、几个 */
+function openingFence(state: EditorState, fence: SyntaxNode) {
+  const match = /^([ \t]*)(`{3,}|~{3,})/.exec(state.doc.lineAt(fence.from).text);
+  return match ? { indent: match[1]!, char: match[2]![0]!, length: match[2]!.length } : null;
+}
+
+/**
+ * 围栏代码里的回车照抄上一行的缩进（代码要这样），收尾的 ``` 也就跟着缩进打出来：
+ * 缩进到 4 格它就不算收尾（CommonMark），后面的正文全成了代码。打完收尾的那一个字符时，
+ * 把这一行挪回开头那道围栏的缩进。
+ */
+export const closeFenceOnInput = EditorView.inputHandler.of((view, from, to, text) => {
+  if (text !== "`" && text !== "~") return false;
+  const { state } = view;
+  if (state.selection.ranges.length > 1) return false;
+  const line = state.doc.lineAt(from);
+  if (to !== line.to) return false;
+  const typed = /^([ \t]*)(`{3,}|~{3,})$/.exec(line.text.slice(0, from - line.from) + text);
+  if (!typed) return false;
+  const fence = topLevelFence(state, line.from);
+  if (!fence || line.from <= fence.from) return false;
+  const open = openingFence(state, fence);
+  const marker = typed[2]!;
+  if (!open || marker[0] !== open.char || marker.length < open.length) return false;
+  if (typed[1] === open.indent) return false;
+  const insert = open.indent + marker;
+  view.dispatch({
+    changes: { from: line.from, to: line.to, insert },
+    selection: { anchor: line.from + insert.length },
+    userEvent: "input.type",
+  });
+  return true;
+});
+
+/**
+ * 在围栏代码收尾那一行的行尾回车：新的一行用开头那道围栏的缩进。默认的回车照抄收尾这一行的缩进，
+ * 而它常常是代码里自动缩进带过来的，代码块后面的正文就平白多了几个空格
+ */
+export const newlineAfterFence: Command = (view) => {
+  const { state } = view;
+  if (state.selection.ranges.length > 1) return false;
+  const { empty, head } = state.selection.main;
+  const line = state.doc.lineAt(head);
+  if (!empty || head !== line.to || !/^[ \t]*(`{3,}|~{3,})[ \t]*$/.test(line.text)) return false;
+  const fence = topLevelFence(state, line.to);
+  const close = fence?.lastChild;
+  if (!fence || !close || close.name !== "CodeMark" || close.from < line.from) return false;
+  if (state.doc.lineAt(fence.from).number === line.number) return false;
+  const open = openingFence(state, fence);
+  if (!open || /^[ \t]*/.exec(line.text)![0] === open.indent) return false;
+  const insert = `\n${open.indent}`;
+  view.dispatch({
+    changes: { from: head, insert },
+    selection: { anchor: head + insert.length },
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  return true;
+};
 
 export function insertLink(image = false): Command {
   return (view) => {

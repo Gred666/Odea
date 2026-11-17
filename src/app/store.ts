@@ -30,8 +30,15 @@ export interface FocusRequest {
   at: "title" | "body";
 }
 
+/**
+ * 内置插件自己的对话框（贡献点 commands 的 dialog，docs/插件与跨端.md §5.3.1）：`plugin:<插件 id>.<对话框>`。
+ * 只能是这个前缀，插件冒充不了核心的对话框
+ */
+export type PluginDialog = `plugin:${string}`;
+
 /** 命令面板能打开、能从那里「返回」命令面板的对话框（components/PaletteBack.tsx） */
 export type PaletteDialog =
+  | PluginDialog
   | "find"
   | "history"
   | "trash"

@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use super::fsio;
 use crate::error::{AppError, Result};
 use crate::plugins::{self, DocType, Plugin};
 
@@ -286,9 +287,7 @@ impl Layout {
         if folder.is_empty() {
             return Ok(self.notes.clone());
         }
-        let ok = folder.split('/').all(|part| {
-            !part.is_empty() && !part.starts_with('.') && !part.contains('\\') && part.trim() == part
-        });
+        let ok = folder.split('/').all(|part| fsio::is_plain_name(part) && part.trim() == part);
         if !ok {
             return Err(AppError::Invalid(format!("文件夹路径不对: {folder}")));
         }
@@ -363,12 +362,11 @@ pub fn within(dir: &str, base: &str) -> bool {
     dir == base || dir.strip_prefix(base).is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// 配置里写的文件夹：正斜杠、去掉两头的斜杠；有 `..`、以点开头的段不收
+/// 配置里写的文件夹：正斜杠、去掉两头的斜杠；有 `..`、以点开头的段、盘符（`D:`，fsio::is_plain_name）不收
 pub fn clean_dir(raw: &str) -> Option<String> {
     let dir = raw.replace('\\', "/");
     let dir = dir.trim().trim_matches('/');
-    let ok = dir.is_empty()
-        || dir.split('/').all(|part| !part.is_empty() && !part.starts_with('.') && part.trim() == part);
+    let ok = dir.is_empty() || dir.split('/').all(|part| fsio::is_plain_name(part) && part.trim() == part);
     ok.then(|| dir.to_string())
 }
 

@@ -1,4 +1,5 @@
 import { CAPABILITY_TEXT, capabilityKey } from "@/extensions/manifest";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { type ConsentRequest, useConsent } from "@/plugins/scripted";
 import { ShieldCheck, X } from "lucide-react";
@@ -53,6 +54,7 @@ export function PluginConsent() {
 
   const manifest = shown?.manifest;
   const install = shown?.mode === "install";
+  const panel = useModalFocus(!!(request && manifest));
 
   return (
     <AnimatePresence>
@@ -76,6 +78,7 @@ export function PluginConsent() {
             className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[14vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label={`「${manifest.name}」要的权限`}
@@ -84,11 +87,13 @@ export function PluginConsent() {
               initial="hidden"
               animate="shown"
               exit="gone"
-              className="pointer-events-auto relative w-[460px] max-w-[calc(100vw-48px)]
-                         overflow-clip rounded-2xl bg-canvas shadow-modal ring-1 ring-line-strong"
+              // 上面留了 14vh：三项权限、每项带一条长理由时比矮的窗口（1.5 倍缩放下 533 高）还高，
+              // 「安装」「取消」落到窗口外面（体验轮 §4.57）。中间那段滚，标题和按钮不动
+              className="pointer-events-auto relative flex max-h-[calc(86vh-12px)] w-[460px] max-w-[calc(100vw-48px)]
+                         flex-col overflow-clip rounded-2xl bg-canvas shadow-modal ring-1 ring-line-strong"
             >
               <div
-                className="flex items-center gap-2.5 border-b border-line px-4"
+                className="flex shrink-0 items-center gap-2.5 border-b border-line px-4"
                 style={{ height: HEADER }}
               >
                 <ShieldCheck size={16} strokeWidth={2} className="shrink-0 text-accent" />
@@ -105,7 +110,7 @@ export function PluginConsent() {
                   <X size={14} strokeWidth={2} />
                 </button>
               </div>
-              <div className="px-5 pb-5 pt-4">
+              <div className="scroll-thin min-h-0 overflow-y-auto px-5 pt-4">
                 <p className="text-[13px] text-muted">
                   {manifest.author} · v{manifest.version}
                 </p>
@@ -152,24 +157,24 @@ export function PluginConsent() {
                 <p className="mt-3 text-[12px] leading-[1.6] text-faint">
                   授权记在这台设备上，不跟着仓库同步；卸载时一起删掉。
                 </p>
-                <div className="mt-5 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={cancel}
-                    className="h-8 rounded-lg bg-raised px-3 text-[12px] font-medium text-ink
+              </div>
+              <div className="flex shrink-0 justify-end gap-2 px-5 pb-5 pt-5">
+                <button
+                  type="button"
+                  onClick={cancel}
+                  className="h-8 rounded-lg bg-raised px-3 text-[12px] font-medium text-ink
                                transition-colors duration-[140ms] hover:bg-line-strong"
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    onClick={allow}
-                    className="h-8 rounded-lg bg-accent px-3 text-[12px] font-medium text-accent-ink
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={allow}
+                  className="h-8 rounded-lg bg-accent px-3 text-[12px] font-medium text-accent-ink
                                transition-colors duration-[140ms] hover:bg-accent-hover"
-                  >
-                    {install ? "安装" : "好"}
-                  </button>
-                </div>
+                >
+                  {install ? "安装" : "好"}
+                </button>
               </div>
             </motion.div>
           </div>

@@ -1,11 +1,21 @@
 // @vitest-environment happy-dom
 
 import { history, redo, undo } from "@codemirror/commands";
-import { EditorSelection, EditorState, type Extension, type Transaction } from "@codemirror/state";
+import {
+  ChangeSet,
+  Compartment,
+  EditorSelection,
+  EditorState,
+  type Extension,
+  StateEffect,
+  Text,
+  type Transaction,
+} from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { LABEL_MS, collab, isCollabSync } from "./binding";
 import { remoteCarets } from "./cursors";
+import { fineEdits, mergeExternal, snapshot } from "./external";
 import { LoopbackHub, type LoopbackMember, ManualScheduler } from "./loopback";
 import {
   CURSOR_HEARTBEAT_MS,
@@ -429,5 +439,296 @@ describe("远端光标", () => {
     await scheduler.advance(40);
     expect(a!.view.state.doc.toString()).toBe("abcdef");
     expect(a!.view.state.field(remoteCarets)[0]!.head).toBe(4);
+  });
+});
+
+describe("挂上时编辑器带着自己的字（docs/协同编辑.md §27）", () => {
+  /**
+   * 主持人这边的编辑器早就开着（照 origin 建的），会话也照 origin 建；访客的编辑器照常挂着。
+   * 主持人的编辑器和 MarkdownEditor 一样，会话来了才换上绑定（collabSlot.reconfigure）
+   */
+  function lateRoom(origin: string, mark = true) {
+    const scheduler = new ManualScheduler();
+    const hub = new LoopbackHub({ scheduler });
+    hubs.push(hub);
+    const host = hub.host(peer("host", "主持人"), origin);
+    if (mark) host.session.markOrigin(origin);
+    const guest = mount(hub.join(peer("guest", "访客")));
+    const late = (doc: string) => {
+      const parent = document.createElement("div");
+      document.body.append(parent);
+      const slot = new Compartment();
+      const log: Log = [];
+      const view = new EditorView({
+        parent,
+        state: EditorState.create({
+          doc,
+          selection: { anchor: doc.length },
+          extensions: [
+            history(),
+            slot.of([]),
+            EditorView.updateListener.of((update) => log.push(...update.transactions)),
+          ],
+        }),
+      });
+      views.push(view);
+      const attach = () => view.dispatch({ effects: slot.reconfigure(collab(host.session)) });
+      return { view, log, member: host, attach };
+    };
+    return { scheduler, host, guest, editor: late(origin), late };
+  }
+
+  it("磁盘上是 \\r\\n 换行：会话里是 \\n，访客、主持人的编辑器都不多出空行，外面照样存成 \\r\\n 不算改动", async () => {
+    const crlf = "a\r\nb\r\nc";
+    const scheduler = new ManualScheduler();
+    const hub = new LoopbackHub({ scheduler });
+    hubs.push(hub);
+    const host = hub.host(peer("host", "主持人"), crlf);
+    host.session.markOrigin(crlf);
+    const guest = mount(hub.join(peer("guest", "访客")));
+    const slot = new Compartment();
+    const view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({ doc: crlf, extensions: [history(), slot.of([])] }),
+    });
+    views.push(view);
+    const editor = {
+      view,
+      attach: () => view.dispatch({ effects: slot.reconfigure(collab(host.session)) }),
+    };
+    await scheduler.advance(100);
+    // 主持人的编辑器还没挂上（主持人没开着这一篇也是这样）：访客照会话对齐（以前每个 \r 成了一个空行）
+    expect(host.session.toString()).toBe("a\nb\nc");
+    expect(guest.view.state.doc.toString()).toBe("a\nb\nc");
+    editor.attach();
+    await scheduler.advance(100);
+    expect(host.session.toString()).toBe("a\nb\nc");
+    expect(editor.view.state.doc.toString()).toBe("a\nb\nc");
+    expect(guest.view.state.doc.toString()).toBe("a\nb\nc");
+    // 别的程序把同样的正文存成 \r\n：不算外部改动
+    expect(mergeExternal(host.session, snapshot(host.session), crlf)).toBe(false);
+    type(guest.view, 1, "X");
+    await scheduler.advance(100);
+    expect(host.session.toString()).toBe("aX\nb\nc");
+    expect(editor.view.state.doc.toString()).toBe("aX\nb\nc");
+  });
+
+  /** 访客看到过的每一版正文（看有没有出现过拼音） */
+  function watch(view: EditorView) {
+    const seen: string[] = [];
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) seen.push(update.state.doc.toString());
+        }),
+      ),
+    });
+    return seen;
+  }
+
+  function startComposing(view: EditorView, at: number, pinyin: string) {
+    fire(view, "compositionstart");
+    view.dispatch({
+      changes: { from: at, insert: pinyin },
+      selection: { anchor: at + pinyin.length },
+      userEvent: "input.type.compose",
+    });
+    return at + pinyin.length;
+  }
+
+  it("编辑器多打的字映射过会话那边的改动写进去，两边对到同一个结果", async () => {
+    const { scheduler, host, guest, editor } = lateRoom("甲乙丙\n第二行");
+    await scheduler.advance(20);
+    // 会话建好以后、编辑器挂上之前：访客打了字，主持人在编辑器里也接着打
+    type(guest.view, 0, "【");
+    await scheduler.advance(20);
+    type(editor.view, 3, "丁");
+    expect(host.session.toString()).toBe("【甲乙丙\n第二行");
+    expect(editor.view.state.doc.toString()).toBe("甲乙丙丁\n第二行");
+
+    editor.attach();
+    // 当场写进了会话（等派发的是编辑器那一半）
+    expect(host.session.toString()).toBe("【甲乙丙丁\n第二行");
+    await scheduler.advance(20);
+    expect(expectConverged([editor, guest])).toBe("【甲乙丙丁\n第二行");
+    // 编辑器收的那一半是一次远端事务
+    const last = editor.log.filter((transaction) => transaction.docChanged).at(-1)!;
+    expect(isCollabSync(last)).toBe(true);
+
+    // CodeMirror 的恒等式：两边从 origin 各走一半，正文一样
+    const origin = "甲乙丙\n第二行";
+    const local = ChangeSet.of(fineEdits(origin, "甲乙丙丁\n第二行"), origin.length);
+    const remote = ChangeSet.of(fineEdits(origin, "【甲乙丙\n第二行"), origin.length);
+    const start = Text.of(origin.split("\n"));
+    expect(local.compose(remote.map(local)).apply(start).toString()).toBe(
+      remote.compose(local.map(remote, true)).apply(start).toString(),
+    );
+  });
+
+  it("同一行上对方也在打字：两边的字都在，各在各的位置", async () => {
+    const { scheduler, guest, editor } = lateRoom("今天开会讨论预算。");
+    await scheduler.advance(20);
+    // 对方在同一段里改了两处（隔开的）
+    guest.view.dispatch({
+      changes: [
+        { from: 0, to: 1, insert: "明" },
+        { from: 9, insert: "（定了）" },
+      ],
+      userEvent: "input.type",
+    });
+    await scheduler.advance(20);
+    // 我在两处中间打字：整段当一个替换的话，「要」会被挪到替换的边上
+    type(editor.view, 4, "要");
+    editor.attach();
+    await scheduler.advance(20);
+    expect(expectConverged([editor, guest])).toBe("明天开会要讨论预算。（定了）");
+  });
+
+  it("编辑器比 origin 少字（删了）：删掉的照删，对方在那一段里插的字留着", async () => {
+    const { scheduler, guest, editor } = lateRoom("一二三四五六");
+    await scheduler.advance(20);
+    type(guest.view, 3, "X");
+    await scheduler.advance(20);
+    editor.view.dispatch({ changes: { from: 2, to: 4 }, userEvent: "delete.backward" });
+    editor.attach();
+    await scheduler.advance(20);
+    expect(expectConverged([editor, guest])).toBe("一二X五六");
+  });
+
+  it("挂上以后、派发之前：又来了远端的字、自己又打了字，都对得上", async () => {
+    const { scheduler, host, guest, editor } = lateRoom("abc\ndef");
+    await scheduler.advance(20);
+    type(guest.view, 0, "1");
+    await scheduler.advance(20);
+    type(editor.view, 3, "X");
+    editor.attach();
+    // 同一个任务里（派发在微任务里）：远端的字到了，编辑器里又打了一个
+    host.session.insertText(host.session.text.length, "!");
+    type(editor.view, editor.view.state.doc.length, "Y");
+    expect(editor.view.state.doc.toString()).toBe("abcX\ndefY");
+    await scheduler.advance(20);
+    // 同一处两边都插了字：本机的在前
+    expect(expectConverged([editor, guest])).toBe("1abcX\ndefY!");
+  });
+
+  it("光标跟着映射：还在自己打的字后面", async () => {
+    const { scheduler, guest, editor } = lateRoom("abc\ndef");
+    await scheduler.advance(20);
+    type(guest.view, 0, "123");
+    await scheduler.advance(20);
+    type(editor.view, 3, "X");
+    expect(editor.view.state.selection.main.head).toBe(4);
+    editor.attach();
+    await scheduler.advance(20);
+    expect(editor.view.state.doc.toString()).toBe("123abcX\ndef");
+    expect(editor.view.state.selection.main.head).toBe(7);
+  });
+
+  it("对齐那一步不进撤销历史；挂上之前自己打的字还能撤销，撤销也同步出去", async () => {
+    const { scheduler, guest, editor } = lateRoom("甲乙丙");
+    await scheduler.advance(20);
+    type(guest.view, 0, "【");
+    await scheduler.advance(20);
+    type(editor.view, 3, "丁");
+    editor.attach();
+    await scheduler.advance(20);
+    expect(expectConverged([editor, guest])).toBe("【甲乙丙丁");
+
+    expect(undo(editor.view)).toBe(true);
+    await scheduler.advance(20);
+    // 撤掉的是自己的「丁」，对方的「【」还在
+    expect(expectConverged([editor, guest])).toBe("【甲乙丙");
+    // 再撤就没有了：对齐的那一步不在历史里
+    expect(undo(editor.view)).toBe(false);
+    expect(editor.view.state.doc.toString()).toBe("【甲乙丙");
+  });
+
+  it("origin 只用一次：第二个编辑器挂同一份会话，不再拿它算一遍", async () => {
+    const { scheduler, host, guest, editor, late } = lateRoom("甲乙丙");
+    await scheduler.advance(20);
+    type(editor.view, 3, "丁");
+    editor.attach();
+    await scheduler.advance(20);
+    expect(host.session.takeOrigin()).toBeNull();
+    type(guest.view, 4, "戊");
+    await scheduler.advance(20);
+    expect(host.session.toString()).toBe("甲乙丙丁戊");
+
+    // 换了一栏、切走再切回来：新的编辑器拿的是挂上之前那份正文
+    editor.view.destroy();
+    views.splice(views.indexOf(editor.view), 1);
+    const second = late("甲乙丙丁");
+    second.attach();
+    await scheduler.advance(20);
+    // 以会话为准（再算一遍的话「丁」会多出一个）
+    expect(expectConverged([second, guest])).toBe("甲乙丙丁戊");
+  });
+
+  it("没有 origin：以会话为准，只换不一样的那几处，不往会话里写", async () => {
+    const { scheduler, host, guest, editor } = lateRoom("开头\n中间\n结尾", false);
+    await scheduler.advance(20);
+    type(guest.view, 2, "（访客）");
+    await scheduler.advance(20);
+    const sent = host.session.stateVector();
+    editor.view.dispatch({ selection: { anchor: 7 } });
+    editor.attach();
+    await scheduler.advance(20);
+    expect(expectConverged([editor, guest])).toBe("开头（访客）\n中间\n结尾");
+    expect(host.session.coveredBy(sent)).toBe(true);
+    // 不是整篇换掉：光标跟着映射到原来那个字后面
+    expect(editor.view.state.selection.main.head).toBe(7 + "（访客）".length);
+  });
+
+  it("挂上的那一刻正在组字、对方改了组字那一行：拼音不发出去，组字不被打断，上屏后一起进来", async () => {
+    const { scheduler, host, guest, editor } = lateRoom("甲\n乙");
+    await scheduler.advance(20);
+    type(guest.view, 0, "【");
+    type(guest.view, guest.view.state.doc.length, "（远端）");
+    await scheduler.advance(20);
+    const seen = watch(guest.view);
+
+    const end = startComposing(editor.view, 1, "shi");
+    editor.attach();
+    await scheduler.advance(30);
+    // 组字那一行有对方的改动：先不派发，编辑器里还是组字时的样子
+    expect(editor.view.compositionStarted).toBe(true);
+    expect(editor.view.state.doc.toString()).toBe("甲shi\n乙");
+    // 正文里有了（只写不发）
+    expect(host.session.toString()).toBe("【甲shi\n乙（远端）");
+    expect(guest.view.state.doc.toString()).toBe("【甲\n乙（远端）");
+
+    fire(editor.view, "compositionend");
+    editor.view.dispatch({
+      changes: { from: 1, to: end, insert: "是" },
+      selection: { anchor: 2 },
+      userEvent: "input.type.compose",
+    });
+    await scheduler.advance(80);
+    expect(expectConverged([editor, guest])).toBe("【甲是\n乙（远端）");
+    expect(seen.some((text) => text.includes("shi"))).toBe(false);
+  });
+
+  it("挂上的那一刻正在组字、对方改的是别的行：当场进来，组字照旧", async () => {
+    const { scheduler, guest, editor } = lateRoom("甲\n乙");
+    await scheduler.advance(20);
+    type(guest.view, guest.view.state.doc.length, "（远端）");
+    await scheduler.advance(20);
+    const seen = watch(guest.view);
+
+    const end = startComposing(editor.view, 1, "shi");
+    editor.attach();
+    await scheduler.advance(30);
+    expect(editor.view.state.doc.toString()).toBe("甲shi\n乙（远端）");
+    expect(editor.view.compositionStarted).toBe(true);
+
+    fire(editor.view, "compositionend");
+    editor.view.dispatch({
+      changes: { from: 1, to: end, insert: "是" },
+      selection: { anchor: 2 },
+      userEvent: "input.type.compose",
+    });
+    await scheduler.advance(80);
+    expect(expectConverged([editor, guest])).toBe("甲是\n乙（远端）");
+    expect(seen.some((text) => text.includes("shi"))).toBe(false);
   });
 });

@@ -10,10 +10,11 @@ import {
 } from "@/data/folders";
 import { useData } from "@/data/store";
 import { cn } from "@/lib/cn";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard } from "@/lib/motion";
 import { Check, Copy, Folder, Inbox, ListFilter, Search } from "lucide-react";
-import { motion } from "motion/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { motion, useIsPresent } from "motion/react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 /* ============================================================
    文件夹选择器：盖在列表栏上的一张卡片，列出全部文件夹（树），打字筛选，
@@ -58,8 +59,23 @@ export function FolderPicker({
   const notes = useData((s) => s.notes);
   const logical = useData((s) => s.layout.logical);
   const [query, setQuery] = useState("");
-  const panel = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement | null>(null);
   const list = useRef<HTMLDivElement>(null);
+  const ids = useId();
+  // 焦点：Tab 留在卡片里；关掉（Esc、选好、点外面）时焦点还给打开它的那个按钮（标题、行的「…」），
+  // 不掉在 body 上（lib/modalFocus.ts）。退场动画一开始就还，不等卡片收完
+  const modalRef = useModalFocus(useIsPresent());
+  const setPanel = useCallback(
+    (el: HTMLDivElement | null) => {
+      panel.current = el;
+      modalRef(el);
+    },
+    [modalRef],
+  );
+  // 打开就是为了马上选，焦点直接给筛选框。放在上面那个 effect 后面、不用 autoFocus：
+  // 开发时 StrictMode 把 effect 跑两遍，中间那次收尾把焦点还了回去，autoFocus 不会再来一次
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => input.current?.focus(), []);
 
   // 快捷方式放不进「未整理」
   const withUnsorted = logical && mode !== "shortcut";
@@ -125,8 +141,16 @@ export function FolderPicker({
 
   return (
     <motion.div
-      ref={panel}
+      ref={setPanel}
       role="dialog"
+      aria-modal="true"
+      // Esc 挂在卡片上：焦点在卡片本身（点了卡片里的空白）时也关得掉
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }}
       aria-label={
         mode === "jump" ? "跳到文件夹" : mode === "shortcut" ? "放快捷方式的文件夹" : "移动到文件夹"
       }
@@ -142,8 +166,12 @@ export function FolderPicker({
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3 text-faint">
         <Search size={14} strokeWidth={2} className="shrink-0" />
         <input
-          // biome-ignore lint/a11y/noAutofocus: 打开就是为了马上选，焦点直接给筛选框
-          autoFocus
+          ref={input}
+          // 焦点一直在筛选框里，↑↓ 挪的是列表里的高亮（和命令面板一样，读屏按 activedescendant 念）
+          role="combobox"
+          aria-expanded="true"
+          aria-controls={`${ids}-list`}
+          aria-activedescendant={entries[active] ? `${ids}-${active}` : undefined}
           value={query}
           onChange={(event) => changeQuery(event.target.value)}
           onKeyDown={(event) => {
@@ -156,10 +184,6 @@ export function FolderPicker({
             } else if (event.key === "Enter") {
               event.preventDefault();
               pick(entries[active]);
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              onClose();
             }
           }}
           placeholder={
@@ -190,6 +214,7 @@ export function FolderPicker({
           列表窄掉一条滚动条的宽度，右边的数字往左挪，展开完滚动条一消失又跳回去 */}
       <div
         ref={list}
+        id={`${ids}-list`}
         role="listbox"
         tabIndex={-1}
         className="scroll-thin max-h-[296px] shrink-0 overflow-y-auto p-1"
@@ -208,7 +233,10 @@ export function FolderPicker({
             <button
               key={entry.path || "/"}
               type="button"
+              id={`${ids}-${index}`}
               role="option"
+              // 不进 Tab 顺序：一个个 Tab 过去，焦点环和高亮的那一项还不是同一个
+              tabIndex={-1}
               aria-selected={index === active}
               aria-disabled={off || undefined}
               data-index={index}

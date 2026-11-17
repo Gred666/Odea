@@ -115,10 +115,16 @@ export function today(now = new Date()): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-/** CSS 字符串：反斜杠、引号转义；换行、控制字符去掉 */
+/**
+ * CSS 字符串：反斜杠、引号转义；换行、控制字符去掉。`<` 写成 `\3c `：这一段在 <style> 里，
+ * 标题里的 `</style>` 不管在不在 CSS 的引号里都会把样式表收尾，后面的字就成了页面上的标签
+ */
 const cssString = (text: string) =>
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: 就是要去掉控制字符
-  `"${text.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/[\\"]/g, (c) => `\\${c}`)}"`;
+  `"${text
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: 就是要去掉控制字符
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/[\\"]/g, (c) => `\\${c}`)
+    .replace(/</g, "\\3c ")}"`;
 
 /**
  * 页眉 / 页脚的一行 → 页边框盒子的 content：`"第 " counter(page) " 页"`。空的返回 null（不画）。

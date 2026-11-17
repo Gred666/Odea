@@ -106,6 +106,8 @@ const FILE_ICON =
 
 /** 卡片对那一篇的订阅：替身拆掉时收 */
 const live = new WeakMap<HTMLElement, () => void>();
+/** 卡片的 DOM 是照哪个替身画的（updateDOM 看它是不是同一张卡片） */
+const drawn = new WeakMap<HTMLElement, EmbedWidget>();
 
 export class EmbedWidget extends OtwWidget {
   constructor(
@@ -118,13 +120,30 @@ export class EmbedWidget extends OtwWidget {
     super();
   }
 
-  eq(other: EmbedWidget) {
+  /** 画出来是不是同一张卡片（光标在不在这一行不算） */
+  private sameCard(other: EmbedWidget) {
     return (
       other.target.title === this.target.title &&
       other.target.heading === this.target.heading &&
-      other.id === this.id &&
-      other.open === this.open
+      other.id === this.id
     );
+  }
+
+  eq(other: EmbedWidget) {
+    return this.sameCard(other) && other.open === this.open;
+  }
+
+  /**
+   * 光标进出这一行只是 is-open 变了：卡片留着，只换这个类。不这样的话每次都重画一张 —— 正文是异步排的，
+   * 新卡片先只有标题那一条、下一轮才长回原来的高度（下面的字跟着跳一下），卡片里展开的 callout、选中的字也没了
+   */
+  override updateDOM(dom: HTMLElement): boolean {
+    const before = drawn.get(dom);
+    if (!before || !this.sameCard(before)) return false;
+    dom.classList.toggle("is-open", this.open);
+    drawn.set(dom, this);
+    this.fresh = false;
+    return true;
   }
 
   protected override heightKey() {
@@ -221,10 +240,11 @@ export class EmbedWidget extends OtwWidget {
       view.state.facet(embedHost)?.open(title, heading, event.shiftKey);
     });
     frame.addEventListener("click", (event) => {
-      if (event.button !== 0 || modifier(event)) return;
       const target = event.target as Element | null;
-      // 卡片里的链接、目录、脚注不跳走：这是编辑器的页面
+      // 卡片里的链接、目录、脚注不跳走：这是编辑器的页面。按着 Ctrl / Shift 点也一样
+      //（那是打开嵌的这一篇；不拦的话内核会照「在新窗口打开链接」处理）
       if (target?.closest("a")) event.preventDefault();
+      if (event.button !== 0 || modifier(event)) return;
       // 点可以收起的 callout 的标题行：开合，不跳到源码
       if (target?.closest("summary")) return;
       // 在卡片里拖着选了字：是要复制，不跳
@@ -234,6 +254,7 @@ export class EmbedWidget extends OtwWidget {
       jumpToSource(view, positionOf(view, frame) + 3);
     });
     frame.addEventListener("toggle", remeasure, true);
+    drawn.set(frame, this);
     return this.settle(frame);
   }
 

@@ -6,6 +6,7 @@ import { type DocHistory, type DocVersion, type DocumentRef, NOTE } from "@/data
 import { cn } from "@/lib/cn";
 import { formatRelativeTime, formatTimestampFull } from "@/lib/date";
 import { diffLines, diffStats } from "@/lib/lineDiff";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { isTauri } from "@/lib/tauri";
 import { History, LoaderCircle, X } from "lucide-react";
@@ -125,6 +126,7 @@ export function HistoryDialog() {
   const shown = requested && opening && keyOf(opening.target) === keyOf(requested) ? opening : null;
   const target = shown?.target;
   const title = useData((s) => (target ? conflictOriginalTitle(target, s) : undefined));
+  const panel = useModalFocus(!!(shown && target));
 
   return (
     <AnimatePresence>
@@ -149,6 +151,7 @@ export function HistoryDialog() {
             className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[10vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="历史版本"

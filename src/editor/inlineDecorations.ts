@@ -66,6 +66,7 @@ import {
 } from "./markdownStyleRegistry";
 import { MathWidget } from "./math";
 import { revealRanges } from "./reveal";
+import { gapsChanged, tableCut } from "./tableGap";
 import {
   AnimatedEmojiWidget,
   CalloutBadgeWidget,
@@ -548,7 +549,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
         const selfActive = selectionTouches(state, node.from, node.to);
 
         if (literalNodes.has(name)) literalRanges.push([node.from, node.to]);
-        if (name === "Table") tableRanges.push([node.from, node.to]);
+        if (name === "Table") tableRanges.push([node.from, tableCut(state, node.from, node.to)]);
         if (name === "CodeBlock") {
           // 缩进（四个空格）的代码块没有围栏封口：上下两条边由第一行、最后一行自己画
           const last = state.doc.lineAt(node.to);
@@ -881,7 +882,16 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
 
         const rule = rulesByNode.get(name);
         if (rule?.kind === "mark") addMark(node.from, node.to, rule.className);
-        else if (rule?.kind === "line") addLines(node.from, node.to, rule.className);
+        else if (rule?.kind === "line") {
+          // 表格下面正在组字、还没和表格隔开的那一行（tableGap.ts）不画成表格的源码行
+          const to =
+            name === "Table"
+              ? tableCut(state, node.from, node.to)
+              : name === "TableRow" && owner && tableCut(state, owner.from, owner.to) < node.from
+                ? -1
+                : node.to;
+          if (to >= node.from) addLines(node.from, to, rule.className);
+        }
 
         const inLink = parentName === "Link" || parentName === "Image";
         const hiddenLinkDestination = name === "URL" && inLink;
@@ -1053,6 +1063,7 @@ const inlineDecorationsPlugin = (fresh: boolean) =>
           update.viewportChanged ||
           revealRanges(update.startState) !== revealRanges(update.state) ||
           syntaxTree(update.startState) !== syntaxTree(update.state) ||
+          gapsChanged(update.startState, update.state) ||
           update.startState.field(headingFolds, false) !==
             update.state.field(headingFolds, false) ||
           update.startState.facet(imageBaseDir) !== update.state.facet(imageBaseDir) ||

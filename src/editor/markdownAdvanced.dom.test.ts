@@ -136,6 +136,25 @@ describe("块级 HTML", () => {
     expect(lines(parent)).toEqual(["", "后"]);
   });
 
+  it("opens a link in an html block outside the app instead of letting the window navigate", () => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const { parent } = mount('<div><a href="https://example.com/x">链</a></div>\n\n后', 999);
+    const link = parent.querySelector(".cm-odea-html-widget a") as HTMLAnchorElement;
+    // 按下：这一块不切回源码
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    link.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    expect(parent.querySelector(".cm-odea-html-widget a")).toBe(link);
+    expect(open).not.toHaveBeenCalled();
+    // 那一下 click 的默认动作（整个窗口跳到那个网址）拦下了，网址交给系统的浏览器。
+    // 以前只在 mousedown 里 preventDefault，拦不住 click
+    const press = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(press);
+    expect(press.defaultPrevented).toBe(true);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open.mock.calls[0]?.[0]).toBe("https://example.com/x");
+  });
+
   it("sanitizes independently of the editor", () => {
     const host = document.createElement("div");
     // iframe 指向 about:blank：happy-dom 的 DOMParser 文档不像浏览器那样是惰性的，

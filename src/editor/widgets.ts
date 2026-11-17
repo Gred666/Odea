@@ -1214,17 +1214,25 @@ export class HtmlBlockWidget extends OtwWidget {
     else host.textContent = this.source;
     host.addEventListener("mousedown", (event) => {
       const target = event.target as HTMLElement;
-      const link = target.closest("a");
-      if (link) {
+      // 链接：别把这一块切回源码。开在 click 里（下面）
+      if (target.closest("a")) {
         event.preventDefault();
-        const href = safeHref(link.getAttribute("href") ?? undefined);
-        if (href) void openExternal(href);
         return;
       }
       // <details> 的开合交给浏览器；别一点就把整块切回源码
       if (target.closest("summary")) return;
       event.preventDefault();
       jumpToSource(view, positionOf(view, block));
+    });
+    // 链接用系统浏览器打开，不在应用的窗口里跳走。要拦在 click 上：mousedown 的 preventDefault 拦不住随后那一下
+    // click 的默认动作 —— 这里的 <a href> 是真的链接，不拦的话整个窗口就跳到那个网址去了。
+    // 链接聚焦时按回车也是一次 click，一样走这里
+    host.addEventListener("click", (event) => {
+      const link = (event.target as HTMLElement).closest("a");
+      if (!link) return;
+      event.preventDefault();
+      const href = safeHref(link.getAttribute("href") ?? undefined);
+      if (href) void openExternal(href);
     });
     // 里面的 <img> 加载完、<details> 展开收起，这一块的高度都变了，让 CodeMirror 重新量
     // （见 ImageWidget）。load / toggle 不冒泡，在捕获阶段接

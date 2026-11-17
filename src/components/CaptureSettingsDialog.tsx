@@ -3,6 +3,7 @@ import { DEFAULT_SHORTCUT, fromKeyboard, shortcutLabel } from "@/capture/shortcu
 import { messageOf } from "@/data/store";
 import { type CaptureSettings, commands } from "@/lib/bindings";
 import { cn } from "@/lib/cn";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { isMac } from "@/lib/platform";
 import { isTauri } from "@/lib/tauri";
@@ -24,6 +25,7 @@ export function CaptureSettingsDialog() {
   const setOpen = useApp((s) => s.setCaptureSettingsOpen);
   const close = () => setOpen(false);
   const back = usePaletteBack("capture", open, close);
+  const panel = useModalFocus(open);
   // 录快捷键时 Esc 是取消录，不关对话框（CaptureBody 自己接）
   const [recording, setRecording] = useState(false);
 
@@ -62,6 +64,7 @@ export function CaptureSettingsDialog() {
             className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[10vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="速记快捷键"

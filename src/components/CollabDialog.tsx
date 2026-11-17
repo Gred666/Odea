@@ -26,6 +26,7 @@ import { useData } from "@/data/store";
 import { noteRef } from "@/data/types";
 import type { Diagnosis, MemberInfo, Permission, Reach, Scope } from "@/lib/bindings";
 import { cn } from "@/lib/cn";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { IS_WINDOWS } from "@/lib/platform";
 import {
@@ -78,6 +79,7 @@ export function CollabDialog() {
   const open = useCollab((s) => s.dialogOpen);
   const close = useCollab((s) => s.closeDialog);
   const back = usePaletteBack("collab", open, close);
+  const panel = useModalFocus(open);
   const focused = useCollab((s) => (s.focus === null ? undefined : s.sessions[s.focus]));
   const any = useCollab((s) => s.order.length > 0);
   const notice = useCollab((s) => s.notice);
@@ -124,6 +126,7 @@ export function CollabDialog() {
             className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[14vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="协作"

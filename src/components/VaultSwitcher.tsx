@@ -136,7 +136,6 @@ export function VaultSwitcher() {
             side="top"
             align="start"
             sideOffset={6}
-            onCloseAutoFocus={(event) => event.preventDefault()}
             className="odea-menu z-50 w-[276px] overflow-hidden rounded-lg bg-canvas p-1 shadow-float
                        outline-none ring-1 ring-line-strong"
           >

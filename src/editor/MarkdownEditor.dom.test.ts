@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
 
+import { defaultKeymap } from "@codemirror/commands";
+import { syntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, runScopeHandlers } from "@codemirror/view";
 import { afterEach, describe, expect, it } from "vitest";
 import { typoraDecorations } from "./MarkdownEditor";
-import { indentListItem, listItemHome } from "./markdownCommands";
+import { closeFenceOnInput, indentListItem, listItemHome } from "./markdownCommands";
 import { markdownKeymap } from "./markdownKeymap";
 import { markdownSupport } from "./markdownParser";
 
@@ -319,5 +321,93 @@ describe("Typora DOM decorations", () => {
       new KeyboardEvent("keydown", { key: "b", ctrlKey: true, bubbles: true }),
     );
     expect(view.state.doc.toString()).toBe("**第一行**\n**第二行**");
+  });
+});
+
+describe("围栏代码的收尾（体验轮 §4.42）", () => {
+  function mountCode(doc: string) {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc,
+        selection: { anchor: doc.length },
+        extensions: [
+          markdownSupport(),
+          keymap.of([...markdownKeymap, ...defaultKeymap]),
+          closeFenceOnInput,
+        ],
+      }),
+    });
+    views.push(view);
+    return view;
+  }
+
+  /** 照浏览器打字的路子走：先问 inputHandler，没人接再插进去 */
+  function type(view: EditorView, text: string) {
+    for (const char of text) {
+      const { from, to } = view.state.selection.main;
+      const insert = () => view.state.update({ changes: { from, to, insert: char } });
+      const handled = view.state
+        .facet(EditorView.inputHandler)
+        .some((handler) => handler(view, from, to, char, insert));
+      if (!handled)
+        view.dispatch({ changes: { from, to, insert: char }, selection: { anchor: from + 1 } });
+    }
+  }
+
+  const enter = (view: EditorView) =>
+    runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+
+  const fenceEnds = (view: EditorView) => {
+    let end = -1;
+    syntaxTree(view.state).iterate({
+      enter: (node) => {
+        if (node.name === "FencedCode") end = node.to;
+      },
+    });
+    return end;
+  };
+
+  it("缩进了 4 格的代码后面打收尾的 ```：挪回开头的缩进，代码块就此收住", () => {
+    const view = mountCode("```python\nclass A:\n  def f(self):\n    return 1\n    ");
+    type(view, "```");
+    expect(view.state.doc.toString()).toBe(
+      "```python\nclass A:\n  def f(self):\n    return 1\n```",
+    );
+    enter(view);
+    type(view, "正文");
+    const doc = view.state.doc.toString();
+    expect(doc.endsWith("```\n正文")).toBe(true);
+    expect(fenceEnds(view)).toBe(doc.indexOf("\n正文"));
+  });
+
+  it("收尾那一行带着缩进时回车：新的一行用开头那道围栏的缩进", () => {
+    const view = mountCode("```js\nif (a) {\n  return a;\n  ```");
+    enter(view);
+    expect(view.state.doc.toString()).toBe("```js\nif (a) {\n  return a;\n  ```\n");
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
+  });
+
+  it("字符或者个数对不上开头那道围栏的不动；代码里普通的回车照旧带缩进", () => {
+    const tilde = mountCode("~~~\nif (a) {\n    ");
+    type(tilde, "```");
+    expect(tilde.state.doc.toString()).toBe("~~~\nif (a) {\n    ```");
+
+    const four = mountCode("````md\n    ");
+    type(four, "```");
+    expect(four.state.doc.toString()).toBe("````md\n    ```");
+
+    const code = mountCode("```\n  a;");
+    enter(code);
+    type(code, "x");
+    expect(code.state.doc.toString()).toBe("```\n  a;\n  x");
+  });
+
+  it("列表里的代码块交给列表的续行，不挪", () => {
+    const view = mountCode("- 一项\n  ```\n  代码\n      ");
+    type(view, "```");
+    expect(view.state.doc.toString()).toBe("- 一项\n  ```\n  代码\n      ```");
   });
 });

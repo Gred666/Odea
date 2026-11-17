@@ -303,6 +303,7 @@ mod runtime {
             .skip_taskbar(true)
             .visible(false)
             .shadow(true)
+            .on_navigation(crate::navigation::guard(app, LABEL, crate::navigation::Window::Capture))
             .build()?;
         #[cfg(windows)]
         if let Ok(hwnd) = window.hwnd() {

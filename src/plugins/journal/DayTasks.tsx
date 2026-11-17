@@ -59,6 +59,8 @@ export function ActionItem({
             )}
             animate={{ x: done ? 1.5 : 0 }}
             transition={spring.snappy}
+            // 一行放不下被截断的：指上去看得到全的
+            title={task.title}
           >
             {task.title}
           </motion.span>
@@ -69,6 +71,7 @@ export function ActionItem({
                 "mt-[3px] block truncate text-[12px] leading-[1.4] transition-colors duration-200",
                 done ? "text-faint/70" : "text-muted",
               )}
+              title={task.meta}
             >
               {task.meta}
             </span>

@@ -12,6 +12,7 @@ import {
   type BrokenPlugin,
   type Grants,
   type InstalledPlugin,
+  carriedGrants,
   installPlugin,
   setGrants,
   undecided,
@@ -128,19 +129,18 @@ export function ExtensionsView() {
       const upgrade = !!before;
       let grants: Grants | undefined;
       if (isScripted(manifest)) {
-        const decided = new Set([
-          ...(before?.grants.granted ?? []),
-          ...(before?.grants.denied ?? []),
-        ]);
+        // 换了来源的不算升级：之前的授权一项不带过去（carriedGrants）
+        const kept = carriedGrants(before, source);
+        const decided = new Set([...kept.granted, ...kept.denied]);
         const ask = (manifest.capabilities ?? []).filter(
           (capability) => !decided.has(capabilityKey(capability)),
         );
-        if (ask.length || !upgrade) {
+        if (ask.length || !upgrade || kept !== before?.grants) {
           const answer = await askConsent(manifest, ask, "install");
           if (!answer) return undefined;
           grants = {
-            granted: [...(before?.grants.granted ?? []), ...answer.granted],
-            denied: [...(before?.grants.denied ?? []), ...answer.denied],
+            granted: [...kept.granted, ...answer.granted],
+            denied: [...kept.denied, ...answer.denied],
           };
         }
       }

@@ -17,7 +17,7 @@ import { DiffView } from "./DiffView";
    这篇是另一篇的冲突副本：两台机器都改了同一篇，网盘同步时没法合并，把其中一版
    另存成了这一篇（或者本应用自己另存的 ——外部改动撞上了没存的修改）。
    给四个动作：看两版差在哪、打开原文、用这一版替换原文、删掉这份副本。
-   删掉的副本进回收站，撤销提示条照常能撤。
+   删掉的副本进回收站，撤销提示条照常能撤；替换了原文的，撤销连原文一起换回替换前的那一版（data/store.ts 的 resolveConflict）。
 
    原文也可以是插件的一篇（某一天、某个周期的目标：两台设备都改了今日TODO，同步里最常见的冲突）：
    它们在插件的缓存里、按需取，横幅挂上时取一次，取回来之前「查看差异」说正在读。
@@ -174,6 +174,7 @@ export function BannerButton({
   danger,
   strong,
   title,
+  expanded,
 }: {
   children: React.ReactNode;
   onClick: () => void;
@@ -182,6 +183,8 @@ export function BannerButton({
   strong?: boolean;
   /** 悬停时多说一句 */
   title?: string;
+  /** 展开 / 收起下面一块的按钮：读屏据此说「已展开」 */
+  expanded?: boolean;
 }) {
   return (
     <button
@@ -189,6 +192,7 @@ export function BannerButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-expanded={expanded}
       className={cn(
         "flex items-center gap-1 rounded-md px-2 py-[3px] text-[12px] transition-colors duration-[140ms]",
         "disabled:opacity-50",

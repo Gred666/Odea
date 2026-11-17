@@ -2,7 +2,9 @@
 
 import { useData } from "@/data/store";
 import { NOTE, type NoteSummary, noteRef } from "@/data/types";
+import { runBeforeClose } from "@/editor/saveBus";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listGuestCopies } from "./keep";
 import { type MockNet, createMockNet } from "./mockNet";
 import { PIPE, decodeFrame, encodeFrame } from "./net";
 import { resetRelaysForTest, useRelays } from "./relayStore";
@@ -237,6 +239,22 @@ describe("访客", () => {
     await until("主持人那边有了", () => net.remoteText().endsWith("访客写的"));
     net.remoteType("（林夕）");
     await until("主持人打的字", () => session.toString().includes("（林夕）"));
+  });
+
+  it("关窗口：主持人还没存下的字，节流还没到也当场写进本机留的那份、写完再关（§24）", async () => {
+    localStorage.removeItem("odea.mock.guestCopies");
+    await net.onControl(handleControl);
+    await store().join("odea://join/abcdefghijklmnop");
+    await until("进来了", () => phase() === "guest" && !!store().session);
+    const session = store().session!;
+    await until("同步到正文", () => session.toString().startsWith("# 周会记录"));
+    session.insertText(session.text.length, "\n最后几个字");
+    // 节流（0.8 秒）还没到：窗口的关闭守卫在编辑器存完以后跑这些
+    await runBeforeClose();
+    const copies = await listGuestCopies();
+    expect(copies).toHaveLength(1);
+    expect(copies[0]?.text.endsWith("最后几个字")).toBe(true);
+    localStorage.removeItem("odea.mock.guestCopies");
   });
 
   it("主持人停止了：那一篇留着，可以存一份到自己的笔记", async () => {
@@ -635,6 +653,37 @@ describe("一条连接里好几篇（设计 §22.5）", () => {
     await until("回了不给", () => answerDoc.mock.calls.some((call) => call[1] === 777));
     expect(answerDoc).toHaveBeenCalledWith(id, 777, "这一篇不在共享的文件夹里");
     expect(store().hostedDocs.n2).toBeUndefined();
+  });
+
+  it("访客要新建：建在共享的文件夹里，往外走的文件夹不交给后端", async () => {
+    const answerCreate = vi.spyOn(net, "answerCreate");
+    const createNote = vi.mocked(useData.getState().createNote);
+    await net.onControl(handleControl);
+    await store().startHostingScope({ kind: "folder", folder: "项目", name: "项目" });
+    const id = one().id;
+    handleControl(id, {
+      type: "createDoc",
+      request: 1,
+      member: 1,
+      folder: "/计划/",
+      title: "复盘",
+    });
+    await until("建好了", () => answerCreate.mock.calls.some((call) => call[1] === 1));
+    expect(createNote).toHaveBeenLastCalledWith("项目/计划");
+    expect(answerCreate).toHaveBeenLastCalledWith(id, 1, "copy-1", null);
+
+    // 审查 2026-11-13 §4.25 的那种：后端也挡，这里先不交过去
+    for (const [request, folder] of [
+      [2, "../私事"],
+      [3, "计划/../../私事"],
+      [4, "D:"],
+      [5, "计划\\..\\私事"],
+    ] as const) {
+      handleControl(id, { type: "createDoc", request, member: 1, folder, title: "x" });
+      await until("回了不给", () => answerCreate.mock.calls.some((call) => call[1] === request));
+      expect(answerCreate).toHaveBeenLastCalledWith(id, request, null, "不能建在共享范围外面");
+    }
+    expect(createNote).toHaveBeenCalledTimes(1);
   });
 
   it("进一个文件夹：拿到树，开哪篇显示哪篇，新建的打开它，开不了的说为什么", async () => {

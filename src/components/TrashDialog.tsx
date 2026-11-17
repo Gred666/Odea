@@ -6,6 +6,7 @@ import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, messageOf, useData } from "@/data/store";
 import { type DocumentRef, NOTE, type TrashedNote, noteRef } from "@/data/types";
 import { formatRelativeTime } from "@/lib/date";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { documentType } from "@/plugins/registry";
 import { LoaderCircle, Trash2, X } from "lucide-react";
@@ -80,6 +81,7 @@ export function TrashDialog() {
   const setOpen = useApp((s) => s.setTrashOpen);
   const close = () => setOpen(false);
   const back = usePaletteBack("trash", open, close);
+  const panel = useModalFocus(open);
   // 每打开一次重新取：关上的淡出还没播完又打开时，AnimatePresence 用的还是那张卡片，列表不会自己再取
   const [opens, setOpens] = useState(0);
 
@@ -120,6 +122,7 @@ export function TrashDialog() {
             className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[10vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="回收站"

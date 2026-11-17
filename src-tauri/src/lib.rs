@@ -16,6 +16,7 @@ mod keep;
 mod notify;
 #[cfg(feature = "desktop-runtime")]
 mod memory;
+mod navigation;
 mod old_name;
 mod plugins;
 #[cfg(feature = "desktop-runtime")]

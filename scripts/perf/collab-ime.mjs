@@ -16,10 +16,19 @@
 // 2. 访客那边的正文从头到尾没出现过拼音字母串
 // 3. 停下以后两边逐字一致
 // 4. 组字期间别人的字进没进来（§20.10）：打在别的行（默认）的当场进来；同一行（near）的等上屏
+//
+//   node scripts/perf/collab-ime.mjs [地址] [轮数] attach # 挂上的那一刻正在组字（docs/协同编辑.md §27），默认 8 轮
+//
+// 实验台开成 late=1：访客那一栏先一个人开着（编辑器照自己那份正文建的），打一个词，再加入
+// （joinLate：记下正文、同步、三方合，300ms 后才把会话交给编辑器），这期间快快打完一个词、再慢慢组下一个 ——
+// 会话挂上来时正在组字，之前上屏的那个词只在编辑器里。
+// 一半的轮主持人的机器人打在同一行（挂上时要对齐的改动碰到组字那一行，得等上屏），一半打在文档开头。
+// 查：访客打的词（加入前、挂上时正在组的、挂上后的）一个不丢不重复；主持人那边没看到过拼音；两边一致
 import { launch, sleep } from "./cdp.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:1420/";
-const ROUNDS = Number(process.argv[3] ?? 40);
+const ATTACH = process.argv[4] === "attach";
+const ROUNDS = Number(process.argv[3] ?? (ATTACH ? 8 : 40));
 const NEAR = process.argv[4] === "near";
 const WORDS = [
   ["nihao", "你好"],
@@ -34,6 +43,132 @@ const WORDS = [
 const page = await launch(9346);
 const { send, evaluate } = page;
 let failed = false;
+
+/** 某一栏正文里某段字前后的屏幕坐标 */
+const spotIn = (peer, text, after) =>
+  evaluate(`(() => {
+    const pane = document.querySelector('[data-lab-peer="${peer}"] .cm-content');
+    const walker = document.createTreeWalker(pane, NodeFilter.SHOW_TEXT);
+    for (let node; (node = walker.nextNode()); ) {
+      const i = node.data.indexOf(${JSON.stringify(text)});
+      if (i < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, i + (${after} ? ${text.length} : 0));
+      const box = range.getBoundingClientRect();
+      return { x: box.left + 1, y: box.top + box.height / 2 };
+    }
+  })()`);
+const clickAt = async (point) => {
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await send("Input.dispatchMouseEvent", { type, ...point, button: "left", clickCount: 1 });
+  }
+  await sleep(100);
+};
+
+/** 挂上的那一刻正在组字（attach）：每轮重开一次实验台 */
+async function attachRounds() {
+  let ok = true;
+  let composingAtAttach = 0;
+  for (let round = 0; round < ROUNDS; round++) {
+    const near = round % 2 === 1;
+    await send("Page.navigate", { url: new URL("?lab=collab&late=1&latency=20", BASE).href });
+    for (let i = 0; i < 150 && !(await evaluate("!!window.__collabLab")); i++) await sleep(100);
+    await sleep(600);
+    await evaluate(`(() => {
+      const host = window.__collabLab.members[0].session;
+      window.__pinyinSeen = [];
+      const pinyin = ${JSON.stringify(WORDS.map(([py]) => py.slice(0, 3)))};
+      host.onChange(() => {
+        const text = host.toString();
+        for (const py of pinyin) if (text.includes(py)) window.__pinyinSeen.push(py);
+      });
+    })()`);
+    await clickAt(await spotIn("lab-guest-1", "一起进来。", true));
+    const typed = [];
+    const typeWord = async ([pinyin, word], gap) => {
+      for (let length = 1; length <= pinyin.length; length++) {
+        await send("Input.imeSetComposition", {
+          text: pinyin.slice(0, length),
+          selectionStart: length,
+          selectionEnd: length,
+        });
+        await sleep(gap ?? 10 + Math.random() * 30);
+      }
+      await send("Input.insertText", { text: word });
+      typed.push(word);
+    };
+    // 加入之前一个人打的（加入时三方合进会话）。同一行的那一半不打：主持人也改了那一行，三方合会跳过（让 git 合）
+    if (!near) await typeWord(WORDS[round % WORDS.length]);
+    // 主持人的机器人：near 打在同一行（「组字的时候」前面），不然打在文档开头
+    await evaluate(`(() => {
+      const lab = window.__collabLab;
+      const text = lab.members[0].session.toString();
+      lab.typeHeadless(0, ${near} ? text.indexOf("组字的时候") : 0);
+    })()`);
+    // 加入：300ms 后会话交给编辑器。这期间先快快打完一个词（记下正文以后、挂上之前上屏的，靠 origin 对齐），
+    // 再慢慢组下一个词，挂上的那一刻正组着
+    await evaluate(`(() => {
+      const content = document.querySelector('[data-lab-peer="lab-guest-1"] .cm-content');
+      const view = content.cmTile?.view;
+      window.__attachedComposing = null;
+      window.__collabLab.joinLate(300).then(() => {
+        window.__attachedComposing = !!view?.compositionStarted;
+      });
+    })()`);
+    await typeWord(WORDS[(round + 1) % WORDS.length], 8);
+    await typeWord(WORDS[(round + 2) % WORDS.length], 70);
+    await typeWord(WORDS[(round + 3) % WORDS.length]);
+    await evaluate("window.__collabLab.stopHeadless()");
+    await sleep(1500);
+    const result = await evaluate(`(() => {
+      const [host, guest] = window.__collabLab.members.map((member) => member.session.toString());
+      const shown = document.querySelector('[data-lab-peer="lab-guest-1"] .cm-content').cmTile?.view.state.doc.toString();
+      return { host, guest, shown, pinyin: window.__pinyinSeen, composing: window.__attachedComposing };
+    })()`);
+    if (result.composing) composingAtAttach += 1;
+    const expected = typed.join("");
+    const at = result.guest.indexOf("一起进来。") + 5;
+    const got = result.guest.slice(at, at + expected.length);
+    const checks = [
+      ["访客打的词一个不丢、不重复、连成一片", got === expected, `期望「${expected}」\n  实际「${got}」`],
+      ["主持人从没看到拼音", result.pinyin.length === 0, `看到了：${[...new Set(result.pinyin)].join("、")}`],
+      [
+        "两边逐字一致、编辑器和正文一致",
+        result.host === result.guest && result.shown === result.guest,
+        `主持人 ${result.host.length} 字，访客 ${result.guest.length} 字，访客编辑器 ${result.shown?.length} 字`,
+      ],
+    ];
+    const bad = checks.filter(([, pass]) => !pass);
+    console.log(
+      `第 ${round + 1} 轮（${near ? "同一行" : "别的行"}，挂上时${result.composing ? "正在组字" : "没在组字"}）：${bad.length ? "✗" : "✓"}`,
+    );
+    for (const [name, , detail] of bad) console.log(`  ✗ ${name}\n  ${detail}`);
+    if (bad.length) ok = false;
+  }
+  console.log(`${ROUNDS} 轮里 ${composingAtAttach} 轮挂上的那一刻正在组字`);
+  if (composingAtAttach < ROUNDS / 2) {
+    console.log("✗ 挂上时正在组字的轮太少，没测到");
+    ok = false;
+  }
+  return ok;
+}
+
+if (ATTACH) {
+  try {
+    await send("Page.enable");
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: 1400,
+      height: 860,
+      deviceScaleFactor: 1.5,
+      mobile: false,
+    });
+    failed = !(await attachRounds());
+  } finally {
+    await page.close();
+  }
+  process.exit(failed ? 1 : 0);
+}
+
 try {
   await send("Page.enable");
   await send("Emulation.setDeviceMetricsOverride", {

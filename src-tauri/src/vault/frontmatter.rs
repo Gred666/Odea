@@ -9,10 +9,14 @@ archived-from / trashed-from。其余行（别的工具写的 tags、aliases…�
 认不出来的行一律当「别人的」原样保留，最坏情况是某个键没被识别，而不是丢数据。
 
 判定规则和编辑器（editor/frontMatter.ts）、摘要（domain/search.rs）一致：
-第一行 `---`，60 行以内以 `---` 收尾，中间至少有一行 `key: value`。
+第一行 `---`，60 行以内以 `---` 收尾，中间至少有一行 `键: 值`（键以 Unicode 字母或下划线开头，
+`标签: 旅行` 也算，docs/提醒与属性.md §3.3）。
 ============================================================ */
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone};
+
+/// 这一行是不是 `键: 值` 的样子。和摘要、编辑器同一条规矩，用摘要那一份
+pub(super) use crate::domain::search::is_yaml_key;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FrontMatter {
@@ -182,21 +186,6 @@ fn find_block(text: &str) -> Option<(&str, &str)> {
         offset = end + 1;
     }
     None
-}
-
-fn is_yaml_key(line: &str) -> bool {
-    let mut chars = line.chars();
-    if !chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-    {
-        return false;
-    }
-    chars
-        .as_str()
-        .trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        .trim_start()
-        .starts_with(':')
 }
 
 fn parse_block(block: &str) -> FrontMatter {
@@ -408,6 +397,36 @@ mod tests {
         let (meta, body) = split(text);
         assert!(meta.is_empty());
         assert_eq!(body, text);
+    }
+
+    /// 键是中文、日文的属性块也认（docs/提醒与属性.md §3.3）。同一组样例 domain/search.rs、editor/frontMatter.test.ts 也测
+    #[test]
+    fn blocks_whose_keys_are_not_english_are_recognised() {
+        // 后两条带组合符号（拆开写的重音、印地文 kya 的半音符），写回时一个字节不改（§3.3 放宽的那一段）
+        for line in [
+            "标签: 旅行",
+            "截止: 2026-11-20",
+            "_x: 1",
+            "タグ: a",
+            "e\u{301}: x",
+            "\u{915}\u{94d}\u{92f}\u{93e}: 1",
+        ] {
+            let text = format!("---\n{line}\n---\n\n正文");
+            let (meta, body) = split(&text);
+            assert_eq!(meta.extra, [line], "{line}");
+            assert_eq!(body, "正文");
+            assert_eq!(render(&meta, &body), text, "原样写回");
+        }
+        for line in ["标签：旅行", "1a: x", "- 列表项"] {
+            let text = format!("---\n{line}\n---\n\n正文");
+            let (meta, body) = split(&text);
+            assert!(meta.is_empty(), "{line}");
+            assert_eq!(body, text, "{line}: 整篇是正文");
+        }
+        // 只要有一行是键，别的行（列表项、全角冒号的）跟着算属性块里的
+        let (meta, body) = split("---\n标签：旅行\n截止: 2026-11-20\n---\n正文");
+        assert_eq!(meta.extra, ["标签：旅行", "截止: 2026-11-20"]);
+        assert_eq!(body, "正文");
     }
 
     #[test]

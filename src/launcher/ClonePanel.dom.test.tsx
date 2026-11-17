@@ -39,6 +39,53 @@ const until = async (ready: () => boolean) => {
   for (let i = 0; i < 40 && !ready(); i++) await settle(50);
 };
 
+describe("从同步仓库拉一份：GitHub 登录", () => {
+  const CODE = {
+    userCode: "ABCD-1234",
+    verificationUri: "https://github.com/login/device",
+    expiresIn: 900,
+  };
+  const render = () =>
+    act(() => root.render(<ClonePanel busy={false} onBack={() => {}} onClone={() => {}} />));
+  const github = () =>
+    [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("GitHub"));
+
+  it("等确认时出错：回到选托管方、说原因，不停在「等你确认」", async () => {
+    vi.spyOn(launcherApi, "accounts").mockResolvedValue([]);
+    vi.spyOn(launcherApi, "githubLoginStart").mockResolvedValue(CODE);
+    vi.spyOn(launcherApi, "githubLoginWait").mockRejectedValue(new Error("验证码过期了"));
+    render();
+    await settle(20);
+    act(() => github()?.click());
+    await settle(20);
+    expect(container.textContent).not.toContain("等你在浏览器里确认");
+    expect(container.textContent).not.toContain(CODE.userCode);
+    expect(container.textContent).toContain("验证码过期了");
+    expect(github()?.disabled).toBe(false);
+  });
+
+  it("领码时离开了这一屏：码回来就收回，不去等", async () => {
+    vi.spyOn(launcherApi, "accounts").mockResolvedValue([]);
+    let give: (code: typeof CODE) => void = () => {};
+    vi.spyOn(launcherApi, "githubLoginStart").mockReturnValue(
+      new Promise((resolve) => {
+        give = resolve;
+      }),
+    );
+    const wait = vi.spyOn(launcherApi, "githubLoginWait");
+    const cancel = vi.spyOn(launcherApi, "loginCancel").mockResolvedValue(undefined);
+    render();
+    await settle(20);
+    act(() => github()?.click());
+    act(() => root.render(<div />));
+    cancel.mockClear();
+    give(CODE);
+    await settle(20);
+    expect(wait).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("从同步仓库拉一份：团队仓库", () => {
   it("没登录时先说要拉的是哪个仓库", async () => {
     vi.spyOn(launcherApi, "accounts").mockResolvedValue([]);

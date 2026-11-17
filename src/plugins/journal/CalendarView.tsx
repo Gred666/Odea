@@ -3,6 +3,7 @@ import { ColumnButton, ListColumn } from "@/components/ListColumn";
 import { cn } from "@/lib/cn";
 import {
   type ISODate,
+  addDays,
   addMonths,
   formatDayEyebrowCN,
   formatDayNum,
@@ -15,11 +16,42 @@ import {
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { AnimatePresence, animate, motion, useMotionValue, useTransform } from "motion/react";
-import { useEffect, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useJournal } from "./store";
 import type { CalendarMarks } from "./types";
 
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"] as const;
+
+/** 日历格子里按了这个键去哪一天：← → 一天，↑ ↓ 一周，Home / End 这一周的头尾，PageUp / PageDown 一个月。别的键不管 */
+export function dayByKey(from: ISODate, key: string): ISODate | null {
+  switch (key) {
+    case "ArrowLeft":
+      return addDays(from, -1);
+    case "ArrowRight":
+      return addDays(from, 1);
+    case "ArrowUp":
+      return addDays(from, -7);
+    case "ArrowDown":
+      return addDays(from, 7);
+    case "Home":
+      return startOfWeek(from);
+    case "End":
+      return addDays(startOfWeek(from), 6);
+    case "PageUp":
+      return addMonths(from, -1);
+    case "PageDown":
+      return addMonths(from, 1);
+    default:
+      return null;
+  }
+}
 
 /**
  * 月历面板：日历那一页的列表栏（导航贡献点的 List）。
@@ -71,6 +103,22 @@ export function CalendarPanel() {
   const days = monthGrid(anchor);
   const selectedWeekStart = startOfWeek(selected);
   const [year, month] = anchor.split("-").map(Number);
+  // 42 格只有一格进 Tab 顺序（选中的那天；它不在这一页上就是这个月 1 号），格子之间用方向键走 ——
+  // 以前 42 格个个能 Tab，用键盘的人要按 44 下才出得了日历（体验轮 §4.53）
+  const tabbable = days.includes(selected) ? selected : startOfMonth(anchor);
+  /** 方向键挪到的那一天：它那一格（本月的那一格，换了月就是新网格里的）选中以后把焦点拿过去 */
+  const keyboardTo = useRef<ISODate | null>(null);
+  const onGridKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const from = (event.target as HTMLElement).closest<HTMLElement>("[data-date]")?.dataset.date;
+    if (!from) return;
+    const to = dayByKey(from, event.key);
+    if (!to) return;
+    event.preventDefault();
+    if (to === from) return;
+    keyboardTo.current = to;
+    selectDate(to);
+  };
 
   return (
     <ListColumn
@@ -136,7 +184,7 @@ export function CalendarPanel() {
       </div>
 
       {/* 网格固定 6 行 —— 切月时高度不变，动画才干净 */}
-      <div className="relative overflow-hidden px-1">
+      <div className="relative overflow-hidden px-1" onKeyDown={onGridKeyDown}>
         <AnimatePresence mode="popLayout" initial={false} custom={dir}>
           <motion.div
             key={anchor.slice(0, 7)}
@@ -147,6 +195,7 @@ export function CalendarPanel() {
             // restDelta：spring 默认差半个像素以内就直接跳到终点，满屏日期数字最后会一起抖一下
             transition={{ ...spring.smooth, restDelta: 0.01, opacity: tween.fast }}
             className="flex flex-col"
+            data-month={anchor.slice(0, 7)}
           >
             {Array.from({ length: 6 }, (_, row) => {
               const weekDays = days.slice(row * 7, row * 7 + 7);
@@ -162,6 +211,8 @@ export function CalendarPanel() {
                   todayISO={todayISO}
                   marks={marks}
                   highlighted={weekStart === selectedWeekStart}
+                  tabbable={tabbable}
+                  keyboardTo={keyboardTo}
                   onSelect={selectDate}
                 />
               );
@@ -181,6 +232,8 @@ function WeekRow({
   todayISO,
   marks,
   highlighted,
+  tabbable,
+  keyboardTo,
   onSelect,
 }: {
   weekDays: ISODate[];
@@ -190,6 +243,8 @@ function WeekRow({
   todayISO: ISODate;
   marks: CalendarMarks;
   highlighted: boolean;
+  tabbable: ISODate;
+  keyboardTo: RefObject<ISODate | null>;
   onSelect: (d: ISODate) => void;
 }) {
   // 每周自成一个 grid 行 —— 这样整行底色可以用 inset-0，
@@ -225,6 +280,8 @@ function WeekRow({
           isToday={d === todayISO}
           written={marks.written.has(d)}
           open={marks.open.has(d)}
+          tabbable={d === tabbable}
+          keyboardTo={keyboardTo}
           onSelect={onSelect}
         />
       ))}
@@ -239,6 +296,8 @@ function DayCell({
   isToday,
   written,
   open,
+  tabbable,
+  keyboardTo,
   onSelect,
 }: {
   date: ISODate;
@@ -249,8 +308,21 @@ function DayCell({
   written: boolean;
   /** 这天还有没做完的待办 */
   open: boolean;
+  /** 日历里进 Tab 顺序的那一格 */
+  tabbable: boolean;
+  keyboardTo: RefObject<ISODate | null>;
   onSelect: (d: ISODate) => void;
 }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  // 方向键挪到了这一天：本月的这一格接焦点。网格外的那几天不接 —— 选中它月份马上跟过去，
+  // 这张网格整个退场，焦点留在上面就掉在 body 上了；新网格里的那一格挂上时接
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 只在选中、换网格时看一次
+  useLayoutEffect(() => {
+    if (selected && !outside && keyboardTo.current === date) {
+      keyboardTo.current = null;
+      ref.current?.focus({ preventScroll: true });
+    }
+  }, [selected, outside]);
   // 三层各管一件事：圈 = 选中、数字颜色 = 今天/有没有写、下面的记号 = 写过（实心）/ 欠着事（空心）。
   // 圈里的数字和记号都跟着主色走，整格只有一种色相。
   const marked = written || open;
@@ -265,7 +337,10 @@ function DayCell({
 
   return (
     <button
+      ref={ref}
       type="button"
+      data-date={date}
+      tabIndex={tabbable ? 0 : -1}
       onClick={() => onSelect(date)}
       aria-label={`${formatDayEyebrowCN(date)}${written ? "，有记录" : ""}${open ? "，有待办" : ""}`}
       aria-current={selected ? "date" : isToday ? "true" : undefined}

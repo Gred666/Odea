@@ -36,6 +36,14 @@ export function Launcher() {
   // 实测点下去到藏起来之间按钮半透明画了 20ms，60Hz 的屏上一两帧）
   const pending = useLingering(busy, 200);
   const [error, setError] = useState<string | null>(null);
+  // 出错的那一行在当前这一屏的最下面。「新建」那一屏自己就到了窗口底（800×560、不能改大小），
+  // 那一行落在窗口外面：右边这一列能滚，出错时把它滚进来
+  const alertRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (error) alertRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [error]);
+  // 从哪一屏回到首页：焦点回到打开那一屏的按钮上（不然落在 body 上，Esc、回车都没反应）
+  const [returnTo, setReturnTo] = useState<Panel | null>(null);
   // 点团队仓库的链接（odea://vault/）打开的：直接到「从同步仓库拉一份」、停在那个仓库
   const [vaultLink, setVaultLink] = useState<VaultLink | null>(null);
 
@@ -86,6 +94,7 @@ export function Launcher() {
 
   const go = (next: Panel) => {
     setError(null);
+    setReturnTo(next === "home" ? panel : null);
     setPanel(next);
   };
 
@@ -118,7 +127,7 @@ export function Launcher() {
       </aside>
 
       {/* ---------- 右：Logo 和操作 ---------- */}
-      <main className="relative flex h-full min-w-0 flex-1 flex-col items-center pt-[38px]">
+      <main className="scroll-none relative flex h-full min-w-0 flex-1 flex-col items-center overflow-y-auto pt-[38px]">
         <div className="flex flex-col items-center pt-9">
           <LauncherLogo />
           <p className="mt-2 text-[13px] text-muted">版本 {APP_VERSION}</p>
@@ -141,6 +150,7 @@ export function Launcher() {
                     button="新建"
                     primary
                     disabled={pending}
+                    autoFocus={returnTo === "create"}
                     onClick={() => go("create")}
                   />
                   <ActionRow
@@ -159,6 +169,7 @@ export function Launcher() {
                     detail="换了电脑：把同步过的笔记拉到这台上。"
                     button="拉取"
                     disabled={pending}
+                    autoFocus={returnTo === "clone"}
                     onClick={() => go("clone")}
                   />
                   <ActionRow
@@ -166,6 +177,7 @@ export function Launcher() {
                     detail="粘贴别人发来的邀请链接，不用先开仓库。"
                     button="加入"
                     disabled={pending}
+                    autoFocus={returnTo === "join"}
                     onClick={() => go("join")}
                   />
                 </div>
@@ -201,12 +213,16 @@ export function Launcher() {
             </motion.div>
           </AnimatePresence>
 
-          <p
-            role={error ? "alert" : undefined}
-            className="mt-3 min-h-[20px] text-[13px] leading-[1.6] text-danger"
-          >
-            {error}
-          </p>
+          {/* 没出错时不占地方：「新建」那一屏刚好贴着窗口底，空着的一行会让这一列白白能滚 */}
+          {error && (
+            <p
+              ref={alertRef}
+              role="alert"
+              className="mt-3 pb-4 text-[13px] leading-[1.6] text-danger"
+            >
+              {error}
+            </p>
+          )}
         </div>
       </main>
     </div>
@@ -308,6 +324,7 @@ function ActionRow({
   button,
   primary,
   disabled,
+  autoFocus,
   onClick,
 }: {
   title: string;
@@ -315,6 +332,7 @@ function ActionRow({
   button: string;
   primary?: boolean;
   disabled?: boolean;
+  autoFocus?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -323,7 +341,7 @@ function ActionRow({
         <p className="text-[14px] font-medium text-ink">{title}</p>
         <p className="mt-0.5 text-[13px] leading-[1.55] text-muted">{detail}</p>
       </div>
-      <Button primary={primary} disabled={disabled} onClick={onClick}>
+      <Button primary={primary} disabled={disabled} autoFocus={autoFocus} onClick={onClick}>
         {button}
       </Button>
     </div>

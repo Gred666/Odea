@@ -334,6 +334,46 @@ describe("MarkdownEditor", () => {
     expect(guest.session.toString()).toBe("正文");
   });
 
+  it("主持人组字时攒着对方的字、编辑器正好被拆掉：拆之前最后那次存盘存的是全的（审查 §5.7）", async () => {
+    const { scheduler, host, guest } = room("甲乙\n第二行");
+    await scheduler.advance(20);
+    const saves: string[] = [];
+    const view = render({
+      initialMarkdown: "甲乙\n第二行",
+      cacheKey: "note:composing",
+      collab: host.session,
+      onSave: async (markdown) => {
+        saves.push(markdown);
+      },
+    });
+    const fire = (type: "compositionstart" | "compositionend") =>
+      view.contentDOM.dispatchEvent(new CompositionEvent(type, { bubbles: true, data: "" }));
+    fire("compositionstart");
+    view.dispatch({
+      changes: { from: 1, insert: "ni" },
+      selection: { anchor: 3 },
+      userEvent: "input.type.compose",
+    });
+    // 对方在组字那一行打了字：主持人这边先攒着（deferred），会话里已经有了
+    guest.session.insertText(0, "【");
+    await scheduler.advance(20);
+    expect(view.state.doc.toString()).toBe("甲ni乙\n第二行");
+    expect(host.session.toString()).toBe("【甲ni乙\n第二行");
+
+    // 上屏，最后那次组字改动读进来、还没放行（放行在微任务里）就关了这一篇（Ctrl+W、关窗口）
+    fire("compositionend");
+    view.dispatch({
+      changes: { from: 1, to: 3, insert: "你" },
+      selection: { anchor: 2 },
+      userEvent: "input.type.compose",
+    });
+    act(() => roots[0]!.root.render(null));
+    // 存盘排在写入链的微任务里
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(saves.at(-1)).toBe("【甲你乙\n第二行");
+    expect(host.session.toString()).toBe("【甲你乙\n第二行");
+  });
+
   it("「[[」菜单开着时别人在前面加了字：菜单还是这一个，不收起", async () => {
     const { scheduler, host, guest } = room("前面一段\n\n");
     const view = render({

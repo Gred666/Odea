@@ -62,7 +62,7 @@ export function invalidateCatalog(): void {
 }
 
 /** 记着的类型（面板里改过「这个键是什么类型」） */
-export function setRecordedTypes(types: Record<string, string>): void {
+export function setRecordedTypes(types: PropertyCatalog["types"]): void {
   const catalog = useCatalog.getState().catalog;
   useCatalog.setState({ catalog: catalog ? { ...catalog, types } : { keys: [], types } });
 }

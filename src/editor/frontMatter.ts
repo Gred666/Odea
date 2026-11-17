@@ -11,9 +11,20 @@ export interface FrontMatterRange {
 }
 
 const FENCE_RE = /^---\s*$/;
-const KEY_RE = /^[A-Za-z_][\w-]*\s*:/;
+/**
+ * `键: 值` 的键：第一个字是 Unicode 字母（中文、日文的字也算）或下划线，后面是字母、组合符号（拆开写的重音、
+ * 印地文的半音符、泰文的声调号）、数字、`_`、`-`，再是半角的 `:`。全角冒号、带空格的键不算（YAML 本来就不认）。
+ * 和 Rust 的 `domain/search.rs::is_yaml_key` 一字不差的同一条正则（docs/提醒与属性.md §3.3）。Unicode 表的版本不一样：
+ * 那边的 `regex` 是 16.0，WebView2 151（ICU 78）是 17.0，跑测试的 Node 24（ICU 77）是 16.0 —— 只差 17.0 新加的字，见那一节的实现记录
+ */
+const KEY_RE = /^[\p{Alphabetic}_][\p{Alphabetic}\p{M}\p{N}_-]*\s*:/u;
 /** 超过这么多行还没闭合就不当 front matter 了：真有人写 200 行 YAML 头也不合理。 */
 const MAX_LINES = 60;
+
+/** 这一行是不是 `键: 值` 的样子。属性块里至少要有一行这样的，不然是「开头一条分隔线」 */
+export function isFrontMatterKey(line: string): boolean {
+  return KEY_RE.test(line);
+}
 
 /**
  * 文档开头的 YAML front matter。

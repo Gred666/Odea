@@ -3,6 +3,7 @@ import { inviteText, useTeam } from "@/data/team";
 import type { TeamAccess, TeamPerson } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
+import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { Check, Copy, LoaderCircle, Users, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -25,6 +26,7 @@ export function TeamDialog() {
   const close = useTeam((s) => s.close);
   const team = useTeam((s) => s.info?.team ?? false);
   const back = usePaletteBack("team", open, close);
+  const panel = useModalFocus(open);
 
   useEffect(() => {
     if (!open) return;
@@ -61,6 +63,7 @@ export function TeamDialog() {
             className="pointer-events-none fixed inset-0 z-[55] flex items-start justify-center pt-[14vh]"
           >
             <motion.div
+              ref={panel}
               role="dialog"
               aria-modal="true"
               aria-label="团队成员"

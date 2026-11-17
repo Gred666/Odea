@@ -19,6 +19,10 @@ describe("PDF 的页面设置", () => {
     expect(marginContent("   ", "周报", "2026-11-12")).toBeNull();
     // 标题里的引号、反斜杠转义，写不出 CSS 去
     expect(marginContent("{标题}", 'a"b\\c', "")).toBe('"a\\"b\\\\c"');
+    // 这一段是写在 <style> 里的：标题里的 </style> 会把样式表提前收尾，后面的字就成了页面上的标签
+    const sneaky = marginContent("{标题}", "</style><script>alert(1)</script>", "");
+    expect(sneaky).not.toContain("<");
+    expect(sneaky).toBe('"\\3c /style>\\3c script>alert(1)\\3c /script>"');
   });
 
   it("writes the paper, the margins and only the chosen margin boxes", () => {

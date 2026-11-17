@@ -17,6 +17,7 @@ import {
   Plus,
   SquareCheck,
   Tags,
+  TriangleAlert,
   Type,
   X,
 } from "lucide-react";
@@ -25,6 +26,8 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -48,14 +51,16 @@ import {
   type Kind,
   MANAGED,
   appendEntry,
-  convertValue,
   entryLines,
+  fitsKind,
   isListKind,
   kindOf,
   parse,
   removeEntry,
   renameEntry,
   replaceEntry,
+  singleValue,
+  valueFits,
 } from "./yaml";
 
 /* ============================================================
@@ -66,8 +71,36 @@ import {
    - 提示从整个仓库来：加属性时提示出现过的键，填值时提示这个键出现过的值
    - 没有属性时不占地方；命令面板「添加属性」（Ctrl+;）、或者底下的「添加属性」加第一条
    - 「源码」：直接改 YAML（嵌套的、多行的在这里改）
+   - 键盘：Enter 存、Esc 不改（提示列表开着时先收列表）。存完、不改了，焦点回到进面板之前在的地方
+     （多半是正文：Ctrl+; 加一条、填完接着写），不留在 body 上
    动效照 docs/PITFALLS/动效.md：提示列表、删除按钮都是直接出现或者只淡颜色，不位移、不缩放
    ============================================================ */
+
+/** 焦点进面板之前在哪（正文、标题），按面板的那个 section 记 */
+const cameFrom = new WeakMap<Element, HTMLElement>();
+
+/** 在影子树里的（日期框里「年」「月」那几格）换成它外面那个元素 */
+function hostOf(target: EventTarget | null): HTMLElement | null {
+  let node = target instanceof HTMLElement ? target : null;
+  for (let root = node?.getRootNode(); root instanceof ShadowRoot; root = node?.getRootNode()) {
+    node = root.host as HTMLElement;
+  }
+  return node;
+}
+
+/**
+ * 这个输入框用完了（Enter 存了、Esc 不改了）：焦点还给进面板之前的地方；那个地方不在了就只是失焦。
+ * 按键的默认动作要拦掉：焦点在按下的这一下就换到了正文，回车的换行接着落进正文开头，
+ * 每加一条属性正文前面多一个空行（体验轮 §4.47）
+ */
+function leave(event: { currentTarget: HTMLElement; preventDefault(): void }): void {
+  event.preventDefault();
+  const field = event.currentTarget;
+  const panel = field.closest("section");
+  const back = panel ? cameFrom.get(panel) : undefined;
+  if (back?.isConnected) back.focus({ preventScroll: true });
+  else field.blur();
+}
 
 const KIND_META: Record<Kind, { label: string; icon: LucideIcon }> = {
   text: { label: "文字", icon: Type },
@@ -105,6 +138,8 @@ export function PropertiesPanel({
   const [sourceOpen, setSourceOpen] = useState(false);
   const catalog = useCatalog((s) => s.catalog);
   const writes = useRef<Promise<unknown>>(Promise.resolve());
+  /** 写回排到第几次、写完到第几次：后面还排着的时候，前一次的结果、半路取回来的都比界面上的旧，不拿来换 */
+  const queue = useRef({ asked: 0, done: 0 });
   const targetRef = useRef(target);
   targetRef.current = target;
 
@@ -116,11 +151,14 @@ export function PropertiesPanel({
     setAdding(false);
     setSourceOpen(false);
     setError(null);
+    // 上一篇还没写完的不算这一篇的
+    queue.current.done = queue.current.asked;
     let alive = true;
     const refetch = async () => {
       try {
         const fresh = await (await backend()).docProperties(targetRef.current);
-        if (!alive) return;
+        // 自己还有没写完的：写完会对一遍，这里取到的是中间的某一版
+        if (!alive || queue.current.done < queue.current.asked) return;
         primeProperties(targetRef.current, fresh.text, fresh.editable);
         setDoc(fresh);
       } catch {
@@ -155,6 +193,8 @@ export function PropertiesPanel({
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== ";" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey)
         return;
+      // 组字时的按键归输入法（同命令面板）
+      if (event.isComposing) return;
       // 开着好几篇（分屏、弹出窗口）：正在写的那一篇才接
       const focused = focusedDocument();
       if (readOnly || !focused || propKey(focused.ref) !== key) return;
@@ -168,6 +208,13 @@ export function PropertiesPanel({
 
   const text = doc?.text ?? "";
   const parsed = useMemo(() => parse(text), [text]);
+  // 记着的类型（types.json）跟着一览来：这一篇有属性就去取，不等指上来 —— 换类型不再改值（§3.4），
+  // 不取的话第一眼是按值猜的类型，指上来才换成记着的那种、才标出「类型不符」。一览没过期时这一下什么都不做
+  const anyEntries = parsed.entries.length > 0;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 换了一篇（key）也要看一眼一览过没过期
+  useEffect(() => {
+    if (anyEntries) void loadCatalog();
+  }, [anyEntries, key]);
   const editable = !readOnly && (doc?.editable ?? false);
   const recorded = catalog?.types ?? {};
   const usual = useMemo(() => {
@@ -183,37 +230,49 @@ export function PropertiesPanel({
       const at = targetRef.current;
       setDoc((current) => ({ text: next, editable: current?.editable ?? true }));
       setError(null);
+      queue.current.asked += 1;
+      const mine = queue.current.asked;
       writes.current = writes.current.then(async () => {
+        const api = await backend();
+        const here = () => propKey(targetRef.current) === propKey(at);
+        // 后面又改了一次：界面上已经是更新的那一版，等最后一次写完再对
+        const last = () => mine === queue.current.asked;
         try {
-          const saved = await (await backend()).docSetProperties(at, next);
+          const saved = await api.docSetProperties(at, next);
+          queue.current.done = Math.max(queue.current.done, mine);
           primeProperties(at, saved.text, saved.editable);
-          if (propKey(targetRef.current) === propKey(at)) setDoc(saved);
+          if (here() && last()) setDoc(saved);
           invalidateCatalog();
         } catch (cause) {
-          if (propKey(targetRef.current) === propKey(at)) {
-            setDoc(before);
-            setError(messageOf(cause));
-          } else {
+          queue.current.done = Math.max(queue.current.done, mine);
+          if (!here()) {
             useData.setState({ error: messageOf(cause) });
+            return;
           }
+          setError(messageOf(cause));
+          if (!last()) return;
+          // 退回磁盘上的那一版：连着排了几次、前面的也没写成时，before 不一定是真的
+          const truth = await api.docProperties(at).catch(() => before);
+          if (here() && last()) setDoc(truth);
         }
       });
     },
     [doc],
   );
 
+  /**
+   * 换类型只记进 types.json，文件里的值一个字不动（§3.4，照 Obsidian）：这种类型读不了的值那一行标「类型不符」，
+   * 用户动了值才按新的样子写回。界面先换，后端记好了换成它记的那张表；没记成退回去、说为什么
+   */
   const changeKind = async (entry: Entry, from: Kind, to: Kind) => {
     if (from === to) return;
-    commit(
-      replaceEntry(
-        parsed,
-        entry,
-        entryLines(entry.key, to, convertValue(entry, from, to), entry.flow),
-      ),
-    );
+    const before = useCatalog.getState().catalog?.types ?? {};
+    setRecordedTypes({ ...before, [entry.key]: to });
+    setError(null);
     try {
       setRecordedTypes(await (await backend()).setPropertyType(entry.key, to));
     } catch (cause) {
+      setRecordedTypes(before);
       setError(messageOf(cause));
     }
   };
@@ -228,7 +287,20 @@ export function PropertiesPanel({
     <section
       aria-label="属性"
       className="group/props mt-5 -mx-2 flex flex-col"
-      onFocusCapture={() => void loadCatalog()}
+      onFocusCapture={(event) => {
+        void loadCatalog();
+        // 从面板外面进来的：记下从哪来（面板里挪来挪去的不算；刚加的那一行自己拿到焦点时 relatedTarget 是空的）。
+        // 内核会把输入框自己里面的东西当成 relatedTarget 给出来：日历里点了一天，焦点回日期框时给的是框里
+        // 「年」那一格（已经拆掉了），记成它回车就落到 body 上（体验轮 §4.49）
+        const from = hostOf(event.relatedTarget);
+        if (
+          from?.isConnected &&
+          typeof from.focus === "function" &&
+          !event.currentTarget.contains(from)
+        ) {
+          cameFrom.set(event.currentTarget, from);
+        }
+      }}
       onMouseEnter={() => void loadCatalog()}
     >
       {showSource ? (
@@ -249,19 +321,30 @@ export function PropertiesPanel({
             entry.shape === "complex"
               ? "complex"
               : kindOf(entry, recorded, usual.get(entry.key)?.kind);
+          // 记着的类型读不了这个值（「草稿」记成日期）：画原文 + 「类型不符」，按文字改
+          const mismatch = kind !== "complex" && !fitsKind(entry, kind);
           return (
             <PropertyRow
               // 键可能重名（手写的），加上位置
               key={`${entry.key}\u0000${index}`}
               entry={entry}
               kind={kind}
+              mismatch={mismatch}
               editable={editable}
+              // 别的工具留下的 created、archived 这些（值应用认不出，才会留在这里）：只能看、能删。
+              // 改了它的值可能变成应用认得的（归档、改标题），Rust 那边也不收
+              locked={MANAGED.includes(entry.key)}
               autoFocus={focusKey === entry.key}
               suggestions={usual.get(entry.key)?.values ?? []}
               onFocused={() => setFocusKey(null)}
               onCommitValue={(value) => {
                 if (kind === "complex") return;
-                commit(replaceEntry(parsed, entry, entryLines(entry.key, kind, value, entry.flow)));
+                // 类型不符的那一行是按文字改的：改完这种类型读得了就照它写（2026-11-20 写成日期），读不了照文字写
+                const as =
+                  mismatch && !(typeof value === "string" && valueFits(value, kind))
+                    ? "text"
+                    : kind;
+                commit(replaceEntry(parsed, entry, entryLines(entry.key, as, value, entry.flow)));
               }}
               onRename={(name) => {
                 const trimmed = name.trim();
@@ -377,10 +460,14 @@ function FooterButton({
 
 /* ---------------- 一行 ---------------- */
 
+const LOCKED_HINT = "这个名字 Odea 自己在用：这一行只能看，可以删掉";
+
 function PropertyRow({
   entry,
   kind,
+  mismatch,
   editable,
+  locked,
   autoFocus,
   suggestions,
   onFocused,
@@ -393,7 +480,10 @@ function PropertyRow({
 }: {
   entry: Entry;
   kind: Kind | "complex";
+  /** 记着的类型读不了这个值：类型图标换成警示，值按文字画 */
+  mismatch: boolean;
   editable: boolean;
+  locked: boolean;
   autoFocus: boolean;
   suggestions: string[];
   onFocused: () => void;
@@ -405,22 +495,36 @@ function PropertyRow({
   onWikiLink?: (title: string, heading?: string, newTab?: boolean) => void;
 }) {
   const meta = kind === "complex" ? { label: "多行内容", icon: Braces } : KIND_META[kind];
-  const Icon = meta.icon;
+  const Icon = mismatch ? TriangleAlert : meta.icon;
+  const open = editable && !locked;
+  // 「类型不符」就标在类型图标上（Obsidian 也是）：它本来就是按钮，键盘走得到，点了正好是换类型。
+  // 值的输入框也带上这一句（title 是它的描述，读屏读完「值」接着读这一句）
+  const misfit = mismatch ? `类型不符：这个值不是${meta.label}` : "";
   const icon = (
     <button
       type="button"
-      disabled={!editable || kind === "complex"}
-      title={kind === "complex" ? "多行内容、嵌套的：在源码里改" : `${meta.label}（点了换类型）`}
-      aria-label={`${entry.key}：${meta.label}`}
-      className="grid h-[30px] w-6 shrink-0 place-items-center rounded-md text-faint transition-colors duration-[140ms]
-                 enabled:hover:bg-raised enabled:hover:text-ink"
+      disabled={!open || kind === "complex"}
+      title={
+        locked
+          ? `${misfit ? `${misfit}。` : ""}${LOCKED_HINT}`
+          : kind === "complex"
+            ? "多行内容、嵌套的：在源码里改"
+            : misfit
+              ? `${misfit}（点了换类型）`
+              : `${meta.label}（点了换类型）`
+      }
+      aria-label={`${entry.key}：${meta.label}${misfit ? `，${misfit}` : ""}`}
+      className={cn(
+        "grid h-[30px] w-6 shrink-0 place-items-center rounded-md transition-colors duration-[140ms] enabled:hover:bg-raised",
+        mismatch ? "text-warning" : "text-faint enabled:hover:text-ink",
+      )}
     >
       <Icon size={14} strokeWidth={1.9} />
     </button>
   );
   return (
     <div className="group/row flex min-h-[34px] items-start gap-1 rounded-md px-1 py-[2px] hover:bg-panel focus-within:bg-panel">
-      {editable && kind !== "complex" ? (
+      {open && kind !== "complex" ? (
         <ActionMenu
           align="start"
           trigger={icon}
@@ -435,12 +539,18 @@ function PropertyRow({
       ) : (
         icon
       )}
-      <KeyCell name={entry.key} editable={editable} onRename={onRename} />
+      <KeyCell
+        name={entry.key}
+        editable={open}
+        hint={locked ? LOCKED_HINT : undefined}
+        onRename={onRename}
+      />
       <div className="min-w-0 flex-1 py-[3px]">
         <ValueCell
           entry={entry}
           kind={kind}
-          editable={editable}
+          misfit={misfit}
+          editable={open}
           autoFocus={autoFocus}
           suggestions={suggestions}
           onFocused={onFocused}
@@ -468,9 +578,11 @@ function PropertyRow({
 function KeyCell({
   name,
   editable,
+  hint,
   onRename,
-}: { name: string; editable: boolean; onRename: (name: string) => void }) {
+}: { name: string; editable: boolean; hint?: string; onRename: (name: string) => void }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const cancelled = useRef(false);
   if (draft !== null) {
     return (
       <input
@@ -480,12 +592,16 @@ function KeyCell({
         aria-label="属性名"
         onChange={(event) => setDraft(event.target.value)}
         onBlur={() => {
-          onRename(draft);
+          if (!cancelled.current) onRename(draft);
+          cancelled.current = false;
           setDraft(null);
         }}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.nativeEvent.isComposing) event.currentTarget.blur();
-          if (event.key === "Escape") setDraft(null);
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) leave(event);
+          if (event.key === "Escape") {
+            cancelled.current = true;
+            leave(event);
+          }
         }}
         className="mt-[3px] h-[26px] w-[132px] shrink-0 rounded-[5px] border border-accent bg-canvas px-1.5 text-[13px] text-ink outline-none"
       />
@@ -495,7 +611,7 @@ function KeyCell({
     <button
       type="button"
       disabled={!editable}
-      title={editable ? `${name}（点了改名）` : name}
+      title={hint ?? (editable ? `${name}（点了改名）` : name)}
       onClick={() => setDraft(name)}
       className="mt-[3px] h-[26px] w-[132px] shrink-0 truncate rounded-[5px] px-1.5 text-left text-[13px] text-muted
                  transition-colors duration-[140ms] enabled:hover:bg-raised enabled:hover:text-ink"
@@ -514,6 +630,7 @@ const INPUT =
 function ValueCell({
   entry,
   kind,
+  misfit,
   editable,
   autoFocus,
   suggestions,
@@ -524,6 +641,8 @@ function ValueCell({
 }: {
   entry: Entry;
   kind: Kind | "complex";
+  /** 记着的类型读不了这个值时，说为什么（「类型不符：这个值不是日期」）；对得上是空的 */
+  misfit: string;
   editable: boolean;
   autoFocus: boolean;
   suggestions: string[];
@@ -532,6 +651,24 @@ function ValueCell({
   onSource: () => void;
   onWikiLink?: (title: string, heading?: string, newTab?: boolean) => void;
 }) {
+  // 类型不符：原来的字原样画，点进去按文字改（勾选不能画成一个没勾的框，一点就把「草稿」盖成 true）
+  if (misfit) {
+    return (
+      <TextValue
+        value={entry.shape === "list" ? entry.items.join(", ") : entry.value}
+        numeric={false}
+        misfit={misfit}
+        editable={editable}
+        autoFocus={autoFocus}
+        suggestions={suggestions}
+        onFocused={onFocused}
+        onCommit={onCommit}
+        onWikiLink={onWikiLink}
+      />
+    );
+  }
+  // 读得了的标量类型：一项的列表当那一个值（用户动了值才按新的样子写回）
+  const one = singleValue(entry) ?? "";
   switch (kind) {
     case "complex":
       return (
@@ -547,7 +684,7 @@ function ValueCell({
     case "checkbox":
       return (
         <CheckboxValue
-          checked={entry.value === "true"}
+          checked={one === "true"}
           editable={editable}
           autoFocus={autoFocus}
           onFocused={onFocused}
@@ -558,7 +695,7 @@ function ValueCell({
     case "datetime":
       return (
         <DateValue
-          value={entry.value}
+          value={one}
           withTime={kind === "datetime"}
           editable={editable}
           autoFocus={autoFocus}
@@ -584,8 +721,9 @@ function ValueCell({
     default:
       return (
         <TextValue
-          value={entry.shape === "list" ? entry.items.join(", ") : entry.value}
+          value={one}
           numeric={kind === "number"}
+          misfit=""
           editable={editable}
           autoFocus={autoFocus}
           suggestions={suggestions}
@@ -597,62 +735,120 @@ function ValueCell({
   }
 }
 
-/** 输入框下面的提示：按出现的次数排好的那些，打了字就筛。直接出现、直接消失 */
-function useSuggestions(all: string[], query: string, exclude: string[] = []) {
+const NO_ITEMS: string[] = [];
+
+/** autoFocus 变成 true 时把焦点放进去：刚加的那一行（挂上时），「添加属性」打了已经有的名字（早就挂着） */
+function useFocusWhen<T extends HTMLElement>(wanted: boolean) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    if (wanted) ref.current?.focus();
+  }, [wanted]);
+  return ref;
+}
+
+/**
+ * 输入框下面的提示：按出现的次数排好的那些，打了字就筛。直接出现、直接消失。
+ *
+ * 默认第一条是选中的，回车选它（键名、标签多半是复用）。`preselect: false`（文字值，多半是新写的）：
+ * 一条都不选，↓ 进第一条、↑ 从第一条回到「没选」；没选中时 Enter 不归列表管，存的就是打的字 ——
+ * 不然打了「Bob」、存下去的是「Bobby」（审查 §6.2，docs/提醒与属性.md §3.5）
+ */
+function useSuggestions(
+  all: string[],
+  query: string,
+  exclude: string[] = NO_ITEMS,
+  { preselect = true }: { preselect?: boolean } = {},
+) {
+  const none = preselect ? 0 : -1;
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(none);
+  const listId = useId();
   const items = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return all
-      .filter((item) => !exclude.includes(item) && item !== query)
-      .filter((item) => q === "" || item.toLowerCase().includes(q))
-      .slice(0, 7);
-  }, [all, query, exclude]);
-  // 打的字变了：从第一条重新挑（只跟着字走，不跟着列表走）
+    const typed = query.trim();
+    const q = typed.toLowerCase();
+    const matches = all.filter(
+      (item) => !exclude.includes(item) && (q === "" || item.toLowerCase().includes(q)),
+    );
+    // 不默认选中的：和打的字一样的那条不列（回车存的本来就是打的字）
+    if (!preselect) return matches.filter((item) => item !== typed).slice(0, 7);
+    // 默认选中第一条的：打的字正好是现成的一条，它排第一 —— 不然打了「项目」，回车加上的是排在前面的「项目二期」
+    const exact = matches.filter((item) => item.toLowerCase() === q);
+    return [...exact, ...matches.filter((item) => item.toLowerCase() !== q)].slice(0, 7);
+  }, [all, query, exclude, preselect]);
+  // 打的字变了：从头重新挑（只跟着字走，不跟着列表走）
   // biome-ignore lint/correctness/useExhaustiveDependencies: 见上
-  useEffect(() => setActive(0), [query]);
+  useEffect(() => setActive(none), [query]);
+  const shown = open && items.length > 0;
+  const optionId = (index: number) => `${listId}-${index}`;
   return {
-    open: open && items.length > 0,
+    open: shown,
     items,
     active,
+    listId,
+    optionId,
+    /** 输入框上的读屏属性：它管着下面那张列表，选中的是哪一条（没选中时不写） */
+    combo: {
+      role: "combobox",
+      "aria-autocomplete": "list",
+      "aria-expanded": shown,
+      "aria-controls": shown ? listId : undefined,
+      "aria-activedescendant": shown && items[active] !== undefined ? optionId(active) : undefined,
+    } as const,
     show: () => setOpen(true),
     hide: () => setOpen(false),
-    /** ↑ ↓ 挑、Enter 选：选中了返回那一项 */
-    key(event: ReactKeyboardEvent): string | null {
-      if (!open || items.length === 0) return null;
+    /**
+     * ↑ ↓ 挑、Enter 选、Esc 收起列表。列表接了这个键返回 true（Enter 选中的那一项交给 onPick）；
+     * 没接（列表没开着、`preselect: false` 时一条都没选）返回 false，输入框自己处理。
+     * typed：框里有打了还没存的字。这时 Esc 只收列表，再按一次才是不改了；收起以后 Enter 存的就是打的字 ——
+     * 不然打的字正好是某条提示的一截时，没法用键盘照原样存。什么都没打的时候 Esc 一下就走，不用按两次
+     */
+    key(event: ReactKeyboardEvent, onPick: (item: string) => void, typed: boolean): boolean {
+      if (!open || items.length === 0) return false;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const step = event.key === "ArrowDown" ? 1 : -1;
-        setActive((current) => (current + step + items.length) % items.length);
-        return null;
+        // 不默认选中的：「没选」也是转一圈里的一格（-1 → 0 → … → 最后一条 → -1）
+        const span = preselect ? items.length : items.length + 1;
+        setActive((current) => ((current - none + step + span) % span) + none);
+        return true;
       }
       if (event.key === "Enter" && !event.nativeEvent.isComposing) {
         const picked = items[active];
         if (picked !== undefined) {
           event.preventDefault();
           setOpen(false);
-          return picked;
+          onPick(picked);
+          return true;
         }
       }
-      if (event.key === "Escape") setOpen(false);
-      return null;
+      if (event.key === "Escape") {
+        setOpen(false);
+        return typed;
+      }
+      return false;
     },
   };
 }
 
 function SuggestionList({
+  id,
+  optionId,
   items,
   active,
   onPick,
   render,
 }: {
+  id: string;
+  optionId: (index: number) => string;
   items: string[];
+  /** 选中的第几条；-1 是一条都没选 */
   active: number;
   onPick: (item: string) => void;
   render?: (item: string) => ReactNode;
 }) {
   return (
     <div
+      id={id}
       role="listbox"
       // 焦点留在输入框里（↑ ↓ 在那边挑），列表本身不进 Tab 顺序
       tabIndex={-1}
@@ -661,6 +857,7 @@ function SuggestionList({
       {items.map((item, index) => (
         <button
           key={item}
+          id={optionId(index)}
           type="button"
           role="option"
           aria-selected={index === active}
@@ -687,6 +884,7 @@ function wikiTarget(value: string): { title: string; heading?: string } | null {
 function TextValue({
   value,
   numeric,
+  misfit,
   editable,
   autoFocus,
   suggestions,
@@ -696,6 +894,8 @@ function TextValue({
 }: {
   value: string;
   numeric: boolean;
+  /** 类型不符时说为什么（这一行按文字改）；对得上是空的 */
+  misfit: string;
   editable: boolean;
   autoFocus: boolean;
   suggestions: string[];
@@ -705,11 +905,17 @@ function TextValue({
 }) {
   const [draft, setDraft] = useState(value);
   const [focused, setFocused] = useState(false);
+  const ref = useFocusWhen<HTMLInputElement>(autoFocus);
+  /** Esc：这一次失焦不存 */
+  const cancelled = useRef(false);
   // 别处改了（另一个窗口、外部程序）：没在打字时跟上
   useEffect(() => {
     if (!focused) setDraft(value);
   }, [value, focused]);
-  const hints = useSuggestions(numeric ? [] : suggestions, draft);
+  // 文字值多半是新写的：提示不默认选中，回车存打的字（§3.5）
+  const hints = useSuggestions(numeric ? NO_ITEMS : suggestions, draft, NO_ITEMS, {
+    preselect: false,
+  });
   const link = !focused ? wikiTarget(value) : null;
 
   const save = (next: string) => {
@@ -724,14 +930,15 @@ function TextValue({
   return (
     <div className="relative">
       <input
-        // biome-ignore lint/a11y/noAutofocus: 刚加的那一条，光标直接进值里
-        autoFocus={autoFocus}
+        ref={ref}
+        {...(numeric ? {} : hints.combo)}
         // 双链不在改的时候只显示标题，点进去才露出 [[ ]]（和正文里的双链一样）
         value={link ? link.title : draft}
         disabled={!editable}
         inputMode={numeric ? "decimal" : undefined}
         placeholder={editable ? "空" : ""}
         aria-label="值"
+        aria-invalid={misfit ? true : undefined}
         onFocus={() => {
           setFocused(true);
           hints.show();
@@ -744,7 +951,10 @@ function TextValue({
         onBlur={() => {
           setFocused(false);
           hints.hide();
-          save(draft);
+          if (cancelled.current) {
+            cancelled.current = false;
+            setDraft(value);
+          } else save(draft);
         }}
         onMouseDown={(event) => {
           // Ctrl / ⌘ + 点双链：打开那一篇
@@ -754,23 +964,26 @@ function TextValue({
           }
         }}
         onKeyDown={(event) => {
-          const picked = hints.key(event);
-          if (picked !== null) {
+          const pick = (picked: string) => {
             setDraft(picked);
             save(picked);
-            return;
-          }
-          if (event.key === "Enter" && !event.nativeEvent.isComposing) event.currentTarget.blur();
+          };
+          if (hints.key(event, pick, draft.trim() !== value)) return;
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) leave(event);
           if (event.key === "Escape") {
-            setDraft(value);
-            event.currentTarget.blur();
+            // 失焦的那一下还拿着没改回去的 draft：记一笔，别把不要的字存了
+            cancelled.current = true;
+            leave(event);
           }
         }}
-        title={link ? "Ctrl + 点击打开" : undefined}
+        // 类型不符的那一句也放这里：指上去看得到，读屏当它的描述
+        title={[misfit, link ? "Ctrl + 点击打开" : ""].filter(Boolean).join("；") || undefined}
         className={cn(INPUT, numeric && "tabular-nums", link && "text-accent")}
       />
       {hints.open && (
         <SuggestionList
+          id={hints.listId}
+          optionId={hints.optionId}
           items={hints.items}
           active={hints.active}
           onPick={(item) => {
@@ -804,14 +1017,28 @@ function ListValue({
   onWikiLink?: (title: string, heading?: string, newTab?: boolean) => void;
 }) {
   const [draft, setDraft] = useState("");
-  const hints = useSuggestions(suggestions, draft, items);
+  const ref = useFocusWhen<HTMLInputElement>(autoFocus);
+  const box = useRef<HTMLDivElement>(null);
+  const cancelled = useRef(false);
+  /** 用键盘去掉了第几项：换完以后焦点落到接替它的那一项的 ×，后面没有了就落进输入框（不然按钮一拆焦点掉在 body 上） */
+  const refocusAt = useRef<number | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 只在列表换了以后挪一次
+  useLayoutEffect(() => {
+    const at = refocusAt.current;
+    if (at === null) return;
+    refocusAt.current = null;
+    const removes = box.current?.querySelectorAll<HTMLButtonElement>("button[data-remove]");
+    (removes?.[at] ?? ref.current)?.focus();
+  }, [items]);
+  // 标签照着显示的样子打了 `#`：按去掉它的字筛（加的时候也去掉）
+  const hints = useSuggestions(suggestions, tags ? draft.replace(/^#/, "") : draft, items);
   const add = (raw: string) => {
     const value = (tags ? raw.replace(/^#/, "") : raw).trim();
     setDraft("");
     if (value && !items.includes(value)) onCommit([...items, value]);
   };
   return (
-    <div className="relative flex min-h-[26px] flex-wrap items-center gap-1 px-1">
+    <div ref={box} className="relative flex min-h-[26px] flex-wrap items-center gap-1 px-1">
       {items.map((item, index) => {
         const link = wikiTarget(item);
         return (
@@ -828,7 +1055,9 @@ function ListValue({
             {link && onWikiLink ? (
               <button
                 type="button"
-                className="truncate hover:underline"
+                // 和文字值里的双链一个颜色：看得出点得开
+                className="truncate text-accent hover:underline"
+                title={link.title}
                 onClick={(event) =>
                   onWikiLink(link.title, link.heading, event.ctrlKey || event.metaKey)
                 }
@@ -836,13 +1065,23 @@ function ListValue({
                 {link.title}
               </button>
             ) : (
-              <span className="truncate">{tags ? `#${item}` : item}</span>
+              // 太长被截断的一项：指上去看得到全的
+              <span className="truncate" title={tags ? `#${item}` : item}>
+                {tags ? `#${item}` : item}
+              </span>
             )}
             {editable && (
               <button
                 type="button"
+                data-remove
                 aria-label={`去掉 ${item}`}
-                onClick={() => onCommit(items.filter((_, at) => at !== index))}
+                // 用鼠标点：焦点留在原处（正在打的那一项、正文），不先跳到一个马上要拆掉的按钮上
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={(event) => {
+                  // detail 是 0：回车、空格按的
+                  if (event.detail === 0) refocusAt.current = index;
+                  onCommit(items.filter((_, at) => at !== index));
+                }}
                 className="grid h-[18px] w-[18px] place-items-center rounded-[4px] opacity-60 hover:bg-canvas/60 hover:opacity-100"
               >
                 <X size={12} strokeWidth={2.2} />
@@ -853,8 +1092,8 @@ function ListValue({
       })}
       {editable && (
         <input
-          // biome-ignore lint/a11y/noAutofocus: 刚加的那一条，光标直接进值里
-          autoFocus={autoFocus}
+          ref={ref}
+          {...hints.combo}
           value={draft}
           aria-label="加一项"
           placeholder={items.length === 0 ? "空" : "加一项"}
@@ -871,22 +1110,23 @@ function ListValue({
           }}
           onBlur={() => {
             hints.hide();
-            if (draft.trim()) add(draft);
+            if (cancelled.current) {
+              cancelled.current = false;
+              setDraft("");
+            } else if (draft.trim()) add(draft);
           }}
           onKeyDown={(event) => {
-            const picked = hints.key(event);
-            if (picked !== null) {
-              add(picked);
-              return;
-            }
+            if (hints.key(event, add, draft.trim() !== "")) return;
             if (event.key === "Enter" && !event.nativeEvent.isComposing) {
               event.preventDefault();
+              // 空着按回车：加完了
               if (draft.trim()) add(draft);
+              else leave(event);
             } else if (event.key === "Backspace" && draft === "" && items.length > 0) {
               onCommit(items.slice(0, -1));
             } else if (event.key === "Escape") {
-              setDraft("");
-              event.currentTarget.blur();
+              cancelled.current = true;
+              leave(event);
             }
           }}
           className="h-[22px] min-w-[72px] flex-1 bg-transparent px-1 text-[13px] text-body outline-none placeholder:text-faint"
@@ -894,6 +1134,8 @@ function ListValue({
       )}
       {hints.open && (
         <SuggestionList
+          id={hints.listId}
+          optionId={hints.optionId}
           items={hints.items}
           active={hints.active}
           onPick={(item) => add(item)}
@@ -993,6 +1235,11 @@ function DateValue({
 }) {
   const [editing, setEditing] = useState(autoFocus);
   const ref = useRef<HTMLInputElement>(null);
+  const cancelled = useRef(false);
+  // 「添加属性」打了一个已经有的名字：光标去那一行（这一行早就挂着了）
+  useEffect(() => {
+    if (autoFocus) setEditing(true);
+  }, [autoFocus]);
   useEffect(() => {
     if (!editing) return;
     const input = ref.current;
@@ -1005,7 +1252,13 @@ function DateValue({
   }, [editing]);
 
   if (editing && editable) {
-    const inputValue = withTime ? value.replace(" ", "T").slice(0, 16) : value.slice(0, 10);
+    // 只有日期、类型记成日期和时间的（§3.4 读得了的那种）：选择器里时间补 09:00，不动就不写；
+    // 照原样给 datetime-local 一个没有时间的值，内核当它是空的，一走就把日期抹了
+    const inputValue = withTime
+      ? /^\d{4}-\d{2}-\d{2}$/.test(value)
+        ? `${value}T09:00`
+        : value.replace(" ", "T").slice(0, 16)
+      : value.slice(0, 10);
     return (
       <input
         ref={ref}
@@ -1016,11 +1269,18 @@ function DateValue({
         onBlur={(event) => {
           setEditing(false);
           const next = event.target.value;
+          const skip = cancelled.current;
+          cancelled.current = false;
+          // 只填了一半（删掉了「日」那一段就走了）：内核给的值是空的，但这不是「清空」，原来的日期留着
+          if (skip || event.target.validity.badInput) return;
           if (next !== inputValue) onCommit(next);
         }}
         onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-          if (event.key === "Escape") setEditing(false);
+          if (event.key === "Enter") leave(event);
+          if (event.key === "Escape") {
+            cancelled.current = true;
+            leave(event);
+          }
         }}
         className={cn(INPUT, "w-auto tabular-nums")}
       />
@@ -1055,6 +1315,7 @@ function AddRow({
   onError: (message: string | null) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const cancelled = useRef(false);
   const catalog = useCatalog((s) => s.catalog);
   const keys = useMemo(
     () =>
@@ -1094,6 +1355,7 @@ function AddRow({
         <input
           // biome-ignore lint/a11y/noAutofocus: 点了「添加属性」就是要打名字
           autoFocus
+          {...hints.combo}
           value={draft}
           placeholder="属性名"
           aria-label="新属性的名字"
@@ -1104,25 +1366,28 @@ function AddRow({
           }}
           onBlur={() => {
             hints.hide();
-            if (draft.trim()) submit(draft);
-            else onCancel();
+            if (cancelled.current || !draft.trim()) onCancel();
+            else submit(draft);
           }}
           onKeyDown={(event) => {
-            const picked = hints.key(event);
-            if (picked !== null) {
-              submit(picked);
-              return;
-            }
+            if (hints.key(event, submit, draft.trim() !== "")) return;
             if (event.key === "Enter" && !event.nativeEvent.isComposing) {
               event.preventDefault();
               submit(draft);
             }
-            if (event.key === "Escape") onCancel();
+            if (event.key === "Escape") {
+              // 先把焦点还回去（这一下会失焦：记一笔，别把打了一半的名字加上），再收起这一行
+              cancelled.current = true;
+              leave(event);
+              onCancel();
+            }
           }}
           className="h-[26px] w-[200px] rounded-[5px] border border-accent bg-canvas px-1.5 text-[13px] text-ink outline-none placeholder:text-faint"
         />
         {hints.open && (
           <SuggestionList
+            id={hints.listId}
+            optionId={hints.optionId}
             items={hints.items}
             active={hints.active}
             onPick={submit}
@@ -1162,7 +1427,12 @@ function SourceEditor({
   onCancel: () => void;
 }) {
   const [draft, setDraft] = useState(text);
-  useEffect(() => setDraft(text), [text]);
+  const shown = useRef(text);
+  // 别处改了（另一个窗口、外部程序、协作的对方）：没动过就跟上；改了一半的不冲掉，和文字值一样（存好时以打的为准）
+  useEffect(() => {
+    setDraft((current) => (current === shown.current ? text : current));
+    shown.current = text;
+  }, [text]);
   const rows = Math.max(2, draft.split("\n").length);
   return (
     <div className="flex flex-col gap-1.5 px-2">
@@ -1177,11 +1447,14 @@ function SourceEditor({
         placeholder="status: 进行中"
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
+          // 存了、不改了这个框都会收起来：先把焦点还回去，不然落在 body 上
           if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
             event.preventDefault();
+            leave(event);
             onCommit(draft);
           }
           if (event.key === "Escape") {
+            leave(event);
             setDraft(text);
             onCancel();
           }

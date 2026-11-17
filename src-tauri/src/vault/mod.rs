@@ -57,6 +57,9 @@ use layout::Slot;
 /// 回收站里的文件放多久（天）
 const TRASH_KEEP_DAYS: i64 = 30;
 
+/// 重名时加的序号（「 2」…「 999」）给文件名留的字节（fsio::fit_stem）
+const NUMBER_TAIL: usize = " 999".len();
+
 /// 启动时最多当场读这么多个文件（约 0.2 秒）。再多就交给后台分批读，窗口不等它（见 open_quick）
 const QUICK_SCAN_LIMIT: usize = 200;
 
@@ -377,21 +380,61 @@ impl Vault {
 
     /* ---------------- 扫描与索引 ---------------- */
 
-    /// 把索引和磁盘对齐，返回变了的文档。启动时和文件监听触发时调用。
+    /// 把索引和磁盘对齐，返回变了的文档。启动时和文件监听触发时调用。整个一批一个事务（batched）
     pub fn rescan(&mut self) -> Result<VaultChange> {
-        let (mut change, stale) = self.plan_rescan()?;
-        for file in &stale {
-            let Some(decoded) = self.read_lossy(&file.rel)? else {
-                continue;
-            };
-            self.index_text(&file.rel, &decoded.text, decoded.utf8, file.mtime, file.size, &mut change)?;
+        self.batched(|vault| {
+            let (mut change, stale) = vault.plan_rescan()?;
+            for file in &stale {
+                let Some(decoded) = vault.read_for_index(&file.rel) else {
+                    continue;
+                };
+                vault.index_text(&file.rel, &decoded.text, decoded.utf8, file.mtime, file.size, &mut change)?;
+            }
+            Ok(change)
+        })
+    }
+
+    /// 读文件进索引的一批（后台的一批、一次整扫、只重读几篇）一个事务：f 里每篇的写（put / remove）是里面的保存点，
+    /// 一篇写坏了只退它，最后一起提交（index::begin_batch）。f 中途出错返回时，已经写好的那几篇照样提交（和以前一篇一个事务时一样）。
+    /// 提交失败的话这一批都没进索引，记一笔：下次扫描按修改时间和大小还会再读
+    fn batched<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let started = index::begin_batch(&self.db).unwrap_or_else(|error| {
+            eprintln!("索引开不了事务，一篇一篇写: {error}");
+            false
+        });
+        let out = f(self);
+        if let Err(error) = index::end_batch(&self.db, started) {
+            eprintln!("这一批写不进索引，下次扫描再读: {error}");
         }
-        Ok(change)
+        out
+    }
+
+    /// 扫描时读一个文件。读不了的（别的程序正独占着它：网盘、杀毒、别的编辑器存到一半，
+    /// Windows 上是 os error 32）记一笔、跳过：索引里它还是旧的，下次扫描再读。
+    /// 不能让它把整批拦下 —— 排在后面的文件就进不了索引，已经认出来的删除也发不到前端
+    fn read_for_index(&self, rel: &str) -> Option<fsio::Decoded> {
+        match self.read_lossy(rel) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                eprintln!("读 {rel} 进索引失败，下次再读: {error}");
+                None
+            }
+        }
+    }
+
+    /// 仓库文件夹整个打不开（移动硬盘拔了、网络盘断了、网盘的文件夹被挪走）：说明不了笔记被删了。
+    /// 照「这些都不在了」往下走会把它们从索引里去掉，回来以后不是应用写的笔记（id 只在索引里）都换了 id。
+    /// 整扫、只重读几篇、后台读，凡是因为「文件不在」要 forget 的，先问这一句
+    fn check_root(&self) -> Result<()> {
+        std::fs::read_dir(&self.root)
+            .map(drop)
+            .map_err(|error| AppError::Io(format!("仓库文件夹现在打不开: {error}")))
     }
 
     /// 扫描里不读文件的那一半：只 stat。消失了的从索引里去掉、文件夹列表更新，
     /// 返回修改时间或大小变了、要（重新）读进索引的文件，按该读的顺序
     fn plan_rescan(&mut self) -> Result<(VaultChange, Vec<fsio::FileEntry>)> {
+        self.check_root()?;
         let mut change = VaultChange {
             layout: self.check_layout(),
             ..VaultChange::default()
@@ -467,10 +510,7 @@ impl Vault {
 
     /// 树上列出来的一个文件在磁盘上的位置（前端给的路径要是树上真有的那种文件，以点开头的不认）
     pub fn tree_file_path(&self, rel: &str) -> Result<PathBuf> {
-        let ok = !rel.is_empty()
-            && rel.split('/').all(|part| !part.is_empty() && part != ".." && !fsio::is_hidden_name(part))
-            && !rel.contains('\\')
-            && folders::tree_file_kind(rel).is_some();
+        let ok = rel.split('/').all(fsio::is_plain_name) && folders::tree_file_kind(rel).is_some();
         let path = fsio::abs(&self.root, rel);
         if !ok || !path.is_file() {
             return Err(AppError::NotFound(format!("文件不在了: {rel}")));
@@ -487,14 +527,16 @@ impl Vault {
             backlog.files.clear();
             return change;
         }
-        while let Some(rel) = backlog.files.pop_front() {
-            if let Err(error) = self.index_file(&rel, &mut change) {
-                eprintln!("读 {rel} 进索引失败: {error}");
+        self.batched(|vault| {
+            while let Some(rel) = backlog.files.pop_front() {
+                if let Err(error) = vault.index_file(&rel, &mut change) {
+                    eprintln!("读 {rel} 进索引失败: {error}");
+                }
+                if budget.is_some_and(|budget| start.elapsed() >= budget) {
+                    break;
+                }
             }
-            if budget.is_some_and(|budget| start.elapsed() >= budget) {
-                break;
-            }
-        }
+        });
         if backlog.is_empty() && !self.indexed_all {
             change.folders |= self.on_indexed();
         }
@@ -507,6 +549,7 @@ impl Vault {
         let indexed = index::by_path(&self.db, rel)?;
         let Some((mtime, size)) = fsio::stat(&fsio::abs(&self.root, rel)) else {
             if let Some(row) = indexed {
+                self.check_root()?;
                 self.forget(&row, change)?;
             }
             return Ok(());
@@ -539,29 +582,34 @@ impl Vault {
     /// 文件监听用：只重读这几个文件（都是 .md）。没了的先处理，外部改名时新文件
     /// 带着同一个 id，旧的那一行得先让位。
     pub fn rescan_paths_and_announce(&mut self, rels: &[String]) -> Result<()> {
+        self.check_root()?;
         let mut change = VaultChange::default();
         // 逻辑目录的清单、仓库标记（文件监听单独放行了 .odea/tree、.odea/vault.json，见 watch.rs）
         change.folders |= self.reload_tree();
         change.layout |= self.check_layout();
-        for rel in rels {
-            if !fsio::abs(&self.root, rel).is_file() {
-                if let Some(row) = index::by_path(&self.db, rel)? {
-                    self.forget(&row, &mut change)?;
+        let read: Result<()> = self.batched(|vault| {
+            for rel in rels {
+                if !fsio::abs(&vault.root, rel).is_file() {
+                    if let Some(row) = index::by_path(&vault.db, rel)? {
+                        vault.forget(&row, &mut change)?;
+                    }
                 }
             }
-        }
-        for rel in rels {
-            let Some((mtime, size)) = fsio::stat(&fsio::abs(&self.root, rel)) else {
-                continue;
-            };
-            if index::by_path(&self.db, rel)?.is_some_and(|row| row.mtime == mtime && row.size == size) {
-                continue;
+            for rel in rels {
+                let Some((mtime, size)) = fsio::stat(&fsio::abs(&vault.root, rel)) else {
+                    continue;
+                };
+                if index::by_path(&vault.db, rel)?.is_some_and(|row| row.mtime == mtime && row.size == size) {
+                    continue;
+                }
+                let Some(decoded) = vault.read_for_index(rel) else {
+                    continue;
+                };
+                vault.index_text(rel, &decoded.text, decoded.utf8, mtime, size, &mut change)?;
             }
-            let Some(decoded) = self.read_lossy(rel)? else {
-                continue;
-            };
-            self.index_text(rel, &decoded.text, decoded.utf8, mtime, size, &mut change)?;
-        }
+            Ok(())
+        });
+        read?;
         self.announce(change);
         Ok(())
     }
@@ -736,7 +784,8 @@ impl Vault {
         Ok(note_from_row(row, self.conflict_of(row)?))
     }
 
-    /// 笔记的 id：属性块里的（没被别的文件占用的话）；否则沿用这个路径原来的；再否则新分配一个。
+    /// 笔记的 id：属性块里的（没被别的文件占用的话）；否则沿用这个路径原来的；再否则清空索引之前
+    /// 这个路径上那篇的（index::kept_id，技术方案 §5.3.1）；都没有才新分配一个。
     /// 新分配的只在索引里，下次应用写这个文件时才写进属性块。
     /// 插件的文档在索引里用的 id（`day:…`、`goal:…`）不分给笔记，插件关着也一样
     fn note_id_for(&self, rel: &str, meta_id: Option<&str>, previous: Option<&DocRow>) -> Result<String> {
@@ -751,7 +800,28 @@ impl Vault {
                 return Ok(previous.id.clone());
             }
         }
+        if let Some(id) = index::kept_id(&self.db, rel)?.filter(|id| usable(id)) {
+            if !index::id_taken(&self.db, &id, rel)? {
+                return Ok(id);
+            }
+        }
         Ok(crate::db::new_id())
+    }
+
+    /// 整个仓库重新认完一遍（on_indexed）：清空索引前留着的 id 还剩下的，文件已经不在了 —— 不清的话，
+    /// 以后同一个路径上新建的另一篇会捡到它。读不了的文件（别的程序占着）还在，它的那一行留到读进来为止。
+    /// 仓库文件夹整个打不开（移动硬盘拔了）时说明不了什么，不动。索引里有这个路径的不用看（刚认过，文件在）
+    pub(super) fn forget_kept_ids(&self) {
+        let result = self.check_root().and_then(|()| {
+            let gone: Vec<String> = index::unindexed_kept_paths(&self.db)?
+                .into_iter()
+                .filter(|rel| !fsio::abs(&self.root, rel).is_file())
+                .collect();
+            index::drop_kept(&self.db, &gone)
+        });
+        if let Err(error) = result {
+            eprintln!("清理留着的 id 失败: {error}");
+        }
     }
 
     /// 写一个文件（原子替换）再读进索引。写下去的总是 UTF-8
@@ -833,8 +903,9 @@ impl Vault {
         meta.id = None;
         meta.title = None;
         meta.pinned = false;
-        let stamp = chrono::Local::now().format("%Y-%m-%d %H%M");
-        let stem = format!("{} (冲突 {stamp})", layout::stem_of(rel));
+        let suffix = format!(" (冲突 {})", chrono::Local::now().format("%Y-%m-%d %H%M"));
+        // 原名很长时截短一点：另存不下来的话，保存时这一篇一直存不进去，同步合并时对方那一版只剩在历史里
+        let stem = format!("{}{suffix}", fsio::fit_stem(layout::stem_of(rel), suffix.len() + NUMBER_TAIL + ".md".len()));
         let copy = fsio::unique_rel(&self.root, layout::dir_of(rel), &stem, None);
         let row = self.write_and_index(&copy, &frontmatter::render(&meta, &body), change)?;
         // 自己另存的这一份已经在 conflicts 里报了，不再当「新发现的副本」报一遍
@@ -1123,9 +1194,11 @@ impl Vault {
             .read(&trash)?
             .ok_or_else(|| AppError::NotFound(format!("deleted note {id}")))?;
         let (mut meta, body) = frontmatter::split(&text);
+        // 回收站里的文件网盘也会同步：属性块里写的原处是外面来的，不是仓库里的普通路径（`../`、`D:/`）就放回「笔记」
         let from = meta
             .trashed_from
             .take()
+            .filter(|from| from.split('/').all(fsio::is_plain_name) && fsio::is_markdown(from))
             .unwrap_or_else(|| layout::join(&self.layout.notes, &format!("{}.md", layout::UNTITLED)));
         let title = meta
             .title
@@ -1251,10 +1324,20 @@ impl Vault {
             .into_iter()
             .filter(|path| path == folder || path.starts_with(&format!("{folder}/")))
             .collect();
+        let rows = index::notes_under(&self.db, &dir)?;
+        // 不是 UTF-8 的删不了（进回收站要读出来、改属性块、写过去）：先说，一篇都不动。以前删到它才报错，
+        // 前面那几篇已经进了回收站，前端拿不到能撤销的 FolderDeletion，列表里还列着它们
+        if let Some(row) = rows.iter().find(|row| row.not_utf8) {
+            return Err(not_utf8(&row.rel_path));
+        }
         let mut change = VaultChange::default();
         let mut notes = Vec::new();
-        for row in index::notes_under(&self.db, &dir)? {
-            self.trash(&row, &mut change)?;
+        for row in rows {
+            if let Err(error) = self.trash(&row, &mut change) {
+                // 删到一半出错（文件被别的程序占着之类）：已经进了回收站的告诉前端，别让它还列着
+                self.announce(change);
+                return Err(error);
+            }
             notes.push(row.id);
         }
         let kept = !folders::remove_empty_tree(&fsio::abs(&self.root, &dir));
@@ -1508,7 +1591,8 @@ impl Vault {
         let mut change = VaultChange::default();
         let mut copies = Vec::new();
         for (rel, bytes) in theirs {
-            if rel.split('/').any(fsio::is_hidden_name) {
+            // 以点开头的不另存；不是普通名字的（盘符这些）也不往磁盘上写
+            if !rel.split('/').all(fsio::is_plain_name) {
                 continue;
             }
             let text = fsio::is_markdown(rel).then(|| std::str::from_utf8(bytes).ok()).flatten();
@@ -1592,13 +1676,14 @@ impl Vault {
     /// 原文另存在哪：同一个文件夹里的「周报 (GBK 原文).txt」，重名加序号
     fn legacy_backup_rel(&self, rel: &str, encoding: &str) -> String {
         let dir = layout::dir_of(rel);
-        let stem = layout::stem_of(rel);
+        let suffix = format!(" ({encoding} 原文)");
+        let stem = fsio::fit_stem(layout::stem_of(rel), suffix.len() + NUMBER_TAIL + ".txt".len());
         (1..)
             .map(|n| {
                 let name = if n == 1 {
-                    format!("{stem} ({encoding} 原文).txt")
+                    format!("{stem}{suffix}.txt")
                 } else {
-                    format!("{stem} ({encoding} 原文) {n}.txt")
+                    format!("{stem}{suffix} {n}.txt")
                 };
                 layout::join(dir, &name)
             })
@@ -1610,12 +1695,13 @@ impl Vault {
     fn conflict_copy_rel(&self, rel: &str) -> String {
         let dir = layout::dir_of(rel);
         let (stem, ext) = split_name(rel.rsplit('/').next().unwrap_or(rel));
-        let stamp = chrono::Local::now().format("%Y-%m-%d %H%M");
+        let suffix = format!(" (冲突 {})", chrono::Local::now().format("%Y-%m-%d %H%M"));
+        let stem = fsio::fit_stem(stem, suffix.len() + NUMBER_TAIL + 1 + ext.len());
         for n in 1.. {
             let name = if n == 1 {
-                format!("{stem} (冲突 {stamp})")
+                format!("{stem}{suffix}")
             } else {
-                format!("{stem} (冲突 {stamp}) {n}")
+                format!("{stem}{suffix} {n}")
             };
             let file = if ext.is_empty() { name } else { format!("{name}.{ext}") };
             let copy = layout::join(dir, &file);

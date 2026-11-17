@@ -21,6 +21,7 @@ import {
   vaultRef,
 } from "@/data/types";
 import type { EditorOutlineHandle } from "@/editor/MarkdownEditor";
+import { registerEditorFlush } from "@/editor/saveBus";
 import type { WikiCandidate } from "@/editor/suggest";
 import { cn } from "@/lib/cn";
 import { snapToDevicePixels } from "@/lib/devicePixels";
@@ -66,6 +67,7 @@ import { ActionMenu } from "./RowMenu";
 import { Segmented } from "./Segmented";
 import { SwapFade } from "./SwapFade";
 import { TeamPresence } from "./TeamPresence";
+import { TeamUnseenBanner } from "./TeamUnseenBanner";
 
 /** 目录树的指纹：标题文字或行号变了才需要重新渲染文档视图。 */
 const outlineKeyOf = (markdown: string) =>
@@ -462,6 +464,9 @@ export function DocumentView({
                   <>
                     {/* ---------- 做客那一篇：重新连接中、只读、协作结束了 ---------- */}
                     {shared && <CollabBanner />}
+
+                    {/* ---------- 团队里加入时本机那一版没合进会话：说一声、看得到（docs/协同编辑.md §28） ---------- */}
+                    <TeamUnseenBanner doc={doc} />
 
                     {/* ---------- 冲突副本横幅 ---------- */}
                     {doc.conflict && (
@@ -1100,6 +1105,8 @@ export function EditableDocumentTitle({
     else field.blur();
   };
 
+  /** 正在存（或者刚存下）的那一版：失焦存了一次，接着又被拆掉、关窗时不再存第二次 */
+  const sending = useRef<string | null>(null);
   const commit = async () => {
     if (discarding.current) return;
     const clean = value.trim();
@@ -1107,17 +1114,30 @@ export function EditableDocumentTitle({
       setValue(shown);
       return;
     }
-    if (clean === title) return;
+    if (clean === title || clean === sending.current) return;
+    sending.current = clean;
     setSaving(true);
     try {
       await onSave(clean);
       setValue(clean);
     } catch {
+      sending.current = null;
       setValue(shown);
     } finally {
       setSaving(false);
     }
   };
+  // 没失焦就被拆掉（光标还在标题里按 Ctrl+Tab、Ctrl+W 换篇）不发 blur，改了的标题就丢了；
+  // 关窗、换仓库也一样等它（saveBus 的 flushAllEditors）。审查 2026-11-13 §4.34
+  const latestCommit = useRef(commit);
+  latestCommit.current = commit;
+  useEffect(() => {
+    const unregister = registerEditorFlush(() => latestCommit.current());
+    return () => {
+      unregister();
+      void latestCommit.current();
+    };
+  }, []);
 
   return (
     <textarea
@@ -1253,11 +1273,15 @@ function StatusBar({
         </button>
       )}
 
-      {/* 字数、日期：换篇时跟着正文一起溶解，快照只盖这一截 */}
+      {/* 字数、日期：换篇时跟着正文一起溶解，快照只盖这一截。
+          放不下时整段整段地藏（折到看不见的第二行），不把「上次更新」从字中间切开 */}
       <div className="relative h-full min-w-0 flex-1 overflow-hidden" data-swap-host>
-        <SwapFade swapKey={docKey} className="flex h-full items-center whitespace-nowrap">
+        <SwapFade
+          swapKey={docKey}
+          className="flex h-full flex-wrap content-start whitespace-nowrap"
+        >
           {parts.map((p, i) => (
-            <span key={p} className="flex items-center">
+            <span key={p} className="flex h-full items-center">
               {i > 0 && <Dot />}
               <span className={cn(BAR_TEXT, "text-muted")}>{p}</span>
             </span>

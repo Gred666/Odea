@@ -9,6 +9,7 @@ import {
   insertFencedBlock,
   insertLink,
   listItemHome,
+  newlineAfterFence,
   setHeading,
   toggleLinePrefix,
   wrapMarkdown,
@@ -35,6 +36,8 @@ export const markdownKeymap: readonly KeyBinding[] = [
   { key: "Mod-l", run: selectLine },
   { key: "Shift-Mod-i", mac: "Ctrl-Mod-i", run: insertLink(true) },
   { key: "Mod-Alt-c", run: insertFencedBlock() },
+  // 代码块收尾那一行回车不带代码里的缩进（其余的回车：lang-markdown 续列表、引用，再落到 defaultKeymap）
+  { key: "Enter", run: newlineAfterFence },
   {
     key: "Shift-Mod-q",
     mac: "Alt-Mod-q",

@@ -59,6 +59,17 @@ for (const [kind, name] of [
   row(`${name} 按键 INP 中位数`, (r) => median(r.split[kind].map((run) => run.inp)));
   row(`${name} 最长一帧中位数`, (r) => median(r.split[kind].map((run) => run.longestFrame)));
 }
+if (before.tabs || after.tabs) {
+  row("Ctrl+Tab 换篇 INP 中位数", (r) => median(r.tabs.inp));
+  row("Ctrl+Tab 换篇 最长一帧中位数", (r) => median(r.tabs.longestFrame));
+  row("Ctrl+Tab 换篇 到焦点进正文 ms（-1 没进）", (r) => r.tabs.ready.join(" / "));
+}
+if (before.props || after.props) {
+  row("属性面板里打字 输入→出帧 p50", (r) => r.props.typing.p50);
+  row("属性面板里打字 输入→出帧 p90", (r) => r.props.typing.p90);
+  row("属性回车存 INP 中位数", (r) => median(r.props.commit));
+  row("属性回车存 最长一帧中位数", (r) => median(r.props.commitFrame));
+}
 row("列表里画出来的行", (r) => r.listRows);
 row("切完笔记还活着的编辑器（应为 1）", (r) => r.editorViews);
 row("JS 堆 MB", (r) => r.memory.heapMB);

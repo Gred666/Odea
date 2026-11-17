@@ -1,3 +1,4 @@
+import type { PluginDialog } from "@/app/store";
 import type {
   DocumentModel,
   DocumentRef,
@@ -91,6 +92,11 @@ export interface PaletteCommand {
   label: string;
   hint?: string;
   keywords?: string;
+  /**
+   * 打开的是插件自己的哪个对话框：从命令面板开的，那个对话框用 usePaletteBack 同一个名字，
+   * 标题栏左边就是「返回」、Esc 回到面板（components/PaletteBack.tsx，docs/插件与跨端.md §5.3.1）
+   */
+  dialog?: PluginDialog;
   run: () => void;
 }
 

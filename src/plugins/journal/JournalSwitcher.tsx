@@ -95,8 +95,8 @@ export function JournalSwitcher() {
         <DropdownMenu.Content
           align="start"
           sideOffset={6}
-          onCloseAutoFocus={(event) => event.preventDefault()}
-          className="odea-menu z-50 min-w-[220px] overflow-hidden rounded-lg bg-canvas p-1 shadow-float
+          // 有上限：仓库名很长时菜单不往宽里长（以前长到 758px，800 宽的窗口里被推到最左边、离开按钮），长的名字截断
+          className="odea-menu z-50 min-w-[220px] max-w-[320px] overflow-hidden rounded-lg bg-canvas p-1 shadow-float
                      outline-none ring-1 ring-line-strong"
         >
           <p className="px-2 pt-1 pb-1.5 text-[12px] text-muted">谁的日程</p>
@@ -116,7 +116,9 @@ export function JournalSwitcher() {
               ) : (
                 <NotebookPen size={14} strokeWidth={1.9} className="shrink-0 text-muted" />
               )}
-              <span className="min-w-0 flex-1 truncate">{vault.name}</span>
+              <span className="min-w-0 flex-1 truncate" title={vault.name}>
+                {vault.name}
+              </span>
               <span className="text-[12px] text-muted">{vault.team ? "团队" : "个人"}</span>
               <Check
                 size={14}

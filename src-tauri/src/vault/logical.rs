@@ -132,10 +132,11 @@ impl Vault {
         Ok(())
     }
 
-    /// 索引和磁盘对齐完了（打开时当场读完，或者后台那批读完）：清单还没建过的按文件夹结构建；
-    /// 按路径引用、其实已经写上了 id 的换成按 id；找不到笔记的节点按两次的规矩去掉。返回树变没变
+    /// 索引和磁盘对齐完了（打开时当场读完，或者后台那批读完）：清空索引前留着的 id 还剩的清掉（forget_kept_ids）；
+    /// 清单还没建过的按文件夹结构建；按路径引用、其实已经写上了 id 的换成按 id；找不到笔记的节点按两次的规矩去掉。返回树变没变
     pub(super) fn on_indexed(&mut self) -> bool {
         self.indexed_all = true;
+        self.forget_kept_ids();
         if self.tree.is_none() {
             return false;
         }
@@ -430,14 +431,16 @@ impl Vault {
     /// 删文件夹：连同底下的文件夹、智能文件夹从清单里拿掉，放在里面的笔记进回收站（归档的不动）。
     /// 拿掉的那几行放在返回值里，撤销时原样放回去
     pub(super) fn tree_delete(&mut self, folder: &str) -> Result<FolderDeletion> {
-        let tree = self.tree_mut()?;
+        let tree = self.tree_ref()?;
         let folders: Vec<String> = tree
             .branches()
             .into_iter()
             .map(|branch| branch.path)
             .filter(|path| path == folder || path.starts_with(&format!("{folder}/")))
             .collect();
-        let removed = tree.remove_branch(folder)?;
+        // 先在一份拷贝上摘：底下有删不了的（不是 UTF-8）就一点都不动，清单也不动
+        let mut rest = tree.clone();
+        let removed = rest.remove_branch(folder)?;
         let mut rows = Vec::new();
         for (_, node) in removed.nodes() {
             let row = match &node.item {
@@ -449,10 +452,18 @@ impl Vault {
                 rows.push(row);
             }
         }
+        if let Some(row) = rows.iter().find(|row| row.not_utf8) {
+            return Err(super::not_utf8(&row.rel_path));
+        }
+        self.tree = Some(rest);
         let mut change = VaultChange::default();
         let mut notes = Vec::new();
         for row in rows {
-            self.trash(&row, &mut change)?;
+            if let Err(error) = self.trash(&row, &mut change) {
+                // 删到一半出错：已经进了回收站的告诉前端
+                self.announce(change);
+                return Err(error);
+            }
             notes.push(row.id);
         }
         self.save_tree()?;
