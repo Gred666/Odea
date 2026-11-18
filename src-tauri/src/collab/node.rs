@@ -96,6 +96,12 @@ struct Inner {
     knocks: Mutex<HashMap<u32, oneshot::Sender<Choice>>>,
     next_knock: AtomicU32,
     accept: Mutex<Option<JoinHandle<()>>>,
+    /// 有会话挂上来过没有。端点先起、会话后挂（开始协作、继续上次的协作都是这个顺序）：这中间进来的连接
+    /// 读完 Hello 先等第一个会话挂上再分 —— 不然按「链接不对」拒了，正在重连的访客就此放弃（§29.5）
+    started: watch::Sender<bool>,
+    /// 单测：等过「第一个会话挂上」的连接有几条
+    #[cfg(test)]
+    held: AtomicU32,
 }
 
 impl Node {
@@ -123,6 +129,9 @@ impl Node {
             knocks: Mutex::new(HashMap::new()),
             next_knock: AtomicU32::new(1),
             accept: Mutex::new(None),
+            started: watch::Sender::new(false),
+            #[cfg(test)]
+            held: AtomicU32::new(0),
         });
         let accept = tokio::spawn(accept_loop(endpoint, Arc::downgrade(&inner)));
         *inner.accept.lock().unwrap() = Some(accept);
@@ -243,6 +252,7 @@ impl Node {
             hosts.push(Arc::downgrade(shared));
             hosts.len() == 1
         };
+        self.inner.started.send_replace(true);
         if first {
             self.start_advertising();
         }
@@ -269,6 +279,7 @@ impl Node {
         let mut guests = self.inner.guests.lock().unwrap();
         guests.retain(|guest| guest.strong_count() > 0);
         guests.push(Arc::downgrade(shared));
+        self.inner.started.send_replace(true);
     }
 
     pub(crate) fn remove_guest(&self, shared: &Arc<guest::Shared>) {
@@ -409,14 +420,23 @@ impl Node {
                 std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).is_ok()
             }
         };
-        for _ in 0..50 {
+        // 等端口真的空出来；一直不空就直说（不然重启的那个悄悄换了随机端口，访客那边只看到「等不到：接上了」）
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
             let v4 = ports.first().is_none_or(|port| free(*port, false));
             let v6 = ports.get(1).is_none_or(|port| free(*port, true));
             if v4 && v6 {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(tokio::time::Instant::now() < deadline, "崩了的端点 10 秒还没放开端口 {ports:?}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    /// 单测：等过「第一个会话挂上」的连接有几条
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> u32 {
+        self.inner.held.load(Ordering::SeqCst)
     }
 
     /// 只听的那一份 mDNS（访客订阅它：同一个网络里看到主持人了没有）
@@ -486,6 +506,7 @@ async fn knock(
             return Err("对方没发 Hello".into());
         }
     };
+    started(inner).await;
     let nearby = !dialed && hello.proof.is_none() && hello.session == [0; 16];
     if !nearby {
         let host = live(&inner.hosts).into_iter().find(|host| host::session_of(host) == hello.session);
@@ -523,6 +544,17 @@ async fn knock(
         Some((host, preset)) => host::serve_knock(host, conn, send, recv, hello, false, preset).await,
         None => host::reject(Some(&conn), send, RejectReason::Ended).await,
     }
+}
+
+/// 等第一个会话挂上（Inner::started）。等不到（那个会话没起来）照常往下分，对不上的照旧拒
+async fn started(inner: &Inner) {
+    let mut started = inner.started.subscribe();
+    if *started.borrow_and_update() {
+        return;
+    }
+    #[cfg(test)]
+    inner.held.fetch_add(1, Ordering::SeqCst);
+    let _ = tokio::time::timeout(HANDSHAKE, started.wait_for(|started| *started)).await;
 }
 
 /// 「附近」进来、我主持着好几个：问主持人进哪一个（不设时限，他走了就算了）

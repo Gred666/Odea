@@ -1041,9 +1041,11 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     assert_eq!(record::hosts_left(dir.path()).len(), 1);
 
     // 重启以后照记录起来：同一个会话 id、邀请密钥、端口
+    let node = test_node_on(key, false, Vec::new(), left.ports.clone()).await;
+    assert_eq!(node.ports(), left.ports, "要绑回原来的端口：访客手里只有链接里的地址");
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
-        &test_node_on(key, false, Vec::new(), left.ports.clone()).await,
+        &node,
         HostOptions { record: Some(dir.path().to_path_buf()), resume: Some(left), ..host_options("周会") },
         events,
     )
@@ -1076,6 +1078,64 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     host.stop().await;
     assert!(record::hosts_left(dir.path()).is_empty());
     assert!(!session_dir.exists());
+    drop(guest);
+}
+
+/// 端点先起、会话后挂：重连的访客正好在这中间敲门，要等会话挂上，不能按「链接不对」打发走
+/// （以前这一下拒了，访客就此放弃；机器忙时上面那条测试偶尔「等不到：接上了」就是它，§29.5）
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guests_knocking_before_a_restarted_session_is_back_wait_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = SecretKey::generate();
+    let (events, mut host_events) = unbounded_channel();
+    let host = Host::start(
+        &test_node(key.clone(), false, Vec::new()).await,
+        HostOptions { record: Some(dir.path().to_path_buf()), ..host_options("周会") },
+        events,
+    )
+    .await
+    .unwrap();
+    host.allow_docs(&[DOC]);
+    let (guest, mut guest_events, member) = admitted(&host, &mut host_events, "Alex", Permission::Edit).await;
+    let session_dir = record::host_dir(dir.path(), &host.session());
+    record::save_state(&session_dir, record::Role::Host, DOC, b"y-state").unwrap();
+    let left = record::host_left(&session_dir).expect("落盘的记录");
+    host.crash().await;
+    expect(&mut guest_events, "重新连接中", |event| {
+        matches!(status_of(event), Some(Status::Reconnecting)).then_some(())
+    })
+    .await;
+
+    // 端点起来了、会话还没挂上：等访客重连敲到门上
+    let node = test_node_on(key, false, Vec::new(), left.ports.clone()).await;
+    tokio::time::timeout(WAIT, async {
+        while node.held() == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("等不到：访客敲门");
+    let (events, mut host_events) = unbounded_channel();
+    let host = Host::start(
+        &node,
+        HostOptions { record: Some(dir.path().to_path_buf()), resume: Some(left), ..host_options("周会") },
+        events,
+    )
+    .await
+    .unwrap();
+    host.allow_docs(&[DOC]);
+    let again = expect(&mut guest_events, "接上了", |event| match status_of(event) {
+        Some(Status::Connected { member, .. }) => Some(member),
+        Some(Status::Ended { reason }) => panic!("访客放弃了：{reason:?}"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(again, member);
+    expect(&mut host_events, "主持人的 SyncStart", |event| {
+        matches!(event, Event::SyncStart { with, .. } if *with == member).then_some(())
+    })
+    .await;
+    host.stop().await;
     drop(guest);
 }
 
