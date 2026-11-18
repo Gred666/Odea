@@ -24,6 +24,11 @@ export interface RelaysState {
   busy: boolean;
   /** 这台设备的公钥（十六进制）：中继的 access.allowlist 填它 */
   deviceId: string | null;
+  /**
+   * 刚删掉的那一台：中继码里带着地址、令牌、证书指纹，「撤销」拿它加回去。应用里别的删除都能撤销，
+   * 这里手一滑删掉的话，令牌得再找给中继码的人要一次（审查 2026-11-13 §5.9）。对话框关了、又删了别的就作废
+   */
+  removed: { url: string; label: string; code: string } | null;
 
   openRelays(code?: string): void;
   close(): void;
@@ -33,6 +38,7 @@ export interface RelaysState {
   cancelPending(): void;
   addManual(input: Extract<RelayInput, { url: string }>): Promise<boolean>;
   remove(url: string): Promise<void>;
+  undoRemove(): Promise<void>;
   /** 中继码（带令牌）：发给团队里的其他人 */
   code(url: string): Promise<string | null>;
   test(url: string): Promise<void>;
@@ -57,9 +63,10 @@ export const useRelays = create<RelaysState>((set, get) => ({
   error: null,
   busy: false,
   deviceId: null,
+  removed: null,
 
   openRelays: (code) => {
-    set({ open: true, error: null, pending: null });
+    set({ open: true, error: null, pending: null, removed: null });
     void ensureNet()
       .then((current) => current.relays())
       .then((relays) => set({ relays }))
@@ -70,7 +77,7 @@ export const useRelays = create<RelaysState>((set, get) => ({
       .catch(() => {});
     if (code) void get().inspect(code);
   },
-  close: () => set({ open: false, pending: null, error: null }),
+  close: () => set({ open: false, pending: null, error: null, removed: null }),
 
   inspect: async (code) => {
     if (!isRelayCode(code)) return false;
@@ -110,12 +117,30 @@ export const useRelays = create<RelaysState>((set, get) => ({
     }
   },
   remove: async (url) => {
+    const relay = get().relays.find((item) => item.url === url);
     try {
-      const relays = await (await ensureNet()).relayRemove(url);
+      const api = await ensureNet();
+      // 删之前先拿中继码：撤销时照它加回去。拿不到（极少）就不给撤销，删照删
+      const code = await api.relayCode(url).catch(() => null);
+      const relays = await api.relayRemove(url);
       const { [url]: _, ...checks } = get().checks;
-      set({ relays, checks });
+      const label = relay?.name ?? relay?.host ?? url;
+      set({ relays, checks, removed: code ? { url, label, code } : null });
     } catch (error) {
       set({ error: errorText(error) });
+    }
+  },
+  undoRemove: async () => {
+    const removed = get().removed;
+    if (!removed) return;
+    set({ removed: null, busy: true });
+    try {
+      const relays = await (await ensureNet()).relayAdd({ code: removed.code });
+      set({ relays, error: null });
+    } catch (error) {
+      set({ error: errorText(error) });
+    } finally {
+      set({ busy: false });
     }
   },
   code: async (url) => {

@@ -15,6 +15,7 @@ const api = {
   syncInspect: vi.fn(),
   syncEnable: vi.fn(),
   syncProxy: vi.fn(),
+  syncSetProxy: vi.fn(),
   syncNow: vi.fn(),
 };
 
@@ -110,6 +111,63 @@ describe("开启同步", () => {
     await settle();
     off();
     expect(order).toEqual(["flush", "enable"]);
+  });
+});
+
+describe("同步对话框里小的几处（审查 2026-11-13 §5.9）", () => {
+  it("看云端的时候点了「换个托管方」：结果回来不再把人拽到确认那一步", async () => {
+    api.syncAccounts.mockResolvedValue([{ provider: "github", login: "you" }]);
+    api.syncRepos.mockResolvedValue([
+      {
+        fullName: "you/notes",
+        cloneUrl: "https://github.com/you/notes.git",
+        private: true,
+        updatedAt: null,
+        owner: "you",
+      },
+    ]);
+    let inspected: (plan: unknown) => void = () => {};
+    api.syncInspect.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          inspected = resolve;
+        }),
+    );
+    await openDialog();
+    act(() => button("GitHub")?.click());
+    await settle();
+    act(() => button("you/notes")?.click());
+    await settle();
+    act(() => button("换个托管方")?.click());
+    await settle();
+    // 回去以后又进了仓库列表：旧的那次看完了也不算数
+    act(() => button("GitHub")?.click());
+    await settle();
+    expect(button("you/notes")).toBeDefined();
+    inspected({ connectHere: false, cloneTarget: "D:/x", localNotes: false });
+    await settle();
+    expect(button("下载并切换")).toBeUndefined();
+    expect(button("you/notes")).toBeDefined();
+    expect(container.querySelector("[role=alert]")).toBeNull();
+  });
+
+  it("代理保存失败：框留着、说原因", async () => {
+    api.syncSetProxy.mockRejectedValue(new Error("写不进 config.json"));
+    await openDialog();
+    act(() => button("改")?.click());
+    await settle();
+    const field = container.querySelector<HTMLInputElement>(
+      'input[placeholder^="http://127.0.0.1"]',
+    )!;
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(field, "http://127.0.0.1:7890");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => button("保存")?.click());
+    await settle();
+    expect(container.querySelector("[role=alert]")?.textContent).toContain("写不进 config.json");
+    expect(container.querySelector('input[placeholder^="http://127.0.0.1"]')).not.toBeNull();
   });
 });
 
