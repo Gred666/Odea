@@ -1,9 +1,11 @@
 import { ZEN_TRANSITION } from "@/app/navMotion";
+import { focusedPane } from "@/app/panes";
 import { LIST_WIDTH, chromeWidth, hasListColumn, useApp } from "@/app/store";
+import { isBaseTab } from "@/bases/ids";
 import { CaptureSettingsDialog } from "@/components/CaptureSettingsDialog";
 import { CollabDialog, CollabRequests, CollabResume } from "@/components/CollabDialog";
 import { CommandPalette } from "@/components/CommandPalette";
-import { DocumentPanes } from "@/components/DocumentPanes";
+import { DocumentPanes, activeNoteOf } from "@/components/DocumentPanes";
 import { ErrorToast, LayoutChangeToast, NoticeToast } from "@/components/ErrorToast";
 import { ExportDialog } from "@/components/ExportDialog";
 import { FindDialog } from "@/components/FindDialog";
@@ -11,7 +13,7 @@ import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
 import { useTabKeys } from "@/components/NoteTabs";
 import { PluginConsent } from "@/components/PluginConsent";
-import { Popouts } from "@/components/Popouts";
+import { InActiveWindow, Popouts } from "@/components/Popouts";
 import { RelayDialog } from "@/components/RelayDialog";
 import { Sidebar } from "@/components/Sidebar";
 import { SyncDialog } from "@/components/SyncDialog";
@@ -65,6 +67,14 @@ export function Shell() {
   const saveTitle = useData((s) => s.saveTitle);
 
   const doc = useCurrentDocument();
+  const paletteOpen = useApp((s) => s.paletteOpen);
+  const findOpen = useApp((s) => s.findOpen);
+  // 正在弹出窗口里写：命令面板里「这一篇」的命令对着那边的那一篇（视图文件不算一篇）
+  const popoutNote = useApp((s) => {
+    const popout = s.popouts.find((other) => other.id === s.activePopout);
+    return popout ? activeNoteOf(focusedPane(popout)) : null;
+  });
+  const popoutTarget = popoutNote && !isBaseTab(popoutNote) ? noteRef(popoutNote) : undefined;
   // 命令面板里那些「这一篇」的命令只认仓库里的文档（做客的那一篇不算）
   const docTarget = vaultRef(doc.editor?.target);
   // 列表栏收起了（像 VS Code 的侧栏）：和今日TODO、目标一样只剩窄栏和正文
@@ -86,9 +96,11 @@ export function Shell() {
     if (!initialized || indexing) return;
     useApp.getState().pruneTabs(new Set(notes.map((note) => note.id)));
   }, [initialized, indexing, notes]);
-  // 开着的标签那几篇的编辑器状态不挤出缓存
+  // 开着的标签那几篇的编辑器状态不挤出缓存（弹出窗口里的也算）
   const openNotes = useApp((s) =>
-    s.notePanes.flatMap((pane) => pane.tabs.map((tab) => tab.noteId)).join("\n"),
+    [...s.notePanes, ...s.popouts.flatMap((popout) => popout.panes)]
+      .flatMap((pane) => pane.tabs.map((tab) => tab.noteId))
+      .join("\n"),
   );
   useEffect(() => {
     pinEditorStates(openNotes.split("\n").map((id) => saveKeyOf(noteRef(id))));
@@ -272,8 +284,13 @@ export function Shell() {
             <UndoToast />
           </div>
         </div>
-        <CommandPalette docTarget={docTarget} />
-        <FindDialog />
+        {/* 在按快捷键的那个窗口里开（弹出窗口里按就开在那边，docs/标签页与分屏.md §20.2） */}
+        <InActiveWindow open={paletteOpen}>
+          <CommandPalette docTarget={popoutTarget ?? docTarget} />
+        </InActiveWindow>
+        <InActiveWindow open={findOpen}>
+          <FindDialog />
+        </InActiveWindow>
         <SyncDialog />
         <CollabDialog />
         {/* 在协作对话框之上：连不上时从协作对话框里「配中继…」打开 */}

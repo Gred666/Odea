@@ -333,25 +333,63 @@ export function resize(layout: PaneLayout, sizes: number[]): PaneLayout {
   };
 }
 
-/* ---------------- 弹出窗口（§16） ----------------
-   一个弹出窗口一个窗格，不在主窗口那一排里（selectedNoteId 的不变式只管主窗口）。改它的时候当成只有
-   一栏的布局，用上面那些函数 */
+/* ---------------- 弹出窗口（§16、§20） ----------------
+   一个弹出窗口是一排窗格（能分屏，和主窗口一样最多三栏），不在主窗口那一排里（selectedNoteId 的不变式只管主窗口）。
+   它就是一个 PaneLayout，上面那些函数直接用在它身上 */
 
-export const asLayout = (pane: NotePane): PaneLayout => ({ panes: [pane], activePane: pane.id });
+export interface PopoutLayout extends PaneLayout {
+  /** 窗口的 id（app/popout.ts 按它找窗口），不是哪个窗格的：窗格会拆、会关 */
+  id: string;
+}
 
-/**
- * 改完以后的那个窗格；关空了是 null（上面的函数关空了会换成一个空标签的新窗格）—— 弹出窗口跟着关。
- * 弹出窗口里不拆分，所以不会多出一栏
- */
-export function popoutPane(before: NotePane, after: PaneLayout): NotePane | null {
-  const pane = after.panes[0];
-  return after.panes.length === 1 && pane?.id === before.id ? pane : null;
+export function newPopout(tabs: NoteTab[], active = tabs[0]!.id): PopoutLayout {
+  const pane = newPane(tabs, 1, active);
+  return { id: `popout-${++seq}`, panes: [pane], activePane: pane.id };
+}
+
+export const tabsOf = (layout: PaneLayout): NoteTab[] => layout.panes.flatMap((pane) => pane.tabs);
+
+/** 改完以后的弹出窗口；一篇都不剩了（上面的函数关空了会换成一个空标签）是 null —— 窗口跟着关 */
+export function popoutAfter(before: PopoutLayout, after: PaneLayout): PopoutLayout | null {
+  if (after === before) return before;
+  return tabsOf(after).some((tab) => tab.noteId) ? { ...after, id: before.id } : null;
 }
 
 /** 弹出窗口里关一个标签：关的是最后一个就是关窗口（null），不像主窗口那样留一个 */
-export function closeInPopout(pane: NotePane, tabId: string) {
-  const { layout, closed } = dropTabs(asLayout(pane), (tab) => tab.id === tabId);
-  return { pane: popoutPane(pane, layout), closed };
+export function closeInPopout(popout: PopoutLayout, tabId: string) {
+  const { layout, closed } = dropTabs(popout, (tab) => tab.id === tabId);
+  return { popout: popoutAfter(popout, layout), closed };
+}
+
+/**
+ * 别的窗口拖过来的标签放进这个布局（§20.4）：where 是放在 paneId 那个窗格的第几个，或者拆到它的左边 / 右边
+ * （到了 MAX_PANES、那个窗格是空的就放进它）。那个窗格里已经开着这一篇：切到那个。
+ * 只有空标签的窗格（主窗口唯一的标签拖走了）换掉空标签。放进去的成了正在写的
+ */
+export function adopt(
+  layout: PaneLayout,
+  tab: NoteTab,
+  paneId: string,
+  where: number | "left" | "right",
+): PaneLayout {
+  const target = layout.panes.find((pane) => pane.id === paneId) ?? focusedPane(layout);
+  const kept = target.tabs.filter((other) => other.noteId);
+  if (typeof where === "string" && kept.length && layout.panes.length < MAX_PANES) {
+    const half = target.size / 2;
+    const pane = newPane([tab], half);
+    const panes = layout.panes.flatMap((other) => {
+      if (other !== target) return [other];
+      const rest = { ...other, size: half };
+      return where === "left" ? [pane, rest] : [rest, pane];
+    });
+    return { ...layout, panes, activePane: pane.id };
+  }
+  const same = kept.find((other) => other.noteId === tab.noteId);
+  if (same) return withPane(layout, { ...target, activeTab: same.id });
+  const tabs = [...kept];
+  const index = typeof where === "number" ? where : tabs.length;
+  tabs.splice(Math.max(0, Math.min(index, tabs.length)), 0, tab);
+  return withPane(layout, { ...target, tabs, activeTab: tab.id });
 }
 
 /** 拿一个标签出去开成弹出窗口：主窗口那一排里去掉它（不记进「最近关掉的」）。全拿走了留一个空标签 */
@@ -445,7 +483,10 @@ export interface StoredLayout {
 
 export function storeLayout(layout: PaneLayout): StoredLayout | null {
   const single = layout.panes.length === 1 && layout.panes[0]!.tabs.length < 2;
-  if (single) return null;
+  return single ? null : entriesOf(layout);
+}
+
+function entriesOf(layout: PaneLayout): StoredLayout {
   return {
     panes: layout.panes.map((pane) => ({
       tabs: pane.tabs.map((tab) => tab.noteId),
@@ -458,6 +499,12 @@ export function storeLayout(layout: PaneLayout): StoredLayout | null {
 
 /** 读回来；坏了的、空的去掉。selected 是记下的「上次停在哪一篇」，对不上时以它为准开在正在写的窗格里 */
 export function restoreLayout(raw: unknown, selected: string): PaneLayout {
+  const layout = parseLayout(raw);
+  if (!layout) return emptyLayout(selected);
+  return selected && selectedOf(layout) !== selected ? navigate(layout, selected) : layout;
+}
+
+function parseLayout(raw: unknown): PaneLayout | null {
   const stored = raw as Partial<StoredLayout> | undefined;
   const panes: NotePane[] = [];
   let activePane = "";
@@ -476,7 +523,43 @@ export function restoreLayout(raw: unknown, selected: string): PaneLayout {
       if (index === stored.pane) activePane = pane.id;
     });
   }
-  if (!panes.length) return emptyLayout(selected);
-  const layout = { panes, activePane: activePane || panes[0]!.id };
-  return selected && selectedOf(layout) !== selected ? navigate(layout, selected) : layout;
+  return panes.length ? { panes, activePane: activePane || panes[0]!.id } : null;
+}
+
+/** 弹出窗口在屏幕上的位置和大小（CSS 像素，window.open 的 left / top / width / height 认的那种） */
+export interface PopoutBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** 记下来的一个弹出窗口：里面的窗格和标签（和主窗口一样记法）、窗口在哪（docs/标签页与分屏.md §20.3） */
+export interface StoredPopout {
+  layout: StoredLayout;
+  bounds: PopoutBounds | null;
+}
+
+export function storePopout(popout: PaneLayout, bounds: PopoutBounds | null): StoredPopout | null {
+  if (!tabsOf(popout).some((tab) => tab.noteId)) return null;
+  return { layout: entriesOf(popout), bounds };
+}
+
+/** 读回来一个弹出窗口：坏了的、一篇都不在了的是 null。alive：那一篇还在不在 */
+export function restorePopout(
+  raw: unknown,
+  alive: (id: string) => boolean,
+): { popout: PopoutLayout; bounds: PopoutBounds | null } | null {
+  const stored = raw as Partial<StoredPopout> | undefined;
+  const parsed = parseLayout(stored?.layout);
+  if (!parsed) return null;
+  const live = dropTabs(parsed, (tab) => !alive(tab.noteId)).layout;
+  if (!tabsOf(live).some((tab) => tab.noteId)) return null;
+  const b = stored?.bounds as Partial<PopoutBounds> | null | undefined;
+  const ok = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+  const bounds =
+    b && ok(b.left) && ok(b.top) && ok(b.width) && ok(b.height) && b.width > 0 && b.height > 0
+      ? { left: b.left, top: b.top, width: b.width, height: b.height }
+      : null;
+  return { popout: { ...live, id: `popout-${++seq}` }, bounds };
 }

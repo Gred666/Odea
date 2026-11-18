@@ -103,12 +103,18 @@ interface AppState {
   closeTab: (tabId: string) => void;
   closeOtherTabs: (tabId: string) => void;
   closeTabsToRight: (tabId: string) => void;
-  /** 挪到某个窗格的第 index 个（同一个窗格里就是排顺序） */
+  /**
+   * 挪到某个窗格的第 index 个（同一个窗格里就是排顺序）。那个窗格可以在另一个窗口里（跨窗口拖标签，
+   * docs/标签页与分屏.md §20.4）：从原来的窗口拿走（弹出窗口拿空了就关），那个窗口成了正在写的
+   */
   moveTab: (tabId: string, paneId: string, index: number) => void;
-  /** 在 paneId 左边 / 右边拆出一栏放这个标签；copy：同一篇再开一个（向右拆分），否则是挪过去 */
+  /**
+   * 在 paneId 左边 / 右边拆出一栏放这个标签；copy：同一篇再开一个（向右拆分），否则是挪过去（也能挪到
+   * 另一个窗口里拆）
+   */
   splitTab: (tabId: string, paneId: string, side: "left" | "right", copy: boolean) => void;
-  /** 拖完分割条：每个窗格占的比例 */
-  resizePanes: (sizes: number[]) => void;
+  /** 拖完分割条：每个窗格占的比例。popout：那个弹出窗口里的 */
+  resizePanes: (sizes: number[], popout?: string | null) => void;
   /** 当前标签往回 / 往前走一步（alive：那一篇还在不在）；popout：那个弹出窗口里的 */
   walkTab: (step: -1 | 1, alive: (noteId: string) => boolean, popout?: string) => void;
   /** 重新打开最近关掉的那个（放进正在写的窗格原来的位置）；不在了的跳过 */
@@ -121,21 +127,25 @@ interface AppState {
   /** 笔记的 id 整个换了（开关日程、转成逻辑目录以后按路径认回来）：标签跟着换，认不回来的关掉 */
   remapTabs: (map: (noteId: string) => string | undefined) => void;
 
-  /* ---- 弹出窗口（docs/标签页与分屏.md §16）：一个窗口一个窗格，不进 notePanes ----
+  /* ---- 弹出窗口（docs/标签页与分屏.md §16、§20）：一个窗口一排窗格（能分屏），不进 notePanes ----
      上面那些按标签 id 的动作（切、关、排、往回走）认得出标签在哪个窗口里，各改各的。
      弹出窗口里关掉最后一个标签就是关这个窗口 */
-  popouts: NotePane[];
+  popouts: panes.PopoutLayout[];
   /**
    * 正在写的是哪个弹出窗口（它有焦点）；null 是主窗口。从正文里打开一篇（双链、反向链接）、
    * Ctrl+Shift+T 作用在它上面。列表栏在主窗口里，点它之前主窗口先拿到焦点，所以列表照旧开在主窗口
    */
   activePopout: string | null;
   setActivePopout: (paneId: string | null) => void;
-  /** 拆成弹出窗口：fromTab 从主窗口那一排里拿走，pane 是装着它的新窗格（app/popout.ts 先开好窗口） */
-  addPopout: (pane: NotePane, fromTab: string) => void;
+  /**
+   * 拆成弹出窗口：fromTab 从它所在的窗口里拿走（主窗口、或者另一个弹出窗口，拿空了就关），popout 是装着它的
+   * 新窗口（app/popout.ts 先开好窗口）。fromTab 是 null：重开记下的弹出窗口（标签本来就不在别的窗口里），
+   * 也不抢「正在写的」
+   */
+  addPopout: (popout: panes.PopoutLayout, fromTab: string | null) => void;
   /** 弹出窗口关了：back 时标签回到主窗口（关窗口），不然就丢掉（里面的标签都关掉了） */
   removePopout: (paneId: string, back: boolean) => void;
-  /** 弹出窗口里的一个标签挪回主窗口（挪的是最后一个就关掉这个窗口） */
+  /** 弹出窗口里的一个标签挪回主窗口正在写的那个窗格、切过去（挪的是最后一个就关掉这个窗口） */
   tabToMain: (tabId: string) => void;
 
   /**
@@ -340,6 +350,8 @@ interface Session {
   layout?: StoredLayout;
   /** P12.1 记的：一个窗格里的标签（笔记 id）。读得懂，不再写 */
   tabs?: string[];
+  /** 开着的弹出窗口：里面的标签、窗口在屏幕上的位置（docs/标签页与分屏.md §20.3）。下次打开仓库时重开 */
+  popouts?: panes.StoredPopout[];
 }
 
 function loadSession(): Session {
@@ -361,6 +373,7 @@ function loadSession(): Session {
       session.tabs = [...new Set(ids)];
     }
     if (p.layout && typeof p.layout === "object") session.layout = p.layout;
+    if (Array.isArray(p.popouts)) session.popouts = p.popouts;
   } catch {
     /* 隐私模式 / 数据损坏：从笔记区开始 */
   }
@@ -394,6 +407,20 @@ const layoutOfState = (state: Pick<AppState, "notePanes" | "activePane">): PaneL
 
 const initialSession = loadSession();
 const initialLayout = layoutOf(initialSession);
+/** 记下的弹出窗口，等界面起来以后重开（app/popout.ts 的 reopenPopouts）；拿走一次就没了 */
+let pendingPopouts: panes.StoredPopout[] = initialSession.popouts ?? [];
+
+export function takePendingPopouts(): panes.StoredPopout[] {
+  const taken = pendingPopouts;
+  pendingPopouts = [];
+  return taken;
+}
+
+/** 弹出窗口在屏幕上的位置（app/popout.ts 给：store 不引它，它引 store） */
+let popoutBounds: (paneId: string) => panes.PopoutBounds | null = () => null;
+export function providePopoutBounds(get: (paneId: string) => panes.PopoutBounds | null) {
+  popoutBounds = get;
+}
 
 function loadExpanded(): Set<string> {
   try {
@@ -423,35 +450,55 @@ const folderDir = (from: string, to: string): 1 | -1 | 0 =>
 
 export const useApp = create<AppState>((set, get) => {
   /**
-   * 改一下窗格（app/panes.ts 的纯函数）；没变就不 set。popout：改的是这个弹出窗口（当成只有一栏的布局），
-   * 关空了就去掉它（窗口跟着关，components/Popouts.tsx）
+   * 改一下窗格（app/panes.ts 的纯函数）；没变就不 set。popout：改的是这个弹出窗口（它也是一个布局），
+   * 关空了就去掉它（窗口跟着关，app/popout.ts）
    */
   const apply = (change: (layout: PaneLayout) => PaneLayout, popout?: string | null) => {
     if (popout) {
-      const pane = get().popouts.find((other) => other.id === popout);
-      if (!pane) return;
-      const before = panes.asLayout(pane);
+      const before = popoutById(popout);
+      if (!before) return;
       const after = change(before);
-      if (after !== before) setPopout(pane.id, panes.popoutPane(pane, after));
+      if (after !== before) setPopout(before.id, panes.popoutAfter(before, after));
       return;
     }
     const before = layoutOfState(get());
     const after = change(before);
     if (after !== before) set(laid(after));
   };
-  /** 换掉一个弹出窗口的窗格；null 是关掉它 */
-  const setPopout = (paneId: string, pane: NotePane | null) =>
+  const popoutById = (id: string) => get().popouts.find((popout) => popout.id === id);
+  /** 换掉一个弹出窗口；null 是关掉它 */
+  const setPopout = (id: string, popout: panes.PopoutLayout | null) =>
     set((state) => ({
-      popouts: pane
-        ? state.popouts.map((other) => (other.id === paneId ? pane : other))
-        : state.popouts.filter((other) => other.id !== paneId),
-      activePopout: !pane && state.activePopout === paneId ? null : state.activePopout,
+      popouts: popout
+        ? state.popouts.map((other) => (other.id === id ? popout : other))
+        : state.popouts.filter((other) => other.id !== id),
+      activePopout: !popout && state.activePopout === id ? null : state.activePopout,
     }));
   /** 标签在哪个弹出窗口里；在主窗口里是 null */
   const popoutOf = (tabId: string) =>
-    get().popouts.find((pane) => pane.tabs.some((tab) => tab.id === tabId))?.id ?? null;
-  const isPopout = (paneId?: string | null): paneId is string =>
-    !!paneId && get().popouts.some((pane) => pane.id === paneId);
+    get().popouts.find((popout) => !!panes.paneOfTab(popout, tabId))?.id ?? null;
+  /** 窗格在哪个弹出窗口里（弹出窗口自己的 id 也认：指的是它正在写的那个窗格）；在主窗口里是 null */
+  const windowOfPane = (paneId?: string | null) =>
+    (paneId &&
+      get().popouts.find(
+        (popout) => popout.id === paneId || popout.panes.some((pane) => pane.id === paneId),
+      )?.id) ||
+    null;
+  /**
+   * 一个标签挪到另一个窗口的 paneId 窗格（§20.4）：从原来的窗口拿走（不记进「最近关掉的」，弹出窗口拿空了就关），
+   * 放进去（panes.adopt），那个窗口成了正在写的
+   */
+  const moveAcross = (tabId: string, paneId: string, where: number | "left" | "right") => {
+    const from = popoutOf(tabId);
+    const to = windowOfPane(paneId);
+    const source = from ? popoutById(from) : layoutOfState(get());
+    const tab = source && panes.tabsOf(source).find((other) => other.id === tabId);
+    if (!tab?.noteId) return;
+    if (from) setPopout(from, panes.closeInPopout(popoutById(from)!, tabId).popout);
+    else set(laid(panes.takeOut(layoutOfState(get()), tabId)));
+    apply((layout) => panes.adopt(layout, tab, paneId, where), to);
+    get().setActivePopout(to);
+  };
   /** 关掉的记下来给 Ctrl+Shift+T */
   const remember = (closed: panes.Closed[]) => {
     closedTabs = [...closedTabs, ...closed].slice(-CLOSED_LIMIT);
@@ -497,47 +544,51 @@ export const useApp = create<AppState>((set, get) => {
     selectedNoteId: initialSession.noteId,
     selectedArchiveId: initialSession.archiveId,
 
-    selectNote: (id, popout) =>
-      apply((layout) => panes.navigate(layout, id), isPopout(popout) ? popout : null),
+    selectNote: (id, popout) => apply((layout) => panes.navigate(layout, id), windowOfPane(popout)),
     selectArchive: (id) => set({ selectedArchiveId: id }),
 
     notePanes: initialLayout.panes,
     activePane: initialLayout.activePane,
-    openNoteTab: (noteId, paneId) =>
-      apply((layout) => panes.openTab(layout, noteId, paneId), isPopout(paneId) ? paneId : null),
+    openNoteTab: (noteId, paneId) => {
+      const popout = windowOfPane(paneId);
+      // 指名的是弹出窗口自己：开在它正在写的那个窗格里
+      const pane = paneId === popout ? undefined : paneId;
+      apply((layout) => panes.openTab(layout, noteId, pane), popout);
+    },
     switchTab: (tabId) => apply((layout) => panes.switchTab(layout, tabId), popoutOf(tabId)),
-    focusPane: (paneId) => apply((layout) => panes.focusPane(layout, paneId)),
+    focusPane: (paneId) => apply((layout) => panes.focusPane(layout, paneId), windowOfPane(paneId)),
     closeTab: (tabId) => {
-      const popout = get().popouts.find((pane) => pane.tabs.some((tab) => tab.id === tabId));
+      const popout = popoutOf(tabId);
       if (!popout) {
         close((layout) => panes.closeTab(layout, tabId));
         return;
       }
       // 弹出窗口里关掉最后一个标签：关这个窗口
-      const { pane, closed } = panes.closeInPopout(popout, tabId);
+      const { popout: after, closed } = panes.closeInPopout(popoutById(popout)!, tabId);
       remember(closed);
-      setPopout(popout.id, pane);
+      setPopout(popout, after);
     },
     closeOtherTabs: (tabId) => close((layout) => panes.closeOthers(layout, tabId), popoutOf(tabId)),
     closeTabsToRight: (tabId) =>
       close((layout) => panes.closeRight(layout, tabId), popoutOf(tabId)),
-    moveTab: (tabId, paneId, index) => {
+    moveTab: (tabId, to, index) => {
+      // 指名的是弹出窗口自己：它正在写的那个窗格
+      const paneId = popoutById(to)?.activePane ?? to;
       const popout = popoutOf(tabId);
-      // 跨窗口拖不了（指针出了窗口），只有弹出窗口里自己排顺序
-      if (popout || isPopout(paneId)) {
-        if (popout === paneId)
-          apply((layout) => panes.moveTab(layout, tabId, paneId, index), popout);
-        return;
-      }
-      apply((layout) => panes.moveTab(layout, tabId, paneId, index));
+      if (popout !== windowOfPane(paneId)) moveAcross(tabId, paneId, index);
+      else apply((layout) => panes.moveTab(layout, tabId, paneId, index), popout);
     },
-    splitTab: (tabId, paneId, side, copy) => {
-      if (popoutOf(tabId) || isPopout(paneId)) return;
-      apply((layout) => panes.split(layout, tabId, paneId, side, copy));
+    splitTab: (tabId, to, side, copy) => {
+      const paneId = popoutById(to)?.activePane ?? to;
+      const popout = popoutOf(tabId);
+      if (popout === windowOfPane(paneId)) {
+        apply((layout) => panes.split(layout, tabId, paneId, side, copy), popout);
+      } else if (!copy) moveAcross(tabId, paneId, side);
     },
-    resizePanes: (sizes) => apply((layout) => panes.resize(layout, sizes)),
+    resizePanes: (sizes, popout) =>
+      apply((layout) => panes.resize(layout, sizes), windowOfPane(popout)),
     walkTab: (step, alive, popout) =>
-      apply((layout) => panes.walkHistory(layout, step, alive), isPopout(popout) ? popout : null),
+      apply((layout) => panes.walkHistory(layout, step, alive), windowOfPane(popout)),
     reopenTab: (alive) => {
       // 开回正在写的那个窗口里：弹出窗口里按的 Ctrl+Shift+T 开在弹出窗口里
       const popout = get().activePopout;
@@ -578,31 +629,45 @@ export const useApp = create<AppState>((set, get) => {
     setActivePopout: (paneId) => {
       if (get().activePopout !== paneId) set({ activePopout: paneId });
     },
-    addPopout: (pane, fromTab) =>
-      set((state) => ({
-        ...laid(panes.takeOut(layoutOfState(state), fromTab)),
-        popouts: [...state.popouts, pane],
-        activePopout: pane.id,
-      })),
-    removePopout: (paneId, back) =>
+    addPopout: (popout, fromTab) => {
+      // 从别的弹出窗口里拖出来的：那边拿走（拿空了那个窗口关掉）。拿走和加上要在同一次 set 里：
+      // 新窗口已经开好了、还不在 popouts 里，中间多一次 set 的话 app/popout.ts 会当它是去掉了的、把它关掉
+      const source = fromTab ? popoutOf(fromTab) : null;
       set((state) => {
-        const pane = state.popouts.find((other) => other.id === paneId);
-        if (!pane) return {};
+        let popouts = state.popouts;
+        if (source && fromTab) {
+          const from = popouts.find((other) => other.id === source)!;
+          const after = panes.closeInPopout(from, fromTab).popout;
+          popouts = after
+            ? popouts.map((other) => (other === from ? after : other))
+            : popouts.filter((other) => other !== from);
+        }
         return {
-          ...(back ? laid(panes.bringBack(layoutOfState(state), pane.tabs)) : {}),
-          popouts: state.popouts.filter((other) => other !== pane),
-          activePopout: state.activePopout === paneId ? null : state.activePopout,
+          ...(fromTab && !source ? laid(panes.takeOut(layoutOfState(state), fromTab)) : {}),
+          popouts: [...popouts, popout],
+          activePopout: fromTab ? popout.id : state.activePopout,
+        };
+      });
+    },
+    removePopout: (id, back) =>
+      set((state) => {
+        const popout = state.popouts.find((other) => other.id === id);
+        if (!popout) return {};
+        return {
+          ...(back ? laid(panes.bringBack(layoutOfState(state), panes.tabsOf(popout))) : {}),
+          popouts: state.popouts.filter((other) => other !== popout),
+          activePopout: state.activePopout === id ? null : state.activePopout,
         };
       }),
     tabToMain: (tabId) => {
-      const popout = get().popouts.find((pane) => pane.tabs.some((tab) => tab.id === tabId));
-      const tab = popout?.tabs.find((other) => other.id === tabId);
+      const id = popoutOf(tabId);
+      const popout = id ? popoutById(id) : undefined;
+      const tab = popout && panes.tabsOf(popout).find((other) => other.id === tabId);
       if (!popout || !tab) return;
-      // 回到主窗口正在写的那个窗格，切过去（这一篇那里已经开着就切到那个）
-      const back = panes.bringBack(layoutOfState(get()), [tab]);
-      const there = panes.focusedPane(back).tabs.find((other) => other.noteId === tab.noteId);
-      set(laid(there ? panes.switchTab(back, there.id) : back));
-      setPopout(popout.id, panes.closeInPopout(popout, tabId).pane);
+      // 回到主窗口正在写的那个窗格的最后，切过去（这一篇那里已经开着就切到那个）
+      const main = layoutOfState(get());
+      set(laid(panes.adopt(main, tab, main.activePane, Number.POSITIVE_INFINITY)));
+      setPopout(popout.id, panes.closeInPopout(popout, tabId).popout);
     },
     pendingAnchor: null,
     setPendingAnchor: (pendingAnchor) => set({ pendingAnchor }),
@@ -766,6 +831,7 @@ export function restoreVaultSession(root: string, legacy: boolean) {
   vaultKey = root;
   legacyFallback = legacy;
   const session = loadSession();
+  pendingPopouts = session.popouts ?? [];
   useApp.setState({
     workspace: session.workspace,
     selectedArchiveId: session.archiveId,
@@ -776,6 +842,14 @@ export function restoreVaultSession(root: string, legacy: boolean) {
 }
 
 /** 每种窗口启动时调一次（src/boot/）：应用初始偏好并跟随系统变化，记下每次停在哪 */
+let lastSession = "";
+let persistSession: (state: AppState) => void = () => {};
+
+/** 现在就记一次（弹出窗口挪了地方、改了大小：store 没变，关窗口之前补记一下位置） */
+export function saveSessionNow(): void {
+  persistSession(useApp.getState());
+}
+
 export function initPreferences() {
   const { theme, reduceMotion, bodySize, measure } = useApp.getState();
   applyTheme(theme);
@@ -784,34 +858,32 @@ export function initPreferences() {
 
   // 换了区、换了篇、换了文件夹、开关了标签就记一下（只是几个字符串，不用节流）。
   // 桌面端在知道是哪个仓库之前不记：记下的会是还没换成这个仓库记录的初始值
-  let last = "";
-  useApp.subscribe((state) => {
+  persistSession = (state: AppState) => {
     if (isTauri && vaultKey === null) return;
+    // 弹出窗口记着（下次打开仓库时重开在原来的地方，docs/标签页与分屏.md §20.3）；
+    // 重开不了的（浏览器预览、窗口开不出来）那时候再把标签放回主窗口
+    const layout = panes.storeLayout(layoutOfState(state));
+    const popouts = state.popouts
+      .map((popout) => panes.storePopout(popout, popoutBounds(popout.id)))
+      .filter((popout): popout is panes.StoredPopout => popout !== null);
     const session: Session = {
       workspace: state.workspace,
       noteId: state.selectedNoteId,
       archiveId: state.selectedArchiveId,
       noteFolder: state.noteFolder,
-      ...(() => {
-        // 弹出窗口不记：下次打开时它们的标签在主窗口里（和关掉弹出窗口一样）
-        const layout = panes.storeLayout(
-          panes.bringBack(
-            layoutOfState(state),
-            state.popouts.flatMap((pane) => pane.tabs),
-          ),
-        );
-        return layout ? { layout } : {};
-      })(),
+      ...(layout ? { layout } : {}),
+      ...(popouts.length ? { popouts } : {}),
     };
     const json = JSON.stringify(session);
-    if (json === last) return;
-    last = json;
+    if (json === lastSession) return;
+    lastSession = json;
     try {
       localStorage.setItem(keyOf(SESSION_KEY), json);
     } catch {
       /* 忽略：下次从笔记区开始而已 */
     }
-  });
+  };
+  useApp.subscribe((state) => persistSession(state));
 
   mq?.addEventListener("change", () => {
     // 跟随系统时系统换了明暗（比如到点自动切暗色）：一样播日落 / 日出

@@ -3,7 +3,7 @@ import "@/plugins";
 import { Shell } from "@/app/Shell";
 import { armIntro, markShown } from "@/app/intro";
 import { startQuickCapture } from "@/app/quickCapture";
-import { initPreferences, restoreVaultSession } from "@/app/store";
+import { initPreferences, restoreVaultSession, takePendingPopouts } from "@/app/store";
 import { initCollab } from "@/collab/store";
 import { preloadEditor } from "@/components/DocumentView";
 import { backend } from "@/data/backend";
@@ -55,4 +55,7 @@ export async function boot() {
   // 窗口出来了，开场才开始落笔
   await mount(<Shell />);
   markShown();
+  // 上次开着的弹出窗口重开在原来的地方（docs/标签页与分屏.md §20.3）：主窗口先出来，它们跟着
+  const { reopenPopouts } = await import("@/app/popout");
+  void reopenPopouts(takePendingPopouts());
 }

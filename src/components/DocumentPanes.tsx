@@ -254,12 +254,13 @@ export function usePaneWide(ref: React.RefObject<HTMLDivElement | null>, split: 
  * （最上面那 38px 还是拖窗口的）。悬停一会儿（300ms，划过去不闪）变成主色。
  *
  * 拖的时候不经过 React：直接改左右两个窗格的 flex-grow（按像素当比例），每帧最多一次；松手才写进
- * store。双击：几栏一样宽
+ * store。双击：几栏一样宽。popout：弹出窗口里的（components/Popouts.tsx）
  */
-function Sash({
+export function Sash({
   rowRef,
   index,
-}: { rowRef: React.RefObject<HTMLDivElement | null>; index: number }) {
+  popout = null,
+}: { rowRef: React.RefObject<HTMLDivElement | null>; index: number; popout?: string | null }) {
   const [dragging, setDragging] = useState(false);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -309,7 +310,7 @@ function Sash({
         host.style.flexGrow = "";
         host.style.flex = `${sizes[i]} 1 0px`;
       });
-      useApp.getState().resizePanes(sizes);
+      useApp.getState().resizePanes(sizes, popout);
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
@@ -329,12 +330,22 @@ function Sash({
     const next = Math.max(min, Math.min(pair - min, widths[index - 1]! + delta));
     widths[index - 1] = next;
     widths[index] = pair - next;
-    useApp.getState().resizePanes(widths.map((width) => width / total));
+    useApp.getState().resizePanes(
+      widths.map((width) => width / total),
+      popout,
+    );
   };
 
   const equalize = () => {
-    const count = useApp.getState().notePanes.length;
-    useApp.getState().resizePanes(Array.from({ length: count }, () => 1 / count));
+    const app = useApp.getState();
+    const count = popout
+      ? (app.popouts.find((other) => other.id === popout)?.panes.length ?? 0)
+      : app.notePanes.length;
+    if (count)
+      app.resizePanes(
+        Array.from({ length: count }, () => 1 / count),
+        popout,
+      );
   };
 
   return (

@@ -1,7 +1,7 @@
 import { MAX_PANES, type NotePane } from "@/app/panes";
-import { popOut } from "@/app/popout";
+import { focusWindow, popOut, windowAt } from "@/app/popout";
 import { type NoteTab, useApp } from "@/app/store";
-import { baseOfTab, baseTitle } from "@/bases/ids";
+import { baseOfTab, baseTitle, isBaseTab } from "@/bases/ids";
 import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, useData } from "@/data/store";
 import { cn } from "@/lib/cn";
@@ -102,7 +102,7 @@ export function NoteTabs({
     wasShown.current = shown;
   }, [shown]);
   const host = usePaneWindow();
-  const drag = useTabDrag(listRef, pane.id, host.popout !== null);
+  const drag = useTabDrag(listRef, pane.id, host.popout);
   const [menu, setMenu] = useState<TabMenuAt | null>(null);
 
   // 竖着滚轮也横着滚（标签多到放不下时）。React 的 onWheel 是 passive 的，拦不住页面滚
@@ -443,27 +443,38 @@ const lefts = new WeakMap<HTMLElement, Map<string, number>>();
 const DOCK_SLOP = 24;
 /** 窗格左右各这么宽是「拆到这一边」，中间是「挪进这个窗格」 */
 const EDGE = 0.25;
-/** 指针离窗口边不到这么远（或者出了窗口）：松手开成弹出窗口 */
+/** 指针离窗口边不到这么远（或者出了窗口、又不在别的窗口上）：松手开成弹出窗口 */
 const EDGE_OUT = 2;
 
 interface DockZone {
   paneId: string;
-  /** outside：拖出了窗口，松手开成弹出窗口（§16） */
+  /** 落点在哪个窗口：弹出窗口的 id，主窗口是 null */
+  popout: string | null;
+  /** outside：拖出了窗口（又不在别的窗口上），松手开成弹出窗口（§16） */
   kind: "left" | "right" | "center" | "outside";
   rect: { left: number; top: number; width: number; height: number };
+}
+
+/** 停靠时指针在哪：落点，和小签、落点画在哪个窗口（文档）的哪里（那个窗口里的坐标） */
+interface DockSpot {
+  zone: DockZone | null;
+  doc: Document;
+  x: number;
+  y: number;
 }
 
 /**
  * 按下就切过去（和浏览器一样）；左右拖过 4px 是排顺序：被拖的跟着指针走，别的让位，
  * 松手才真的挪（moveTab）。上下拖出 24px 是停靠（docs/标签页与分屏.md §13）：标签回到原处、
  * 淡一档，一个小签跟着指针走，指针底下那个窗格亮出落点 —— 左右四分之一是拆到那一边，中间是挪进去。
+ * 拖到另一个窗口（主窗口、弹出窗口）上也一样，松手挪过去、那个窗口提到前面（§20.4）；哪个窗口都不在是开成新窗口。
  * 点已经是当前的那个：这个窗格的正文滚回顶上（和点标签栏底下「路径 / 标题」那一行的标题一样）
  */
 function useTabDrag(
   listRef: React.RefObject<HTMLDivElement | null>,
   paneId: string,
-  /** 在弹出窗口里：只排顺序，不停靠、不拆分（跨窗口拖不了，指针一出窗口就不归它管了） */
-  inPopout: boolean,
+  /** 在哪个弹出窗口里；主窗口是 null */
+  popout: string | null,
 ) {
   return (event: ReactPointerEvent<HTMLElement>, tab: NoteTab, wasActive: boolean) => {
     if (event.button !== 0) return;
@@ -492,10 +503,11 @@ function useTabDrag(
     let target = from;
     let dock: Dock | null = null;
     let zone: DockZone | null = null;
+    // 按着的时候指针出了窗口也照样收得到（系统把鼠标捕获给了按下的那个窗口），坐标在窗口外面
     element.setPointerCapture(event.pointerId);
 
     const move = (moveEvent: PointerEvent) => {
-      if (!inPopout && mode !== "dock" && Math.abs(moveEvent.clientY - startY) >= DOCK_SLOP) {
+      if (mode !== "dock" && Math.abs(moveEvent.clientY - startY) >= DOCK_SLOP) {
         // 别的标签滑回原处，被拖的回到自己的格子里、淡一档
         mode = "dock";
         target = from;
@@ -506,8 +518,9 @@ function useTabDrag(
         dock = openDock(element.querySelector("[data-tab-title]")?.textContent ?? "", doc);
       }
       if (mode === "dock") {
-        zone = dockZoneAt(moveEvent.clientX, moveEvent.clientY, paneId, doc);
-        dock?.move(moveEvent.clientX, moveEvent.clientY, zone);
+        const spot = locate(moveEvent, doc, paneId, popout);
+        zone = spot.zone;
+        dock?.move(spot);
         return;
       }
       if (mode === "press") {
@@ -551,19 +564,23 @@ function useTabDrag(
         const drop = zone;
         if (!drop) return;
         const app = useApp.getState();
+        const across = drop.popout !== popout;
+        // 开窗口、挪到别的窗口只认真的松手（pointercancel 是系统把指针拿走了）
+        if ((across || drop.kind === "outside") && upEvent.type !== "pointerup") return;
         if (drop.kind === "outside") {
-          if (upEvent.type !== "pointerup") return;
           // 松手的地方就是新窗口里这个标签的位置；宽度和它原来那一栏差不多
           const width = element.closest<HTMLElement>("[data-pane]")?.offsetWidth;
           popOut(tab.id, { x: upEvent.screenX, y: upEvent.screenY }, width);
           return;
         }
         if (drop.kind === "center") {
-          const into = app.notePanes.find((pane) => pane.id === drop.paneId);
+          const into = layoutIn(drop.popout)?.panes.find((pane) => pane.id === drop.paneId);
           app.moveTab(tab.id, drop.paneId, into ? into.tabs.length : 0);
         } else {
           app.splitTab(tab.id, drop.paneId, drop.kind, false);
         }
+        // 挪到了另一个窗口：接着在那边写
+        if (across) focusWindow(drop.popout);
         return;
       }
       // 松手时看得见的位置记成「上一次的位置」：挪过去以后从这里接着滑到格子里
@@ -597,47 +614,86 @@ function useTabDrag(
   };
 }
 
+/** 一个窗口里的那一排窗格：弹出窗口的，主窗口（null）的 */
+function layoutIn(popout: string | null): { panes: NotePane[] } | undefined {
+  const app = useApp.getState();
+  return popout ? app.popouts.find((other) => other.id === popout) : { panes: app.notePanes };
+}
+
 /**
- * 指针底下是哪个窗格的哪一块。拆不了的（到了三栏、把一个窗格里唯一的标签拖到自己边上）
- * 两边也算「挪进去」；挪进自己所在的窗格等于没动，不算落点
+ * 停靠时指针在哪。在按下的那个窗口里：它里面的窗格。出了这个窗口、落在另一个应用窗口里：那个窗口的窗格
+ * （跨窗口拖，§20.4，按屏幕坐标找，app/popout.ts 的 windowAt）。哪个窗口都不在、或者贴着这个窗口的边
+ * （最外面那 2px：窗口最大化时指针出不了屏幕，也就出不了窗口）：松手开成弹出窗口
  */
-function dockZoneAt(x: number, y: number, fromPane: string, doc: Document): DockZone | null {
-  const { notePanes } = useApp.getState();
-  const source = notePanes.find((pane) => pane.id === fromPane);
+function locate(
+  event: PointerEvent,
+  doc: Document,
+  fromPane: string,
+  here: string | null,
+): DockSpot {
   const view = doc.defaultView ?? window;
-  // 拖出了主窗口、或者拖到了窗口的边上：开成弹出窗口（§16）。窗口最大化时指针出不了屏幕，
-  // 也就出不了窗口，贴着边（最外面那 2px）也算
-  if (
+  const { clientX: x, clientY: y } = event;
+  const edge =
     x < EDGE_OUT ||
     y < EDGE_OUT ||
     x >= view.innerWidth - EDGE_OUT ||
-    y >= view.innerHeight - EDGE_OUT
-  ) {
-    return windowKind === "vault"
-      ? { paneId: fromPane, kind: "outside", rect: { left: 0, top: 0, width: 0, height: 0 } }
-      : null;
+    y >= view.innerHeight - EDGE_OUT;
+  if (!edge) return { zone: dockZoneAt(x, y, fromPane, doc, here), doc, x, y };
+  const inside = x >= 0 && y >= 0 && x < view.innerWidth && y < view.innerHeight;
+  if (windowKind !== "vault") return { zone: null, doc, x, y };
+  const hit = inside ? null : windowAt(event.screenX, event.screenY);
+  if (hit && hit.popout !== here) {
+    const there = hit.win.document;
+    const zone = dockZoneAt(hit.x, hit.y, fromPane, there, hit.popout);
+    return { zone, doc: there, x: hit.x, y: hit.y };
   }
+  const rect = { left: 0, top: 0, width: 0, height: 0 };
+  return { zone: { paneId: fromPane, popout: here, kind: "outside", rect }, doc, x, y };
+}
+
+/**
+ * 指针底下是 popout 那个窗口里哪个窗格的哪一块（x、y 是那个窗口里的坐标）。拆不了的（到了三栏、
+ * 把一个窗格里唯一的标签拖到自己边上）两边也算「挪进去」；挪进自己所在的窗格等于没动，不算落点。
+ * 主窗口不在笔记区（日历、归档这些）不接
+ */
+function dockZoneAt(
+  x: number,
+  y: number,
+  fromPane: string,
+  doc: Document,
+  popout: string | null,
+): DockZone | null {
+  const layout = layoutIn(popout);
+  if (!layout || (!popout && useApp.getState().workspace !== "notes")) return null;
+  const source = layout.panes.find((pane) => pane.id === fromPane);
   for (const host of doc.querySelectorAll<HTMLElement>("[data-pane]")) {
     const box = host.getBoundingClientRect();
     if (x < box.left || x >= box.right || y < box.top || y >= box.bottom) continue;
     const paneId = host.dataset.pane!;
     const at = (x - box.left) / box.width;
     const lonely = paneId === fromPane && (source?.tabs.length ?? 0) < 2;
-    const canSplit = notePanes.length < MAX_PANES && !lonely;
+    const canSplit = layout.panes.length < MAX_PANES && !lonely;
     const half = box.width / 2;
     const rect = { left: box.left, top: box.top, width: box.width, height: box.height };
-    if (canSplit && at < EDGE) return { paneId, kind: "left", rect: { ...rect, width: half } };
+    if (canSplit && at < EDGE) {
+      return { paneId, popout, kind: "left", rect: { ...rect, width: half } };
+    }
     if (canSplit && at > 1 - EDGE) {
-      return { paneId, kind: "right", rect: { ...rect, left: box.left + half, width: half } };
+      return {
+        paneId,
+        popout,
+        kind: "right",
+        rect: { ...rect, left: box.left + half, width: half },
+      };
     }
     if (paneId === fromPane) return null;
-    return { paneId, kind: "center", rect };
+    return { paneId, popout, kind: "center", rect };
   }
   return null;
 }
 
 interface Dock {
-  move: (x: number, y: number, zone: DockZone | null) => void;
+  move: (spot: DockSpot) => void;
   close: () => void;
 }
 
@@ -645,12 +701,15 @@ interface Dock {
  * 停靠时的两样东西：跟着指针的小签、窗格上的落点。都是 fixed、不接指针，直接操作 DOM（指针每动一下
  * 不重渲染 React）。落点只淡入淡出；换了一块就把位置、大小滑过去（它没有字，docs/PITFALLS/动效.md 规矩 1 说的是
  * 带字的东西不缩放），第一次出现直接摆在那里再淡入，不从上一次的地方滑过来。
- * 坐标都对齐到整物理像素，边框不糊
+ * 指针到了另一个窗口上，两样都搬进那个窗口的文档（§20.4）。坐标都对齐到整物理像素，边框不糊
  */
 function openDock(label: string, doc: Document): Dock {
-  const view = doc.defaultView ?? window;
-  const ratio = view.devicePixelRatio || 1;
-  const snap = (value: number) => Math.round(value * ratio) / ratio;
+  let at = doc;
+  let view = doc.defaultView ?? window;
+  const snap = (value: number) => {
+    const ratio = view.devicePixelRatio || 1;
+    return Math.round(value * ratio) / ratio;
+  };
   const overlay = doc.createElement("div");
   overlay.className =
     "pointer-events-none fixed left-0 top-0 z-[60] rounded-[10px] border border-accent-line bg-accent-wash/70";
@@ -676,7 +735,17 @@ function openDock(label: string, doc: Document): Dock {
     .join(", ");
 
   return {
-    move(x, y, zone) {
+    move({ zone, doc: there, x, y }) {
+      if (there !== at) {
+        // 换了窗口：搬过去，落点不从上一个窗口里的位置滑过来
+        at = there;
+        view = there.defaultView ?? window;
+        overlay.style.transition = "none";
+        overlay.style.opacity = "0";
+        shown = null;
+        there.body.append(overlay, ghost);
+        ghostWidth = ghost.offsetWidth;
+      }
       // 松手会开成新窗口：小签上说一声
       if ((zone?.kind === "outside") !== outside) {
         outside = zone?.kind === "outside";
@@ -761,10 +830,9 @@ function TabMenu({ at, onClose }: { at: TabMenuAt; onClose: () => void }) {
     };
   }, [onClose, view]);
 
-  const pane = (popout ? popouts : notePanes).find((other) =>
-    other.tabs.some((tab) => tab.id === at.tabId),
-  );
-  if (!pane) return null;
+  const layout = popout ? popouts.find((other) => other.id === popout) : { panes: notePanes };
+  const pane = layout?.panes.find((other) => other.tabs.some((tab) => tab.id === at.tabId));
+  if (!layout || !pane) return null;
   const index = pane.tabs.findIndex((tab) => tab.id === at.tabId);
   const app = useApp.getState();
   const items: { id: string; label: string; hint?: string; run: () => void }[] = [
@@ -775,7 +843,7 @@ function TabMenu({ at, onClose }: { at: TabMenuAt; onClose: () => void }) {
     ...(index < pane.tabs.length - 1
       ? [{ id: "right", label: "关闭右侧的标签", run: () => app.closeTabsToRight(at.tabId) }]
       : []),
-    ...(!popout && notePanes.length < MAX_PANES
+    ...(layout.panes.length < MAX_PANES
       ? [
           {
             id: "split",
@@ -785,10 +853,11 @@ function TabMenu({ at, onClose }: { at: TabMenuAt; onClose: () => void }) {
           },
         ]
       : []),
-    // 弹出窗口（§16）：主窗口里拆出去，弹出窗口里挪回来
-    popout
-      ? { id: "main", label: "移回主窗口", run: () => app.tabToMain(at.tabId) }
-      : { id: "popout", label: "在新窗口中打开", run: () => void popOut(at.tabId) },
+    // 弹出窗口（§16）：主窗口里拆出去，弹出窗口里挪回来；弹出窗口里不止一个标签时也能再拆出去
+    ...(popout ? [{ id: "main", label: "移回主窗口", run: () => app.tabToMain(at.tabId) }] : []),
+    ...(!popout || layout.panes.some((other) => other !== pane || other.tabs.length > 1)
+      ? [{ id: "popout", label: "在新窗口中打开", run: () => void popOut(at.tabId) }]
+      : []),
   ];
 
   return createPortal(
@@ -834,8 +903,8 @@ function TabMenu({ at, onClose }: { at: TabMenuAt; onClose: () => void }) {
  *   macOS 上 Option + ← 是编辑器里按词移动，不占
  */
 export function useTabKeys(
-  /** 弹出窗口（§16）：在那个窗口上听，作用在它的窗格上（只关、切、往回走；不拆分） */
-  popout?: { win: Window; paneId: string },
+  /** 弹出窗口（§16、§20）：在那个窗口上听，作用在它正在写的那个窗格上 */
+  popout?: { win: Window; popout: string },
 ): void {
   useEffect(() => {
     const target = popout?.win ?? window;
@@ -851,15 +920,27 @@ export function useTabKeys(
         !!app.updateDialog
       );
     };
-    const alive = (id: string) => useData.getState().notes.some((note) => note.id === id);
+    // 视图文件的标签按路径开着，不在笔记列表里（docs/视图文件.md §3.5）
+    const alive = (id: string) =>
+      isBaseTab(id) || useData.getState().notes.some((note) => note.id === id);
     const onKey = (event: KeyboardEvent) => {
       // 输入法正在组字时的按键是输入法的：这时换篇，组着的拼音会被当成字留在正文里、存下去
       if (event.defaultPrevented || event.repeat || event.isComposing || busy()) return;
       const app = useApp.getState();
-      const pane = popout
-        ? app.popouts.find((other) => other.id === popout.paneId)
-        : (app.notePanes.find((other) => other.id === app.activePane) ?? app.notePanes[0]);
+      const layout = popout
+        ? app.popouts.find((other) => other.id === popout.popout)
+        : { panes: app.notePanes, activePane: app.activePane };
+      const pane =
+        layout && (layout.panes.find((other) => other.id === layout.activePane) ?? layout.panes[0]);
       if (!pane) return;
+      const doc = target.document;
+      /** 改完以后这个窗口正在写的那个窗格 */
+      const nextPane = () => {
+        const after = useApp.getState();
+        return popout
+          ? after.popouts.find((other) => other.id === popout.popout)?.activePane
+          : after.activePane;
+      };
       const tabs = pane.tabs;
       const index = tabs.findIndex((tab) => tab.id === pane.activeTab);
       const mod = event.ctrlKey || event.metaKey;
@@ -878,13 +959,13 @@ export function useTabKeys(
       if (mod && plain && event.code === "KeyW") {
         // 弹出窗口里关掉最后一个就是关这个窗口（像浏览器）；主窗口里不关窗口
         if (popout || tabs.length > 1 || app.notePanes.length > 1) {
-          const active = document.activeElement;
+          const active = doc.activeElement;
           app.closeTab(pane.activeTab);
           // 关的是这一栏最后一个标签、这一栏收掉了：正文里的焦点交给成了当前栏的那一栏。
           // 它的编辑器早就挂着，等不到 lib/focusHandoff.ts 的交接
-          const next = useApp.getState().activePane;
-          if (!popout && next !== pane.id && active?.closest(".cm-content")) {
-            document
+          const next = nextPane();
+          if (next && next !== pane.id && active?.closest(".cm-content")) {
+            doc
               .querySelector<HTMLElement>(`[data-pane="${next}"] .cm-content`)
               ?.focus({ preventScroll: true });
           }
@@ -898,21 +979,18 @@ export function useTabKeys(
       } else if (digit && digitKey && !event.shiftKey) {
         const tab = digit === 9 ? tabs[tabs.length - 1] : tabs[digit - 1];
         if (tab) app.switchTab(tab.id);
-      } else if (!popout && mod && plain && event.code === "Backslash") {
-        const active = document.activeElement;
+      } else if (mod && plain && event.code === "Backslash") {
+        // 弹出窗口里的元素是那个窗口的 HTMLElement，不用 instanceof（§20.2）
+        const active = doc.activeElement as HTMLElement | null;
         app.splitTab(pane.activeTab, pane.id, "right", true);
         // 拆出来的一栏成了当前栏：正文里的焦点跟过去（lib/focusHandoff.ts），不然打的字还落在原来那一栏。
         // 新的一栏这时还没画出来，它的编辑器挂上时接
-        if (
-          useApp.getState().activePane !== pane.id &&
-          active instanceof HTMLElement &&
-          active.classList.contains("cm-content")
-        ) {
+        if (nextPane() !== pane.id && active?.classList.contains("cm-content")) {
           active.blur();
-          offerEditorFocus(document);
+          offerEditorFocus(doc);
         }
       } else if (back || forward) {
-        app.walkTab(back ? -1 : 1, alive, popout?.paneId);
+        app.walkTab(back ? -1 : 1, alive, popout?.popout);
       } else return;
       event.preventDefault();
       event.stopPropagation();
@@ -922,7 +1000,7 @@ export function useTabKeys(
       if ((event.button !== 3 && event.button !== 4) || busy()) return;
       event.preventDefault();
       if (event.type === "mouseup") {
-        useApp.getState().walkTab(event.button === 3 ? -1 : 1, alive, popout?.paneId);
+        useApp.getState().walkTab(event.button === 3 ? -1 : 1, alive, popout?.popout);
       }
     };
     target.addEventListener("keydown", onKey, true);
