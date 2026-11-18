@@ -4,12 +4,12 @@ import { useApp } from "@/app/store";
 import type { CollabScheduler } from "@/collab/session";
 import { useCurrentDocument } from "@/data/adapter";
 import { useData } from "@/data/store";
-import { NOTE, type NoteSummary, isShared, noteRef } from "@/data/types";
+import { NOTE, type NoteSummary, noteRef } from "@/data/types";
 import { TeamController } from "@/team/controller";
 import { createMockTeamHub } from "@/team/mockNet";
-import { initTeam, resetTeam, setTeamView, teamDocId, useTeam } from "@/team/store";
+import { initTeam, resetTeam, setTeamView, useTeam, useTeamView } from "@/team/store";
 import { MotionGlobalConfig } from "motion/react";
-import { act, useEffect } from "react";
+import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TeamUnseenBanner } from "./TeamUnseenBanner";
@@ -89,11 +89,7 @@ async function join(local: string, hostText: string, base?: string) {
 /** 窗口里正文那一栏：和 Shell 一样告诉团队在看哪篇，和 DocumentView 一样把这一篇交给横幅 */
 function Window() {
   const doc = useCurrentDocument();
-  const target = doc.editor?.target;
-  const id = teamDocId(doc);
-  useEffect(() => {
-    if (id && target && !isShared(target)) setTeamView({ doc: id, target });
-  }, [id, target]);
+  useTeamView("main", doc);
   return <TeamUnseenBanner doc={doc} />;
 }
 
@@ -242,9 +238,9 @@ describe("团队里加入一篇，本机那一版被换掉（§28）", () => {
     expect(useTeam.getState().sessions[DOC]?.remote).toBe(true);
 
     // 切走（会话收掉，磁盘没动）再回来：重新加入，本机那一版还是没合进去，再说一次
-    setTeamView(null);
+    setTeamView("main", null);
     await until("会话收掉了", () => !useTeam.getState().sessions[DOC]);
-    setTeamView({ doc: DOC, target: noteRef("n1") });
+    setTeamView("main", { doc: DOC, target: noteRef("n1") });
     await until("又加入了", () => useTeam.getState().sessions[DOC]?.remote === true);
     await until("又出来了", () => banner() !== null);
   });

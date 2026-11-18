@@ -128,7 +128,7 @@ describe("团队仓库的窗口", () => {
       shown = doc;
       const id = teamDocId(doc);
       const target = doc.editor?.target;
-      if (id && target && !isShared(target)) setTeamView({ doc: id, target });
+      if (id && target && !isShared(target)) setTeamView("main", { doc: id, target });
       return null;
     }
     const container = document.createElement("div");
@@ -183,7 +183,7 @@ describe("团队仓库的窗口", () => {
       const doc = useCurrentDocument();
       const id = teamDocId(doc);
       const target = doc.editor?.target;
-      if (id && target && !isShared(target)) setTeamView({ doc: id, target });
+      if (id && target && !isShared(target)) setTeamView("main", { doc: id, target });
       return null;
     }
     const container = document.createElement("div");

@@ -7,10 +7,10 @@ import { NOTE, type NoteSummary, isShared, noteRef } from "@/data/types";
 import { MarkdownEditor, clearEditorStateCache } from "@/editor/MarkdownEditor";
 import { TeamController, type TeamIO } from "@/team/controller";
 import { createMockTeamHub } from "@/team/mockNet";
-import { initTeam, resetTeam, setTeamView, teamDocId, useTeam } from "@/team/store";
+import { initTeam, resetTeam, useTeam, useTeamView } from "@/team/store";
 import { EditorView } from "@codemirror/view";
 import { MotionGlobalConfig } from "motion/react";
-import { act, useEffect } from "react";
+import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type MockNet, createMockNet } from "./mockNet";
@@ -53,10 +53,7 @@ function Editor() {
   const doc = useCurrentDocument();
   const editing = doc.editor?.target;
   const target = editing && !isShared(editing) ? editing : undefined;
-  const id = teamDocId(doc);
-  useEffect(() => {
-    if (id && target) setTeamView({ doc: id, target });
-  }, [id, target]);
+  useTeamView("main", doc);
   if (!target) return null;
   return (
     <MarkdownEditor

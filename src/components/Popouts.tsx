@@ -7,7 +7,7 @@ import { NEW_NOTE_TITLE, useData } from "@/data/store";
 import { NOTE, vaultRef } from "@/data/types";
 import { type PaneWindow, PaneWindowContext } from "@/lib/paneWindow";
 import { onPopoutCloseRequested, popoutControls, popoutOp, popoutTitle } from "@/lib/tauri";
-import { setTeamView, teamDocId } from "@/team/store";
+import { useTeamView } from "@/team/store";
 import { Fragment, type ReactNode, memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { type Handlers, Sash, activeNoteOf, collabElsewhere, usePaneWide } from "./DocumentPanes";
@@ -285,17 +285,8 @@ function PopoutPane({
     };
   }, [handle, title, focused]);
 
-  // 团队视图（「我在看哪一篇」）：正在这个窗口的这个窗格里写的时候报它的
-  const teamDoc = teamDocId(doc);
-  const target = doc.editor?.target;
-  const teamTarget = useRef(target);
-  teamTarget.current = target;
-  useEffect(() => {
-    if (!active || !focused) return;
-    const view = teamTarget.current;
-    const doc = vaultRef(view);
-    setTeamView(teamDoc && doc ? { doc: teamDoc, target: doc } : null);
-  }, [active, focused, teamDoc]);
+  // 团队视图（「我在看哪几篇」）：每个窗格都报自己显示着的那一篇（docs/协同编辑.md §29.3）
+  useTeamView(pane.id, doc);
 
   const handleDelete = () => {
     // 删的是这个窗格里的这一篇：先关掉它的标签（窗口里最后一个的话窗口也关了），再删

@@ -5,6 +5,7 @@ import { BaseHost } from "@/bases/BaseHost";
 import { usePaneDocument } from "@/data/adapter";
 import { useData } from "@/data/store";
 import { type DocumentModel, type DocumentRef, NOTE, isShared, vaultRef } from "@/data/types";
+import { useTeamView } from "@/team/store";
 import { useInstantLayoutTransition } from "motion/react";
 import {
   Fragment,
@@ -176,6 +177,8 @@ const PaneBody = memo(function PaneBody({
   const own = usePaneDocument(activeNoteOf(pane), notes && !focused);
   const shown = !notes || focused ? shellDoc : own;
   const doc = mirror && shown.collab ? collabElsewhere(shown) : shown;
+  // 团队视图（「我在看哪几篇」）：每个窗格都报自己显示着的那一篇，不只正在写的那个（docs/协同编辑.md §29.3）
+  useTeamView(paneId, doc);
   const tabsShown =
     notes && !zen && initialized && !isShared(doc.editor?.target) && (count > 1 || tabs.length > 1);
   const wide = usePaneWide(hostRef, count > 1);

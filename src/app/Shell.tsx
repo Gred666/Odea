@@ -31,12 +31,12 @@ import { pinEditorStates } from "@/editor/statePins";
 import { cn } from "@/lib/cn";
 import { tween } from "@/lib/motion";
 import { navItemOf } from "@/plugins/registry";
-import { initTeam, setTeamView, teamDocId } from "@/team/store";
+import { initTeam } from "@/team/store";
 import { ArchiveList } from "@/views/ArchiveView";
 import { ExtensionsView } from "@/views/ExtensionsView";
 import { NotesList } from "@/views/NotesView";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 
 /**
  * 专注模式的进出。
@@ -106,21 +106,11 @@ export function Shell() {
     pinEditorStates(openNotes.split("\n").map((id) => saveKeyOf(noteRef(id))));
   }, [openNotes]);
 
-  // 团队仓库（docs/协同编辑.md §22.4）：起团队端点；编辑器里换了哪一篇告诉它（别人也开着就进同一个会话）
+  // 团队仓库（docs/协同编辑.md §22.4）：起团队端点。每个窗格显示着哪一篇由窗格自己报（DocumentPanes 的 useTeamView）
   const team = useData((s) => s.team);
   useEffect(() => {
     if (team) void initTeam();
   }, [team]);
-  // 正在弹出窗口里写的时候报那边的（components/Popouts.tsx），回到主窗口再报这边的
-  const teamDoc = teamDocId(doc);
-  const teamTarget = useRef(docTarget);
-  teamTarget.current = docTarget;
-  const popoutActive = useApp((s) => s.activePopout !== null);
-  useEffect(() => {
-    if (popoutActive) return;
-    const target = teamTarget.current;
-    setTeamView(teamDoc && target ? { doc: teamDoc, target } : null);
-  }, [teamDoc, popoutActive]);
 
   // Esc 退出专注模式。走冒泡阶段并且看 defaultPrevented ——
   // 命令面板在捕获阶段处理 Esc 并且会 preventDefault，这样两者不会打架：

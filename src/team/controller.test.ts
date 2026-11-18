@@ -291,6 +291,49 @@ describe("团队：同一篇谁主持（设计 §22.4）", () => {
     await until("回到一个人", () => sessionOf(b) === undefined);
   });
 
+  it("看着几篇（分屏、弹出窗口）：每一篇各自进会话；对端一次只报一篇（0.9.0 那样）照样连上（§29.3）", async () => {
+    const hub = createMockTeamHub();
+    const a = device(hub, "a1", "张三");
+    const b = device(hub, "b2", "李四");
+    const PLAN = "笔记/计划.md";
+    const PLAN_TARGET = noteRef("n2");
+    for (const each of [a, b]) each.disk.set("n2", "# 计划\n\n- 第一步");
+    const both = [
+      { doc: DOC, target: TARGET },
+      { doc: PLAN, target: PLAN_TARGET },
+    ];
+    a.controller.views(both);
+    // 李四只报一篇（0.9.0 只会这样报，Presence 的格式没变）
+    b.controller.view({ doc: PLAN, target: PLAN_TARGET });
+    await until(
+      "李四进了张三的《计划》",
+      () =>
+        b.snapshot.sessions[PLAN]?.remote === true && a.snapshot.sessions[PLAN]?.remote === false,
+    );
+    // 张三看着的另一篇没别人开：照旧一个人编辑，不建会话
+    expect(sessionOf(a)).toBeUndefined();
+    // 「也在看」：李四那边看到张三开着两篇
+    await until("李四看到张三开着两篇", () => {
+      const docs = b.snapshot.peers.find((peer) => peer.id === "a1")?.docs.map((item) => item.doc);
+      return docs?.includes(DOC) === true && docs.includes(PLAN);
+    });
+
+    // 李四换到《周会》：张三那边这一篇也进会话，《计划》没人一起看了，过一会儿收掉
+    b.controller.view({ doc: DOC, target: TARGET });
+    await until(
+      "李四进了张三的《周会》",
+      () => sessionOf(b)?.remote === true && sessionOf(a)?.remote === false,
+    );
+    append(b, "\n- 李四在分屏的另一边写的");
+    await until("张三存下", () => a.disk.get("n1")?.endsWith("李四在分屏的另一边写的") === true);
+    await until("《计划》收掉了", () => a.snapshot.sessions[PLAN] === undefined);
+
+    // 张三关掉放《周会》的那个窗格（只剩《计划》）：和主持人切走一样，李四接手
+    a.controller.views([{ doc: PLAN, target: PLAN_TARGET }]);
+    await until("李四接手了", () => sessionOf(b)?.remote === false);
+    expect(a.disk.get("n2")).toBe("# 计划\n\n- 第一步");
+  });
+
   it("主持人断线：不在线了就接手；他回来了、还在主持（同一份会话），让给公钥小的", async () => {
     const hub = createMockTeamHub();
     const a = device(hub, "a1", "张三");
