@@ -14,6 +14,7 @@ use rusqlite::Connection;
 use crate::error::Result;
 use crate::vault::frontmatter::FrontMatter;
 use crate::vault::legacy::write_file;
+use crate::vault::{fsio, layout};
 
 use super::{day_path, goal_path, tasks};
 
@@ -113,11 +114,23 @@ pub fn import(conn: &Connection, root: &Path, written: &mut Vec<PathBuf>) -> Res
         if title.is_empty() && body.trim().is_empty() {
             continue;
         }
-        let meta = FrontMatter {
-            title: (!title.is_empty()).then_some(title),
-            ..FrontMatter::default()
+        let (rel, title) = match day_path(&date) {
+            Ok(rel) => (rel, (!title.is_empty()).then_some(title)),
+            // 旧库里日期不合法的一天（理论上不会有）：以前整个搬家失败，仓库不打开、下次启动重来、又失败。
+            // 照一篇笔记搬到「笔记」里，标题带上原来写的日期，字不丢（审查 2026-11-13 §5.3）
+            Err(_) => {
+                let shown = date.trim();
+                let title = if title.is_empty() {
+                    format!("旧库里日期认不出的一天（{shown}）")
+                } else {
+                    format!("{title}（旧库里的日期：{shown}）")
+                };
+                let stem = layout::file_stem_for_title(&title);
+                (fsio::unique_rel(root, layout::NOTES_DIR, &stem, None), Some(title))
+            }
         };
-        write_file(root, &day_path(&date)?, &meta, &body, updated, written)?;
+        let meta = FrontMatter { title, ..FrontMatter::default() };
+        write_file(root, &rel, &meta, &body, updated, written)?;
         days_written += 1;
     }
 

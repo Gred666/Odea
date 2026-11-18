@@ -9,7 +9,7 @@ import { popoverCard, tween } from "@/lib/motion";
 import { isTauri } from "@/lib/tauri";
 import { Bell, Play, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
 
 /* ============================================================
@@ -170,12 +170,28 @@ function ReminderBody() {
   });
   const { settings } = state;
 
-  const save = async (next: ReminderSettings) => {
-    setState({ ...state, settings: next });
+  // 连着点两下（两档提前量）：两次 reminder_configure 各自异步，后发的可能先写进文件，先发的结果后到又把界面换回去一下。
+  // 一次写完再发下一次，只认最后那一次的结果；排着队的时候又点了，排着的那次不写（每次带的是整份设置）
+  // （审查 2026-11-13 §5.3）
+  const writes = useRef<Promise<void>>(Promise.resolve());
+  const asked = useRef(0);
+  const save = (next: ReminderSettings) => {
+    setState((current) => ({ ...current, settings: next }));
     if (!isTauri) return;
-    const result = await commands.reminderConfigure(next);
-    if (result.status === "ok") setState(result.data);
-    else setStatus({ text: messageOf(result.error), tone: "danger" });
+    const ticket = ++asked.current;
+    const latest = () => ticket === asked.current;
+    writes.current = writes.current.then(async () => {
+      if (!latest()) return;
+      try {
+        const result = await commands.reminderConfigure(next);
+        if (!latest()) return;
+        if (result.status === "ok") setState(result.data);
+        else setStatus({ text: messageOf(result.error), tone: "danger" });
+      } catch (error) {
+        // 没走到 Rust 那边（IPC 本身断了）：照样说，也不让后面排着的那次跟着不写
+        if (latest()) setStatus({ text: messageOf(error), tone: "danger" });
+      }
+    });
   };
 
   const preview = (sound: string) => {
@@ -204,7 +220,7 @@ function ReminderBody() {
         <input
           type="checkbox"
           checked={settings.enabled}
-          onChange={(event) => void save({ ...settings, enabled: event.target.checked })}
+          onChange={(event) => save({ ...settings, enabled: event.target.checked })}
           className="mt-[3px] accent-[var(--color-accent)]"
         />
         <span className="flex flex-col gap-0.5">
@@ -224,7 +240,7 @@ function ReminderBody() {
             size="sm"
             options={LEADS}
             value={String(settings.leadMinutes)}
-            onChange={(value) => void save({ ...settings, leadMinutes: Number(value) })}
+            onChange={(value) => save({ ...settings, leadMinutes: Number(value) })}
           />
         </div>
 
@@ -252,7 +268,7 @@ function ReminderBody() {
                     role="radio"
                     aria-checked={active}
                     onClick={() => {
-                      void save({ ...settings, sound: sound.value });
+                      save({ ...settings, sound: sound.value });
                       preview(sound.value);
                     }}
                     className="flex min-w-0 flex-1 flex-col items-start gap-0.5 rounded-lg px-3 py-2.5 text-left"
