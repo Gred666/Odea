@@ -19,13 +19,11 @@
 
 // 起名字的两个纯函数不带 Tauri，CI 的 --no-default-features 也测得到；别的都要 Tauri
 use std::path::PathBuf;
+use std::time::Duration;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 use std::{path::Path, sync::Mutex};
 #[cfg(feature = "desktop-runtime")]
-use std::{
-    sync::atomic::{AtomicU32, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 use tauri::{AppHandle, Manager, Runtime};
@@ -229,6 +227,23 @@ pub async fn export_html(path: String, html: String) -> Result<()> {
     Ok(())
 }
 
+/// 导出 PDF 的几个等待（载入、等图、PrintToPdf）在固定的上限之外多给多久。整个文件夹合成一份、几百篇很多图的，
+/// 固定一分钟会超时（审查 2026-11-13 §5.3）；上限按页面的分量放宽：正文每 10 KB 一秒，
+/// data: 图片（解码、缩放比排版快得多）每 640 KB 一秒。这是防 WebView2 卡死的兜底，宁可宽：
+/// 真卡住的极少，误判超时丢的是用户等了半天的整份导出；正常的导出印完就走，不多等
+pub fn print_allowance(html: &str) -> Duration {
+    let mut images = 0usize;
+    let mut rest = html;
+    while let Some(at) = rest.find("data:") {
+        let tail = &rest[at..];
+        let end = tail.find(['"', '\'', ')', ' ', '>']).unwrap_or(tail.len());
+        images += end;
+        rest = &tail[end..];
+    }
+    let text = html.len() - images;
+    Duration::from_millis((text / 10) as u64 + (images / 640) as u64)
+}
+
 /// 纸张（毫米）→ 英寸。超出常见纸张范围的（50–1200 毫米以外）不认，按 A4
 pub fn paper_inches(width_mm: f64, height_mm: f64) -> (f64, f64) {
     let ok = |mm: f64| mm.is_finite() && (50.0..=1200.0).contains(&mm);
@@ -261,7 +276,8 @@ pub async fn export_pdf<R: Runtime>(
             return Err(AppError::Invalid("只能存到「另存为」里选的地方".into()));
         }
         let page = write_page(&html)?;
-        let printed = webview2::print_to_pdf(&app, &page, &target, paper_inches(width_mm, height_mm)).await;
+        let extra = print_allowance(&html);
+        let printed = webview2::print_to_pdf(&app, &page, &target, paper_inches(width_mm, height_mm), extra).await;
         let _ = std::fs::remove_file(&page);
         printed?;
         remember_dir(&target);
@@ -480,6 +496,7 @@ mod webview2 {
         page: &Path,
         out: &Path,
         paper: (f64, f64),
+        extra: Duration,
     ) -> Result<()> {
         let (tx, rx) = oneshot::channel::<()>();
         let tx = Mutex::new(Some(tx));
@@ -501,22 +518,23 @@ mod webview2 {
             .build()
             .map_err(|error| AppError::Internal(format!("开导出窗口失败: {error}")))?;
         let printed = async {
-            tokio::time::timeout(Duration::from_secs(30), rx)
+            let load = Duration::from_secs(30) + extra;
+            tokio::time::timeout(load, rx)
                 .await
-                .map_err(|_| AppError::Internal("导出的页面 30 秒还没载入完".into()))?
+                .map_err(|_| AppError::Internal(format!("导出的页面 {} 秒还没载入完", load.as_secs())))?
                 .map_err(|_| AppError::Internal("导出的页面没载入".into()))?;
-            wait_ready(&window).await;
-            write_pdf(&window, out, paper).await
+            wait_ready(&window, Duration::from_secs(10) + extra).await;
+            write_pdf(&window, out, paper, Duration::from_secs(60) + extra).await
         }
         .await;
         let _ = window.destroy();
         printed
     }
 
-    /// 等字体、图片：每 50ms 问一次，最多 10 秒（网络图片加载不出来也照样印，缺一张图）
-    async fn wait_ready<R: Runtime>(window: &WebviewWindow<R>) {
+    /// 等字体、图片：每 50ms 问一次，最多 limit（十秒起，页面大的多给；网络图片加载不出来也照样印，缺一张图）
+    async fn wait_ready<R: Runtime>(window: &WebviewWindow<R>, limit: Duration) {
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(10) {
+        while start.elapsed() < limit {
             if eval(window, READY).await.as_deref() == Some("true") {
                 return;
             }
@@ -542,7 +560,12 @@ mod webview2 {
         tokio::time::timeout(Duration::from_secs(5), rx).await.ok()?.ok()
     }
 
-    async fn write_pdf<R: Runtime>(window: &WebviewWindow<R>, out: &Path, paper: (f64, f64)) -> Result<()> {
+    async fn write_pdf<R: Runtime>(
+        window: &WebviewWindow<R>,
+        out: &Path,
+        paper: (f64, f64),
+        limit: Duration,
+    ) -> Result<()> {
         let (tx, rx) = oneshot::channel::<std::result::Result<(), String>>();
         let target = HSTRING::from(out.as_os_str());
         window
@@ -580,11 +603,11 @@ mod webview2 {
                 }
             })
             .map_err(|error| AppError::Internal(format!("导出窗口不在了: {error}")))?;
-        match tokio::time::timeout(Duration::from_secs(60), rx).await {
+        match tokio::time::timeout(limit, rx).await {
             Ok(Ok(Ok(()))) => Ok(()),
             Ok(Ok(Err(message))) => Err(AppError::Io(format!("写 PDF 失败: {message}"))),
             Ok(Err(_)) => Err(AppError::Internal("这个 WebView2 太旧，不能打印成 PDF（要 Edge 内核 103 以上）".into())),
-            Err(_) => Err(AppError::Internal("写 PDF 超过一分钟还没完".into())),
+            Err(_) => Err(AppError::Internal(format!("写 PDF 过了 {} 秒还没完", limit.as_secs()))),
         }
     }
 }
@@ -627,6 +650,21 @@ mod tests {
         assert_eq!(export_rel_path("工作//周报.html"), None);
         assert_eq!(export_rel_path("脚本.js"), None, "只写网页");
         assert_eq!(export_rel_path(""), None);
+    }
+
+    // 整个文件夹合成一份 PDF：几百篇、很多图的，固定一分钟会超时（审查 2026-11-13 §5.3）
+    #[test]
+    fn big_pages_get_more_time_to_print() {
+        assert_eq!(print_allowance(""), Duration::ZERO);
+        // 正文 3 MB（几百篇）：多给五分钟上下
+        let text = "<p>一段字</p>".repeat(200_000);
+        assert_eq!(print_allowance(&text).as_secs(), (text.len() / 10_000) as u64);
+        // 一张 640 KB 的 data: 图片多给一秒，不按正文算
+        let image = format!("<img src=\"data:image/png;base64,{}\">", "A".repeat(640_000));
+        let secs = print_allowance(&image).as_secs_f64();
+        assert!((1.0..1.01).contains(&secs), "{secs}");
+        let css = format!("<div style=\"background: url(data:image/png;base64,{})\">", "A".repeat(640_000));
+        assert!(print_allowance(&css).as_secs_f64() < 1.01);
     }
 
     #[test]

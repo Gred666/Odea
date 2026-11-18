@@ -155,13 +155,49 @@ const MARGIN_STYLE = `color: #91918a;
     font-family: -apple-system, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
     font-size: 9pt;`;
 
+/** 页眉页脚的字号（MARGIN_STYLE 的 9pt）折成毫米 */
+const MARGIN_EM_MM = (9 * 25.4) / 72;
+/** 汉字、假名、谚文、全角符号：一个字一个 em */
+const WIDE =
+  /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꥠ-꥿가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1faff}\u{20000}-\u{3fffd}]/u;
+/** 一段字在页眉页脚里大约多宽（em）。别的字按 0.6 个 em 算：比无衬线字体的平均宽一点，宁可早一点截 */
+const emWidth = (text: string) => [...text].reduce((sum, c) => sum + (WIDE.test(c) ? 1 : 0.6), 0);
+
+/**
+ * {标题} 放不下一行就截短、末尾「…」：页边框盒子不限行数，标题长了折成几行，再长就从页边距那一条里
+ * 溢出来压到正文（审查 2026-11-13 §5.2）。一行有多宽按纸张减左右页边距算，减去这一行里别的字
+ * （{页码}、{总页数} 按三位数算）；页边框盒子里的 text-overflow 管不管用各家不一样，在这里截靠得住
+ */
+export function fitTitle(template: string, title: string, setup: PageSetup, date: string): string {
+  if (!template.includes("{标题}")) return title;
+  const [width] = paperSize(setup);
+  const [, right, , left] = marginsOf(setup);
+  const line = (width - left - right) / MARGIN_EM_MM;
+  const others = template
+    .replaceAll("{标题}", "")
+    .replaceAll("{日期}", date)
+    .replaceAll("{页码}", "999")
+    .replaceAll("{总页数}", "999");
+  const titles = template.split("{标题}").length - 1;
+  const room = (line - emWidth(others)) / titles;
+  if (emWidth(title) <= room) return title;
+  let used = 1; // 「…」
+  let kept = "";
+  for (const c of title) {
+    used += WIDE.test(c) ? 1 : 0.6;
+    if (used > room) break;
+    kept += c;
+  }
+  return `${kept.trimEnd()}…`;
+}
+
 /** 这份设置的 `@page`：纸张、页边距、页眉页脚。title 是 {标题} 换成的字 */
 export function pageCss(setup: PageSetup, title: string, date = today()): string {
   const [width, height] = paperSize(setup);
   const [top, right, bottom, left] = marginsOf(setup);
   const boxes: string[] = [];
-  const header = marginContent(setup.header, title, date);
-  const footer = marginContent(setup.footer, title, date);
+  const header = marginContent(setup.header, fitTitle(setup.header, title, setup, date), date);
+  const footer = marginContent(setup.footer, fitTitle(setup.footer, title, setup, date), date);
   // 页边框盒子在页边距那一条里上下居中；只写选的那一格，另外两格空着
   if (header) {
     boxes.push(`  @top-${setup.headerAlign} {
