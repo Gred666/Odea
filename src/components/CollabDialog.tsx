@@ -1003,7 +1003,13 @@ function NearbyList() {
           {nearby.map((host) => (
             <li key={host.id} data-collab-nearby-host className="flex h-9 items-center gap-2.5">
               <PeerAvatar id={host.id} name={host.name} />
-              <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{host.name}</span>
+              <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
+                {host.name}
+                {/* 主持人不在这个网络里、做客的那位替他转（docs/协同编辑.md §29.2） */}
+                {host.via !== null && (
+                  <span className="text-[12px] text-muted"> · 经由 {host.via}</span>
+                )}
+              </span>
               <BannerButton onClick={() => void joinNearby(host.id)}>请求加入</BannerButton>
             </li>
           ))}

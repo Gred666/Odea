@@ -1214,6 +1214,60 @@ async fn nearby_list_finds_a_sharing_host_over_mdns() {
     host.stop().await;
 }
 
+/// 真的 mDNS：主持人不在这个网络里（不广播），做客的 B 广播「经由我」，「附近」列表里是「林夕 · 经由 B」，
+/// 点一下经 B 加入。要组播，平时不跑（§29.2）
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn nearby_list_shows_hosts_reachable_through_a_guest() {
+    let (host, mut host_events) = start_host("t").await;
+    let (events, mut relay_events) = unbounded_channel();
+    let relay = Guest::join(
+        &test_node(SecretKey::generate(), true, Vec::new()).await,
+        GuestOptions { name: "B".into(), invite: loopback(&host, host.invite()), use_host_relay: true, nearby: false },
+        events,
+    )
+    .await
+    .unwrap();
+    let request = expect(&mut host_events, "B 的加入请求", |event| match event {
+        Event::Control(Control::JoinRequest { request, .. }) => Some(*request),
+        _ => None,
+    })
+    .await;
+    assert!(host.answer(request, Decision::Allow(Permission::Edit)));
+    expect(&mut relay_events, "B 进来了", |event| {
+        matches!(status_of(event), Some(Status::Connected { .. })).then_some(())
+    })
+    .await;
+
+    let (scan_tx, mut scan) = unbounded_channel();
+    let nearby = nearby::Nearby::start(scan_tx).await.expect("mDNS 起不来");
+    let id = expect_within(&mut scan, "列表里出现「经由 B」", Duration::from_secs(20), |event| match event {
+        Event::Control(Control::Nearby { hosts }) => hosts
+            .iter()
+            .find(|found| found.name == "林夕" && found.via.as_deref() == Some("B"))
+            .map(|found| found.id.clone()),
+        _ => None,
+    })
+    .await;
+    let invite = nearby.invite(&id).expect("列表里的地址");
+    nearby.stop().await;
+    let (events_tx, _events) = unbounded_channel();
+    let _far = Guest::join(
+        &test_node(SecretKey::generate(), true, Vec::new()).await,
+        GuestOptions { name: "邻座".into(), invite, use_host_relay: true, nearby: true },
+        events_tx,
+    )
+    .await
+    .unwrap();
+    expect(&mut host_events, "经由 B 的加入请求", |event| match event {
+        Event::Control(Control::JoinRequest { invited: false, via, .. }) => (via.as_deref() == Some("B")).then_some(()),
+        _ => None,
+    })
+    .await;
+    relay.leave().await;
+    host.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guests_fetch_referenced_attachments_and_hand_over_pasted_ones() {
     let (host, mut host_events) = start_host("t").await;
@@ -1836,6 +1890,62 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
         members_of(event).filter(|members| members.len() == 2).map(|_| ())
     })
     .await;
+    relay.leave().await;
+    host.stop().await;
+}
+
+/// 「附近」里的「经由 B」（§29.2）：C 按 B 广播的公钥和地址拨 B，Hello 里没有会话 id 和证明。B 没在主持、
+/// 只在这一个会话里做客，就把他转给主持人；主持人照样问（没拿着链接），成员表里记着经由 B
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nearby_knocks_on_a_guest_go_through_to_its_host() {
+    let (host, mut host_events) = start_host("附近").await;
+    let (relay, _relay_events, relay_member) = admitted(&host, &mut host_events, "B", Permission::Read).await;
+
+    // nearby.rs 的 invite 拼出来的样子：B 的公钥和地址，会话 id、邀请密钥全 0
+    let made = relay.callbacks().forward_link().await;
+    let mut invite = Invite::parse(&made.link).unwrap();
+    invite.addrs = relay
+        .bound_sockets()
+        .into_iter()
+        .filter(|addr| addr.is_ipv4())
+        .map(|addr| SocketAddr::from((Ipv4Addr::LOCALHOST, addr.port())))
+        .collect();
+    invite.session = [0; 16];
+    invite.secret = [0; 32];
+    let (events, mut far_events) = unbounded_channel();
+    let far = Guest::join(
+        &test_node(SecretKey::generate(), false, Vec::new()).await,
+        GuestOptions { name: "C".into(), invite, use_host_relay: true, nearby: true },
+        events,
+    )
+    .await
+    .unwrap();
+    let request = expect(&mut host_events, "经由 B 的加入请求", |event| match event {
+        Event::Control(Control::JoinRequest { request, name, invited, via, .. }) if name == "C" => {
+            assert!(!*invited, "「附近」进来的没拿着链接");
+            assert_eq!(via.as_deref(), Some("B"));
+            Some(*request)
+        }
+        _ => None,
+    })
+    .await;
+    assert!(host.answer(request, Decision::Allow(Permission::Edit)));
+    let (far_member, permission) = expect(&mut far_events, "C 进来了", |event| match status_of(event) {
+        Some(Status::Connected { member, permission, .. }) => Some((member, permission)),
+        Some(Status::Ended { reason }) => panic!("C 没进来：{reason:?}"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(permission, Permission::Read, "权限不超过转发的那位");
+    let via = host.members().into_iter().find(|member| member.member == far_member).and_then(|member| member.via);
+    assert_eq!(via, Some(relay_member));
+    far.send_update(DOC, b"from-c".to_vec());
+    // 只读的改动主持人丢掉：只看连没连着（主持人那边收到 C 开的那一篇的 SyncStart）
+    expect(&mut host_events, "主持人和 C 的 SyncStart", |event| {
+        matches!(event, Event::SyncStart { with, .. } if *with == far_member).then_some(())
+    })
+    .await;
+    far.leave().await;
     relay.leave().await;
     host.stop().await;
 }

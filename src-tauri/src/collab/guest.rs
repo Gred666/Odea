@@ -17,6 +17,7 @@
 （和 mDNS、中继）退避重连，也等主持人往回拨。重连上了双方再互发一次 Sync1 / Sync2，
 断线期间各自的改动就补齐了。主持人允许过的人重连不再问。
 替别人转发（设计 §20.9）：连不上主持人的人拿我的转发链接连我，我替他把流接到主持人那边（文件末尾）。
+我直连着主持人、又只在这一个会话里做客时，端点在局域网上广播「经由我」（§29.2）：「附近」点进来的人也替他转。
 端点是几个会话共用的（node.rs，§25.1）：主持人按回连链接拨过来的、找我转发的，都由它交过来。
 ============================================================ */
 
@@ -106,6 +107,8 @@ pub(crate) struct Shared {
     networks: Mutex<Option<Vec<(std::net::IpAddr, u8)>>>,
     /// 经我转发的人：成员号 → 他连我的那条连接（主持人发给他的数据报从这里转过去）
     forwarding: Mutex<HashMap<u16, Connection>>,
+    /// 主持人（成员 0）的公钥和名字：Welcome、成员表里来的。「经由我」的广播要用
+    host: Mutex<Option<([u8; 32], String)>>,
     /// 要开着的那几篇（文档 id）：断了重连以后照样开
     wanted: Mutex<BTreeSet<String>>,
     next_create: AtomicU32,
@@ -168,6 +171,7 @@ impl Guest {
             nearby: options.nearby,
             networks: Mutex::new(None),
             forwarding: Mutex::new(HashMap::new()),
+            host: Mutex::new(None),
             wanted: Mutex::new(BTreeSet::new()),
             next_create: AtomicU32::new(1),
             creating: Mutex::new(HashMap::new()),
@@ -194,6 +198,7 @@ impl Guest {
         if let Some(link) = self.shared.link.lock().unwrap().as_ref() {
             let _ = link.control.send((kind::NAME, name.into_bytes()));
         }
+        self.shared.node.advertise();
     }
 
     /// 要开这一篇：连着就马上开它的文档流，断着的话重连以后开。开好了是 SyncStart 事件
@@ -466,6 +471,37 @@ pub(crate) fn dialed_in(shared: &Shared, conn: Connection) {
     }
 }
 
+/// 「附近」点进来的人能不能经我转（§29.2）：没在走、连着主持人、而且是直连（主持人只认直连的成员替人转）
+pub(crate) fn relays_nearby(shared: &Shared) -> bool {
+    if shared.leaving.load(Ordering::SeqCst) {
+        return false;
+    }
+    let host = shared.host.lock().unwrap().as_ref().map(|(id, _)| *id);
+    let link = shared.link.lock().unwrap();
+    matches!((link.as_ref(), host), (Some(link), Some(host)) if *link.conn.remote_id().as_bytes() == host)
+}
+
+/// 「经由我」广播的那一串（nearby.rs 的 via_data）
+pub(crate) fn via_data(shared: &Shared) -> Option<String> {
+    let (host, host_name) = shared.host.lock().unwrap().clone()?;
+    Some(super::nearby::via_data(&host, &host_name, &shared.name.lock().unwrap()))
+}
+
+/// 记下主持人是谁（成员 0）；名字变了的话「经由我」的广播跟着换
+fn note_host(shared: &Shared, members: &[Member]) {
+    let Some(host) = members.iter().find(|member| member.member == 0) else { return };
+    let next = Some((host.id, clean_name(&host.name)));
+    let changed = {
+        let mut known = shared.host.lock().unwrap();
+        let changed = *known != next;
+        *known = next;
+        changed
+    };
+    if changed {
+        shared.node.advertise();
+    }
+}
+
 /// 拿着这一次的会话 id 来的人找的是我（我的转发链接，设计 §20.9）
 pub(crate) fn forwards(shared: &Shared, session: &[u8; 16]) -> bool {
     shared.invite.session == *session && !shared.leaving.load(Ordering::SeqCst)
@@ -679,6 +715,7 @@ async fn session(shared: &Arc<Shared>, conn: Connection, joined: &mut bool) -> R
         _ => return Ok(Outcome::Lost),
     };
     *joined = true;
+    note_host(shared, &welcome.members);
     let _ = shared.events.send(Event::Control(Control::Members { members: infos(&welcome.members) }));
     // 一篇的范围：进来就开那一篇
     if welcome.scope.kind == protocol::ScopeKind::Doc && !welcome.scope.doc.is_empty() {
@@ -697,6 +734,7 @@ async fn session(shared: &Arc<Shared>, conn: Connection, joined: &mut bool) -> R
     let (control, control_writer) = spawn_writer(control_send);
     *shared.link.lock().unwrap() =
         Some(Link { conn: conn.clone(), docs: HashMap::new(), control, writers: vec![control_writer] });
+    shared.node.advertise();
     // 要开着的那几篇：重连的话就是断之前开着的
     let wanted: Vec<String> = shared.wanted.lock().unwrap().iter().cloned().collect();
     for doc in wanted {
@@ -715,6 +753,7 @@ async fn session(shared: &Arc<Shared>, conn: Connection, joined: &mut bool) -> R
         reader.abort();
     }
     shared.link.lock().unwrap().take();
+    shared.node.advertise();
     conn.close(VarInt::from_u32(0), b"done");
     Ok(outcome)
 }
@@ -740,6 +779,7 @@ async fn read_control(shared: &Shared, recv: &mut RecvStream) -> Outcome {
         match protocol::read_frame(recv).await {
             Ok(Some((kind::MEMBERS, payload))) => {
                 if let Ok(members) = protocol::decode::<Vec<Member>>(&payload) {
+                    note_host(shared, &members);
                     let _ = shared.events.send(Event::Control(Control::Members { members: infos(&members) }));
                 }
             }
