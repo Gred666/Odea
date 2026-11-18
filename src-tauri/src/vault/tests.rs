@@ -1998,6 +1998,30 @@ fn a_kept_id_is_not_handed_to_another_note_later() {
     assert_ne!(note_ids(&vault)["随手记.md"], before["随手记.md"]);
 }
 
+/// 搜过正文以后关仓库（关窗口、换仓库、退出）：搜正文的只读连接先关、主连接最后关，WAL 合回主文件。
+/// 以前只读连接是个不关的 static，主连接不是最后一个，WAL 一直留着、下次打开先读一遍（桌面端验证 §4.8）
+#[test]
+fn closing_a_vault_after_a_search_folds_the_wal_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    let index_file = dir.path().join("index.db");
+    let mut vault = Vault::open(&root, &index_file).unwrap();
+    for n in 0..40 {
+        vault.note_create(&format!("第{n}篇"), &"向日葵".repeat(300)).unwrap();
+    }
+    let wal = dir.path().join("index.db-wal");
+    assert!(wal.exists());
+    let count: i64 = index::with_reader(index_file.clone(), &|| false, |conn| {
+        Ok(Some(conn.query_row("SELECT count(*) FROM doc", [], |row| row.get(0))?))
+    })
+    .unwrap();
+    assert!(count >= 40);
+
+    drop(vault);
+    let left = std::fs::metadata(&wal).map_or(0, |meta| meta.len());
+    assert_eq!(left, 0, "WAL 没合回去，还有 {left} 字节");
+}
+
 #[test]
 fn kept_ids_wait_for_files_that_could_not_be_read() {
     let dir = tempfile::tempdir().unwrap();

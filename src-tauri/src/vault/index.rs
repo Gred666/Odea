@@ -11,7 +11,8 @@
 插件自己另存的东西（日程的带日期的任务）在插件自己的表里（plugins::IndexPart），和文档同一个事务写、删。
 ============================================================ */
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -103,6 +104,51 @@ fn prepare(conn: &Connection) -> Result<()> {
     }
     conn.pragma_update(None, "user_version", VERSION)?;
     Ok(())
+}
+
+/* ---------------- 搜正文用的只读连接 ---------------- */
+
+/// search_text、find_in_vault 用的只读连接（连同它连的是哪个索引文件），整个进程一份。不拿仓库的锁：
+/// 几万篇的仓库里扫一遍要几百毫秒，这期间自动保存不该等着（索引是 WAL，读写互不挡）
+static READER: Mutex<Option<(PathBuf, Connection)>> = Mutex::new(None);
+
+/// 在只读连接上跑一次搜索。排队等到锁之后先看一眼 cancelled()：又来了新的就不扫了。
+/// scan 返回 None 也是被顶掉了，都给空结果（前端只认最后一次的）
+pub fn with_reader<T: Default>(
+    path: PathBuf,
+    cancelled: &dyn Fn() -> bool,
+    scan: impl FnOnce(&Connection) -> Result<Option<T>>,
+) -> Result<T> {
+    let mut slot = READER
+        .lock()
+        .map_err(|_| crate::error::AppError::Internal("搜索的连接坏了".into()))?;
+    if cancelled() {
+        return Ok(T::default());
+    }
+    if slot.as_ref().map(|(open, _)| open != &path).unwrap_or(true) {
+        let conn = Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        // 每次搜都把全部正文读一遍：默认的 2 MB 页缓存装不下，每次都从系统缓存一页页拷进来。
+        // 映射进来直接读，3000 篇（13 MB）一次 33 → 19 ms（REVIEWS/2026-11-15-桌面端验证.md §3.6）。
+        // 映射的是文件页（系统缓存里本来就有），不算进程的专用内存；和应用数据库（db/pragma.rs）一样 256 MB 封顶
+        conn.pragma_update(None, "mmap_size", 268_435_456i64)?;
+        *slot = Some((path, conn));
+    }
+    let (_, conn) = slot.as_ref().expect("刚放进去");
+    Ok(scan(conn)?.unwrap_or_default())
+}
+
+/// 这个索引的主连接要关了（仓库窗口关掉、换了仓库、退出）：先关掉连着同一个文件的只读连接。
+/// SQLite 只在最后一个连接关掉时把 WAL 合回主文件，只读连接自己又合不了 —— 以前它是个不关的 static，
+/// 搜过正文以后关窗口、退出，WAL 就一直留着，下次打开先读一遍它（REVIEWS/2026-11-15-桌面端验证.md §4.8）
+pub fn release_reader(main: &Connection) {
+    let Some(file) = main.path().filter(|file| !file.is_empty()) else { return };
+    let Ok(mut slot) = READER.lock() else { return };
+    if slot.as_ref().is_some_and(|(_, reader)| reader.path() == Some(file)) {
+        *slot = None;
+    }
 }
 
 /// 仓库的摆法（layout::Layout::fingerprint）和建这份索引时不一样了（开关了日程、换了日记文件夹）：

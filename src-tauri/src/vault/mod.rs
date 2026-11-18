@@ -202,6 +202,14 @@ fn title_meta(rel: &str, title: &str) -> Option<String> {
     (layout::stem_of(rel) != title).then(|| title.to_string())
 }
 
+impl Drop for Vault {
+    /// 主连接（db 字段，在这之后才释放）要关了：先关掉搜正文那个连着同一个索引的只读连接，
+    /// 主连接才是最后一个、把 WAL 合回去（index::release_reader）
+    fn drop(&mut self) {
+        index::release_reader(&self.db);
+    }
+}
+
 impl Vault {
     /// 打开仓库并把索引和文件对齐（增量：只重读变过的文件）。应用里用 open_quick
     #[cfg(test)]

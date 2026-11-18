@@ -455,38 +455,6 @@ static TEXT_SEARCH_GEN: [std::sync::atomic::AtomicU64; 2] =
     [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
 /// 每次 find_in_vault 加一，意思同上
 static FIND_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// search_text、find_in_vault 用的只读连接（连同它连的是哪个索引文件）。不拿仓库的锁：几万篇的
-/// 仓库里扫一遍要几百毫秒，这期间自动保存不该等着（索引是 WAL，读写互不挡）
-static TEXT_SEARCH_DB: Mutex<Option<(PathBuf, rusqlite::Connection)>> = Mutex::new(None);
-
-/// 在 TEXT_SEARCH_DB 上跑一次搜索。排队等到锁之后先看一眼 cancelled()：又来了新的就不扫了。
-/// scan 返回 None 也是被顶掉了，都给空结果（前端只认最后一次的）
-fn with_search_db<T: Default>(
-    path: PathBuf,
-    cancelled: &dyn Fn() -> bool,
-    scan: impl FnOnce(&rusqlite::Connection) -> Result<Option<T>>,
-) -> Result<T> {
-    let mut slot = TEXT_SEARCH_DB
-        .lock()
-        .map_err(|_| AppError::Internal("搜索的连接坏了".into()))?;
-    if cancelled() {
-        return Ok(T::default());
-    }
-    if slot.as_ref().map(|(open, _)| open != &path).unwrap_or(true) {
-        let conn = rusqlite::Connection::open_with_flags(
-            &path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        // 每次搜都把全部正文读一遍：默认的 2 MB 页缓存装不下，每次都从系统缓存一页页拷进来。
-        // 映射进来直接读，3000 篇（13 MB）一次 33 → 19 ms（REVIEWS/2026-11-15-桌面端验证.md §3.6）。
-        // 映射的是文件页（系统缓存里本来就有），不算进程的专用内存；和应用数据库（db/pragma.rs）一样 256 MB 封顶
-        conn.pragma_update(None, "mmap_size", 268_435_456i64)?;
-        *slot = Some((path, conn));
-    }
-    let (_, conn) = slot.as_ref().expect("刚放进去");
-    Ok(scan(conn)?.unwrap_or_default())
-}
-
 /// 搜正文：大小写不敏感的子串，笔记（含归档）和插件的文档（日记、目标）各自最多 limit 条；archived_only
 /// 只搜归档里的笔记（归档的搜索框）。被同一处后来的搜索顶掉的这一次返回空结果（前端只认最后一次的）
 #[tauri::command]
@@ -507,7 +475,7 @@ pub async fn search_text(
     let path = boot::index_path(&state.data_dir, &root);
     blocking(move || {
         let cancelled = || counter.load(Ordering::SeqCst) != generation;
-        with_search_db(path, &cancelled, |conn| {
+        crate::vault::index::with_reader(path, &cancelled, |conn| {
             crate::vault::search_text(conn, &query, limit, archived_only, &types, cancelled)
         })
     })
@@ -530,7 +498,7 @@ pub async fn find_in_vault(
     let path = boot::index_path(&state.data_dir, &root);
     blocking(move || {
         let cancelled = || FIND_GEN.load(Ordering::SeqCst) != generation;
-        with_search_db(path, &cancelled, |conn| {
+        crate::vault::index::with_reader(path, &cancelled, |conn| {
             crate::vault::find_text(conn, &query, options, &types, cancelled)
         })
     })
