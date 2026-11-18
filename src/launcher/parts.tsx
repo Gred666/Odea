@@ -1,6 +1,7 @@
 import { cn } from "@/lib/cn";
 import { ChevronLeft } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
+import { launcherApi } from "./api";
 
 /* 启动器右边几屏共用的小东西：按钮、输入框的样子、带返回的标题 */
 
@@ -60,3 +61,66 @@ export function PanelHeader({ title, onBack }: { title: string; onBack: () => vo
 export const FIELD =
   "h-9 w-full min-w-0 rounded-lg border border-line-strong bg-canvas px-3 text-[13px] text-ink " +
   "outline-none focus:border-accent";
+
+/**
+ * 仓库放在哪（新建、拉一份共用）：一打开先取默认位置（「文档」文件夹），「换个位置…」开系统的选文件夹。
+ * 两样都可能出错（「文档」被重定向到不存在的盘、对话框起不来）：以前没人接，位置一栏空着、「创建」一直灰着，
+ * 什么都不说（审查 2026-11-13 §5.9）。现在在这一栏下面说一句
+ */
+export function useParentFolder() {
+  const [parent, setParent] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    launcherApi
+      .defaultParent()
+      .then((dir) => setParent((now) => now || dir))
+      .catch((error) =>
+        setProblem(`没找到默认的位置（${errorMessage(error)}），点「换个位置…」选一个`),
+      );
+  }, []);
+  const pick = () => {
+    launcherApi
+      .pickParent(parent)
+      .then((picked) => {
+        if (!picked) return;
+        setParent(picked);
+        setProblem(null);
+      })
+      .catch((error) => setProblem(`选位置的对话框没打开：${errorMessage(error)}`));
+  };
+  return { parent, pick, problem };
+}
+
+export function ParentField({
+  parent,
+  problem,
+  busy,
+  onPick,
+  className,
+}: {
+  parent: string;
+  problem: string | null;
+  busy: boolean;
+  onPick: () => void;
+  className?: string;
+}) {
+  return (
+    <>
+      <div className={cn("flex gap-2", className)}>
+        <p className={cn(FIELD, "flex items-center truncate text-body")} title={parent}>
+          {parent}
+        </p>
+        <Button disabled={busy} onClick={onPick}>
+          换个位置…
+        </Button>
+      </div>
+      {problem && (
+        <p role="alert" className="mt-1.5 text-[12px] leading-[1.6] text-danger">
+          {problem}
+        </p>
+      )}
+    </>
+  );
+}
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));

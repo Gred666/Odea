@@ -2,6 +2,7 @@ import { ActionMenu } from "@/components/RowMenu";
 import { WinButton } from "@/components/TitleBar";
 import { DOT, LOGO_VIEWBOX_ATTR, STROKES, STROKE_WIDTH } from "@/components/logoGeometry";
 import { cn } from "@/lib/cn";
+import { afterPaint, rememberNeighbors } from "@/lib/focusNeighbor";
 import { useLingering } from "@/lib/lingering";
 import { tween } from "@/lib/motion";
 import { isTauri, win } from "@/lib/tauri";
@@ -11,7 +12,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 import { version as APP_VERSION } from "../../package.json";
 import { ClonePanel } from "./ClonePanel";
 import { type VaultEntry, type VaultLink, launcherApi as api, parseVaultLink } from "./api";
-import { Button, FIELD, PanelHeader } from "./parts";
+import { Button, FIELD, PanelHeader, ParentField, useParentFolder } from "./parts";
 
 /* ============================================================
    启动器（docs/仓库与启动器.md §3）：左边是用过的仓库，右边是新建 / 打开文件夹 / 从同步仓库拉一份 /
@@ -115,12 +116,21 @@ export function Launcher() {
               disabled={pending}
               onOpen={() => void run(() => api.open(vault.path))}
               onReveal={() => void api.reveal(vault.path).catch(() => {})}
-              onForget={() =>
+              onForget={() => {
+                // 这一行连同焦点要还的「更多操作」一起拆掉：焦点给相邻的那一个仓库（审查 §5.12）
+                const settle = rememberNeighbors(
+                  "[data-vault-row]",
+                  (row) => row.dataset.vaultRow === vault.path,
+                  (row) => row.querySelector("button"),
+                );
                 void api
                   .forget(vault.path)
-                  .then(setVaults)
-                  .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-              }
+                  .then((rest) => {
+                    setVaults(rest);
+                    afterPaint(settle);
+                  })
+                  .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+              }}
             />
           ))}
         </div>
@@ -247,6 +257,7 @@ function VaultRow({
   const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div
+      data-vault-row={vault.path}
       className={cn(
         "relative flex items-center rounded-lg transition-colors duration-[120ms]",
         menuOpen ? "bg-raised" : "hover:bg-raised",
@@ -378,11 +389,10 @@ function CreatePanel({
   onCreate: (parent: string, name: string, logical: boolean) => void;
 }) {
   const [name, setName] = useState(first ? "Odea" : "");
-  const [parent, setParent] = useState("");
+  const { parent, pick, problem } = useParentFolder();
   const [logical, setLogical] = useState(false);
   const nameInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    void api.defaultParent().then((dir) => setParent((now) => now || dir));
     nameInput.current?.focus();
   }, []);
   const separator = parent.includes("/") && !parent.includes("\\") ? "/" : "\\";
@@ -414,21 +424,7 @@ function CreatePanel({
         className={cn(FIELD, "mt-1.5")}
       />
       <p className="mt-4 text-[13px] text-muted">位置</p>
-      <div className="mt-1.5 flex gap-2">
-        <p className={cn(FIELD, "flex items-center truncate text-body")} title={parent}>
-          {parent}
-        </p>
-        <Button
-          disabled={busy}
-          onClick={() =>
-            void api.pickParent(parent).then((picked) => {
-              if (picked) setParent(picked);
-            })
-          }
-        >
-          换个位置…
-        </Button>
-      </div>
+      <ParentField parent={parent} problem={problem} busy={busy} onPick={pick} className="mt-1.5" />
       <p className="mt-4 text-[13px] text-muted" id="launcher-layout">
         文件夹
       </p>

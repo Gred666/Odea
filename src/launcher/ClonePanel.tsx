@@ -12,7 +12,7 @@ import {
   type VaultLink,
   launcherApi as api,
 } from "./api";
-import { Button, FIELD, PanelHeader } from "./parts";
+import { Button, FIELD, PanelHeader, ParentField, useParentFolder } from "./parts";
 
 /* ============================================================
    启动器的「从同步仓库拉一份」（docs/仓库与启动器.md §3.2，技术方案 §5.9.7）：换了电脑时最常用。
@@ -461,10 +461,9 @@ function Place({
   onClone: (parent: string, name: string) => void;
 }) {
   const [name, setName] = useState(repo.fullName.split("/").pop() ?? "Odea");
-  const [parent, setParent] = useState("");
+  const { parent, pick, problem } = useParentFolder();
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    void api.defaultParent().then((dir) => setParent((now) => now || dir));
     input.current?.focus();
   }, []);
   const separator = parent.includes("/") && !parent.includes("\\") ? "/" : "\\";
@@ -492,21 +491,7 @@ function Place({
         autoComplete="off"
         className={cn(FIELD, "mt-1.5")}
       />
-      <div className="mt-3 flex gap-2">
-        <p className={cn(FIELD, "flex items-center truncate text-body")} title={parent}>
-          {parent}
-        </p>
-        <Button
-          disabled={busy}
-          onClick={() =>
-            void api.pickParent(parent).then((picked) => {
-              if (picked) setParent(picked);
-            })
-          }
-        >
-          换个位置…
-        </Button>
-      </div>
+      <ParentField parent={parent} problem={problem} busy={busy} onPick={pick} className="mt-3" />
       <div className="mt-4 flex items-center gap-3">
         <p className="min-w-0 flex-1 truncate text-[12px] text-muted" title={target}>
           {busy ? "正在拉取，笔记多的话要一会儿…" : target ? `会放在 ${target}` : ""}
