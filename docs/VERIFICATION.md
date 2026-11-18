@@ -59,6 +59,7 @@ node scripts/a11y-names.mjs --check
 | 淡入淡出结束那一帧闪不闪 | `fade-frames.mjs` | 逐帧和终帧比，找「平台」；场景名和读法见下面「逐帧对比」 |
 | 窗口级的动画（开窗、关窗、两个窗口交接） | `window-frames.py` | WebView 里量不到，抓屏幕；量窗口的边，不只量亮度 |
 | 协作时用输入法打字 | `collab-ime.mjs` | 真 Chrome 里走一遍组字：不丢字、不重复、对方看不到拼音。加 `near`：对方打在同一行；加 `attach`：挂上会话的那一刻正在组字（实验台 `late=1`，`协同编辑.md` §27）；加 `joincompose`：点加入（记本机正文）的那一刻正在组字（§27.5）。`CDP_PORT` 换调试端口 |
+| 协作时 Loro 文档的内存、开一篇的耗时、编辑历史和浅快照 | `collab-docs.mjs` | node 直接跑真的 `loro-crdt`，不起界面；篇数是参数（`协同编辑.md` §29.1） |
 | 表格格子里用输入法打字 | `table-ime.mjs` | 同上，格子里的子编辑器（`表格.md`）。加 `same`：访客打在主持人这一格；加 `below`：在表格下面紧贴的那一行组字，字不进表格、表格一帧都不塌成源码（`表格.md` §13） |
 | 插件沙箱的拒绝测试 | `plugin-sandbox.mjs` | 真的 iframe 和 Worker；`--cdp` 接到开着的桌面端（`插件与跨端.md` §15） |
 | 白板的几个实验 | `board/` | `白板.md` §9 |
