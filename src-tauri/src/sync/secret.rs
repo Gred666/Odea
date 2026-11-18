@@ -120,11 +120,8 @@ mod tests {
 
     #[test]
     fn tokens_round_trip_through_the_keyring() {
-        let token = Token {
-            access: "ghu_test".into(),
-            refresh: Some("ghr_test".into()),
-            expires_at: Some(1_800_000_000_000),
-        };
+        let token =
+            Token { access: "ghu_test".into(), refresh: Some("ghr_test".into()), expires_at: Some(1_800_000_000_000) };
         assert_eq!(load("github:tester").unwrap(), None);
         save("github:tester", &token).unwrap();
         assert_eq!(load("github:tester").unwrap(), Some(token));
@@ -136,11 +133,7 @@ mod tests {
 
     #[test]
     fn a_token_saved_before_the_rename_is_found_and_moved_over() {
-        let token = Token {
-            access: "ghu_old".into(),
-            refresh: None,
-            expires_at: None,
-        };
+        let token = Token { access: "ghu_old".into(), refresh: None, expires_at: None };
         let text = serde_json::to_string(&token).unwrap();
         entry(old_name::NAME, "github:renamed").unwrap().set_password(&text).unwrap();
 

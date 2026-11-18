@@ -20,8 +20,8 @@ use tauri_specta::Event;
 
 use crate::boot::{self, SavedVault};
 use crate::commands::{self, CollabLink, Indexing};
-use crate::error::{AppError, Result};
 use crate::domain::model::PluginVault;
+use crate::error::{AppError, Result};
 use crate::navigation;
 use crate::state::{AppState, Caller, Workspace};
 use crate::sync::engine::SyncHub;
@@ -71,7 +71,10 @@ pub fn open_vault<R: Runtime>(app: &AppHandle<R>, root: &Path, how: Open) -> Res
         Ok(if how.remember {
             config.remember_vault(root, crate::db::now_ms())
         } else {
-            config.saved_vault(root).cloned().unwrap_or(SavedVault { path: root.to_path_buf(), ..SavedVault::default() })
+            config
+                .saved_vault(root)
+                .cloned()
+                .unwrap_or(SavedVault { path: root.to_path_buf(), ..SavedVault::default() })
         })
     })?;
     let label = free_label(app, &state, boot::window_label(&saved));
@@ -146,15 +149,15 @@ fn build_vault_window<R: Runtime>(
 }
 
 /* ---------------- 仓库窗口的样子（docs/仓库与启动器.md §19） ----------------
-   上次关的时候什么样就什么样；没记过的最大化开（像 Obsidian）。
+上次关的时候什么样就什么样；没记过的最大化开（像 Obsidian）。
 
-   以前交给 tauri-plugin-window-state，两个毛病：它只在应用正常退出那一刻写盘，自动更新是 restart，
-   走不到那一步 —— 记录一直停在 10 月 20 日，最大化过也记不住；它还原「最大化」「可见」是在窗口刚建好的
-   时候，而最大化（SW_MAXIMIZE）会把藏着的窗口直接显示出来，前端还没画第一帧，先闪一个空窗口。
+以前交给 tauri-plugin-window-state，两个毛病：它只在应用正常退出那一刻写盘，自动更新是 restart，
+走不到那一步 —— 记录一直停在 10 月 20 日，最大化过也记不住；它还原「最大化」「可见」是在窗口刚建好的
+时候，而最大化（SW_MAXIMIZE）会把藏着的窗口直接显示出来，前端还没画第一帧，先闪一个空窗口。
 
-   现在自己记：关之前（lib.rs 的 CloseRequested）记下是不是最大化、不最大化时的位置大小（Windows 用
-   GetWindowPlacement，最大化着也拿得到原来那个）；建窗口时（还藏着）摆好 —— 要最大化的先撑满它那块
-   屏幕的工作区，前端第一帧就按最终的尺寸排，显示时不再重排一次；ready 时一步显示（show_placed）。 */
+现在自己记：关之前（lib.rs 的 CloseRequested）记下是不是最大化、不最大化时的位置大小（Windows 用
+GetWindowPlacement，最大化着也拿得到原来那个）；建窗口时（还藏着）摆好 —— 要最大化的先撑满它那块
+屏幕的工作区，前端第一帧就按最终的尺寸排，显示时不再重排一次；ready 时一步显示（show_placed）。 */
 
 /// 建好、藏着、等 ready 的仓库窗口：显示时按这个摆
 static PLACING: std::sync::LazyLock<Mutex<HashMap<String, boot::WindowPlacement>>> =
@@ -162,9 +165,8 @@ static PLACING: std::sync::LazyLock<Mutex<HashMap<String, boot::WindowPlacement>
 
 fn place_hidden<R: Runtime>(window: &tauri::WebviewWindow<R>, saved: Option<boot::WindowPlacement>) {
     // 没记过：最大化；不最大化时就是刚建好的样子（屏幕正中 1440×900）
-    let fresh = || {
-        current_placement(&window.as_ref().window()).map(|now| boot::WindowPlacement { maximized: true, ..now })
-    };
+    let fresh =
+        || current_placement(&window.as_ref().window()).map(|now| boot::WindowPlacement { maximized: true, ..now });
     let Some(placement) = saved.or_else(fresh) else { return };
     if saved.is_some() {
         set_normal(window, placement);
@@ -656,14 +658,14 @@ pub fn reopen<R: Runtime>(app: &AppHandle<R>) {
 /// 单实例、深链接、Dock 的回调在主线程上：读文件、建窗口挪到别处
 fn open_recent_or_launcher<R: Runtime>(app: &AppHandle<R>) {
     let state = app.state::<AppState>();
-    let recent = boot::Config::load(&state.data_dir)
-        .recent_vaults()
-        .into_iter()
-        .find(|saved| saved.path.is_dir());
+    let recent = boot::Config::load(&state.data_dir).recent_vaults().into_iter().find(|saved| saved.path.is_dir());
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let opened = match recent {
-            Some(saved) => open_vault(&app, &saved.path, Open { seed: false, remember: true, quiet: true, logical: false }).map(|_| ()),
+            Some(saved) => {
+                open_vault(&app, &saved.path, Open { seed: false, remember: true, quiet: true, logical: false })
+                    .map(|_| ())
+            }
             None => show_launcher(&app),
         };
         if let Err(error) = opened {
@@ -681,9 +683,7 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    tauri::async_runtime::spawn_blocking(f)
-        .await
-        .map_err(|e| AppError::Internal(format!("任务panic: {e}")))?
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| AppError::Internal(format!("任务panic: {e}")))?
 }
 
 /* ---------------- 启动器的命令 ---------------- */
@@ -771,9 +771,7 @@ pub async fn launcher_open_folder<R: Runtime>(app: AppHandle<R>) -> Result<bool>
     })
     .await?;
     let Some(picked) = picked else { return Ok(false) };
-    let root = picked
-        .into_path()
-        .map_err(|error| AppError::Invalid(format!("这个位置用不了: {error}")))?;
+    let root = picked.into_path().map_err(|error| AppError::Invalid(format!("这个位置用不了: {error}")))?;
     open_from_launcher(app, root, false, false).await?;
     Ok(true)
 }
@@ -782,9 +780,7 @@ pub async fn launcher_open_folder<R: Runtime>(app: AppHandle<R>) -> Result<bool>
 #[tauri::command]
 #[specta::specta]
 pub async fn launcher_default_parent<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> Result<String> {
-    Ok(boot::default_parent(app.path().document_dir().ok(), &state.data_dir)
-        .to_string_lossy()
-        .into_owned())
+    Ok(boot::default_parent(app.path().document_dir().ok(), &state.data_dir).to_string_lossy().into_owned())
 }
 
 /// 新建时换个位置：选一个文件夹，新仓库建在它下面。取消了返回 null
@@ -800,9 +796,7 @@ pub async fn launcher_pick_parent<R: Runtime>(app: AppHandle<R>, from: String) -
         Ok(dialog.blocking_pick_folder())
     })
     .await?;
-    Ok(picked
-        .and_then(|picked| picked.into_path().ok())
-        .map(|path| path.to_string_lossy().into_owned()))
+    Ok(picked.and_then(|picked| picked.into_path().ok()).map(|path| path.to_string_lossy().into_owned()))
 }
 
 /// 新建：在 parent 下面建一个叫 name 的文件夹，放使用指南，打开。同名的文件夹已经有了、里面有东西就不建。
@@ -991,11 +985,7 @@ fn apply_place<R: Runtime>(window: &tauri::WebviewWindow<R>, place: Place) {
 /// lib.rs 的 ready 在显示窗口之前调：跳过去时打开的窗口先摆好位置。摆了返回 true
 pub fn place_pending<R: Runtime>(window: &tauri::WebviewWindow<R>) -> bool {
     let state = window.state::<AppState>();
-    let place = state
-        .goto_jumps
-        .lock()
-        .ok()
-        .and_then(|jumps| jumps.get(window.label()).and_then(|jump| jump.place));
+    let place = state.goto_jumps.lock().ok().and_then(|jumps| jumps.get(window.label()).and_then(|jump| jump.place));
     if let Some(place) = place {
         apply_place(window, place);
     }
@@ -1022,11 +1012,8 @@ pub async fn plugin_vaults(caller: Caller, state: State<'_, AppState>, plugin: S
     let open: Vec<PathBuf> = state.all_workspaces().iter().map(|workspace| workspace.root()).collect();
     let data_dir = state.data_dir.clone();
     blocking(move || {
-        let mut paths: Vec<PathBuf> = boot::Config::load(&data_dir)
-            .recent_vaults()
-            .into_iter()
-            .map(|saved| saved.path)
-            .collect();
+        let mut paths: Vec<PathBuf> =
+            boot::Config::load(&data_dir).recent_vaults().into_iter().map(|saved| saved.path).collect();
         for root in open.into_iter().chain(current.clone()) {
             if !paths.iter().any(|path| boot::same_vault(path, &root)) {
                 paths.push(root);
@@ -1069,10 +1056,9 @@ pub async fn vault_goto<R: Runtime>(
     let place = place_of(&window);
     let goto = VaultGoto { page, arg };
     let handle = app.clone();
-    let (label, existed) = blocking(move || {
-        open_vault(&handle, &root, Open { seed: false, remember: true, quiet: true, logical: false })
-    })
-    .await?;
+    let (label, existed) =
+        blocking(move || open_vault(&handle, &root, Open { seed: false, remember: true, quiet: true, logical: false }))
+            .await?;
     if existed {
         if let (Some(target), Some(place)) = (app.get_webview_window(&label), place) {
             apply_place(&target, place);

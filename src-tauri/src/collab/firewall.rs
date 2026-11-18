@@ -48,10 +48,7 @@ pub struct Rule {
 /// 启用着的入站规则
 pub fn evaluate(current: i32, enabled: impl Fn(i32) -> bool, rules: &[Rule]) -> Firewall {
     let public = current & PUBLIC != 0;
-    let active: Vec<i32> = [DOMAIN, PRIVATE, PUBLIC]
-        .into_iter()
-        .filter(|profile| current & profile != 0)
-        .collect();
+    let active: Vec<i32> = [DOMAIN, PRIVATE, PUBLIC].into_iter().filter(|profile| current & profile != 0).collect();
     if active.is_empty() {
         return Firewall::Unknown;
     }
@@ -88,10 +85,7 @@ pub fn check() -> Firewall {
 }
 
 /// 开始协作以后盯着：头一分钟每 5 秒查一次（等用户回答弹窗），之后每分钟一次
-pub fn watch() -> (
-    tokio::sync::watch::Receiver<Firewall>,
-    tokio::task::JoinHandle<()>,
-) {
+pub fn watch() -> (tokio::sync::watch::Receiver<Firewall>, tokio::task::JoinHandle<()>) {
     let (sender, receiver) = tokio::sync::watch::channel(Firewall::Unknown);
     let task = tokio::spawn(async move {
         if !cfg!(windows) {
@@ -107,11 +101,7 @@ pub fn watch() -> (
                 *value = next;
                 changed
             });
-            let wait = if started.elapsed() < std::time::Duration::from_secs(60) {
-                5
-            } else {
-                60
-            };
+            let wait = if started.elapsed() < std::time::Duration::from_secs(60) { 5 } else { 60 };
             tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
         }
     });
@@ -122,12 +112,10 @@ pub fn watch() -> (
 mod windows_impl {
     use windows::core::Interface;
     use windows::Win32::NetworkManagement::WindowsFirewall::{
-        INetFwPolicy2, INetFwRule, NetFwPolicy2, NET_FW_ACTION_ALLOW, NET_FW_PROFILE_TYPE2,
-        NET_FW_RULE_DIR_IN,
+        INetFwPolicy2, INetFwRule, NetFwPolicy2, NET_FW_ACTION_ALLOW, NET_FW_PROFILE_TYPE2, NET_FW_RULE_DIR_IN,
     };
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, CLSCTX_INPROC_SERVER,
-        COINIT_MULTITHREADED,
+        CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
     };
     use windows::Win32::System::Ole::IEnumVARIANT;
     use windows::Win32::System::Variant::{VARIANT, VT_DISPATCH};
@@ -151,17 +139,14 @@ mod windows_impl {
     }
 
     fn normalize(path: &str) -> String {
-        path.replace('/', "\\")
-            .trim_end_matches('\\')
-            .to_lowercase()
+        path.replace('/', "\\").trim_end_matches('\\').to_lowercase()
     }
 
     pub fn check() -> Option<Firewall> {
         let _com = Com::init()?;
         let exe = normalize(&std::env::current_exe().ok()?.to_string_lossy());
         unsafe {
-            let policy: INetFwPolicy2 =
-                CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER).ok()?;
+            let policy: INetFwPolicy2 = CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER).ok()?;
             let current = policy.CurrentProfileTypes().ok()?;
             let mut rules = Vec::new();
             let all = policy.Rules().ok()?;
@@ -181,10 +166,7 @@ mod windows_impl {
                     continue;
                 };
                 if rule.Direction().ok() != Some(NET_FW_RULE_DIR_IN)
-                    || !rule
-                        .Enabled()
-                        .map(|enabled| enabled.as_bool())
-                        .unwrap_or(false)
+                    || !rule.Enabled().map(|enabled| enabled.as_bool()).unwrap_or(false)
                 {
                     continue;
                 }
@@ -203,10 +185,7 @@ mod windows_impl {
                 });
             }
             let enabled = |profile: i32| {
-                policy
-                    .get_FirewallEnabled(NET_FW_PROFILE_TYPE2(profile))
-                    .map(|on| on.as_bool())
-                    .unwrap_or(true)
+                policy.get_FirewallEnabled(NET_FW_PROFILE_TYPE2(profile)).map(|on| on.as_bool()).unwrap_or(true)
             };
             Some(evaluate(current, enabled, &rules))
         }

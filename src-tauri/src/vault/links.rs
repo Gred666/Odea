@@ -26,10 +26,7 @@ struct Span {
 pub fn wikilinks(body: &str) -> Vec<WikiLink> {
     spans(body)
         .into_iter()
-        .map(|span| WikiLink {
-            line: span.line,
-            title: body[span.start..span.end].to_string(),
-        })
+        .map(|span| WikiLink { line: span.line, title: body[span.start..span.end].to_string() })
         .collect()
 }
 
@@ -42,10 +39,7 @@ pub fn linkable(title: &str) -> bool {
 /// 把正文里链到 `old` 的双链改成链到 `new`：只换标题那一段，`|别名`、`#小节`、`^块` 和两头的空白
 /// 原样留着；代码里的、转义的不动。返回改过的正文和改了几处；一处都没有返回 None
 pub fn retarget(body: &str, old: &str, new: &str) -> Option<(String, usize)> {
-    let hits: Vec<Span> = spans(body)
-        .into_iter()
-        .filter(|span| same_title(&body[span.start..span.end], old))
-        .collect();
+    let hits: Vec<Span> = spans(body).into_iter().filter(|span| same_title(&body[span.start..span.end], old)).collect();
     if hits.is_empty() {
         return None;
     }
@@ -91,10 +85,7 @@ fn prose_lines(body: &str) -> impl Iterator<Item = (usize, usize, &str)> {
 
 /// 正文去掉代码：围栏代码块整段拿掉、行内代码换成空格。标签、待办这些不认代码里写的
 pub fn without_code(body: &str) -> String {
-    prose_lines(body)
-        .map(|(_, _, line)| without_code_spans(line))
-        .collect::<Vec<_>>()
-        .join("\n")
+    prose_lines(body).map(|(_, _, line)| without_code_spans(line)).collect::<Vec<_>>().join("\n")
 }
 
 fn spans(body: &str) -> Vec<Span> {
@@ -105,11 +96,7 @@ fn spans(body: &str) -> Vec<Span> {
         }
         // 行内代码换成了等长的空格，字节位置和原来那一行一一对应
         for (start, end) in links_in_line(&without_code_spans(line)) {
-            out.push(Span {
-                line: index,
-                start: line_start + start,
-                end: line_start + end,
-            });
+            out.push(Span { line: index, start: line_start + start, end: line_start + end });
         }
     }
     out
@@ -234,10 +221,7 @@ pub fn context_line(line: &str, title: &str) -> String {
     // 从链接前面 30 个字开始截，链接一定在里面
     let lower = text.to_lowercase();
     let needle = format!("[[{}", title.trim().to_lowercase());
-    let at = lower
-        .find(&needle)
-        .map(|byte| lower[..byte].chars().count())
-        .unwrap_or(0);
+    let at = lower.find(&needle).map(|byte| lower[..byte].chars().count()).unwrap_or(0);
     let start = at.saturating_sub(30);
     let end = (start + MAX).min(chars.len());
     let mut out = String::new();
@@ -262,10 +246,7 @@ mod tests {
     #[test]
     fn finds_every_form_of_wikilink() {
         let body = "看 [[周报]] 和 [[周报|上周的]]，跳到 [[周报#结论]]、[[周报^abc]]\n第二行 [[ 京都书店清单 ]]";
-        assert_eq!(
-            titles(body),
-            vec!["周报", "周报", "周报", "周报", "京都书店清单"]
-        );
+        assert_eq!(titles(body), vec!["周报", "周报", "周报", "周报", "京都书店清单"]);
         assert_eq!(wikilinks(body)[4].line, 1);
     }
 

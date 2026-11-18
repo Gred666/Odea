@@ -42,10 +42,7 @@ pub struct Log {
 
 impl Log {
     pub fn new(dir: PathBuf) -> Self {
-        Self {
-            dir,
-            last_update: HashMap::new(),
-        }
+        Self { dir, last_update: HashMap::new() }
     }
 
     pub fn record(&mut self, entity: &str, id: &str, action: &str) {
@@ -88,10 +85,7 @@ pub fn append(dir: &Path, entries: &[Entry]) -> Result<()> {
         line.push('\n');
     }
     for (month, text) in by_month {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join(format!("{month}.jsonl")))?;
+        let mut file = OpenOptions::new().create(true).append(true).open(dir.join(format!("{month}.jsonl")))?;
         file.write_all(text.as_bytes())?;
     }
     Ok(())
@@ -99,9 +93,8 @@ pub fn append(dir: &Path, entries: &[Entry]) -> Result<()> {
 
 #[cfg(test)]
 pub fn read_all(dir: &Path) -> Vec<Entry> {
-    let mut files: Vec<_> = std::fs::read_dir(dir)
-        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
-        .unwrap_or_default();
+    let mut files: Vec<_> =
+        std::fs::read_dir(dir).map(|entries| entries.flatten().map(|entry| entry.path()).collect()).unwrap_or_default();
     files.sort();
     files
         .iter()
@@ -130,14 +123,9 @@ mod tests {
         log.record("task", "t1", "completed");
         log.record("task", "t1", "reopened");
 
-        let actions: Vec<_> = read_all(dir.path())
-            .into_iter()
-            .map(|entry| format!("{}:{}", entry.id, entry.action))
-            .collect();
-        assert_eq!(
-            actions,
-            vec!["n1:created", "n1:updated", "n2:updated", "t1:completed", "t1:reopened"]
-        );
+        let actions: Vec<_> =
+            read_all(dir.path()).into_iter().map(|entry| format!("{}:{}", entry.id, entry.action)).collect();
+        assert_eq!(actions, vec!["n1:created", "n1:updated", "n2:updated", "t1:completed", "t1:reopened"]);
     }
 
     #[test]

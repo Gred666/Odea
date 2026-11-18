@@ -42,17 +42,11 @@ pub struct VaultWatcher {
 pub type OnBatch = Arc<dyn Fn() + Send + Sync>;
 
 pub fn start(vault: Arc<Mutex<Vault>>, on_batch: Option<OnBatch>) -> Result<VaultWatcher> {
-    let root = vault
-        .lock()
-        .map_err(|_| AppError::Internal("仓库锁坏了".into()))?
-        .root()
-        .to_path_buf();
+    let root = vault.lock().map_err(|_| AppError::Internal("仓库锁坏了".into()))?.root().to_path_buf();
     let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
-    let mut watcher = notify::recommended_watcher(tx)
-        .map_err(|error| AppError::Io(format!("监听文件夹失败: {error}")))?;
-    watcher
-        .watch(&root, RecursiveMode::Recursive)
-        .map_err(|error| AppError::Io(format!("监听文件夹失败: {error}")))?;
+    let mut watcher =
+        notify::recommended_watcher(tx).map_err(|error| AppError::Io(format!("监听文件夹失败: {error}")))?;
+    watcher.watch(&root, RecursiveMode::Recursive).map_err(|error| AppError::Io(format!("监听文件夹失败: {error}")))?;
 
     std::thread::Builder::new()
         .name("vault-watch".into())
@@ -100,11 +94,8 @@ pub fn start(vault: Arc<Mutex<Vault>>, on_batch: Option<OnBatch>) -> Result<Vaul
                 if vault.root() != root {
                     return;
                 }
-                let result = if work.full {
-                    vault.rescan_and_announce()
-                } else {
-                    vault.rescan_paths_and_announce(&work.files)
-                };
+                let result =
+                    if work.full { vault.rescan_and_announce() } else { vault.rescan_paths_and_announce(&work.files) };
                 unread = vault.take_unread();
                 if unread.is_empty() {
                     retry_in = RETRY_FIRST;
@@ -181,8 +172,7 @@ fn is_tree_file(root: &Path, path: &Path) -> bool {
 
 /// 仓库标记 .odea/vault.json
 fn is_marker_file(root: &Path, path: &Path) -> bool {
-    path.strip_prefix(root)
-        .is_ok_and(|rel| rel == Path::new(super::layout::APP_DIR).join("vault.json"))
+    path.strip_prefix(root).is_ok_and(|rel| rel == Path::new(super::layout::APP_DIR).join("vault.json"))
 }
 
 /// 仓库里的相对路径（正斜杠）；在仓库外或者路径里有隐藏的一层时返回 None
@@ -211,9 +201,7 @@ mod tests {
     fn ignores_hidden_paths_and_sorts_out_what_to_rescan() {
         let root = Path::new("/vault");
         let mut batch = Batch::default();
-        let event = |path: &str| {
-            Ok(notify::Event::new(EventKind::Any).add_path(PathBuf::from(path)))
-        };
+        let event = |path: &str| Ok(notify::Event::new(EventKind::Any).add_path(PathBuf::from(path)));
         batch.add(root, event("/vault/.odea/trash/x.md"));
         batch.add(root, event("/vault/笔记/.周报.md.1-0.tmp"));
         batch.add(root, event("/elsewhere/a.md"));
@@ -264,8 +252,7 @@ mod tests {
         // 放开（Windows 上关一个只读的句柄没有文件事件）：隔一会儿再读，读进来了
         drop(hold);
         let got = (0..20).any(|_| {
-            rx.recv_timeout(Duration::from_millis(500))
-                .is_ok_and(|change| change.notes.contains(&"held1".to_string()))
+            rx.recv_timeout(Duration::from_millis(500)).is_ok_and(|change| change.notes.contains(&"held1".to_string()))
         });
         assert!(got, "放开以后没再读");
         assert_eq!(vault.lock().unwrap().note_get("held1").unwrap().content_md, "外面写的");
@@ -279,12 +266,9 @@ mod tests {
         let vault = Arc::new(Mutex::new(Vault::open_in_memory(&root)));
         let (tx, rx) = mpsc::channel::<VaultChange>();
         let tx = Mutex::new(tx);
-        vault
-            .lock()
-            .unwrap()
-            .set_announcer(Arc::new(move |change| {
-                let _ = tx.lock().unwrap().send(change);
-            }));
+        vault.lock().unwrap().set_announcer(Arc::new(move |change| {
+            let _ = tx.lock().unwrap().send(change);
+        }));
         // 同步线程靠它知道「有文件变了」
         let batches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = batches.clone();
@@ -304,11 +288,7 @@ mod tests {
         }
         assert_eq!(vault.lock().unwrap().note_get("ext1").unwrap().content_md, "你好");
 
-        std::fs::rename(
-            root.join("笔记").join("外面写的.md"),
-            root.join("笔记").join("改了名.md"),
-        )
-        .unwrap();
+        std::fs::rename(root.join("笔记").join("外面写的.md"), root.join("笔记").join("改了名.md")).unwrap();
         let mut renamed = false;
         for _ in 0..5 {
             let change = wait();
@@ -325,15 +305,8 @@ mod tests {
 
         // 应用自己写的不算外部改动：写完之后不该再收到通知 —— 但同步线程照样要被戳到
         let before = batches.load(std::sync::atomic::Ordering::SeqCst);
-        vault
-            .lock()
-            .unwrap()
-            .note_update("ext1", "改了名", "应用写的")
-            .unwrap();
-        assert!(
-            rx.recv_timeout(Duration::from_millis(1500)).is_err(),
-            "自己写的文件被当成了外部改动"
-        );
+        vault.lock().unwrap().note_update("ext1", "改了名", "应用写的").unwrap();
+        assert!(rx.recv_timeout(Duration::from_millis(1500)).is_err(), "自己写的文件被当成了外部改动");
         assert!(batches.load(std::sync::atomic::Ordering::SeqCst) > before, "自己写的文件没戳到同步");
 
         std::fs::remove_file(root.join("笔记").join("改了名.md")).unwrap();

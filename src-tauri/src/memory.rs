@@ -51,16 +51,12 @@ pub fn forget_window(label: &str) {
 #[cfg(windows)]
 fn set_low<R: Runtime>(webview: &tauri::WebviewWindow<R>, low: bool) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
-        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
     };
     use windows::core::Interface;
 
-    let level = if low {
-        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
-    } else {
-        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
-    };
+    let level =
+        if low { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL };
     let _ = webview.with_webview(move |platform| unsafe {
         let Ok(core) = platform.controller().CoreWebView2() else { return };
         if let Ok(core) = core.cast::<ICoreWebView2_19>() {

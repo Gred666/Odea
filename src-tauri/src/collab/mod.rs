@@ -147,7 +147,10 @@ pub enum Control {
     },
     /// 有人想加入，可两边的 Odea 版本对不上，直接拒了（主持人）。guest_older = 对方的旧
     #[serde(rename_all = "camelCase")]
-    JoinOutdated { name: String, guest_older: bool },
+    JoinOutdated {
+        name: String,
+        guest_older: bool,
+    },
     /// 等确认的那位自己走了
     JoinCancelled {
         request: u32,
@@ -297,12 +300,7 @@ pub type Events = tokio::sync::mpsc::UnboundedSender<Event>;
 
 /// 昵称：去掉首尾空白，最长 40 个字，空的叫「访客」
 pub(crate) fn clean_name(name: &str) -> String {
-    let name: String = name
-        .trim()
-        .chars()
-        .filter(|c| !c.is_control())
-        .take(40)
-        .collect();
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).take(40).collect();
     if name.is_empty() {
         "访客".into()
     } else {
@@ -314,17 +312,11 @@ pub(crate) fn clean_name(name: &str) -> String {
 /// 通道关了就把流收尾（让对方读到正常结束），最多等半秒对方确认
 pub(crate) fn spawn_writer(
     mut send: iroh::endpoint::SendStream,
-) -> (
-    tokio::sync::mpsc::UnboundedSender<(u8, Vec<u8>)>,
-    tokio::task::JoinHandle<()>,
-) {
+) -> (tokio::sync::mpsc::UnboundedSender<(u8, Vec<u8>)>, tokio::task::JoinHandle<()>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(u8, Vec<u8>)>();
     let handle = tokio::spawn(async move {
         while let Some((kind, bytes)) = rx.recv().await {
-            if protocol::write_frame(&mut send, kind, &bytes)
-                .await
-                .is_err()
-            {
+            if protocol::write_frame(&mut send, kind, &bytes).await.is_err() {
                 return;
             }
         }

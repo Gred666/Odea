@@ -25,10 +25,7 @@ pub fn run(conn: &mut Connection, db_path: &Path) -> Result<()> {
 
     // 用户装了新版又退回旧版：必须明确报错，不能静默按旧 schema 操作新数据
     if current > target {
-        return Err(AppError::DbTooNew {
-            found: current,
-            supported: target,
-        });
+        return Err(AppError::DbTooNew { found: current, supported: target });
     }
 
     // 迁移前留一份备份。老库出问题时至少能捞回来。
@@ -51,11 +48,7 @@ pub fn run(conn: &mut Connection, db_path: &Path) -> Result<()> {
 
 fn apply(conn: &mut Connection, current: i64) -> Result<()> {
     let dangling = |conn: &Connection| -> Result<i64> {
-        Ok(
-            conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
-                r.get(0)
-            })?,
-        )
+        Ok(conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0))?)
     };
 
     for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
@@ -63,14 +56,10 @@ fn apply(conn: &mut Connection, current: i64) -> Result<()> {
         let tx = conn.transaction()?;
         // 只拦迁移自己造成的悬空引用；老库里原本就有的不该让新版起不来
         let before = dangling(&tx)?;
-        tx.execute_batch(sql)
-            .map_err(|e| AppError::Db(format!("迁移 {version} 失败: {e}")))?;
+        tx.execute_batch(sql).map_err(|e| AppError::Db(format!("迁移 {version} 失败: {e}")))?;
         let after = dangling(&tx)?;
         if after > before {
-            return Err(AppError::Db(format!(
-                "迁移 {version} 失败: 新增了 {} 条悬空外键",
-                after - before
-            )));
+            return Err(AppError::Db(format!("迁移 {version} 失败: 新增了 {} 条悬空外键", after - before)));
         }
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
@@ -103,16 +92,12 @@ mod tests {
         crate::db::pragma::configure(&mut conn).unwrap();
 
         run(&mut conn, Path::new(":memory:")).unwrap();
-        let v: i64 = conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
+        let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v, MIGRATIONS.len() as i64);
 
         // 再跑一次不应有任何变化
         run(&mut conn, Path::new(":memory:")).unwrap();
-        let v2: i64 = conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
+        let v2: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v, v2);
     }
 
@@ -140,13 +125,8 @@ mod tests {
         )
         .unwrap();
 
-        let hits: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM note_fts WHERE note_fts MATCH '正文'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+        let hits: i64 =
+            conn.query_row("SELECT count(*) FROM note_fts WHERE note_fts MATCH '正文'", [], |r| r.get(0)).unwrap();
         assert_eq!(hits, 1, "FTS5 触发器没把行同步进索引");
     }
 
@@ -184,21 +164,12 @@ mod tests {
 
         run(&mut conn, Path::new(":memory:")).unwrap();
 
-        let krs: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM key_result WHERE goal_id='g1'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+        let krs: i64 = conn.query_row("SELECT count(*) FROM key_result WHERE goal_id='g1'", [], |r| r.get(0)).unwrap();
         assert_eq!(krs, 1, "key_result 被 DROP TABLE goal 级联删掉了");
-        let goal_id: Option<String> = conn
-            .query_row("SELECT goal_id FROM task WHERE id='t1'", [], |r| r.get(0))
-            .unwrap();
+        let goal_id: Option<String> =
+            conn.query_row("SELECT goal_id FROM task WHERE id='t1'", [], |r| r.get(0)).unwrap();
         assert_eq!(goal_id.as_deref(), Some("g1"), "task.goal_id 被置空了");
-        let fk: bool = conn
-            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
-            .unwrap();
+        let fk: bool = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
         assert!(fk, "迁移完外键没有重新打开");
     }
 
@@ -231,19 +202,13 @@ mod tests {
         conn.execute_batch(MIGRATIONS[2]).unwrap();
 
         let (markdown, action_title): (String, Option<String>) = conn
-            .query_row(
-                "SELECT content_md, action_title FROM note WHERE id='n1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+            .query_row("SELECT content_md, action_title FROM note WHERE id='n1'", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .unwrap();
         assert!(markdown.contains("## 下阶段行动"));
         assert!(markdown.contains("- [x] 可编辑任务"));
         assert!(action_title.is_none());
-        assert_eq!(
-            conn.query_row("SELECT count(*) FROM task", [], |row| row.get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
+        assert_eq!(conn.query_row("SELECT count(*) FROM task", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
     }
 }

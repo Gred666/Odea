@@ -36,11 +36,7 @@ impl Finder {
         if query.is_empty() {
             return Ok(None);
         }
-        let pattern = if options.regex {
-            query.to_string()
-        } else {
-            regex::escape(query)
-        };
+        let pattern = if options.regex { query.to_string() } else { regex::escape(query) };
         let re = RegexBuilder::new(&pattern)
             .case_insensitive(!options.case_sensitive)
             // 一行一行地搜：^ $ 是行首行尾
@@ -57,11 +53,7 @@ impl Finder {
                 regex::Error::CompiledTooBig(_) => "正则太复杂了".to_string(),
                 _ => "正则写错了".to_string(),
             })?;
-        Ok(Some(Self {
-            re,
-            whole_word: options.whole_word,
-            literal: !options.regex,
-        }))
+        Ok(Some(Self { re, whole_word: options.whole_word, literal: !options.regex }))
     }
 
     /// 这篇正文里可能有命中吗：不是正则时先整篇找一遍，大多数不含这个词的文档就不用一行一行地看了。
@@ -120,10 +112,7 @@ pub fn count_words(md: &str) -> i64 {
             if token.contains("://") {
                 1
             } else {
-                token
-                    .split(|c: char| !c.is_ascii_alphanumeric())
-                    .filter(|s| !s.is_empty())
-                    .count()
+                token.split(|c: char| !c.is_ascii_alphanumeric()).filter(|s| !s.is_empty()).count()
             }
         })
         .sum();
@@ -204,9 +193,8 @@ fn front_matter_len(lines: &[&str]) -> usize {
 /// `is_yaml_key` 的正则，和编辑器的 editor/frontMatter.ts::KEY_RE 一字不差（那边带 `u` 标志）。
 /// Unicode 表的版本两边不一样：regex-syntax 0.8.11 是 16.0，WebView2 151（ICU 78）是 17.0 ——
 /// 键全是 17.0 新加的字（CJK 扩展 J 等）的块，编辑器认、这里不认。实测和影响见 docs/提醒与属性.md §3.3 的实现记录
-static YAML_KEY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[\p{Alphabetic}_][\p{Alphabetic}\p{M}\p{N}_-]*\s*:").expect("键的正则写死在这里")
-});
+static YAML_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[\p{Alphabetic}_][\p{Alphabetic}\p{M}\p{N}_-]*\s*:").expect("键的正则写死在这里"));
 
 /// 这一行是不是 `键: 值` 的样子：键的第一个字是 Unicode 字母（中文、日文的字也算）或下划线，
 /// 后面是字母、组合符号（拆开写的重音、印地文的半音符、泰文的声调号）、数字、`_`、`-`，再是半角的 `:`。
@@ -242,10 +230,7 @@ fn is_definition(line: &str) -> bool {
     let Some(rest) = rest.strip_prefix('[') else {
         return false;
     };
-    !rest.starts_with('^')
-        && rest
-            .find("]:")
-            .is_some_and(|end| !rest[..end].contains(['[', ']']))
+    !rest.starts_with('^') && rest.find("]:").is_some_and(|end| !rest[..end].contains(['[', ']']))
 }
 
 /// 行首的块级标记：引用（可嵌套）、标题、列表符号、任务勾选框、脚注定义。
@@ -256,20 +241,11 @@ fn strip_line_prefix(line: &str) -> &str {
     }
 
     let hashes = line.len() - line.trim_start_matches('#').len();
-    if (1..=6).contains(&hashes)
-        && line[hashes..]
-            .chars()
-            .next()
-            .is_none_or(char::is_whitespace)
-    {
+    if (1..=6).contains(&hashes) && line[hashes..].chars().next().is_none_or(char::is_whitespace) {
         let text = line[hashes..].trim();
         // `## 标题 ##` 的收尾井号；`## C#` 里的不算（前面没有空格）
         let unclosed = text.trim_end_matches('#');
-        return if unclosed.is_empty() || unclosed.ends_with(char::is_whitespace) {
-            unclosed.trim_end()
-        } else {
-            text
-        };
+        return if unclosed.is_empty() || unclosed.ends_with(char::is_whitespace) { unclosed.trim_end() } else { text };
     }
 
     line = strip_list_marker(line);
@@ -341,10 +317,7 @@ fn strip_inline(text: &str) -> String {
 
 /// `\*` → `*`
 fn escaped(rest: &str) -> Option<(String, &str)> {
-    let next = rest[1..]
-        .chars()
-        .next()
-        .filter(char::is_ascii_punctuation)?;
+    let next = rest[1..].chars().next().filter(char::is_ascii_punctuation)?;
     Some((next.to_string(), &rest[1 + next.len_utf8()..]))
 }
 
@@ -394,11 +367,7 @@ fn matching(s: &str, open: char, close: char) -> Option<usize> {
 /// Obsidian 式尺寸 `![alt|300]` / `![alt|300x200]` 不算 alt。
 fn image_alt(label: &str) -> &str {
     match label.rsplit_once('|') {
-        Some((alt, size))
-            if !size.is_empty() && size.chars().all(|c| c.is_ascii_digit() || c == 'x') =>
-        {
-            alt.trim()
-        }
+        Some((alt, size)) if !size.is_empty() && size.chars().all(|c| c.is_ascii_digit() || c == 'x') => alt.trim(),
         _ => label.trim(),
     }
 }
@@ -427,25 +396,15 @@ fn html(rest: &str) -> Option<(String, &str)> {
     let end = rest.find('>')?;
     let inner = &rest[1..end];
     let after = &rest[end + 1..];
-    if !inner.is_empty()
-        && !inner.contains(char::is_whitespace)
-        && (inner.contains("://") || inner.contains('@'))
-    {
+    if !inner.is_empty() && !inner.contains(char::is_whitespace) && (inner.contains("://") || inner.contains('@')) {
         return Some((inner.to_string(), after));
     }
     let name = inner.strip_prefix('/').unwrap_or(inner);
     if !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
         return None;
     }
-    let tag: String = name
-        .chars()
-        .take_while(char::is_ascii_alphanumeric)
-        .collect();
-    let kept = if tag.eq_ignore_ascii_case("br") {
-        " "
-    } else {
-        ""
-    };
+    let tag: String = name.chars().take_while(char::is_ascii_alphanumeric).collect();
+    let kept = if tag.eq_ignore_ascii_case("br") { " " } else { "" };
     Some((kept.to_string(), after))
 }
 
@@ -457,11 +416,7 @@ mod tests {
         Finder::new(query, options).unwrap().unwrap().find_in_line(line, usize::MAX)
     }
 
-    const PLAIN: FindOptions = FindOptions {
-        case_sensitive: false,
-        whole_word: false,
-        regex: false,
-    };
+    const PLAIN: FindOptions = FindOptions { case_sensitive: false, whole_word: false, regex: false };
 
     #[test]
     fn finder_matches_text_literally_and_ignores_case_by_default() {
@@ -497,10 +452,7 @@ mod tests {
         let reason = Finder::new("(a", regex).err().unwrap();
         assert!(!reason.is_empty() && !reason.contains('\n'), "{reason}");
         // limit
-        assert_eq!(
-            Finder::new("a", PLAIN).unwrap().unwrap().find_in_line("aaaa", 2),
-            vec![(0, 1), (1, 2)]
-        );
+        assert_eq!(Finder::new("a", PLAIN).unwrap().unwrap().find_in_line("aaaa", 2), vec![(0, 1), (1, 2)]);
     }
 
     #[test]
@@ -531,35 +483,17 @@ mod tests {
     #[test]
     fn excerpt_is_plain_text() {
         for (md, expected) in [
-            (
-                "- [x] 已完成的任务\n- [ ] 待办事项",
-                "已完成的任务 待办事项",
-            ),
+            ("- [x] 已完成的任务\n- [ ] 待办事项", "已完成的任务 待办事项"),
             ("1. 第一步\n2) 第二步", "第一步 第二步"),
             ("见 [官网](https://example.com/a_(b)) 说明", "见 官网 说明"),
             ("![截图|300x200](C:/img/a.png) 和 ![](b.png)", "截图 和"),
-            (
-                "[[目标笔记|别名]] 与 [[另一篇#小节]]",
-                "别名 与 另一篇#小节",
-            ),
-            (
-                "<b>粗体</b>第一行<br>第二行 <https://x.dev> <!-- 备注 -->",
-                "粗体第一行 第二行 https://x.dev",
-            ),
-            (
-                "**强调** ==高亮== ~~删除~~ __粗__ `a == b` \\*字面\\*",
-                "强调 高亮 删除 粗 a == b *字面*",
-            ),
+            ("[[目标笔记|别名]] 与 [[另一篇#小节]]", "别名 与 另一篇#小节"),
+            ("<b>粗体</b>第一行<br>第二行 <https://x.dev> <!-- 备注 -->", "粗体第一行 第二行 https://x.dev"),
+            ("**强调** ==高亮== ~~删除~~ __粗__ `a == b` \\*字面\\*", "强调 高亮 删除 粗 a == b *字面*"),
             ("正文[^1]\n\n[^1]: 脚注内容", "正文 脚注内容"),
             ("## 标题 ##\n## C#\n#话题", "标题 C# #话题"),
-            (
-                "> > 嵌套引用\n> - [ ] 引用里的任务",
-                "嵌套引用 引用里的任务",
-            ),
-            (
-                "| 名称 | 数量 |\n|---|:-:|\n| 苹果 | 3 |",
-                "名称 数量 苹果 3",
-            ),
+            ("> > 嵌套引用\n> - [ ] 引用里的任务", "嵌套引用 引用里的任务"),
+            ("| 名称 | 数量 |\n|---|:-:|\n| 苹果 | 3 |", "名称 数量 苹果 3"),
             ("[草稿] 方括号只是文字 a < b", "[草稿] 方括号只是文字 a < b"),
         ] {
             assert_eq!(make_excerpt(md, 200), expected, "输入: {md:?}");
@@ -588,17 +522,39 @@ mod tests {
         // 组合符号在字母后面的算（2026-11-17 放宽）：拆开写的重音 e + U+0301、印地文 kya（带半音符 U+094D）、
         // 泰文 chue（带声调号 U+0E48）、NFD 写的 タグ（ク + 浊点 U+3099）；组合符号开头的不算
         for line in [
-            "标签: 旅行", "截止: 2026-11-20", "_x: 1", "タグ: a", "status: 草稿", "my-key : x",
-            "é: x", "nǚ-ér: x", "Ａｂｃ: x", "a１: x", "々: x", "key-名_2: x",
-            "e\u{301}: x", "\u{915}\u{94d}\u{92f}\u{93e}: 1", "\u{e0a}\u{e37}\u{e48}\u{e2d}: a",
+            "标签: 旅行",
+            "截止: 2026-11-20",
+            "_x: 1",
+            "タグ: a",
+            "status: 草稿",
+            "my-key : x",
+            "é: x",
+            "nǚ-ér: x",
+            "Ａｂｃ: x",
+            "a１: x",
+            "々: x",
+            "key-名_2: x",
+            "e\u{301}: x",
+            "\u{915}\u{94d}\u{92f}\u{93e}: 1",
+            "\u{e0a}\u{e37}\u{e48}\u{e2d}: a",
             "\u{30bf}\u{30af}\u{3099}: a",
         ] {
             assert!(is_yaml_key(line), "{line}");
             assert_eq!(make_excerpt(&format!("---\n{line}\n---\n正文"), 200), "正文", "{line}");
         }
         for line in [
-            "标签：旅行", "1a: x", "- 列表项", "my key: x", "  缩进: x", ": x",
-            "１a: x", "😀: x", "a😀: x", "\u{200b}key: x", "ke\u{200b}y: x", "\u{301}e: x",
+            "标签：旅行",
+            "1a: x",
+            "- 列表项",
+            "my key: x",
+            "  缩进: x",
+            ": x",
+            "１a: x",
+            "😀: x",
+            "a😀: x",
+            "\u{200b}key: x",
+            "ke\u{200b}y: x",
+            "\u{301}e: x",
         ] {
             assert!(!is_yaml_key(line), "{line}");
             assert_ne!(make_excerpt(&format!("---\n{line}\n---\n正文"), 200), "正文", "{line}");

@@ -49,27 +49,16 @@ fn cloud_drive_by_name(path: &Path) -> Option<&'static str> {
     ];
     path.components().find_map(|component| {
         let name = component.as_os_str().to_string_lossy().to_lowercase();
-        KNOWN
-            .iter()
-            .find(|(prefix, _)| name.starts_with(prefix))
-            .map(|(_, label)| *label)
+        KNOWN.iter().find(|(prefix, _)| name.starts_with(prefix)).map(|(_, label)| *label)
     })
 }
 
 /// 第二台设备 clone 到哪：现在仓库旁边的「Odea (同步)」，有了就「Odea (同步) 2」……
 pub fn clone_target(current_root: &Path) -> PathBuf {
     let parent = current_root.parent().unwrap_or(current_root);
-    let name = current_root
-        .file_name()
-        .map_or_else(|| "Odea".to_string(), |name| name.to_string_lossy().into_owned());
+    let name = current_root.file_name().map_or_else(|| "Odea".to_string(), |name| name.to_string_lossy().into_owned());
     (1..)
-        .map(|n| {
-            if n == 1 {
-                parent.join(format!("{name} (同步)"))
-            } else {
-                parent.join(format!("{name} (同步) {n}"))
-            }
-        })
+        .map(|n| if n == 1 { parent.join(format!("{name} (同步)")) } else { parent.join(format!("{name} (同步) {n}")) })
         .find(|candidate| !candidate.exists())
         .expect("总有一个名字没被占用")
 }
@@ -113,12 +102,7 @@ pub fn disconnect(root: &Path) -> SyncResult<()> {
 
 /// 同一个远端吗：大小写、结尾的 `/` 和 `.git` 不算
 pub fn same_remote(a: &str, b: &str) -> bool {
-    let norm = |url: &str| {
-        url.trim()
-            .trim_end_matches('/')
-            .trim_end_matches(".git")
-            .to_lowercase()
-    };
+    let norm = |url: &str| url.trim().trim_end_matches('/').trim_end_matches(".git").to_lowercase();
     norm(a) == norm(b)
 }
 

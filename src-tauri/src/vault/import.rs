@@ -35,9 +35,8 @@ impl Vault {
             Some(tree) if folder == tree::UNSORTED || tree.query_at(folder).is_some() => "",
             _ => folder,
         };
-        let source = source
-            .canonicalize()
-            .map_err(|_| AppError::NotFound(format!("找不到文件夹 {}", source.display())))?;
+        let source =
+            source.canonicalize().map_err(|_| AppError::NotFound(format!("找不到文件夹 {}", source.display())))?;
         let root = self.root.canonicalize().unwrap_or_else(|_| self.root.clone());
         if source.starts_with(&root) {
             return Err(AppError::Invalid("这个文件夹已经在仓库里了".into()));
@@ -74,11 +73,7 @@ impl Vault {
         };
         self.log.record_with("folder", &dest, "imported", Some(&source.to_string_lossy()));
         self.announce(change);
-        Ok(ImportReport {
-            folder: tree_folder,
-            notes: copied.notes,
-            files: copied.files,
-        })
+        Ok(ImportReport { folder: tree_folder, notes: copied.notes, files: copied.files })
     }
 
     /// 逻辑目录：拷进来的那些按原来的结构摆到树上 folder 底下。返回树上新文件夹的路径

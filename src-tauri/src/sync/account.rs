@@ -62,9 +62,7 @@ fn access_token_with(
 }
 
 fn expiring(token: &Token) -> bool {
-    token
-        .expires_at
-        .is_some_and(|at| at - chrono::Utc::now().timestamp_millis() < REFRESH_AHEAD_MS)
+    token.expires_at.is_some_and(|at| at - chrono::Utc::now().timestamp_millis() < REFRESH_AHEAD_MS)
 }
 
 /// 正在进行的 GitHub 设备码登录
@@ -111,12 +109,8 @@ impl PendingLogin {
             match http.github_device_poll(&self.code.device_code)? {
                 DevicePoll::Pending => {}
                 DevicePoll::SlowDown(seconds) => interval = Duration::from_secs(seconds.max(1)),
-                DevicePoll::Expired => {
-                    return Err(SyncError::Remote("验证码过期了，重新登录一次".into()))
-                }
-                DevicePoll::Denied => {
-                    return Err(SyncError::Remote("在 GitHub 上没有同意授权".into()))
-                }
+                DevicePoll::Expired => return Err(SyncError::Remote("验证码过期了，重新登录一次".into())),
+                DevicePoll::Denied => return Err(SyncError::Remote("在 GitHub 上没有同意授权".into())),
                 DevicePoll::Done(token) => {
                     let login = Provider::GitHub.login_of(http, &token.access)?;
                     secret::save(&Provider::GitHub.account_key(&login), &token)?;
@@ -198,10 +192,7 @@ mod tests {
             expires_at: Some(chrono::Utc::now().timestamp_millis() + 3_600_000),
         };
         secret::save("github:fresh", &token).unwrap();
-        assert_eq!(
-            access_token(Provider::GitHub, "fresh", unreachable_http, false).unwrap(),
-            "ghu_fresh"
-        );
+        assert_eq!(access_token(Provider::GitHub, "fresh", unreachable_http, false).unwrap(), "ghu_fresh");
     }
 
     #[test]
@@ -243,21 +234,11 @@ mod tests {
 
     #[test]
     fn no_token_or_a_rejected_gitee_token_means_login_again() {
-        assert_eq!(
-            access_token(Provider::Gitee, "nobody", unreachable_http, false).unwrap_err(),
-            SyncError::Auth
-        );
-        secret::save(
-            "gitee:me",
-            &Token { access: "private".into(), refresh: None, expires_at: None },
-        )
-        .unwrap();
+        assert_eq!(access_token(Provider::Gitee, "nobody", unreachable_http, false).unwrap_err(), SyncError::Auth);
+        secret::save("gitee:me", &Token { access: "private".into(), refresh: None, expires_at: None }).unwrap();
         assert_eq!(access_token(Provider::Gitee, "me", unreachable_http, false).unwrap(), "private");
         // 私人令牌被拒了：没有刷新令牌可续
-        assert_eq!(
-            access_token(Provider::Gitee, "me", unreachable_http, true).unwrap_err(),
-            SyncError::Auth
-        );
+        assert_eq!(access_token(Provider::Gitee, "me", unreachable_http, true).unwrap_err(), SyncError::Auth);
         assert!(has_token(Provider::Gitee, "me"));
         logout(Provider::Gitee, "me").unwrap();
         assert!(!has_token(Provider::Gitee, "me"));

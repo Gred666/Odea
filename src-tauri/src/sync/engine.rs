@@ -46,9 +46,7 @@ pub const AUTOSYNC_KEY: &str = "odea.autosync";
 
 /// 这台设备叫什么：提交署名是「账号 (设备名)」（没登录的是「Odea (设备名)」），历史版本里据此说是哪台设备改的
 pub fn this_device() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "本机".into())
+    std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "本机".into())
 }
 
 /// 提交署名拆成（谁, 哪台设备）：「Gred666 (书房的电脑)」→ (Gred666, 书房的电脑)。
@@ -63,7 +61,6 @@ pub fn author_parts(author: &str) -> (Option<&str>, &str) {
         _ => (None, author),
     }
 }
-
 
 /// 提交署名里的应用名
 const APP_NAME: &str = "Odea";
@@ -383,9 +380,7 @@ impl Engine {
 
         // 一下子要进库很多文件（第一次开启同步之类）：先在锁外成批放进包里，
         // 不然提交要好几秒，这期间保存都在等锁。失败了也不要紧，下面的提交照常逐个写
-        let staged = self.repo.stage_bulk(limits.file, || {
-            self.update(|status| status.state = SyncState::Syncing)
-        });
+        let staged = self.repo.stage_bulk(limits.file, || self.update(|status| status.state = SyncState::Syncing));
         if let Err(error) = staged {
             eprintln!("成批放进包里失败: {error}");
         }
@@ -416,10 +411,8 @@ impl Engine {
                 // 对方那一版在合并提交之前另存：存不下来就不合并，这一轮报错、下一轮重来（审查 §5.5）
                 let mut kept = None;
                 let merged = self.repo.merge_fetched(&author, |conflicts| {
-                    let theirs: Vec<(&str, &[u8])> = conflicts
-                        .iter()
-                        .map(|conflict| (conflict.rel.as_str(), conflict.theirs.as_slice()))
-                        .collect();
+                    let theirs: Vec<(&str, &[u8])> =
+                        conflicts.iter().map(|conflict| (conflict.rel.as_str(), conflict.theirs.as_slice())).collect();
                     let copies = vault.keep_theirs(&theirs).map_err(|error| {
                         SyncError::Local(format!(
                             "另一台设备也改了同一处，那一版另存不下来（{error}）：先不合并，下一轮再试"
@@ -445,8 +438,7 @@ impl Engine {
                 } else {
                     let absorbed = vault.absorb_merge(kept);
                     if !copies.is_empty() {
-                        self.repo
-                            .commit_all(&author, limits.file, |_| "保存冲突副本".into())?;
+                        self.repo.commit_all(&author, limits.file, |_| "保存冲突副本".into())?;
                     }
                     (copies, absorbed)
                 }
@@ -467,11 +459,7 @@ impl Engine {
     }
 
     /// 联网的一步（fetch / push）。被拒说「要登录」时让 hooks 续一次令牌，再试一次
-    fn online<T>(
-        &self,
-        net: &mut Net,
-        step: impl Fn(&SyncRepo, &Net) -> SyncResult<T>,
-    ) -> SyncResult<T> {
+    fn online<T>(&self, net: &mut Net, step: impl Fn(&SyncRepo, &Net) -> SyncResult<T>) -> SyncResult<T> {
         match step(&self.repo, net) {
             Err(SyncError::Auth) if net.credentials.is_some() => {
                 *net = (self.hooks.net)(&self.repo, true)?;
@@ -500,10 +488,7 @@ impl Engine {
                 "GitHub" => "GitHub 建议仓库不超过 1 GB",
                 _ => "仓库越大同步越慢",
             };
-            self.notice(format!(
-                "同步的仓库已经有 {} MB 了：{advice}。删掉的附件仍留在历史里占地方",
-                size / MB
-            ));
+            self.notice(format!("同步的仓库已经有 {} MB 了：{advice}。删掉的附件仍留在历史里占地方", size / MB));
         }
 
         if self.repo.loose_objects() > REPACK_LOOSE && now - self.memo.last_repack > REPACK_EVERY_MS {
@@ -519,21 +504,15 @@ impl Engine {
 
     /// 太大没同步的文件：状态里一直列着；每个文件（按路径 + 大小）只提示一次
     fn note_oversized(&mut self, oversized: &[Oversized], limits: &Limits) {
-        let list: Vec<SyncOversized> = oversized
-            .iter()
-            .map(|file| SyncOversized { rel: file.rel.clone(), bytes: file.size as f64 })
-            .collect();
+        let list: Vec<SyncOversized> =
+            oversized.iter().map(|file| SyncOversized { rel: file.rel.clone(), bytes: file.size as f64 }).collect();
         self.update(|status| status.oversized = list);
 
-        let fresh: Vec<&Oversized> = oversized
-            .iter()
-            .filter(|file| !self.memo.warned.contains(&(file.rel.clone(), file.size)))
-            .collect();
+        let fresh: Vec<&Oversized> =
+            oversized.iter().filter(|file| !self.memo.warned.contains(&(file.rel.clone(), file.size))).collect();
         if !fresh.is_empty() {
-            let names: Vec<String> = fresh
-                .iter()
-                .map(|file| format!("{}（{} MB）", file.rel, file.size.div_ceil(MB)))
-                .collect();
+            let names: Vec<String> =
+                fresh.iter().map(|file| format!("{}（{} MB）", file.rel, file.size.div_ceil(MB))).collect();
             self.notice(format!(
                 "「{}」超过 {} 单个文件 {} MB 的上限，没有同步",
                 names.join("」「"),
@@ -541,10 +520,7 @@ impl Engine {
                 limits.file / MB
             ));
         }
-        let current: Vec<(String, u64)> = oversized
-            .iter()
-            .map(|file| (file.rel.clone(), file.size))
-            .collect();
+        let current: Vec<(String, u64)> = oversized.iter().map(|file| (file.rel.clone(), file.size)).collect();
         if current != self.memo.warned {
             // 变回上限以内的就忘掉：以后又超了还会再提示
             self.memo.warned = current;
@@ -583,9 +559,7 @@ impl Engine {
 
 /// 拿仓库锁。`root` 给了就核对一下：Vault 被整个换掉（换了仓库）时返回 Gone
 fn lock<'a>(vault: &'a Mutex<Vault>, root: Option<&Path>) -> Result<MutexGuard<'a, Vault>, Halt> {
-    let guard = vault
-        .lock()
-        .map_err(|_| Halt::Error(SyncError::Local("仓库锁坏了".into())))?;
+    let guard = vault.lock().map_err(|_| Halt::Error(SyncError::Local("仓库锁坏了".into())))?;
     if root.is_some_and(|root| guard.root() != root) {
         return Err(Halt::Gone);
     }
@@ -666,9 +640,8 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path().join("仓库");
             // 云端还是空的：这是第一台设备，init；否则是后来的设备，clone
-            let has_history = git2::Repository::open_bare(&cloud.url)
-                .and_then(|remote| remote.head().map(|_| ()))
-                .is_ok();
+            let has_history =
+                git2::Repository::open_bare(&cloud.url).and_then(|remote| remote.head().map(|_| ())).is_ok();
             let sync = if has_history {
                 SyncRepo::clone(&cloud.url, &root, &Net::default()).unwrap()
             } else {
@@ -691,9 +664,7 @@ mod tests {
             let statuses = Arc::new(StdMutex::new(Vec::new()));
             let status_sink = statuses.clone();
             let hooks = Hooks {
-                status: Arc::new(move |status: &SyncStatus| {
-                    status_sink.lock().unwrap().push(status.clone())
-                }),
+                status: Arc::new(move |status: &SyncStatus| status_sink.lock().unwrap().push(status.clone())),
                 notice: Arc::new(move |text| sink.lock().unwrap().push(text)),
                 net: Arc::new(|_, _| Ok(Net::default())),
             };
@@ -787,7 +758,11 @@ mod tests {
         let git = git2::Repository::open(&b.root).unwrap();
         assert_eq!(git.head().unwrap().peel_to_commit().unwrap().parent_count(), 1, "合并没提交");
         let names = |b: &Device| -> Vec<String> {
-            std::fs::read_dir(b.root.join("笔记")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()
+            std::fs::read_dir(b.root.join("笔记"))
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
         };
         assert_eq!(names(&b), ["周报.md"], "没另存成的副本收回去了");
         assert_eq!(b.vault().note_get(&id).unwrap().content_md, "进度：B 写的");

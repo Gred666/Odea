@@ -30,18 +30,14 @@ mod tests {
         write(dir.path(), crate::vault::layout::NOTES_DIR).unwrap();
         let vault = Vault::open_in_memory(dir.path());
 
-        let titles: Vec<_> = vault
-            .note_list_full(false)
-            .unwrap()
-            .into_iter()
-            .map(|note| note.title)
-            .collect();
+        let titles: Vec<_> = vault.note_list_full(false).unwrap().into_iter().map(|note| note.title).collect();
         assert_eq!(titles, vec!["欢迎使用 Odea", "语法全览"], "欢迎那篇置顶，排在最前");
         assert!(vault.note_list_full(true).unwrap().is_empty(), "没有归档");
         assert!(vault.doc_list().unwrap().is_empty(), "没有日记和目标");
         // 指南里的待办都没写日期，不会出现在日历上
         assert!(vault.marked_dates("2000-01-01", "2100-12-31").unwrap().is_empty());
-        let found = crate::vault::find_text(&vault.db, "命令面板", Default::default(), &vault.layout.types, || false);
+        let found =
+            crate::vault::find_text(&vault.db, "命令面板", Default::default(), &vault.layout.types, || false);
         assert!(!found.unwrap().unwrap().files.is_empty(), "指南能搜到");
     }
 }

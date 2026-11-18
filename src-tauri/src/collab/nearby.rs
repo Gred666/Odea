@@ -48,20 +48,14 @@ pub struct Nearby {
 impl Nearby {
     /// 开始看。建端点要两三秒（Windows 上枚举网卡），列表从 events 里出来
     pub async fn start(events: Events) -> Result<Nearby, String> {
-        let Bound { endpoint, mdns, .. } =
-            endpoint::bind(SecretKey::generate(), None, true, &[], &[]).await?;
+        let Bound { endpoint, mdns, .. } = endpoint::bind(SecretKey::generate(), None, true, &[], &[]).await?;
         let Some(lookup) = mdns.clone() else {
             return Err("这台电脑上的局域网发现起不来（没有支持组播的网卡）".into());
         };
         let found = Arc::new(Mutex::new(BTreeMap::new()));
         let _ = events.send(Event::Control(Control::Nearby { hosts: Vec::new() }));
         let task = tokio::spawn(watch(lookup, found.clone(), events));
-        Ok(Nearby {
-            endpoint,
-            _mdns: mdns,
-            found,
-            task,
-        })
+        Ok(Nearby { endpoint, _mdns: mdns, found, task })
     }
 
     /// 点了列表里的一位：拼一个不带会话 id 和邀请密钥的链接（加入时 GuestOptions.nearby = true）
@@ -84,11 +78,7 @@ impl Nearby {
     }
 }
 
-async fn watch(
-    lookup: MdnsAddressLookup,
-    found: Arc<Mutex<BTreeMap<String, Found>>>,
-    events: Events,
-) {
+async fn watch(lookup: MdnsAddressLookup, found: Arc<Mutex<BTreeMap<String, Found>>>, events: Events) {
     let mut stream = lookup.subscribe().await;
     while let Some(event) = stream.next().await {
         let changed = {
@@ -97,25 +87,18 @@ async fn watch(
                 DiscoveryEvent::Discovered { endpoint_info, .. } => {
                     let id = endpoint::id_text(endpoint_info.endpoint_id.as_bytes());
                     // 只有主持人广播昵称：没有昵称的不是在分享的人
-                    let Some(name) = endpoint_info
-                        .user_data()
-                        .map(|data| data.as_ref().to_string())
-                    else {
+                    let Some(name) = endpoint_info.user_data().map(|data| data.as_ref().to_string()) else {
                         continue;
                     };
-                    let next = Found {
-                        name: super::clean_name(&name),
-                        addrs: endpoint_info.ip_addrs().copied().collect(),
-                    };
-                    let changed = found
-                        .get(&id)
-                        .is_none_or(|old| old.name != next.name || old.addrs != next.addrs);
+                    let next =
+                        Found { name: super::clean_name(&name), addrs: endpoint_info.ip_addrs().copied().collect() };
+                    let changed = found.get(&id).is_none_or(|old| old.name != next.name || old.addrs != next.addrs);
                     found.insert(id, next);
                     changed
                 }
-                DiscoveryEvent::Expired { endpoint_id } => found
-                    .remove(&endpoint::id_text(endpoint_id.as_bytes()))
-                    .is_some(),
+                DiscoveryEvent::Expired { endpoint_id } => {
+                    found.remove(&endpoint::id_text(endpoint_id.as_bytes())).is_some()
+                }
                 _ => false,
             }
         };
@@ -127,13 +110,8 @@ async fn watch(
 }
 
 fn hosts_of(found: &BTreeMap<String, Found>) -> Vec<NearbyHost> {
-    let mut hosts: Vec<NearbyHost> = found
-        .iter()
-        .map(|(id, found)| NearbyHost {
-            id: id.clone(),
-            name: found.name.clone(),
-        })
-        .collect();
+    let mut hosts: Vec<NearbyHost> =
+        found.iter().map(|(id, found)| NearbyHost { id: id.clone(), name: found.name.clone() }).collect();
     hosts.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
     hosts
 }

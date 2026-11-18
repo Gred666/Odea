@@ -82,12 +82,7 @@ pub fn import(conn: &Connection, root: &Path, written: &mut Vec<PathBuf>) -> Res
     let mut stmt = conn.prepare("SELECT date, title, note_md, updated_at FROM day_doc ORDER BY date")?;
     let mut days: BTreeMap<String, (String, String, i64)> = BTreeMap::new();
     for row in stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
-            r.get::<_, i64>(3)?,
-        ))
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))
     })? {
         let (date, title, body, updated) = row?;
         days.insert(date, (title, body, updated));
@@ -141,12 +136,7 @@ pub fn import(conn: &Connection, root: &Path, written: &mut Vec<PathBuf>) -> Res
     )?;
     let goals = stmt
         .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)?,
-            ))
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (horizon, period_start, body, updated) in goals {

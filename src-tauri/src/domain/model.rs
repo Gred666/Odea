@@ -218,8 +218,7 @@ impl<'de> Deserialize<'de> for DocRef {
         if let (Some(NOTE), Some(id)) = (text("kind"), text("id")) {
             return Ok(DocRef::note(id));
         }
-        crate::plugins::legacy_ref(&value)
-            .ok_or_else(|| serde::de::Error::custom(format!("认不出这篇文档: {value}")))
+        crate::plugins::legacy_ref(&value).ok_or_else(|| serde::de::Error::custom(format!("认不出这篇文档: {value}")))
     }
 }
 

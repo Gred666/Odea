@@ -79,17 +79,12 @@ pub enum LinkError {
 
 /// 加上前缀、base32
 pub fn encode_link(prefix: &str, bytes: &[u8]) -> String {
-    format!(
-        "{prefix}{}",
-        data_encoding::BASE32_NOPAD.encode(bytes).to_lowercase()
-    )
+    format!("{prefix}{}", data_encoding::BASE32_NOPAD.encode(bytes).to_lowercase())
 }
 
 /// 认链接：前后的空白、聊天软件里加的尖括号和引号、大小写都不管；只粘了票据那一截也行
 pub fn decode_link(text: &str, prefix: &str, aliases: &[&str]) -> Result<Vec<u8>, LinkError> {
-    let text = text
-        .trim()
-        .trim_matches(|c| c == '<' || c == '>' || c == '"' || c == '\'');
+    let text = text.trim().trim_matches(|c| c == '<' || c == '>' || c == '"' || c == '\'');
     let lower = text.to_ascii_lowercase();
     let code = std::iter::once(prefix)
         .chain(aliases.iter().copied())
@@ -100,9 +95,7 @@ pub fn decode_link(text: &str, prefix: &str, aliases: &[&str]) -> Result<Vec<u8>
     if code.contains("://") || code.contains(':') {
         return Err(LinkError::Malformed);
     }
-    data_encoding::BASE32_NOPAD
-        .decode(code.to_ascii_uppercase().as_bytes())
-        .map_err(|_| LinkError::Malformed)
+    data_encoding::BASE32_NOPAD.decode(code.to_ascii_uppercase().as_bytes()).map_err(|_| LinkError::Malformed)
 }
 
 impl Invite {
@@ -128,12 +121,10 @@ impl Invite {
         let bytes = decode_link(text, JOIN_PREFIX, &["odea:join/"])?;
         let decode = |rest: &[u8], version: u8| -> Result<Invite, LinkError> {
             let (base, relay) = if version == 1 {
-                let base: InviteV1 =
-                    super::protocol::decode(rest).map_err(|_| LinkError::Malformed)?;
+                let base: InviteV1 = super::protocol::decode(rest).map_err(|_| LinkError::Malformed)?;
                 (base, None)
             } else {
-                let ticket: InviteV2 =
-                    super::protocol::decode(rest).map_err(|_| LinkError::Malformed)?;
+                let ticket: InviteV2 = super::protocol::decode(rest).map_err(|_| LinkError::Malformed)?;
                 (ticket.base, ticket.relay)
             };
             Ok(Invite {
@@ -146,9 +137,7 @@ impl Invite {
             })
         };
         match bytes.split_first() {
-            Some((&version, rest)) if version == 1 || version == JOIN_VERSION => {
-                decode(rest, version)
-            }
+            Some((&version, rest)) if version == 1 || version == JOIN_VERSION => decode(rest, version),
             Some((version, _)) if *version > JOIN_VERSION => Err(LinkError::TooNew),
             _ => Err(LinkError::Malformed),
         }
@@ -167,9 +156,7 @@ impl Callback {
     pub fn parse(text: &str) -> Result<Self, LinkError> {
         let bytes = decode_link(text, BACK_PREFIX, &["odea:back/"])?;
         match bytes.split_first() {
-            Some((&BACK_VERSION, rest)) => {
-                super::protocol::decode(rest).map_err(|_| LinkError::Malformed)
-            }
+            Some((&BACK_VERSION, rest)) => super::protocol::decode(rest).map_err(|_| LinkError::Malformed),
             Some((version, _)) if *version > BACK_VERSION => Err(LinkError::TooNew),
             _ => Err(LinkError::Malformed),
         }

@@ -390,9 +390,7 @@ impl Vault {
         if self.tree_ref()?.query_at(folder).is_some() {
             return Err(AppError::Invalid("智能文件夹里放不了快捷方式".into()));
         }
-        let parent = self
-            .tree_parent(folder)?
-            .ok_or_else(|| AppError::Invalid("「未整理」里放不了快捷方式".into()))?;
+        let parent = self.tree_parent(folder)?.ok_or_else(|| AppError::Invalid("「未整理」里放不了快捷方式".into()))?;
         let node = self.tree_mut()?.add_link(&parent, &note_item(&row))?;
         self.save_tree()?;
         self.log.record_with("note", &row.id, "shortcut", Some(folder));
@@ -464,13 +462,7 @@ impl Vault {
         // 删掉的笔记前端自己会拿掉；只把连带的变化（日历上的任务）告诉它
         change.notes.clear();
         self.announce(change);
-        Ok(FolderDeletion {
-            folder: folder.to_string(),
-            notes,
-            folders,
-            kept: false,
-            nodes: Some(removed.render()),
-        })
+        Ok(FolderDeletion { folder: folder.to_string(), notes, folders, kept: false, nodes: Some(removed.render()) })
     }
 
     pub(super) fn tree_undelete(&mut self, deletion: &FolderDeletion) -> Result<()> {
@@ -525,9 +517,7 @@ impl Vault {
         }
         let built = self.structure()?;
         let marker_path = fsio::abs(&self.root, layout::VAULT_MARKER);
-        let marker = std::fs::read_to_string(&marker_path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok());
+        let marker = std::fs::read_to_string(&marker_path).ok().and_then(|text| serde_json::from_str(&text).ok());
         let marker = layout::marker_logical(marker);
         fsio::write_atomic(&fsio::abs(&self.root, tree::TREE_FILE), &built.render())?;
         fsio::write_atomic(&marker_path, &serde_json::to_string_pretty(&marker)?)?;

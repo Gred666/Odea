@@ -167,8 +167,9 @@ impl JournalVault for Vault {
     fn toggle_task(&mut self, id: &str) -> Result<Task> {
         let task = tasks::task(self.db(), id)?.ok_or_else(|| AppError::NotFound(format!("task {id}")))?;
         let done = !task.done;
-        let (saved_id, line) = edit_task_line(self, &task.doc_id, task.line, &task.raw, &task.title, done, tasks::toggle_line)?
-            .ok_or_else(|| AppError::Invalid("这条任务所在的文档刚被改过，找不到它了，刷新后再试".into()))?;
+        let (saved_id, line) =
+            edit_task_line(self, &task.doc_id, task.line, &task.raw, &task.title, done, tasks::toggle_line)?
+                .ok_or_else(|| AppError::Invalid("这条任务所在的文档刚被改过，找不到它了，刷新后再试".into()))?;
         tasks::task(self.db(), &tasks::task_id(&saved_id, line))?
             .map(|row| task_from_row(&row))
             .ok_or_else(|| AppError::Internal(format!("task {id} 勾选后读不到")))
@@ -213,8 +214,10 @@ fn edit_task_line(
     done: bool,
     edit: fn(&str) -> Option<String>,
 ) -> Result<Option<(String, usize)>> {
-    let row = index::by_id(vault.db(), doc_id)?.ok_or_else(|| AppError::NotFound(format!("任务所在的文档 {doc_id}")))?;
-    let text = vault.read(&row.rel_path)?.ok_or_else(|| AppError::NotFound(format!("任务所在的文件 {}", row.rel_path)))?;
+    let row =
+        index::by_id(vault.db(), doc_id)?.ok_or_else(|| AppError::NotFound(format!("任务所在的文档 {doc_id}")))?;
+    let text =
+        vault.read(&row.rel_path)?.ok_or_else(|| AppError::NotFound(format!("任务所在的文件 {}", row.rel_path)))?;
     let (meta, body) = frontmatter::split(&text);
     let mut lines: Vec<String> = body.split('\n').map(str::to_string).collect();
     let line = if lines.get(hint).is_some_and(|line| line == raw) {
@@ -242,11 +245,7 @@ fn edit_task_line(
 /// 任务写在哪一篇、给人看的出处（某一天是「9月26日」，目标是「第 39 周目标」，笔记是它的标题）
 pub(super) fn source_of(row: &TaskRow) -> (DocRef, String) {
     let key = row.doc_key.clone().unwrap_or_default();
-    let source = if row.doc_kind == NOTE {
-        DocRef::note(&row.doc_id)
-    } else {
-        DocRef::new(&row.doc_kind, &key)
-    };
+    let source = if row.doc_kind == NOTE { DocRef::note(&row.doc_id) } else { DocRef::new(&row.doc_kind, &key) };
     let label = match row.doc_kind.as_str() {
         DAY => month_day(&key),
         GOAL => key.split_once(':').map_or_else(String::new, |(horizon, start)| goal_title(horizon, start)),

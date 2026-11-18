@@ -59,11 +59,7 @@ fn app_dir_bases() -> Vec<PathBuf> {
         dirs::data_dir(),
         dirs::data_local_dir(),
         dirs::config_dir(),
-        if cfg!(target_os = "macos") {
-            dirs::home_dir().map(|home| home.join("Library").join("WebKit"))
-        } else {
-            None
-        },
+        if cfg!(target_os = "macos") { dirs::home_dir().map(|home| home.join("Library").join("WebKit")) } else { None },
     ];
     for base in candidates.into_iter().flatten() {
         if !bases.contains(&base) {

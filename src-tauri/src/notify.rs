@@ -112,12 +112,12 @@ mod imp {
     use windows::core::{IInspectable, Interface, HSTRING, PCWSTR};
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::Foundation::TypedEventHandler;
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
     use windows::UI::Notifications::{
         ToastActivatedEventArgs, ToastDismissalReason, ToastDismissedEventArgs, ToastNotification,
         ToastNotificationManager,
     };
-    use windows::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
-    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
     use super::{toast_xml, Activate, Toast};
 
@@ -151,9 +151,8 @@ mod imp {
         }
         let icon = icon.to_string_lossy().into_owned();
         let key = format!(r"Software\Classes\AppUserModelId\{app_id}");
-        let registered = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-            .create_subkey(&key)
-            .and_then(|(key, _)| {
+        let registered =
+            winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).create_subkey(&key).and_then(|(key, _)| {
                 let same = |value: &str, wanted: &str| key.get_value::<String, _>(value).is_ok_and(|old| old == wanted);
                 if !same("DisplayName", name) {
                     key.set_value("DisplayName", &name.to_string())?;
@@ -270,9 +269,7 @@ mod imp {
 
     /// 现在该不该出声：开着勿扰、有程序全屏（游戏、看视频）、在演示、锁屏了都不出声。读不到就当可以
     pub fn quiet() -> bool {
-        use windows::Win32::UI::Shell::{
-            SHQueryUserNotificationState, QUNS_ACCEPTS_NOTIFICATIONS, QUNS_QUIET_TIME,
-        };
+        use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_ACCEPTS_NOTIFICATIONS, QUNS_QUIET_TIME};
         // QUNS_QUIET_TIME 不是勿扰：是新用户第一次登录后的那一小时
         let busy = unsafe { SHQueryUserNotificationState() }
             .is_ok_and(|state| state != QUNS_ACCEPTS_NOTIFICATIONS && state != QUNS_QUIET_TIME);

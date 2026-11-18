@@ -26,8 +26,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use iroh::endpoint::{Connection, RecvStream, VarInt};
 use iroh::endpoint::SendStream;
+use iroh::endpoint::{Connection, RecvStream, VarInt};
 use iroh::{Endpoint, PublicKey, Watcher};
 use iroh_mdns_address_lookup::{DiscoveryEvent, MdnsAddressLookup};
 use n0_future::StreamExt;
@@ -38,14 +38,13 @@ use super::diagnose::{self, Diagnosis, Facts, RelayFact};
 use super::endpoint;
 use super::node::Node;
 use super::protocol::{
-    self, kind, AttachGet, AttachPut, CreateDoc, CreatedDoc, Forward, ForwardStream, Hello, Member,
-    Permission, Reject, RejectReason, Welcome,
+    self, kind, AttachGet, AttachPut, CreateDoc, CreatedDoc, Forward, ForwardStream, Hello, Member, Permission, Reject,
+    RejectReason, Welcome,
 };
 use super::reach::{self, Portmap, Reach, RelayState};
 use super::relays::Relay;
 use super::{
-    clean_name, spawn_writer, Callback, Control, EndReason, Event, Events, Invite, MemberInfo,
-    Status, SyncKind,
+    clean_name, spawn_writer, Callback, Control, EndReason, Event, Events, Invite, MemberInfo, Status, SyncKind,
 };
 
 /// 拨一次最多等多久
@@ -151,8 +150,7 @@ impl Guest {
                 borrowed = Some(relay.clone());
             }
         }
-        let host = PublicKey::from_bytes(&options.invite.host)
-            .map_err(|_| "链接里的主持人公钥不对".to_string())?;
+        let host = PublicKey::from_bytes(&options.invite.host).map_err(|_| "链接里的主持人公钥不对".to_string())?;
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared {
             events,
@@ -242,9 +240,7 @@ impl Guest {
 
     /// 新建一篇的把手：不借用 Guest（命令层不必拿着会话的锁等主持人回话）
     pub fn creator(&self) -> Creator {
-        Creator {
-            shared: self.shared.clone(),
-        }
+        Creator { shared: self.shared.clone() }
     }
 
     /// 端点绑在哪些本机地址上（单测拿它拼本机回环的回连链接）
@@ -255,15 +251,11 @@ impl Guest {
 
     /// 附件的把手：不借用 Guest（命令层不必拿着会话的锁等文件传完）
     pub fn attachments(&self) -> Attachments {
-        Attachments {
-            shared: self.shared.clone(),
-        }
+        Attachments { shared: self.shared.clone() }
     }
 
     pub fn callbacks(&self) -> Callbacks {
-        Callbacks {
-            shared: self.shared.clone(),
-        }
+        Callbacks { shared: self.shared.clone() }
     }
 
     /// 离开：告诉主持人（Bye），断开（端点是共用的，最后一个会话结束时命令层关）
@@ -289,11 +281,10 @@ impl Guest {
         if let Some(relay) = &self.shared.borrowed {
             self.shared.node.release_relay(relay).await;
         }
-        let _ = self.shared.events.send(Event::Control(Control::Status {
-            status: Status::Ended {
-                reason: EndReason::Left,
-            },
-        }));
+        let _ = self
+            .shared
+            .events
+            .send(Event::Control(Control::Status { status: Status::Ended { reason: EndReason::Left } }));
     }
 }
 
@@ -308,11 +299,7 @@ impl Creator {
         let request = self.shared.next_create.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = oneshot::channel();
         self.shared.creating.lock().unwrap().insert(request, sender);
-        let payload = protocol::encode(&CreateDoc {
-            request,
-            folder: folder.to_string(),
-            title: title.to_string(),
-        });
+        let payload = protocol::encode(&CreateDoc { request, folder: folder.to_string(), title: title.to_string() });
         let sent = self
             .shared
             .link
@@ -342,10 +329,7 @@ pub struct Attachments {
 impl Attachments {
     /// 这一篇正文里写的相对路径 → 文件的字节
     pub async fn fetch(&self, doc: &str, path: &str) -> Result<Vec<u8>, String> {
-        let payload = protocol::encode(&AttachGet {
-            doc: doc.to_string(),
-            path: path.to_string(),
-        });
+        let payload = protocol::encode(&AttachGet { doc: doc.to_string(), path: path.to_string() });
         match self.request(kind::ATTACH_GET, payload).await? {
             (kind::ATTACH_DATA, bytes) => Ok(bytes),
             (_, message) => Err(String::from_utf8_lossy(&message).into_owned()),
@@ -361,11 +345,7 @@ impl Attachments {
                 protocol::MAX_ATTACHMENT >> 20
             ));
         }
-        let payload = protocol::encode(&AttachPut {
-            doc: doc.to_string(),
-            name: name.to_string(),
-            bytes,
-        });
+        let payload = protocol::encode(&AttachPut { doc: doc.to_string(), name: name.to_string(), bytes });
         match self.request(kind::ATTACH_PUT, payload).await? {
             (kind::ATTACH_LINK, link) => Ok(String::from_utf8_lossy(&link).into_owned()),
             (_, message) => Err(String::from_utf8_lossy(&message).into_owned()),
@@ -383,9 +363,7 @@ impl Attachments {
             .ok_or_else(|| "现在没连着主持人".to_string())?;
         let exchange = async {
             let (mut send, mut recv) = conn.open_bi().await.map_err(|error| error.to_string())?;
-            protocol::write_frame(&mut send, frame_kind, &payload)
-                .await
-                .map_err(|error| error.to_string())?;
+            protocol::write_frame(&mut send, frame_kind, &payload).await.map_err(|error| error.to_string())?;
             let _ = send.finish();
             match protocol::read_frame_up_to(&mut recv, protocol::MAX_ATTACH_FRAME).await {
                 Ok(Some(frame)) => Ok(frame),
@@ -393,9 +371,7 @@ impl Attachments {
                 Err(error) => Err(error.to_string()),
             }
         };
-        tokio::time::timeout(ATTACH_TIMEOUT, exchange)
-            .await
-            .map_err(|_| "等太久了".to_string())?
+        tokio::time::timeout(ATTACH_TIMEOUT, exchange).await.map_err(|_| "等太久了".to_string())?
     }
 }
 
@@ -429,10 +405,7 @@ impl Callbacks {
             session: self.shared.invite.session,
             relay: self.connected_relay(&reach),
         };
-        CallbackLink {
-            link: callback.to_link(),
-            reach,
-        }
+        CallbackLink { link: callback.to_link(), reach }
     }
 
     /// 带上一台连上了的中继（自己配的在前）：对方经它连过来
@@ -441,13 +414,7 @@ impl Callbacks {
             .relays
             .iter()
             .find(|relay| matches!(relay.state, RelayState::Connected { .. }))
-            .and_then(|connected| {
-                self.shared
-                    .relays
-                    .iter()
-                    .find(|relay| relay.url == connected.url)
-                    .cloned()
-            })
+            .and_then(|connected| self.shared.relays.iter().find(|relay| relay.url == connected.url).cloned())
     }
 
     /// 我能不能被连进来：开端口映射，等它和中继有个结果（最多 5 秒），顺带查防火墙
@@ -456,13 +423,9 @@ impl Callbacks {
         let portmap = node.mapper_state();
         let started = Instant::now();
         // 主持人拨过来是入站连接：这台的防火墙也得放行（真环境里才查，单测里不碰）
-        let firewall = node
-            .checks_firewall()
-            .then(|| tokio::task::spawn_blocking(super::firewall::check));
+        let firewall = node.checks_firewall().then(|| tokio::task::spawn_blocking(super::firewall::check));
         let mut reach = loop {
-            let current = portmap
-                .as_ref()
-                .map_or(Portmap::Unavailable, |state| state.borrow().clone());
+            let current = portmap.as_ref().map_or(Portmap::Unavailable, |state| state.borrow().clone());
             // 网卡地址加入时就在后台读好了（Shared::networks）
             let local: Option<Vec<std::net::IpAddr>> = self
                 .shared
@@ -471,13 +434,8 @@ impl Callbacks {
                 .unwrap()
                 .as_ref()
                 .map(|networks| networks.iter().map(|(ip, _)| *ip).collect());
-            let reach = reach::snapshot(
-                node.endpoint(),
-                &current,
-                &self.shared.relays,
-                self.shared.bound_at,
-                local.as_deref(),
-            );
+            let reach =
+                reach::snapshot(node.endpoint(), &current, &self.shared.relays, self.shared.bound_at, local.as_deref());
             if !reach.checking || started.elapsed() >= reach::CHECK_TIME {
                 break reach;
             }
@@ -491,18 +449,14 @@ impl Callbacks {
 }
 
 fn status(shared: &Shared, status: Status) {
-    let _ = shared
-        .events
-        .send(Event::Control(Control::Status { status }));
+    let _ = shared.events.send(Event::Control(Control::Status { status }));
 }
 
 /* ---------------- 端点（node.rs）用的 ---------------- */
 
 /// 我在等这位主持人（公钥是 remote）回连：还没连上他、也没走
 pub(crate) fn waiting_for(shared: &Shared, remote: &[u8; 32]) -> bool {
-    shared.invite.host == *remote
-        && !shared.leaving.load(Ordering::SeqCst)
-        && shared.link.lock().unwrap().is_none()
+    shared.invite.host == *remote && !shared.leaving.load(Ordering::SeqCst) && shared.link.lock().unwrap().is_none()
 }
 
 /// 主持人按回连链接拨过来了：交给 run
@@ -531,11 +485,7 @@ async fn watch_nearby(mdns: MdnsAddressLookup, host: PublicKey, shared: Arc<Shar
 
 /// 中继现在怎样（访客端点上看到的）
 fn relay_fact(shared: &Shared, endpoint: &Endpoint) -> Option<RelayFact> {
-    let relay = shared
-        .invite
-        .relay
-        .as_ref()
-        .filter(|_| shared.use_host_relay)?;
+    let relay = shared.invite.relay.as_ref().filter(|_| shared.use_host_relay)?;
     let url = relay.relay_url().ok()?;
     let statuses = endpoint.home_relay_status().get();
     let late = shared.bound_at.elapsed() >= RELAY_LATE;
@@ -545,23 +495,18 @@ fn relay_fact(shared: &Shared, endpoint: &Endpoint) -> Option<RelayFact> {
             RelayFact::Denied(status.auth_denied_reason().unwrap_or_default().to_string())
         }
         Some(status)
-            if status.last_error().is_some_and(|error| {
-                super::relays::upgrade_refused(&super::relays::error_text(error))
-            }) =>
+            if status
+                .last_error()
+                .is_some_and(|error| super::relays::upgrade_refused(&super::relays::error_text(error))) =>
         {
             RelayFact::Outdated
         }
-        Some(status) if status.last_error().is_some() && late => RelayFact::Failed(
-            status
-                .last_error()
-                .map(|error| super::relays::error_text(error))
-                .unwrap_or_default(),
-        ),
+        Some(status) if status.last_error().is_some() && late => {
+            RelayFact::Failed(status.last_error().map(|error| super::relays::error_text(error)).unwrap_or_default())
+        }
         // 网络报告里量到了它（连上了只是还没轮到当 home relay）
         _ if late => match endpoint.net_report().get() {
-            Some(report) if super::relays::latency_of(&report, &url).0.is_some() => {
-                RelayFact::Connected
-            }
+            Some(report) if super::relays::latency_of(&report, &url).0.is_some() => RelayFact::Connected,
             _ => RelayFact::Failed("连不上中继".into()),
         },
         _ => RelayFact::Connecting,
@@ -581,19 +526,12 @@ async fn diagnosis(shared: &Shared, endpoint: &Endpoint) -> Diagnosis {
         // 还没读完：按端点知道的地址猜网段，不等
         None => diagnose::guess_networks(&reach::endpoint_addrs(endpoint)),
     };
-    let facts = Facts {
-        networks,
-        seen_nearby: shared.seen_nearby.load(Ordering::SeqCst),
-        relay: relay_fact(shared, endpoint),
-    };
+    let facts =
+        Facts { networks, seen_nearby: shared.seen_nearby.load(Ordering::SeqCst), relay: relay_fact(shared, endpoint) };
     diagnose::conclude(&shared.invite, &facts, shared.use_host_relay)
 }
 
-async fn run(
-    shared: Arc<Shared>,
-    endpoint: Endpoint,
-    mut incoming: mpsc::UnboundedReceiver<Connection>,
-) {
+async fn run(shared: Arc<Shared>, endpoint: Endpoint, mut incoming: mpsc::UnboundedReceiver<Connection>) {
     let mut joined = false;
     let mut backoff = Duration::from_secs(1);
     // 已经给过「连不上」的结论：之后后台再试时不再闪「正在连接」
@@ -601,27 +539,11 @@ async fn run(
     let mut pending: Option<Connection> = None;
     loop {
         if stuck.is_none() {
-            status(
-                &shared,
-                if joined {
-                    Status::Reconnecting
-                } else {
-                    Status::Connecting
-                },
-            );
+            status(&shared, if joined { Status::Reconnecting } else { Status::Connecting });
         }
         let conn = match pending.take() {
             Some(conn) => Ok(conn),
-            None => {
-                obtain(
-                    &shared,
-                    &endpoint,
-                    &mut incoming,
-                    !joined && stuck.is_none(),
-                    &mut stuck,
-                )
-                .await
-            }
+            None => obtain(&shared, &endpoint, &mut incoming, !joined && stuck.is_none(), &mut stuck).await,
         };
         if shared.leaving.load(Ordering::SeqCst) {
             return;
@@ -643,12 +565,7 @@ async fn run(
             }
             // 还没进去就被断开了（主持人那边出了事）：不重试，直说
             Ok(Outcome::Lost) if !joined => {
-                status(
-                    &shared,
-                    Status::Ended {
-                        reason: EndReason::Dropped,
-                    },
-                );
+                status(&shared, Status::Ended { reason: EndReason::Dropped });
                 return;
             }
             Ok(Outcome::Lost) => {
@@ -659,12 +576,7 @@ async fn run(
                 // 还没进去：给结论（变了才报），过一会儿再试；主持人拨过来的话马上接
                 let diagnosis = diagnosis(&shared, &endpoint).await;
                 if stuck.as_ref() != Some(&diagnosis) {
-                    status(
-                        &shared,
-                        Status::Unreachable {
-                            diagnosis: diagnosis.clone(),
-                        },
-                    );
+                    status(&shared, Status::Unreachable { diagnosis: diagnosis.clone() });
                     stuck = Some(diagnosis);
                 }
                 // 等下一次再试的工夫里重读网段：换了网络，下一次的结论按新的说
@@ -723,29 +635,17 @@ async fn obtain(
 }
 
 /// 一条连接：握手、收发，直到断开或者结束
-async fn session(
-    shared: &Arc<Shared>,
-    conn: Connection,
-    joined: &mut bool,
-) -> Result<Outcome, String> {
+async fn session(shared: &Arc<Shared>, conn: Connection, joined: &mut bool) -> Result<Outcome, String> {
     let invite = &shared.invite;
-    let (mut control_send, mut control_recv) =
-        conn.open_bi().await.map_err(|error| error.to_string())?;
+    let (mut control_send, mut control_recv) = conn.open_bi().await.map_err(|error| error.to_string())?;
     let mut keying = [0u8; 32];
     conn.export_keying_material(&mut keying, protocol::PROOF_LABEL, &invite.session)
         .map_err(|_| "导不出密钥材料".to_string())?;
     // 「附近」点进来的：不知道会话 id，也没有邀请密钥
     let hello = Hello {
         version: protocol::PROTOCOL_VERSION,
-        features: protocol::FEATURES
-            .iter()
-            .map(|feature| feature.to_string())
-            .collect(),
-        session: if shared.nearby {
-            [0; 16]
-        } else {
-            invite.session
-        },
+        features: protocol::FEATURES.iter().map(|feature| feature.to_string()).collect(),
+        session: if shared.nearby { [0; 16] } else { invite.session },
         proof: (!shared.nearby).then(|| protocol::proof(&invite.secret, &keying)),
         name: shared.name.lock().unwrap().clone(),
     };
@@ -770,18 +670,16 @@ async fn session(
             conn.close(VarInt::from_u32(0), b"rejected");
             return Ok(Outcome::Ended(match reject.reason {
                 // 主持人回的是他的协议版本：比我的低是他旧；一样高还被拒是我缺了他要的特性，我旧
-                RejectReason::Version { theirs } => EndReason::Outdated {
-                    host_older: theirs < protocol::PROTOCOL_VERSION,
-                },
+                RejectReason::Version { theirs } => {
+                    EndReason::Outdated { host_older: theirs < protocol::PROTOCOL_VERSION }
+                }
                 reason => EndReason::Rejected { reason },
             }));
         }
         _ => return Ok(Outcome::Lost),
     };
     *joined = true;
-    let _ = shared.events.send(Event::Control(Control::Members {
-        members: infos(&welcome.members),
-    }));
+    let _ = shared.events.send(Event::Control(Control::Members { members: infos(&welcome.members) }));
     // 一篇的范围：进来就开那一篇
     if welcome.scope.kind == protocol::ScopeKind::Doc && !welcome.scope.doc.is_empty() {
         shared.wanted.lock().unwrap().insert(welcome.scope.doc.clone());
@@ -797,12 +695,8 @@ async fn session(
     );
 
     let (control, control_writer) = spawn_writer(control_send);
-    *shared.link.lock().unwrap() = Some(Link {
-        conn: conn.clone(),
-        docs: HashMap::new(),
-        control,
-        writers: vec![control_writer],
-    });
+    *shared.link.lock().unwrap() =
+        Some(Link { conn: conn.clone(), docs: HashMap::new(), control, writers: vec![control_writer] });
     // 要开着的那几篇：重连的话就是断之前开着的
     let wanted: Vec<String> = shared.wanted.lock().unwrap().iter().cloned().collect();
     for doc in wanted {
@@ -836,9 +730,7 @@ async fn watch_route(shared: Arc<Shared>, conn: Connection) {
         let relayed = selected.is_relay();
         if last != Some(relayed) {
             last = Some(relayed);
-            let _ = shared
-                .events
-                .send(Event::Control(Control::Route { relayed }));
+            let _ = shared.events.send(Event::Control(Control::Route { relayed }));
         }
     }
 }
@@ -848,22 +740,18 @@ async fn read_control(shared: &Shared, recv: &mut RecvStream) -> Outcome {
         match protocol::read_frame(recv).await {
             Ok(Some((kind::MEMBERS, payload))) => {
                 if let Ok(members) = protocol::decode::<Vec<Member>>(&payload) {
-                    let _ = shared.events.send(Event::Control(Control::Members {
-                        members: infos(&members),
-                    }));
+                    let _ = shared.events.send(Event::Control(Control::Members { members: infos(&members) }));
                 }
             }
             Ok(Some((kind::PERMISSION, payload))) => {
                 if let Ok(permission) = protocol::decode::<Permission>(&payload) {
-                    let _ = shared
-                        .events
-                        .send(Event::Control(Control::Permission { permission }));
+                    let _ = shared.events.send(Event::Control(Control::Permission { permission }));
                 }
             }
             Ok(Some((kind::TREE, payload))) => {
-                let _ = shared.events.send(Event::Control(Control::Tree {
-                    tree: String::from_utf8_lossy(&payload).into_owned(),
-                }));
+                let _ = shared
+                    .events
+                    .send(Event::Control(Control::Tree { tree: String::from_utf8_lossy(&payload).into_owned() }));
             }
             Ok(Some((kind::CREATED, payload))) => {
                 if let Ok(created) = protocol::decode::<CreatedDoc>(&payload) {
@@ -904,16 +792,11 @@ async fn open_stream(shared: Arc<Shared>, conn: Connection, doc: String) {
         link.docs.insert(doc.clone(), sender);
         link.writers.push(writer);
     }
-    let _ = shared.events.send(Event::SyncStart {
-        with: 0,
-        doc: doc.clone(),
-    });
+    let _ = shared.events.send(Event::SyncStart { with: 0, doc: doc.clone() });
     let refused = read_doc(&shared, &doc, recv).await;
     if let Some(reason) = refused {
         shared.wanted.lock().unwrap().remove(&doc);
-        let _ = shared
-            .events
-            .send(Event::Control(Control::DocRefused { doc: doc.clone(), reason }));
+        let _ = shared.events.send(Event::Control(Control::DocRefused { doc: doc.clone(), reason }));
     }
     if let Some(link) = shared.link.lock().unwrap().as_mut() {
         if link.conn.stable_id() == conn.stable_id() {
@@ -927,25 +810,14 @@ async fn read_doc(shared: &Shared, doc: &str, mut recv: RecvStream) -> Option<St
     while let Ok(Some((frame, payload))) = protocol::read_frame(&mut recv).await {
         match frame {
             kind::UPDATE | kind::SYNC2 => {
-                let _ = shared.events.send(Event::Update {
-                    from: 0,
-                    doc: doc.to_string(),
-                    bytes: payload,
-                });
+                let _ = shared.events.send(Event::Update { from: 0, doc: doc.to_string(), bytes: payload });
             }
             kind::SYNC1 => {
-                let _ = shared.events.send(Event::SyncRequest {
-                    from: 0,
-                    doc: doc.to_string(),
-                    vector: payload,
-                });
+                let _ = shared.events.send(Event::SyncRequest { from: 0, doc: doc.to_string(), vector: payload });
             }
             // 主持人那边给我的积压丢掉了：重新发一次状态向量，他回一份补齐
             kind::RESYNC => {
-                let _ = shared.events.send(Event::SyncStart {
-                    with: 0,
-                    doc: doc.to_string(),
-                });
+                let _ = shared.events.send(Event::SyncStart { with: 0, doc: doc.to_string() });
             }
             kind::DOC_ERR => return Some(String::from_utf8_lossy(&payload).into_owned()),
             _ => {}
@@ -966,11 +838,7 @@ async fn read_datagrams(shared: Arc<Shared>, conn: Connection) {
         }
         let Some((member, tagged)) = protocol::untag_cursor(&datagram) else { continue };
         if let Some((doc, payload)) = protocol::untag_doc(tagged) {
-            let _ = shared.events.send(Event::Cursor {
-                from: member,
-                doc: doc.to_string(),
-                bytes: payload.to_vec(),
-            });
+            let _ = shared.events.send(Event::Cursor { from: member, doc: doc.to_string(), bytes: payload.to_vec() });
         }
     }
 }
@@ -991,19 +859,14 @@ fn infos(members: &[Member]) -> Vec<MemberInfo> {
 }
 
 /* ---------------- 替别人转发（设计 §20.9） ----------------
-   连不上主持人、却连得上我的人（比如和我在同一个局域网，主持人只有我够得着的公网 IPv6）：
-   他拿我的「转发链接」（就是一张邀请链接，公钥和地址换成我的，会话 id、邀请密钥照旧）连我。
-   我核过他的证明，在自己到主持人的连接上替他开流（第一帧 Forward），之后原样搬字节；
-   主持人照样问、照样管他的权限。我只是一根管子：他的改动我不碰，我的会话也不受影响 */
+连不上主持人、却连得上我的人（比如和我在同一个局域网，主持人只有我够得着的公网 IPv6）：
+他拿我的「转发链接」（就是一张邀请链接，公钥和地址换成我的，会话 id、邀请密钥照旧）连我。
+我核过他的证明，在自己到主持人的连接上替他开流（第一帧 Forward），之后原样搬字节；
+主持人照样问、照样管他的权限。我只是一根管子：他的改动我不碰，我的会话也不受影响 */
 
 /// 我到主持人的那条连接（转发要用；断着就转不了）
 fn host_conn(shared: &Shared) -> Option<Connection> {
-    shared
-        .link
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|link| link.conn.clone())
+    shared.link.lock().unwrap().as_ref().map(|link| link.conn.clone())
 }
 
 /// 一位经我转发的人：从他连上我到离开（他的控制流、Hello 端点已经读出来了）
@@ -1039,9 +902,7 @@ async fn forward_session(
                 let _ = protocol::write_frame(
                     &mut control_send,
                     kind::REJECT,
-                    &protocol::encode(&Reject {
-                        reason: RejectReason::BadInvite,
-                    }),
+                    &protocol::encode(&Reject { reason: RejectReason::BadInvite }),
                 )
                 .await;
                 let _ = control_send.finish();
@@ -1055,12 +916,7 @@ async fn forward_session(
     };
     let host = host_conn(shared).ok_or_else(|| "我自己现在没连着主持人".to_string())?;
     let (mut host_send, mut host_recv) = host.open_bi().await.map_err(|error| error.to_string())?;
-    let forward = Forward {
-        id,
-        stream: ForwardStream::Control,
-        hello: Some(hello),
-        proven,
-    };
+    let forward = Forward { id, stream: ForwardStream::Control, hello: Some(hello), proven };
     protocol::write_frame(&mut host_send, kind::FORWARD, &protocol::encode(&forward))
         .await
         .map_err(|error| error.to_string())?;
@@ -1073,22 +929,14 @@ async fn forward_session(
     let Some((frame_kind, payload)) = first else {
         return Err("主持人没回话".into());
     };
-    protocol::write_frame(&mut control_send, frame_kind, &payload)
-        .await
-        .map_err(|error| error.to_string())?;
+    protocol::write_frame(&mut control_send, frame_kind, &payload).await.map_err(|error| error.to_string())?;
     if frame_kind != kind::WELCOME {
         let _ = control_send.finish();
         let _ = tokio::time::timeout(Duration::from_secs(2), conn.closed()).await;
         return Ok(());
     }
-    let member = protocol::decode::<Welcome>(&payload)
-        .map_err(|error| error.to_string())?
-        .member;
-    shared
-        .forwarding
-        .lock()
-        .unwrap()
-        .insert(member, conn.clone());
+    let member = protocol::decode::<Welcome>(&payload).map_err(|error| error.to_string())?.member;
+    shared.forwarding.lock().unwrap().insert(member, conn.clone());
 
     let tasks = vec![
         tokio::spawn(pipe(control_recv, host_send)),
@@ -1129,18 +977,9 @@ async fn forward_streams(conn: Connection, host: Connection, id: [u8; 32], prove
             )
             .await;
             let Ok(Ok(Some((frame_kind, payload)))) = first else { return };
-            let stream = if frame_kind == kind::OPEN {
-                ForwardStream::Doc
-            } else {
-                ForwardStream::Attach
-            };
+            let stream = if frame_kind == kind::OPEN { ForwardStream::Doc } else { ForwardStream::Attach };
             let Ok((mut up_send, up_recv)) = host.open_bi().await else { return };
-            let forward = Forward {
-                id,
-                stream,
-                hello: None,
-                proven,
-            };
+            let forward = Forward { id, stream, hello: None, proven };
             let header = async {
                 protocol::write_frame(&mut up_send, kind::FORWARD, &protocol::encode(&forward)).await?;
                 protocol::write_frame(&mut up_send, frame_kind, &payload).await

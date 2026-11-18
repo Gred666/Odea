@@ -23,9 +23,9 @@ CRDT 在前端，这里只搬字节。一个团队一个事件通道（登记它
 一篇的流断了（DocClosed：主持人不给、不主持了、断线；主持人这边是这位访客走了）
 ============================================================ */
 
-mod wire;
 #[cfg(test)]
 mod tests;
+mod wire;
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -69,11 +69,7 @@ impl Device {
     /// vault/team.rs 的一行：公钥不对的是 None
     pub fn from_row(row: &crate::vault::team::Device) -> Option<Device> {
         let key = data_encoding::HEXLOWER.decode(row.key.as_bytes()).ok()?.try_into().ok()?;
-        Some(Device {
-            key,
-            account: row.account.clone(),
-            name: row.name.clone(),
-        })
+        Some(Device { key, account: row.account.clone(), name: row.name.clone() })
     }
 }
 
@@ -116,17 +112,36 @@ pub struct TeamPeer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TeamEvent {
     /// 别人的文档更新（Update 和 Sync2 都是它）
-    Update { from: u16, doc: String, bytes: Vec<u8> },
-    Cursor { from: u16, doc: String, bytes: Vec<u8> },
+    Update {
+        from: u16,
+        doc: String,
+        bytes: Vec<u8>,
+    },
+    Cursor {
+        from: u16,
+        doc: String,
+        bytes: Vec<u8>,
+    },
     /// 别人发来了状态向量：前端回他缺的
-    SyncRequest { from: u16, doc: String, vector: Vec<u8> },
+    SyncRequest {
+        from: u16,
+        doc: String,
+        vector: Vec<u8>,
+    },
     /// 和这位接上了这一篇：前端把自己的状态向量发给他
-    SyncStart { with: u16, doc: String },
+    SyncStart {
+        with: u16,
+        doc: String,
+    },
     /// 谁在线、谁开着哪几篇变了：命令层取 peers() 交给前端
     Peers,
     /// 一篇的流断了。访客这边：主持人不给（refused 是他说的话）、不主持了、断线；
     /// 主持人这边：这位访客走了
-    DocClosed { doc: String, member: u16, refused: Option<String> },
+    DocClosed {
+        doc: String,
+        member: u16,
+        refused: Option<String>,
+    },
 }
 
 pub type Events = mpsc::UnboundedSender<TeamEvent>;
@@ -229,11 +244,8 @@ impl Team {
 
     /// 光标数据报：同上，两头都发
     fn relay_cursor(&self, doc: &str, datagram: &Bytes, except: Option<[u8; 32]>) {
-        let mut to: Vec<[u8; 32]> = self
-            .guests
-            .get(doc)
-            .map(|guests| guests.keys().copied().collect())
-            .unwrap_or_default();
+        let mut to: Vec<[u8; 32]> =
+            self.guests.get(doc).map(|guests| guests.keys().copied().collect()).unwrap_or_default();
         to.extend(self.attached.get(doc).map(|attached| attached.host));
         for key in to.into_iter().filter(|key| Some(*key) != except) {
             if let Some(link) = self.links.get(&key) {
@@ -284,10 +296,8 @@ async fn bind(
     // 和会话式一样 5 秒保活、12 秒认出断了（接手要快）。空闲时的流量大头是 iroh 自己的多路径探测，
     // 保活拉长到 15 秒几乎不变（docs/协同编辑.md §23.5）
     let idle = IdleTimeout::try_from(Duration::from_secs(12)).map_err(|error| error.to_string())?;
-    let transport = QuicTransportConfig::builder()
-        .keep_alive_interval(Duration::from_secs(5))
-        .max_idle_timeout(Some(idle))
-        .build();
+    let transport =
+        QuicTransportConfig::builder().keep_alive_interval(Duration::from_secs(5)).max_idle_timeout(Some(idle)).build();
     let endpoint = Endpoint::builder(presets::Minimal)
         .secret_key(key)
         .alpns(vec![wire::ALPN.to_vec()])
@@ -302,11 +312,7 @@ async fn bind(
         .await
         .map_err(|error| format!("打不开网络端口：{error}"))?;
     let mdns = if mdns {
-        match MdnsAddressLookup::builder()
-            .service_name(MDNS_SERVICE)
-            .advertise(true)
-            .build(endpoint.id())
-        {
+        match MdnsAddressLookup::builder().service_name(MDNS_SERVICE).advertise(true).build(endpoint.id()) {
             Ok(lookup) => {
                 if let Ok(services) = endpoint.address_lookup() {
                     services.add(lookup.clone());
@@ -333,14 +339,7 @@ fn load_places(file: Option<&PathBuf>) -> HashMap<[u8; 32], Place> {
         .into_iter()
         .filter_map(|(key, place)| {
             let key: [u8; 32] = data_encoding::HEXLOWER.decode(key.as_bytes()).ok()?.try_into().ok()?;
-            Some((
-                key,
-                Place {
-                    key,
-                    addrs: place.addrs,
-                    relay: place.relay,
-                },
-            ))
+            Some((key, Place { key, addrs: place.addrs, relay: place.relay }))
         })
         .collect()
 }
@@ -363,14 +362,8 @@ impl TeamNet {
             stopped: AtomicBool::new(false),
             serial: AtomicU64::new(1),
         });
-        let tasks = vec![
-            tokio::spawn(inner.clone().accept_loop()),
-            tokio::spawn(inner.clone().dial_loop()),
-        ];
-        Ok(TeamNet {
-            inner,
-            tasks: Mutex::new(tasks),
-        })
+        let tasks = vec![tokio::spawn(inner.clone().accept_loop()), tokio::spawn(inner.clone().dial_loop())];
+        Ok(TeamNet { inner, tasks: Mutex::new(tasks) })
     }
 
     /// 加一台中继（团队的中继选了「用」、自己新配了一台）：当场接上，拨号时也带着它
@@ -513,22 +506,16 @@ impl TeamNet {
             if team.guests.get(doc).is_some_and(|guests| guests.contains_key(&host)) {
                 return Err("他这一篇是连着我的".into());
             }
-            if let Some(old) = team.attached.insert(
-                doc.to_string(),
-                Attached {
-                    host,
-                    serial,
-                    tx: None,
-                    reader: None,
-                },
-            ) {
+            if let Some(old) = team.attached.insert(doc.to_string(), Attached { host, serial, tx: None, reader: None })
+            {
                 if let Some(reader) = old.reader {
                     reader.abort();
                 }
             }
             (conn, host)
         };
-        let task = tokio::spawn(self.inner.clone().attach(team_id.to_string(), doc.to_string(), conn, host, member, serial));
+        let task =
+            tokio::spawn(self.inner.clone().attach(team_id.to_string(), doc.to_string(), conn, host, member, serial));
         let mut teams = self.inner.teams.lock().unwrap();
         match teams
             .get_mut(team_id)
@@ -544,13 +531,7 @@ impl TeamNet {
 
     /// 不再连着主持人看这一篇（关掉了、换成自己主持）
     pub fn close(&self, team: &str, doc: &str) {
-        let old = self
-            .inner
-            .teams
-            .lock()
-            .unwrap()
-            .get_mut(team)
-            .and_then(|team| team.attached.remove(doc));
+        let old = self.inner.teams.lock().unwrap().get_mut(team).and_then(|team| team.attached.remove(doc));
         if let Some(reader) = old.and_then(|old| old.reader) {
             reader.abort();
         }
@@ -694,11 +675,7 @@ impl Inner {
             .and_then(|home| relays.iter().find(|relay| relay.relay_url().is_ok_and(|url| url.to_string() == home)))
             .or_else(|| relays.first())
             .cloned();
-        Place {
-            key: self.me,
-            addrs: crate::collab::reach::endpoint_addrs(&self.endpoint),
-            relay,
-        }
+        Place { key: self.me, addrs: crate::collab::reach::endpoint_addrs(&self.endpoint), relay }
     }
 
     /* ---------------- 拨号 ---------------- */
@@ -729,7 +706,8 @@ impl Inner {
             roots
                 .into_iter()
                 .map(|(id, root)| {
-                    let devices: Vec<Device> = crate::vault::team::read(&root).iter().filter_map(Device::from_row).collect();
+                    let devices: Vec<Device> =
+                        crate::vault::team::read(&root).iter().filter_map(Device::from_row).collect();
                     (id, devices)
                 })
                 .collect::<Vec<_>>()
@@ -798,12 +776,7 @@ impl Inner {
             addrs: addrs
                 .into_iter()
                 .map(TransportAddr::Ip)
-                .chain(
-                    relays
-                        .iter()
-                        .filter_map(|relay| relay.relay_url().ok())
-                        .map(TransportAddr::Relay),
-                )
+                .chain(relays.iter().filter_map(|relay| relay.relay_url().ok()).map(TransportAddr::Relay))
                 .collect(),
         };
         let conn = tokio::time::timeout(DIAL_TIMEOUT, self.endpoint.connect(addr, wire::ALPN))
@@ -898,9 +871,7 @@ impl Inner {
             return Err(format!("{} 不在名单里", &hex(&device)[..8]));
         }
         let mine = self.hello(&hello.team).ok_or("团队仓库关了")?;
-        frames::write_frame(&mut send, kind::HELLO, &frames::encode(&mine))
-            .await
-            .map_err(|error| error.to_string())?;
+        frames::write_frame(&mut send, kind::HELLO, &frames::encode(&mine)).await.map_err(|error| error.to_string())?;
         let team = hello.team.clone();
         self.run_link(team, conn, send, recv, device, device, hello).await;
         Ok(())
@@ -950,10 +921,7 @@ impl Inner {
                     conn: conn.clone(),
                     tx: tx.clone(),
                     dialer,
-                    hello: Hello {
-                        name: crate::collab::clean_name(&theirs.name),
-                        ..theirs
-                    },
+                    hello: Hello { name: crate::collab::clean_name(&theirs.name), ..theirs },
                     presence: Presence::default(),
                 },
             );
@@ -1032,13 +1000,8 @@ impl Inner {
 
     /// 别人发来的地址表：名单里有的记下来、落盘，再拨一轮没连上的
     fn learn_places(&self, team: &str, places: Places) {
-        let known: HashSet<[u8; 32]> = self
-            .teams
-            .lock()
-            .unwrap()
-            .get(team)
-            .map(|team| team.devices.keys().copied().collect())
-            .unwrap_or_default();
+        let known: HashSet<[u8; 32]> =
+            self.teams.lock().unwrap().get(team).map(|team| team.devices.keys().copied().collect()).unwrap_or_default();
         let mut changed = false;
         {
             let mut stored = self.places.lock().unwrap();
@@ -1057,13 +1020,7 @@ impl Inner {
                     let out: HashMap<String, StoredPlace> = stored
                         .iter()
                         .map(|(key, place)| {
-                            (
-                                hex(key),
-                                StoredPlace {
-                                    addrs: place.addrs.clone(),
-                                    relay: place.relay.clone(),
-                                },
-                            )
+                            (hex(key), StoredPlace { addrs: place.addrs.clone(), relay: place.relay.clone() })
                         })
                         .collect();
                     if let Ok(text) = serde_json::to_string_pretty(&out) {
@@ -1112,10 +1069,7 @@ impl Inner {
             let mut teams = self.teams.lock().unwrap();
             // 刚才看的时候在主持，这会儿不主持了：tx 丢掉，流收尾
             let Some(team) = teams.get_mut(&team_id).filter(|team| team.hosted.contains(&doc)) else { return };
-            team.guests
-                .entry(doc.clone())
-                .or_default()
-                .insert(guest, GuestStream { serial, tx });
+            team.guests.entry(doc.clone()).or_default().insert(guest, GuestStream { serial, tx });
             let member = team.number(&guest);
             team.emit(TeamEvent::SyncStart { with: member, doc: doc.clone() });
             member
@@ -1125,47 +1079,50 @@ impl Inner {
             let mut teams = self.teams.lock().unwrap();
             let Some(team) = teams.get_mut(&team_id) else { break };
             // 不主持了（流收尾的那一刻）
-            if team.guests.get(&doc).is_none_or(|guests| guests.get(&guest).is_none_or(|stream| stream.serial != serial)) {
+            if team
+                .guests
+                .get(&doc)
+                .is_none_or(|guests| guests.get(&guest).is_none_or(|stream| stream.serial != serial))
+            {
                 break;
             }
             match frame_kind {
-                kind::SYNC1 => team.emit(TeamEvent::SyncRequest {
-                    from: member,
-                    doc: doc.clone(),
-                    vector: payload,
-                }),
+                kind::SYNC1 => team.emit(TeamEvent::SyncRequest { from: member, doc: doc.clone(), vector: payload }),
                 kind::SYNC2 | kind::UPDATE => {
                     // 转给这一篇的其他访客、我的上游（我也在做客的话）
                     team.relay_update(&doc, &payload, Some(guest));
-                    team.emit(TeamEvent::Update {
-                        from: member,
-                        doc: doc.clone(),
-                        bytes: payload,
-                    });
+                    team.emit(TeamEvent::Update { from: member, doc: doc.clone(), bytes: payload });
                 }
                 _ => {}
             }
         }
         let mut teams = self.teams.lock().unwrap();
         if let Some(team) = teams.get_mut(&team_id) {
-            let mine = team.guests.get(&doc).is_some_and(|guests| guests.get(&guest).is_some_and(|stream| stream.serial == serial));
+            let mine = team
+                .guests
+                .get(&doc)
+                .is_some_and(|guests| guests.get(&guest).is_some_and(|stream| stream.serial == serial));
             if mine {
                 let guests = team.guests.get_mut(&doc).expect("刚看过");
                 guests.remove(&guest);
                 if guests.is_empty() {
                     team.guests.remove(&doc);
                 }
-                team.emit(TeamEvent::DocClosed {
-                    doc,
-                    member,
-                    refused: None,
-                });
+                team.emit(TeamEvent::DocClosed { doc, member, refused: None });
             }
         }
     }
 
     /// 访客这边：开一条文档流连主持人，收他发来的
-    async fn attach(self: Arc<Self>, team_id: String, doc: String, conn: Connection, host: [u8; 32], member: u16, serial: u64) {
+    async fn attach(
+        self: Arc<Self>,
+        team_id: String,
+        doc: String,
+        conn: Connection,
+        host: [u8; 32],
+        member: u16,
+        serial: u64,
+    ) {
         let opened = async {
             let (mut send, recv) = conn.open_bi().await.ok()?;
             frames::write_frame(&mut send, kind::OPEN, doc.as_bytes()).await.ok()?;
@@ -1196,21 +1153,13 @@ impl Inner {
             loop {
                 let Ok(Some((frame_kind, payload))) = frames::read_frame(&mut recv).await else { break };
                 let event = match frame_kind {
-                    kind::SYNC1 => TeamEvent::SyncRequest {
-                        from: member,
-                        doc: doc.clone(),
-                        vector: payload,
-                    },
+                    kind::SYNC1 => TeamEvent::SyncRequest { from: member, doc: doc.clone(), vector: payload },
                     kind::SYNC2 | kind::UPDATE => {
                         // 上游来的转给我的下游
                         if let Some(team) = self.teams.lock().unwrap().get(&team_id) {
                             team.relay_update(&doc, &payload, Some(host));
                         }
-                        TeamEvent::Update {
-                            from: member,
-                            doc: doc.clone(),
-                            bytes: payload,
-                        }
+                        TeamEvent::Update { from: member, doc: doc.clone(), bytes: payload }
                     }
                     kind::DOC_ERR => {
                         refused = Some(String::from_utf8_lossy(&payload).into_owned());
@@ -1244,11 +1193,7 @@ impl Inner {
             }
             team.relay_cursor(doc, &datagram, Some(from));
             let member = team.number(&origin);
-            team.emit(TeamEvent::Cursor {
-                from: member,
-                doc: doc.to_string(),
-                bytes: payload.to_vec(),
-            });
+            team.emit(TeamEvent::Cursor { from: member, doc: doc.to_string(), bytes: payload.to_vec() });
         }
     }
 }

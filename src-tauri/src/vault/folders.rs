@@ -83,11 +83,7 @@ pub fn scan(root: &Path, tree: &layout::Layout, want_files: bool) -> (Vec<String
 pub fn unique_dir(root: &Path, parent_dir: &str, name: &str, keep: Option<&str>) -> String {
     let keep = keep.map(str::to_lowercase);
     for n in 1.. {
-        let candidate = if n == 1 {
-            name.to_string()
-        } else {
-            format!("{name} {n}")
-        };
+        let candidate = if n == 1 { name.to_string() } else { format!("{name} {n}") };
         let rel = layout::join(parent_dir, &candidate);
         if keep.as_deref() == Some(rel.to_lowercase().as_str()) || !fsio::abs(root, &rel).exists() {
             return rel;
@@ -134,11 +130,7 @@ pub fn relink(body: &str, from_dir: &str, to_dir: &str, exists: impl Fn(&str) ->
             if run >= 3 {
                 match fence {
                     None => fence = Some((c, run)),
-                    Some((open, len))
-                        if open == c && run >= len && trimmed[run..].trim().is_empty() =>
-                    {
-                        fence = None
-                    }
+                    Some((open, len)) if open == c && run >= len && trimmed[run..].trim().is_empty() => fence = None,
                     _ => {}
                 }
                 out.push_str(line);
@@ -223,9 +215,7 @@ fn target_after(line: &str, at: usize, stop: char) -> Option<(usize, usize)> {
         let len = inner.find('>')?;
         return Some((start + 1, start + 1 + len));
     }
-    let len = rest
-        .find(|c: char| c.is_whitespace() || c == stop)
-        .unwrap_or(rest.len());
+    let len = rest.find(|c: char| c.is_whitespace() || c == stop).unwrap_or(rest.len());
     (len > 0).then_some((start, start + len))
 }
 
@@ -269,17 +259,11 @@ fn code_spans(line: &str) -> Vec<(usize, usize)> {
 }
 
 /// 换个位置之后同一个目标该怎么写；不需要改（不是相对路径、仓库里找不到）时返回 None
-fn moved_target(
-    target: &str,
-    from_dir: &str,
-    to_dir: &str,
-    exists: &impl Fn(&str) -> bool,
-) -> Option<String> {
+fn moved_target(target: &str, from_dir: &str, to_dir: &str, exists: &impl Fn(&str) -> bool) -> Option<String> {
     let cut = target.find(['#', '?']).unwrap_or(target.len());
     let (path, suffix) = target.split_at(cut);
     let first = path.split('/').next().unwrap_or("");
-    let not_relative =
-        path.is_empty() || path.starts_with('/') || path.starts_with('\\') || first.contains(':');
+    let not_relative = path.is_empty() || path.starts_with('/') || path.starts_with('\\') || first.contains(':');
     if not_relative {
         return None;
     }
@@ -310,11 +294,7 @@ fn resolve(dir: &str, path: &str) -> Option<String> {
 fn relative(dir: &str, target: &str) -> String {
     let from: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
     let to: Vec<&str> = target.split('/').filter(|part| !part.is_empty()).collect();
-    let common = from
-        .iter()
-        .zip(to.iter().take(to.len().saturating_sub(1)))
-        .take_while(|(a, b)| a == b)
-        .count();
+    let common = from.iter().zip(to.iter().take(to.len().saturating_sub(1))).take_while(|(a, b)| a == b).count();
     let mut parts = vec![".."; from.len() - common];
     parts.extend(&to[common..]);
     parts.join("/")
@@ -325,10 +305,7 @@ mod tests {
     use super::*;
 
     fn existing(rel: &str) -> bool {
-        matches!(
-            rel,
-            "附件/图.png" | "附件/表 格.pdf" | "笔记/工作/另一篇.md"
-        )
+        matches!(rel, "附件/图.png" | "附件/表 格.pdf" | "笔记/工作/另一篇.md")
     }
 
     #[test]
@@ -353,8 +330,7 @@ mod tests {
 
     #[test]
     fn leaves_urls_missing_files_and_code_alone() {
-        let body =
-            "[网](https://example.com) ![绝对](C:/a.png) [锚](#小节) [没有](../附件/不存在.png)\n\
+        let body = "[网](https://example.com) ![绝对](C:/a.png) [锚](#小节) [没有](../附件/不存在.png)\n\
                     `![图](../附件/图.png)` 行内代码\n\
                     ```md\n\
                     ![图](../附件/图.png)\n\
@@ -381,16 +357,14 @@ mod tests {
         fsio::write_atomic(&fsio::abs(root, "笔记/工作.md"), "一篇叫工作的笔记").unwrap();
         assert_eq!(list(root, &layout::Layout::odea()), vec!["工作", "工作/周报", "读书"]);
         // 整个仓库是树根（没开日程）：日记也是一个普通文件夹
-        let plain = layout::Layout { plugins: Vec::new(), types: Vec::new(), notes: String::new(), ..layout::Layout::odea() };
+        let plain =
+            layout::Layout { plugins: Vec::new(), types: Vec::new(), notes: String::new(), ..layout::Layout::odea() };
         assert_eq!(list(root, &plain), vec!["日记", "日记/2026", "笔记", "笔记/工作", "笔记/工作/周报", "笔记/读书"]);
         // 开了日程、树根是整个仓库：日记不在树上
         let journal = layout::Layout { notes: String::new(), ..layout::Layout::odea() };
         assert_eq!(list(root, &journal), vec!["笔记", "笔记/工作", "笔记/工作/周报", "笔记/读书"]);
         assert_eq!(unique_dir(root, "笔记", "工作", None), "笔记/工作 2");
-        assert_eq!(
-            unique_dir(root, "笔记", "工作", Some("笔记/工作")),
-            "笔记/工作"
-        );
+        assert_eq!(unique_dir(root, "笔记", "工作", Some("笔记/工作")), "笔记/工作");
         assert_eq!(unique_dir(root, "笔记", "生活", None), "笔记/生活");
     }
 

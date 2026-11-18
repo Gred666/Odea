@@ -59,11 +59,7 @@ pub async fn collab_remember(
     blocking(move || {
         update_trusted(&data_dir, |list| {
             list.retain(|peer| peer.id != id);
-            list.push(boot::SavedPeer {
-                id,
-                name: collab::clean_name(&name),
-                edit: permission == Permission::Edit,
-            });
+            list.push(boot::SavedPeer { id, name: collab::clean_name(&name), edit: permission == Permission::Edit });
         })
     })
     .await

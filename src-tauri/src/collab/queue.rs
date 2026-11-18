@@ -73,9 +73,7 @@ impl DocQueue {
             }
             state.frames.push_back((frame_kind, bytes));
             if state.frames.len() > LAG_FRAMES || state.update_bytes > LAG_BYTES {
-                state
-                    .frames
-                    .retain(|(frame_kind, _)| !droppable(*frame_kind));
+                state.frames.retain(|(frame_kind, _)| !droppable(*frame_kind));
                 state.frames.push_back((kind::RESYNC, Vec::new()));
                 state.update_bytes = 0;
                 state.resync_pending = true;
@@ -123,15 +121,7 @@ impl DocQueue {
     #[cfg(test)]
     pub fn snapshot(&self) -> (Vec<u8>, usize, bool) {
         let state = self.state.lock().unwrap();
-        (
-            state
-                .frames
-                .iter()
-                .map(|(frame_kind, _)| *frame_kind)
-                .collect(),
-            state.update_bytes,
-            state.resync_pending,
-        )
+        (state.frames.iter().map(|(frame_kind, _)| *frame_kind).collect(), state.update_bytes, state.resync_pending)
     }
 }
 
@@ -142,10 +132,7 @@ pub fn spawn_queue_writer(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some((frame_kind, bytes)) = queue.pop().await {
-            if super::protocol::write_frame(&mut send, frame_kind, &bytes)
-                .await
-                .is_err()
-            {
+            if super::protocol::write_frame(&mut send, frame_kind, &bytes).await.is_err() {
                 queue.close();
                 return;
             }

@@ -67,11 +67,7 @@ impl FrontMatter {
             let value = value.trim();
             if value.is_empty() {
                 // 下面一行一条：`  - 旅行`（YAML 也允许不缩进的 `- 旅行`）
-                while let Some(item) = lines
-                    .peek()
-                    .copied()
-                    .and_then(|next| next.trim_start().strip_prefix('-'))
-                {
+                while let Some(item) = lines.peek().copied().and_then(|next| next.trim_start().strip_prefix('-')) {
                     push_tags(&mut out, item);
                     lines.next();
                 }
@@ -86,10 +82,7 @@ impl FrontMatter {
 /// 一段里的几个标签：逗号、空白分开
 fn push_tags(out: &mut Vec<String>, text: &str) {
     for word in text.split(|c: char| c == ',' || c.is_whitespace()) {
-        let tag = word
-            .trim_matches(|c| c == '"' || c == '\'')
-            .trim_start_matches('#')
-            .to_lowercase();
+        let tag = word.trim_matches(|c| c == '"' || c == '\'').trim_start_matches('#').to_lowercase();
         if !tag.is_empty() && !out.contains(&tag) {
             out.push(tag);
         }
@@ -167,9 +160,7 @@ fn find_block(text: &str) -> Option<(&str, &str)> {
         if offset > text.len() {
             break;
         }
-        let end = text[offset..]
-            .find('\n')
-            .map_or(text.len(), |index| offset + index);
+        let end = text[offset..].find('\n').map_or(text.len(), |index| offset + index);
         let line = &text[offset..end];
         if line.trim_end() == "---" {
             if !saw_key {
@@ -300,11 +291,7 @@ fn unquote(value: &str) -> Option<String> {
 
 /// 本地时间带时区偏移，人读得懂、换台机器也不会错
 pub fn format_time(ms: i64) -> String {
-    Local
-        .timestamp_millis_opt(ms)
-        .single()
-        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string())
-        .unwrap_or_default()
+    Local.timestamp_millis_opt(ms).single().map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()).unwrap_or_default()
 }
 
 /// RFC 3339；或者本地的 `YYYY-MM-DD HH:MM[:SS]` / `YYYY-MM-DD`（别的工具常这么写）
@@ -312,21 +299,13 @@ pub fn parse_time(value: &str) -> Option<i64> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
         return Some(dt.timestamp_millis());
     }
-    let local = |naive: NaiveDateTime| {
-        Local
-            .from_local_datetime(&naive)
-            .earliest()
-            .map(|dt| dt.timestamp_millis())
-    };
+    let local = |naive: NaiveDateTime| Local.from_local_datetime(&naive).earliest().map(|dt| dt.timestamp_millis());
     for format in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S"] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(value, format) {
             return local(naive);
         }
     }
-    NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .ok()
-        .and_then(|date| date.and_hms_opt(0, 0, 0))
-        .and_then(local)
+    NaiveDate::parse_from_str(value, "%Y-%m-%d").ok().and_then(|date| date.and_hms_opt(0, 0, 0)).and_then(local)
 }
 
 #[cfg(test)]
@@ -366,10 +345,7 @@ mod tests {
         let text = "---\nid: n1\ntags:\n  - 旅行\n  - 书店\naliases: [京都]\n---\n\n正文";
         let (meta, body) = split(text);
         assert_eq!(meta.id.as_deref(), Some("n1"));
-        assert_eq!(
-            meta.extra,
-            vec!["tags:", "  - 旅行", "  - 书店", "aliases: [京都]"]
-        );
+        assert_eq!(meta.extra, vec!["tags:", "  - 旅行", "  - 书店", "aliases: [京都]"]);
         assert_eq!(body, "正文");
         assert_eq!(render(&meta, &body), text);
     }
@@ -403,14 +379,9 @@ mod tests {
     #[test]
     fn blocks_whose_keys_are_not_english_are_recognised() {
         // 后两条带组合符号（拆开写的重音、印地文 kya 的半音符），写回时一个字节不改（§3.3 放宽的那一段）
-        for line in [
-            "标签: 旅行",
-            "截止: 2026-11-20",
-            "_x: 1",
-            "タグ: a",
-            "e\u{301}: x",
-            "\u{915}\u{94d}\u{92f}\u{93e}: 1",
-        ] {
+        for line in
+            ["标签: 旅行", "截止: 2026-11-20", "_x: 1", "タグ: a", "e\u{301}: x", "\u{915}\u{94d}\u{92f}\u{93e}: 1"]
+        {
             let text = format!("---\n{line}\n---\n\n正文");
             let (meta, body) = split(&text);
             assert_eq!(meta.extra, [line], "{line}");
@@ -431,7 +402,8 @@ mod tests {
 
     #[test]
     fn accepts_crlf_bom_and_other_tools_formats() {
-        let text = "\u{feff}---\r\ntitle: 'It''s here'\r\ncreated: 2026-08-28 11:59\r\npinned: yes\r\n---\r\n正文\r\n第二行";
+        let text =
+            "\u{feff}---\r\ntitle: 'It''s here'\r\ncreated: 2026-08-28 11:59\r\npinned: yes\r\n---\r\n正文\r\n第二行";
         let (meta, body) = split(text);
         assert_eq!(meta.title.as_deref(), Some("It's here"));
         assert_eq!(format_time(meta.created.unwrap())[..16], *"2026-08-28T11:59");
@@ -443,10 +415,7 @@ mod tests {
     fn unparseable_known_keys_are_kept_not_dropped() {
         let (meta, _) = split("---\ncreated: 上周\npinned: maybe\ntitle: |\n  多行\n---\n");
         assert!(meta.created.is_none());
-        assert_eq!(
-            meta.extra,
-            vec!["created: 上周", "pinned: maybe", "title: |", "  多行"]
-        );
+        assert_eq!(meta.extra, vec!["created: 上周", "pinned: maybe", "title: |", "  多行"]);
     }
 
     #[test]

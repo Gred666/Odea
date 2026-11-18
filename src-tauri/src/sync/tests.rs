@@ -20,10 +20,7 @@ fn cloud() -> Cloud {
     let mut options = git2::RepositoryInitOptions::new();
     options.bare(true).initial_head(DEFAULT_BRANCH);
     git2::Repository::init_opts(&path, &options).unwrap();
-    Cloud {
-        url: path.to_string_lossy().replace('\\', "/"),
-        _dir: dir,
-    }
+    Cloud { url: path.to_string_lossy().replace('\\', "/"), _dir: dir }
 }
 
 struct Device {
@@ -49,12 +46,7 @@ impl Device {
         fs::create_dir_all(&root).unwrap();
         let repo = SyncRepo::init(&root).unwrap();
         repo.set_remote_url(&cloud.url).unwrap();
-        Device {
-            _dir: dir,
-            root,
-            repo,
-            name,
-        }
+        Device { _dir: dir, root, repo, name }
     }
 
     /// 后来的设备：从云端 clone
@@ -62,12 +54,7 @@ impl Device {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("仓库");
         let repo = SyncRepo::clone(&cloud.url, &root, &Net::default()).unwrap();
-        Device {
-            _dir: dir,
-            root,
-            repo,
-            name,
-        }
+        Device { _dir: dir, root, repo, name }
     }
 
     fn path(&self, rel: &str) -> PathBuf {
@@ -93,16 +80,11 @@ impl Device {
     }
 
     fn author(&self) -> Author<'_> {
-        Author {
-            name: self.name,
-            email: "test@localhost",
-        }
+        Author { name: self.name, email: "test@localhost" }
     }
 
     fn commit(&self) -> Committed {
-        self.repo
-            .commit_all(&self.author(), LIMIT, describe)
-            .unwrap()
+        self.repo.commit_all(&self.author(), LIMIT, describe).unwrap()
     }
 
     /// 一轮同步。冲突副本照应用的样子放在原文件旁边（应用里是 Vault::write_conflict_copy）
@@ -159,17 +141,9 @@ impl Device {
 
 /// 「笔记/周报.md」→「笔记/周报 (冲突).md」
 fn copy_name(rel: &str) -> String {
-    let (dir, file) = rel
-        .rsplit_once('/')
-        .map_or(("", rel), |(dir, file)| (dir, file));
-    let (stem, ext) = file
-        .rsplit_once('.')
-        .map_or((file, ""), |(stem, ext)| (stem, ext));
-    let name = if ext.is_empty() {
-        format!("{stem} (冲突)")
-    } else {
-        format!("{stem} (冲突).{ext}")
-    };
+    let (dir, file) = rel.rsplit_once('/').map_or(("", rel), |(dir, file)| (dir, file));
+    let (stem, ext) = file.rsplit_once('.').map_or((file, ""), |(stem, ext)| (stem, ext));
+    let name = if ext.is_empty() { format!("{stem} (冲突)") } else { format!("{stem} (冲突).{ext}") };
     if dir.is_empty() {
         name
     } else {
@@ -202,11 +176,7 @@ fn prepare_writes_its_own_block_and_keeps_the_users_lines() {
     assert!(!repo.prepare().unwrap());
 
     // 用户改了应用那一段：换回来，用户自己的行不动
-    fs::write(
-        root.join(".gitignore"),
-        ignore.replace(".*.tmp\n", "") + "dist/\n",
-    )
-    .unwrap();
+    fs::write(root.join(".gitignore"), ignore.replace(".*.tmp\n", "") + "dist/\n").unwrap();
     assert!(repo.prepare().unwrap());
     let again = fs::read_to_string(root.join(".gitignore")).unwrap();
     assert!(again.contains(".*.tmp\n"));
@@ -288,21 +258,10 @@ fn commit_leaves_out_temp_files_and_the_trash() {
     a.write(".odea/vault.json", "{}");
 
     let committed = a.commit();
-    assert!(committed
-        .changes
-        .iter()
-        .all(|change| change.kind == ChangeKind::Added));
+    assert!(committed.changes.iter().all(|change| change.kind == ChangeKind::Added));
     let mut paths = a.committed_paths();
     paths.sort();
-    assert_eq!(
-        paths,
-        vec![
-            ".gitattributes",
-            ".gitignore",
-            ".odea/vault.json",
-            WEEKLY
-        ]
-    );
+    assert_eq!(paths, vec![".gitattributes", ".gitignore", ".odea/vault.json", WEEKLY]);
     // 没有新改动：不提交
     assert!(a.commit().changes.is_empty());
 }
@@ -315,10 +274,7 @@ fn markdown_is_stored_with_lf_and_attachments_byte_for_byte() {
     a.write("附件/表.csv", "a,b\r\n1,2\r\n");
     a.sync();
 
-    assert_eq!(
-        a.committed("笔记/外面写的.md").unwrap(),
-        "第一行\n第二行\n".as_bytes()
-    );
+    assert_eq!(a.committed("笔记/外面写的.md").unwrap(), "第一行\n第二行\n".as_bytes());
     assert_eq!(a.committed("附件/表.csv").unwrap(), b"a,b\r\n1,2\r\n");
     let b = Device::join(&cloud, "B");
     assert_eq!(b.read("笔记/外面写的.md").unwrap(), "第一行\n第二行\n");
@@ -368,16 +324,10 @@ fn edits_on_two_devices_merge_and_real_conflicts_become_copies() {
     // 两边离线各改各的：同一行都改了，另外各有不冲突的改动
     a.write(WEEKLY, weekly("A 写的"));
     a.write("笔记/只在A.md", "A 新建的\n");
-    a.write(
-        ".odea/activity/2026-10.jsonl",
-        "{\"n\":1}\n{\"from\":\"A\"}\n",
-    );
+    a.write(".odea/activity/2026-10.jsonl", "{\"n\":1}\n{\"from\":\"A\"}\n");
     b.write(WEEKLY, weekly("B 写的"));
     b.write("日记/2026/2026-10-07.md", "- [x] 买菜\n- [ ] 跑步\n");
-    b.write(
-        ".odea/activity/2026-10.jsonl",
-        "{\"n\":1}\n{\"from\":\"B\"}\n",
-    );
+    b.write(".odea/activity/2026-10.jsonl", "{\"n\":1}\n{\"from\":\"B\"}\n");
 
     let first = a.sync();
     assert!(!first.merged && first.copies.is_empty());
@@ -387,10 +337,7 @@ fn edits_on_two_devices_merge_and_real_conflicts_become_copies() {
     assert!(second.merged);
     assert_eq!(second.copies, vec!["笔记/工作/周报 (冲突).md"]);
     assert_eq!(b.read(WEEKLY).unwrap(), weekly("B 写的"));
-    assert_eq!(
-        b.read("笔记/工作/周报 (冲突).md").unwrap(),
-        weekly("A 写的")
-    );
+    assert_eq!(b.read("笔记/工作/周报 (冲突).md").unwrap(), weekly("A 写的"));
     assert_eq!(b.read("笔记/只在A.md").unwrap(), "A 新建的\n");
     assert!(second.changed.contains(&"笔记/只在A.md".to_string()));
     assert!(!second.changed.contains(&WEEKLY.to_string()));
@@ -402,16 +349,9 @@ fn edits_on_two_devices_merge_and_real_conflicts_become_copies() {
     let third = a.sync();
     assert!(!third.merged);
     assert_eq!(a.read(WEEKLY).unwrap(), weekly("B 写的"));
-    assert_eq!(
-        a.read("笔记/工作/周报 (冲突).md").unwrap(),
-        weekly("A 写的")
-    );
+    assert_eq!(a.read("笔记/工作/周报 (冲突).md").unwrap(), weekly("A 写的"));
     assert!(a.read("日记/2026/2026-10-07.md").unwrap().contains("跑步"));
-    for rel in [
-        WEEKLY,
-        "日记/2026/2026-10-07.md",
-        "笔记/工作/周报 (冲突).md",
-    ] {
+    for rel in [WEEKLY, "日记/2026/2026-10-07.md", "笔记/工作/周报 (冲突).md"] {
         assert!(third.changed.contains(&rel.to_string()), "{rel}");
     }
 }
@@ -429,10 +369,7 @@ fn push_is_rejected_while_behind_and_the_next_round_gets_through() {
     b.write("笔记/乙.md", "B\n");
     b.commit();
     assert_eq!(b.repo.unpushed(), 1);
-    assert!(matches!(
-        b.repo.push(&Net::default()).unwrap(),
-        Pushed::Rejected(_)
-    ));
+    assert!(matches!(b.repo.push(&Net::default()).unwrap(), Pushed::Rejected(_)));
 
     let round = b.sync();
     assert_eq!(round.rejections, 0);
@@ -459,18 +396,8 @@ fn deleted_on_one_device_edited_on_the_other_keeps_the_edit() {
 
     assert!(round.copies.is_empty());
     for device in [&a, &b] {
-        assert_eq!(
-            device.read("笔记/甲.md").unwrap(),
-            "B 改过\n",
-            "{}",
-            device.name
-        );
-        assert_eq!(
-            device.read("笔记/乙.md").unwrap(),
-            "A 改过\n",
-            "{}",
-            device.name
-        );
+        assert_eq!(device.read("笔记/甲.md").unwrap(), "B 改过\n", "{}", device.name);
+        assert_eq!(device.read("笔记/乙.md").unwrap(), "A 改过\n", "{}", device.name);
     }
 }
 
@@ -509,13 +436,7 @@ fn oversized_files_are_skipped_and_tracked_ones_stay_at_the_old_version() {
     a.write("附件/大.bin", [1u8; 50]);
 
     let committed = commit();
-    assert_eq!(
-        committed.oversized,
-        vec![Oversized {
-            rel: "附件/大.bin".into(),
-            size: 50
-        }]
-    );
+    assert_eq!(committed.oversized, vec![Oversized { rel: "附件/大.bin".into(), size: 50 }]);
     assert!(a.committed("附件/大.bin").is_none());
     assert_eq!(a.committed("附件/小.bin").unwrap(), [1u8; 5]);
 
@@ -547,19 +468,9 @@ fn case_only_rename_reaches_the_other_device() {
 
     fs::rename(a.path("笔记/Readme.md"), a.path("笔记/README.md")).unwrap();
     let committed = a.commit();
-    let mut changes: Vec<_> = committed
-        .changes
-        .iter()
-        .map(|change| (change.rel.as_str(), change.kind))
-        .collect();
+    let mut changes: Vec<_> = committed.changes.iter().map(|change| (change.rel.as_str(), change.kind)).collect();
     changes.sort_by_key(|(rel, _)| *rel);
-    assert_eq!(
-        changes,
-        vec![
-            ("笔记/README.md", ChangeKind::Added),
-            ("笔记/Readme.md", ChangeKind::Deleted)
-        ]
-    );
+    assert_eq!(changes, vec![("笔记/README.md", ChangeKind::Added), ("笔记/Readme.md", ChangeKind::Deleted)]);
     a.sync();
     b.sync();
 
@@ -613,12 +524,7 @@ fn repack_folds_loose_objects_into_one_pack() {
 
 fn packs(root: &Path) -> usize {
     fs::read_dir(root.join(".git/objects/pack"))
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|entry| entry.file_name().to_string_lossy().ends_with(".pack"))
-                .count()
-        })
+        .map(|entries| entries.flatten().filter(|entry| entry.file_name().to_string_lossy().ends_with(".pack")).count())
         .unwrap_or(0)
 }
 
@@ -638,10 +544,7 @@ fn many_new_files_are_packed_before_the_commit() {
     a.write("附件/录像.mp4", vec![0u8; 3 * MB as usize]);
 
     let mut started = false;
-    let staged = a
-        .repo
-        .stage_in_batches(2 * MB, 64 * 1024, || started = true)
-        .unwrap();
+    let staged = a.repo.stage_in_batches(2 * MB, 64 * 1024, || started = true).unwrap();
     assert!(started);
     // 250 篇 + .gitignore + .gitattributes；大图和录像留给提交
     assert_eq!(staged, 252);
@@ -651,22 +554,13 @@ fn many_new_files_are_packed_before_the_commit() {
 
     let committed = a.repo.commit_all(&a.author(), 2 * MB, describe).unwrap();
     assert_eq!(committed.changes.len(), 253);
-    assert_eq!(
-        committed.oversized,
-        vec![Oversized {
-            rel: "附件/录像.mp4".into(),
-            size: 3 * MB
-        }]
-    );
+    assert_eq!(committed.oversized, vec![Oversized { rel: "附件/录像.mp4".into(), size: 3 * MB }]);
     // 零散的只剩大图、八棵树和提交
     assert!(a.repo.loose_objects() <= 10, "{}", a.repo.loose_objects());
     let again = a.repo.commit_all(&a.author(), 2 * MB, describe).unwrap();
     assert!(again.changes.is_empty());
     let expected = format!("# 第 7 篇\n\n{}\n", "正文".repeat(200));
-    assert_eq!(
-        a.committed("笔记/第2组/第7篇.md").unwrap(),
-        expected.as_bytes()
-    );
+    assert_eq!(a.committed("笔记/第2组/第7篇.md").unwrap(), expected.as_bytes());
 
     assert_eq!(a.repo.push(&Net::default()).unwrap(), Pushed::Done);
     let b = Device::join(&cloud, "B");
@@ -703,9 +597,7 @@ fn bulk_staging_speed() {
         }
         // 刚写出来的文件第一次打开时杀毒软件要扫一遍，每个几毫秒；真实的笔记早扫过了
         for i in 0..2000 {
-            device
-                .read(&format!("笔记/第{}组/第{i}篇.md", i % 20))
-                .unwrap();
+            device.read(&format!("笔记/第{}组/第{i}篇.md", i % 20)).unwrap();
         }
         (cloud, device)
     };
@@ -757,8 +649,7 @@ fn tells_an_empty_cloud_from_one_with_history() {
 fn unreachable_remote_is_a_network_error() {
     let dir = tempfile::tempdir().unwrap();
     let repo = SyncRepo::init(dir.path()).unwrap();
-    repo.set_remote_url("https://127.0.0.1:9/odea.git")
-        .unwrap();
+    repo.set_remote_url("https://127.0.0.1:9/odea.git").unwrap();
     match repo.fetch(&Net::default()) {
         Err(SyncError::Network(_)) => {}
         other => panic!("应该是连不上，实际是 {other:?}"),
@@ -767,19 +658,11 @@ fn unreachable_remote_is_a_network_error() {
 
 #[test]
 fn describe_names_the_files() {
-    let change = |rel: &str| Change {
-        rel: rel.into(),
-        kind: ChangeKind::Modified,
-    };
+    let change = |rel: &str| Change { rel: rel.into(), kind: ChangeKind::Modified };
     assert_eq!(describe(&[]), "同步");
-    assert_eq!(
-        describe(&[change(WEEKLY), change("日记/2026/2026-10-07.md")]),
-        "更新 周报、2026-10-07"
-    );
-    let many: Vec<Change> = ["甲", "乙", "丙", "丁", "甲"]
-        .iter()
-        .map(|name| change(&format!("笔记/{name}.md")))
-        .collect();
+    assert_eq!(describe(&[change(WEEKLY), change("日记/2026/2026-10-07.md")]), "更新 周报、2026-10-07");
+    let many: Vec<Change> =
+        ["甲", "乙", "丙", "丁", "甲"].iter().map(|name| change(&format!("笔记/{name}.md"))).collect();
     assert_eq!(describe(&many), "更新 甲、乙、丙 等 4 个文件");
     // 点开头的排在后面
     assert_eq!(

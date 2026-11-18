@@ -27,8 +27,8 @@ use std::thread;
 use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{
     Commit, ConfigLevel, Cred, Delta, ErrorClass, ErrorCode, FetchOptions, Index, IndexAddOption, IndexConflict,
-    IndexEntry, ProxyOptions, PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions,
-    Signature, Status, StatusOptions, StatusShow, Tree,
+    IndexEntry, ProxyOptions, PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions, Signature, Status,
+    StatusOptions, StatusShow, Tree,
 };
 
 use crate::old_name;
@@ -248,10 +248,7 @@ impl SyncRepo {
         let mut fetch = FetchOptions::new();
         fetch.remote_callbacks(callbacks(net, &asked));
         fetch.proxy_options(proxy(net));
-        let repo = RepoBuilder::new()
-            .fetch_options(fetch)
-            .clone(url, root)
-            .map_err(|error| classify(error, &asked))?;
+        let repo = RepoBuilder::new().fetch_options(fetch).clone(url, root).map_err(|error| classify(error, &asked))?;
         let this = Self::wrap(repo, root);
         this.prepare()?;
         Ok(this)
@@ -265,18 +262,12 @@ impl SyncRepo {
         let connection = remote
             .connect_auth(git2::Direction::Fetch, Some(callbacks(net, &asked)), Some(proxy(net)))
             .map_err(|error| classify(error, &asked))?;
-        let empty = connection
-            .list()?
-            .iter()
-            .all(|head| !head.name().starts_with("refs/heads/"));
+        let empty = connection.list()?.iter().all(|head| !head.name().starts_with("refs/heads/"));
         Ok(empty)
     }
 
     fn wrap(repo: Repository, root: &Path) -> Self {
-        Self {
-            repo,
-            root: root.to_path_buf(),
-        }
+        Self { repo, root: root.to_path_buf() }
     }
 
     /// 开启同步时做一次：仓库自己的配置，加上 .gitignore / .gitattributes 里应用维护的那一段。
@@ -302,12 +293,7 @@ impl SyncRepo {
     }
 
     pub fn remote_url(&self) -> Option<String> {
-        self.repo
-            .find_remote(REMOTE)
-            .ok()?
-            .url()
-            .ok()
-            .map(str::to_string)
+        self.repo.find_remote(REMOTE).ok()?.url().ok().map(str::to_string)
     }
 
     pub fn set_remote_url(&self, url: &str) -> SyncResult<()> {
@@ -364,18 +350,12 @@ impl SyncRepo {
         self.fix_case_renames(&mut index)?;
         index.write()?;
         let tree = self.repo.find_tree(index.write_tree()?)?;
-        let oversized = oversized
-            .into_iter()
-            .map(|(rel, size)| Oversized { rel, size })
-            .collect();
+        let oversized = oversized.into_iter().map(|(rel, size)| Oversized { rel, size }).collect();
 
         let head = self.head_commit()?;
         let old_tree = head.as_ref().map(Commit::tree).transpose()?;
         if old_tree.as_ref().is_some_and(|old| old.id() == tree.id()) {
-            return Ok(Committed {
-                changes: Vec::new(),
-                oversized,
-            });
+            return Ok(Committed { changes: Vec::new(), oversized });
         }
         let changes = self.changes(old_tree.as_ref(), &tree)?;
         if changes.is_empty() {
@@ -383,14 +363,7 @@ impl SyncRepo {
         }
         let signature = Signature::now(author.name, author.email)?;
         let parents: Vec<&Commit> = head.iter().collect();
-        self.repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            &message(&changes),
-            &tree,
-            &parents,
-        )?;
+        self.repo.commit(Some("HEAD"), &signature, &signature, &message(&changes), &tree, &parents)?;
         Ok(Committed { changes, oversized })
     }
 
@@ -418,17 +391,10 @@ impl SyncRepo {
         // add_all 却给每个新文件生成一份 diff —— 打开、读完、判断是不是二进制，2000 个要 5 s
         let max = max_file_bytes.min(BULK_FILE_BYTES);
         let mut options = StatusOptions::new();
-        options
-            .show(StatusShow::Workdir)
-            .include_untracked(true)
-            .recurse_untracked_dirs(true)
-            .exclude_submodules(true);
+        options.show(StatusShow::Workdir).include_untracked(true).recurse_untracked_dirs(true).exclude_submodules(true);
         let mut pending = Vec::new();
         for entry in self.repo.statuses(Some(&mut options))?.iter() {
-            if !entry
-                .status()
-                .intersects(Status::WT_NEW | Status::WT_MODIFIED | Status::WT_TYPECHANGE)
-            {
+            if !entry.status().intersects(Status::WT_NEW | Status::WT_MODIFIED | Status::WT_TYPECHANGE) {
                 continue;
             }
             let Ok(rel) = entry.path() else { continue };
@@ -447,9 +413,7 @@ impl SyncRepo {
         let root = &self.root;
         let pack_dir = self.repo.path().join("objects").join("pack");
         fs::create_dir_all(&pack_dir)?;
-        let threads = thread::available_parallelism()
-            .map_or(1, |n| n.get())
-            .min(BULK_THREADS);
+        let threads = thread::available_parallelism().map_or(1, |n| n.get()).min(BULK_THREADS);
         let mut index = self.repo.index()?;
         let mut staged = 0;
         let mut rest = pending.as_slice();
@@ -474,11 +438,7 @@ impl SyncRepo {
                     .collect();
                 workers
                     .into_iter()
-                    .map(|worker| {
-                        worker
-                            .join()
-                            .unwrap_or_else(|_| Err(SyncError::Local("打包的线程崩了".into())))
-                    })
+                    .map(|worker| worker.join().unwrap_or_else(|_| Err(SyncError::Local("打包的线程崩了".into()))))
                     .collect::<SyncResult<Vec<_>>>()
             })?;
             for entry in entries.iter().flatten() {
@@ -494,18 +454,11 @@ impl SyncRepo {
     /// Windows / macOS 上只改了大小写的改名：libgit2 按 core.ignorecase 当成同一个文件，
     /// 索引里一直是旧的写法。拿索引里的路径和磁盘上的真实写法比，不一样就换成新的
     fn fix_case_renames(&self, index: &mut Index) -> SyncResult<()> {
-        let ignore_case = self
-            .repo
-            .config()?
-            .get_bool("core.ignorecase")
-            .unwrap_or(false);
+        let ignore_case = self.repo.config()?.get_bool("core.ignorecase").unwrap_or(false);
         if !ignore_case {
             return Ok(());
         }
-        let tracked: Vec<String> = index
-            .iter()
-            .filter_map(|entry| String::from_utf8(entry.path).ok())
-            .collect();
+        let tracked: Vec<String> = index.iter().filter_map(|entry| String::from_utf8(entry.path).ok()).collect();
         let mut listings = HashMap::new();
         let mut renames = Vec::new();
         for rel in tracked {
@@ -531,9 +484,7 @@ impl SyncRepo {
         options.remote_callbacks(callbacks(net, &asked));
         options.proxy_options(proxy(net));
         let refspec = format!("+refs/heads/{branch}:refs/remotes/{REMOTE}/{branch}");
-        remote
-            .fetch(&[refspec], Some(&mut options), None)
-            .map_err(|error| classify(error, &asked))
+        remote.fetch(&[refspec], Some(&mut options), None).map_err(|error| classify(error, &asked))
     }
 
     /// 把 fetch 来的合进当前分支，写进工作区。调用前先 commit_all：
@@ -549,10 +500,7 @@ impl SyncRepo {
         keep: impl FnOnce(&[Conflict]) -> SyncResult<()>,
     ) -> SyncResult<Pulled> {
         let branch = self.branch();
-        let Ok(their_ref) = self
-            .repo
-            .find_reference(&format!("refs/remotes/{REMOTE}/{branch}"))
-        else {
+        let Ok(their_ref) = self.repo.find_reference(&format!("refs/remotes/{REMOTE}/{branch}")) else {
             // 远端还是空的（第一次推之前）
             return Ok(Pulled::default());
         };
@@ -567,16 +515,11 @@ impl SyncRepo {
 
         if analysis.is_unborn() || analysis.is_fast_forward() {
             let new_tree = theirs.tree()?;
-            self.repo
-                .checkout_tree(theirs.as_object(), Some(CheckoutBuilder::new().safe()))?;
+            self.repo.checkout_tree(theirs.as_object(), Some(CheckoutBuilder::new().safe()))?;
             let refname = format!("refs/heads/{branch}");
-            self.repo
-                .reference(&refname, theirs.id(), true, "同步：快进")?;
+            self.repo.reference(&refname, theirs.id(), true, "同步：快进")?;
             self.repo.set_head(&refname)?;
-            return Ok(Pulled {
-                changed: self.changed_paths(old_tree.as_ref(), &new_tree)?,
-                merged: false,
-            });
+            return Ok(Pulled { changed: self.changed_paths(old_tree.as_ref(), &new_tree)?, merged: false });
         }
 
         let ours = head.ok_or_else(|| SyncError::Local("本地没有提交，却需要合并".into()))?;
@@ -593,21 +536,10 @@ impl SyncRepo {
         if !conflicts.is_empty() {
             keep(&conflicts)?;
         }
-        self.repo
-            .checkout_tree(tree.as_object(), Some(CheckoutBuilder::new().safe()))?;
+        self.repo.checkout_tree(tree.as_object(), Some(CheckoutBuilder::new().safe()))?;
         let signature = Signature::now(author.name, author.email)?;
-        self.repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            "合并其他设备的改动",
-            &tree,
-            &[&ours, &theirs],
-        )?;
-        Ok(Pulled {
-            changed: self.changed_paths(old_tree.as_ref(), &tree)?,
-            merged: true,
-        })
+        self.repo.commit(Some("HEAD"), &signature, &signature, "合并其他设备的改动", &tree, &[&ours, &theirs])?;
+        Ok(Pulled { changed: self.changed_paths(old_tree.as_ref(), &tree)?, merged: true })
     }
 
     /// 逻辑目录的清单两边都改过（docs/仓库与启动器.md §7.4）：按节点三方合并，结果放进合并的索引，
@@ -666,10 +598,7 @@ impl SyncRepo {
             let mut options = PushOptions::new();
             options.remote_callbacks(callbacks);
             options.proxy_options(proxy(net));
-            remote.push(
-                &[format!("refs/heads/{branch}:refs/heads/{branch}")],
-                Some(&mut options),
-            )
+            remote.push(&[format!("refs/heads/{branch}:refs/heads/{branch}")], Some(&mut options))
         };
         match result {
             Ok(()) => Ok(rejected.map_or(Pushed::Done, Pushed::Rejected)),
@@ -687,21 +616,10 @@ impl SyncRepo {
             return 0;
         };
         let tracking = format!("refs/remotes/{REMOTE}/{}", self.branch());
-        match self
-            .repo
-            .find_reference(&tracking)
-            .and_then(|reference| reference.peel_to_commit())
-        {
-            Ok(remote) => self
-                .repo
-                .graph_ahead_behind(head.id(), remote.id())
-                .map_or(0, |(ahead, _)| ahead),
+        match self.repo.find_reference(&tracking).and_then(|reference| reference.peel_to_commit()) {
+            Ok(remote) => self.repo.graph_ahead_behind(head.id(), remote.id()).map_or(0, |(ahead, _)| ahead),
             // 远端还是空的：本地所有提交都没推
-            Err(_) => self
-                .repo
-                .revwalk()
-                .and_then(|mut walk| walk.push(head.id()).map(|_| walk.count()))
-                .unwrap_or(0),
+            Err(_) => self.repo.revwalk().and_then(|mut walk| walk.push(head.id()).map(|_| walk.count())).unwrap_or(0),
         }
     }
 
@@ -744,10 +662,7 @@ impl SyncRepo {
                 .map(|name| format!("pack-{name}."))
                 .ok_or_else(|| SyncError::Local("打包后拿不到包名".into()))?
         };
-        if !fs::read_dir(&pack_dir)?
-            .flatten()
-            .any(|entry| entry.file_name().to_string_lossy().starts_with(&new_pack))
-        {
+        if !fs::read_dir(&pack_dir)?.flatten().any(|entry| entry.file_name().to_string_lossy().starts_with(&new_pack)) {
             return Err(SyncError::Local("打包没有写出文件".into()));
         }
 
@@ -772,17 +687,13 @@ impl SyncRepo {
     }
 
     fn origin(&self) -> SyncResult<git2::Remote<'_>> {
-        self.repo
-            .find_remote(REMOTE)
-            .map_err(|_| SyncError::Local("还没有设置云端仓库".into()))
+        self.repo.find_remote(REMOTE).map_err(|_| SyncError::Local("还没有设置云端仓库".into()))
     }
 
     fn head_commit(&self) -> SyncResult<Option<Commit<'_>>> {
         match self.repo.head() {
             Ok(head) => Ok(Some(head.peel_to_commit()?)),
-            Err(error) if matches!(error.code(), ErrorCode::UnbornBranch | ErrorCode::NotFound) => {
-                Ok(None)
-            }
+            Err(error) if matches!(error.code(), ErrorCode::UnbornBranch | ErrorCode::NotFound) => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
@@ -805,22 +716,14 @@ impl SyncRepo {
     }
 
     fn changed_paths(&self, old: Option<&Tree>, new: &Tree) -> SyncResult<Vec<String>> {
-        Ok(self
-            .changes(old, new)?
-            .into_iter()
-            .map(|change| change.rel)
-            .collect())
+        Ok(self.changes(old, new)?.into_iter().map(|change| change.rel).collect())
     }
 }
 
 /// stage_bulk 一个线程的活：自己开一个 Repository，挂一个空的内存索引，对象写进内存，
 /// 算完落成一个包。返回的索引项是 libgit2 自己算的（对象 id、按 .gitattributes 转过的内容、
 /// stat），主线程原样放进真正的索引
-fn pack_files(
-    root: &Path,
-    pack_dir: &Path,
-    files: &[(PathBuf, u64)],
-) -> SyncResult<Vec<IndexEntry>> {
+fn pack_files(root: &Path, pack_dir: &Path, files: &[(PathBuf, u64)]) -> SyncResult<Vec<IndexEntry>> {
     let repo = Repository::open(root)?;
     let odb = repo.odb()?;
     let _mempack = odb.add_new_mempack_backend(1000)?;
@@ -867,22 +770,11 @@ pub fn describe(changes: &[Change]) -> String {
 
 /// 一处冲突怎么收场（技术方案 §5.9.5 的表）：有本机的版本就留本机的，对方的版本交回去另存；
 /// 本机删了、对方改了，留对方改过的
-fn resolve(
-    repo: &Repository,
-    index: &mut Index,
-    conflict: IndexConflict,
-    out: &mut Vec<Conflict>,
-) -> SyncResult<()> {
-    let Some(any) = conflict
-        .our
-        .as_ref()
-        .or(conflict.their.as_ref())
-        .or(conflict.ancestor.as_ref())
-    else {
+fn resolve(repo: &Repository, index: &mut Index, conflict: IndexConflict, out: &mut Vec<Conflict>) -> SyncResult<()> {
+    let Some(any) = conflict.our.as_ref().or(conflict.their.as_ref()).or(conflict.ancestor.as_ref()) else {
         return Ok(());
     };
-    let rel = String::from_utf8(any.path.clone())
-        .map_err(|_| SyncError::Local("路径不是 UTF-8".into()))?;
+    let rel = String::from_utf8(any.path.clone()).map_err(|_| SyncError::Local("路径不是 UTF-8".into()))?;
     index.conflict_remove(Path::new(&rel))?;
     match (conflict.our, conflict.their) {
         (Some(mut ours), theirs) => {
@@ -890,10 +782,7 @@ fn resolve(
             index.add(&ours)?;
             // 子模块之类不是文件的，读不出内容，就不另存了
             if let Some(blob) = theirs.and_then(|entry| repo.find_blob(entry.id).ok()) {
-                out.push(Conflict {
-                    rel,
-                    theirs: blob.content().to_vec(),
-                });
+                out.push(Conflict { rel, theirs: blob.content().to_vec() });
             }
         }
         (None, Some(mut theirs)) => {
@@ -914,9 +803,7 @@ fn callbacks<'a>(net: &'a Net, asked: &'a Cell<u32>) -> RemoteCallbacks<'a> {
     callbacks.credentials(move |_url, _username, _allowed| {
         asked.set(asked.get() + 1);
         match &net.credentials {
-            Some((username, token)) if asked.get() == 1 => {
-                Cred::userpass_plaintext(username, token)
-            }
+            Some((username, token)) if asked.get() == 1 => Cred::userpass_plaintext(username, token),
             _ => Err(git2::Error::from_str(NEED_LOGIN)),
         }
     });
@@ -986,21 +873,14 @@ fn cut_block(text: &str, begin: &str, end: &str) -> Option<(String, usize)> {
 
 /// 磁盘上这条路径真正的大小写写法；文件已经不在了返回 None。
 /// 每个目录只读一次（`listings` 缓存）
-fn actual_case(
-    root: &Path,
-    rel: &str,
-    listings: &mut HashMap<PathBuf, Vec<String>>,
-) -> Option<String> {
+fn actual_case(root: &Path, rel: &str, listings: &mut HashMap<PathBuf, Vec<String>>) -> Option<String> {
     let mut dir = root.to_path_buf();
     let mut parts = Vec::new();
     for part in rel.split('/') {
         let names = listings.entry(dir.clone()).or_insert_with(|| {
             fs::read_dir(&dir)
                 .map(|entries| {
-                    entries
-                        .flatten()
-                        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                        .collect()
+                    entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect()
                 })
                 .unwrap_or_default()
         });
@@ -1008,10 +888,7 @@ fn actual_case(
             part.to_string()
         } else {
             let lower = part.to_lowercase();
-            names
-                .iter()
-                .find(|name| name.to_lowercase() == lower)?
-                .clone()
+            names.iter().find(|name| name.to_lowercase() == lower)?.clone()
         };
         dir.push(&name);
         parts.push(name);

@@ -55,12 +55,7 @@ pub fn versions(root: &Path, rel: &str, id: Option<&str>, limit: usize) -> SyncR
     walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
     walk.push(head.id())?;
 
-    let mut finder = Finder {
-        repo: &repo,
-        id,
-        paths: vec![rel.to_string()],
-        ids: HashMap::new(),
-    };
+    let mut finder = Finder { repo: &repo, id, paths: vec![rel.to_string()], ids: HashMap::new() };
     let mut history = History::default();
     for oid in walk.take(MAX_COMMITS) {
         let commit = repo.find_commit(oid?)?;
@@ -144,18 +139,14 @@ impl Finder<'_> {
         if self.id.is_none() {
             return Ok(None);
         }
-        let diff = self
-            .repo
-            .diff_tree_to_tree(Some(before), Some(after), None)?;
+        let diff = self.repo.diff_tree_to_tree(Some(before), Some(after), None)?;
         let removed: Vec<(Oid, String)> = diff
             .deltas()
             .filter(|delta| delta.status() == Delta::Deleted)
             .filter_map(|delta| {
                 let file = delta.old_file();
                 let path = file.path()?.to_str()?.to_string();
-                path.to_lowercase()
-                    .ends_with(".md")
-                    .then_some((file.id(), path))
+                path.to_lowercase().ends_with(".md").then_some((file.id(), path))
             })
             .collect();
         for (blob, path) in removed {
@@ -203,11 +194,7 @@ mod tests {
             let root = dir.path().join("仓库");
             fs::create_dir_all(&root).unwrap();
             let repo = SyncRepo::init(&root).unwrap();
-            Repo {
-                _dir: dir,
-                root,
-                repo,
-            }
+            Repo { _dir: dir, root, repo }
         }
 
         fn write(&self, rel: &str, text: &str) {
@@ -223,10 +210,7 @@ mod tests {
         }
 
         fn commit(&self, device: &str) {
-            let author = Author {
-                name: device,
-                email: "test@localhost",
-            };
+            let author = Author { name: device, email: "test@localhost" };
             self.repo.commit_all(&author, LIMIT, describe).unwrap();
         }
 
@@ -303,10 +287,7 @@ mod tests {
         let history = versions(&r.root, "日记/2026/2026-10-07.md", None, 3).unwrap();
         assert_eq!(history.versions.len(), 3);
         assert!(history.more);
-        assert!(versions(&r.root, "日记/2026/2026-10-08.md", None, 3)
-            .unwrap()
-            .versions
-            .is_empty());
+        assert!(versions(&r.root, "日记/2026/2026-10-08.md", None, 3).unwrap().versions.is_empty());
     }
 
     #[test]
@@ -318,10 +299,7 @@ mod tests {
         git2::Repository::init_opts(&url, &options).unwrap();
         let url = url.to_string_lossy().replace('\\', "/");
         let net = crate::sync::repo::Net::default();
-        let author = |name| Author {
-            name,
-            email: "test@localhost",
-        };
+        let author = |name| Author { name, email: "test@localhost" };
 
         let a = Repo::new();
         a.repo.set_remote_url(&url).unwrap();

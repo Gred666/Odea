@@ -236,11 +236,7 @@ pub enum FrameError {
     Decode(String),
 }
 
-pub async fn write_frame<W: AsyncWrite + Unpin>(
-    writer: &mut W,
-    kind: u8,
-    payload: &[u8],
-) -> Result<(), FrameError> {
+pub async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, kind: u8, payload: &[u8]) -> Result<(), FrameError> {
     let length = payload.len() + 1;
     if length > MAX_ATTACH_FRAME {
         return Err(FrameError::TooLarge(length));
@@ -254,9 +250,7 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(
 }
 
 /// 读一帧。流在两帧之间正常结束了是 None
-pub async fn read_frame<R: AsyncRead + Unpin>(
-    reader: &mut R,
-) -> Result<Option<(u8, Vec<u8>)>, FrameError> {
+pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Option<(u8, Vec<u8>)>, FrameError> {
     read_frame_up_to(reader, MAX_FRAME).await
 }
 
@@ -292,10 +286,7 @@ pub async fn read_frame_head<R: AsyncRead + Unpin>(
     Ok(Some((kind, length - 1)))
 }
 
-pub async fn read_frame_body<R: AsyncRead + Unpin>(
-    reader: &mut R,
-    length: usize,
-) -> Result<Vec<u8>, FrameError> {
+pub async fn read_frame_body<R: AsyncRead + Unpin>(reader: &mut R, length: usize) -> Result<Vec<u8>, FrameError> {
     let mut payload = vec![0; length];
     reader.read_exact(&mut payload).await?;
     Ok(payload)
@@ -319,9 +310,7 @@ async fn read_varint<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Option<u64>
         let byte = match reader.read_u8().await {
             Ok(byte) => byte,
             // 第一个字节就读不到：流正常结束
-            Err(error) if index == 0 && error.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Ok(None)
-            }
+            Err(error) if index == 0 && error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
             Err(error) => return Err(error.into()),
         };
         value |= u64::from(byte & 0x7f) << (7 * index);

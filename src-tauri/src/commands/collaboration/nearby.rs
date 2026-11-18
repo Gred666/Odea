@@ -5,7 +5,11 @@ use super::*;
 /// 开始看同一个网络里谁在分享（加入对话框开着时）。列表从 CollabEvent 的 nearby 里出来
 #[tauri::command]
 #[specta::specta]
-pub async fn collab_nearby_start<R: Runtime>(app: AppHandle<R>, caller: Caller, state: State<'_, AppState>) -> Result<()> {
+pub async fn collab_nearby_start<R: Runtime>(
+    app: AppHandle<R>,
+    caller: Caller,
+    state: State<'_, AppState>,
+) -> Result<()> {
     *state.collab.nearby_owner.lock().unwrap() = Some(caller.label.clone());
     if state.collab.nearby.lock().unwrap().is_some() {
         return Ok(());

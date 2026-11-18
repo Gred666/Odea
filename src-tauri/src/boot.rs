@@ -128,10 +128,7 @@ pub fn same_vault(a: &Path, b: &Path) -> bool {
 
 /// 仓库窗口的标签：迁过来的那个是 `main`，别的是 `vault-<路径指纹>`
 pub fn window_label(saved: &SavedVault) -> String {
-    saved
-        .window
-        .clone()
-        .unwrap_or_else(|| format!("vault-{}", fsio::fingerprint(&path_key(&saved.path))))
+    saved.window.clone().unwrap_or_else(|| format!("vault-{}", fsio::fingerprint(&path_key(&saved.path))))
 }
 
 /// 这个窗口标签是不是仓库窗口（`main`、`vault-…`，被占了加序号的也算，见 workspace::free_label）
@@ -217,7 +214,8 @@ impl Config {
     /// 启动时要打开的：上次开着、文件夹还在的。先开的在前（最近的最后开，落在最上面）。
     /// 找不到的不打开（不在原处新建空仓库），启动器里标「找不到」
     pub fn vaults_to_restore(&self) -> Vec<SavedVault> {
-        let mut vaults: Vec<_> = self.vaults.iter().filter(|saved| saved.open && saved.path.is_dir()).cloned().collect();
+        let mut vaults: Vec<_> =
+            self.vaults.iter().filter(|saved| saved.open && saved.path.is_dir()).cloned().collect();
         vaults.sort_by_key(|saved| saved.last_opened);
         vaults
     }
@@ -267,10 +265,7 @@ impl Config {
     /// 不公开：读 - 改 - 写都得走 edit_config 拿着锁。命令层自己 load、改、save 的话，两个窗口同时改
     /// 会盖掉对方（2026-11-14 的审查：8 处这样写的，并发 150 + 150 次丢了 108 次）
     fn save(&self, data_dir: &Path) -> Result<()> {
-        fsio::write_atomic(
-            &data_dir.join("config.json"),
-            &serde_json::to_string_pretty(self)?,
-        )
+        fsio::write_atomic(&data_dir.join("config.json"), &serde_json::to_string_pretty(self)?)
     }
 }
 
@@ -336,7 +331,11 @@ pub fn startup(config: &Config, env: Option<PathBuf>, default: PathBuf, legacy: 
     }
     let restore = config.vaults_to_restore();
     if !restore.is_empty() {
-        return Startup::Open { roots: restore.into_iter().map(|saved| saved.path).collect(), seed: false, remember: true };
+        return Startup::Open {
+            roots: restore.into_iter().map(|saved| saved.path).collect(),
+            seed: false,
+            remember: true,
+        };
     }
     if config.vaults.is_empty() && legacy {
         return Startup::Open { roots: vec![default], seed: true, remember: true };
@@ -347,9 +346,7 @@ pub fn startup(config: &Config, env: Option<PathBuf>, default: PathBuf, legacy: 
 /// 每个仓库一份索引，按仓库路径分开：换来换去的时候各自的缓存都还在
 pub fn index_path(data_dir: &Path, root: &Path) -> PathBuf {
     let key = root.to_string_lossy().to_lowercase();
-    data_dir
-        .join("index")
-        .join(format!("{}.db", fsio::fingerprint(&key)))
+    data_dir.join("index").join(format!("{}.db", fsio::fingerprint(&key)))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -515,9 +512,7 @@ pub fn move_vault(
     }
     copy_vault(from, to)?;
     if let Some(difference) = first_difference(from, to) {
-        return Err(AppError::Invalid(format!(
-            "复制过去以后核对不上（{difference}），原来的笔记文件夹没动，照旧用它"
-        )));
+        return Err(AppError::Invalid(format!("复制过去以后核对不上（{difference}），原来的笔记文件夹没动，照旧用它")));
     }
     Ok(match discard(from) {
         Ok(()) => Moved::Copied,
@@ -581,10 +576,7 @@ mod tests {
         let root = dir.path().join("obsidian");
         fsio::write_atomic(&fsio::abs(&root, "随手记.md"), "别人的笔记").unwrap();
         let mut config = Config::default();
-        assert_eq!(
-            prepare(&root, &dir.path().join("data"), &mut config, true, false).unwrap(),
-            Prepared::Empty
-        );
+        assert_eq!(prepare(&root, &dir.path().join("data"), &mut config, true, false).unwrap(), Prepared::Empty);
         assert_eq!(fsio::walk_markdown(&root).len(), 1, "不往别人的文件夹里塞示例");
     }
 
@@ -596,10 +588,7 @@ mod tests {
         fsio::write_atomic(&fsio::abs(&root, ".ontheway/vault.json"), "{\"app\":\"OnTheWay\"}").unwrap();
         fsio::write_atomic(&fsio::abs(&root, ".ontheway/trash/a.md"), "回收站").unwrap();
         let mut config = Config::default();
-        assert_eq!(
-            prepare(&root, &dir.path().join("data"), &mut config, true, false).unwrap(),
-            Prepared::Existing
-        );
+        assert_eq!(prepare(&root, &dir.path().join("data"), &mut config, true, false).unwrap(), Prepared::Existing);
         assert!(root.join(layout::TRASH_DIR).join("a.md").exists());
         assert!(!root.join(".ontheway").exists());
     }
@@ -617,11 +606,8 @@ mod tests {
     #[test]
     fn config_round_trips_and_tolerates_garbage() {
         let dir = tempfile::tempdir().unwrap();
-        let config = Config {
-            vault_root: Some(PathBuf::from("D:/笔记")),
-            legacy_imported: true,
-            ..Config::default()
-        };
+        let config =
+            Config { vault_root: Some(PathBuf::from("D:/笔记")), legacy_imported: true, ..Config::default() };
         config.save(dir.path()).unwrap();
         let back = Config::load(dir.path());
         assert_eq!(back.vault_root, config.vault_root);
@@ -659,10 +645,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.json"), r#"{"legacyImported":true}"#).unwrap();
         let mut config = Config::load(dir.path());
-        assert_eq!(
-            note_version(&mut config, false, "0.2.0"),
-            Some(AppUpgrade { from: None, to: "0.2.0".into() })
-        );
+        assert_eq!(note_version(&mut config, false, "0.2.0"), Some(AppUpgrade { from: None, to: "0.2.0".into() }));
         config.save(dir.path()).unwrap();
         assert_eq!(Config::load(dir.path()).last_version.as_deref(), Some("0.2.0"));
     }
@@ -847,7 +830,10 @@ mod tests {
         config.forget_vault(&b);
         assert_eq!(config.vaults.len(), 1);
         assert_eq!(config.vault_root.as_deref(), Some(c.as_path()));
-        assert_ne!(window_label(&SavedVault { path: a.clone(), ..SavedVault::default() }), window_label(&SavedVault { path: b, ..SavedVault::default() }));
+        assert_ne!(
+            window_label(&SavedVault { path: a.clone(), ..SavedVault::default() }),
+            window_label(&SavedVault { path: b, ..SavedVault::default() })
+        );
     }
 
     #[test]
@@ -884,13 +870,7 @@ mod tests {
     #[test]
     fn index_files_are_per_vault() {
         let data = Path::new("/data");
-        assert_ne!(
-            index_path(data, Path::new("C:/a")),
-            index_path(data, Path::new("C:/b"))
-        );
-        assert_eq!(
-            index_path(data, Path::new("C:/A")),
-            index_path(data, Path::new("c:/a"))
-        );
+        assert_ne!(index_path(data, Path::new("C:/a")), index_path(data, Path::new("C:/b")));
+        assert_eq!(index_path(data, Path::new("C:/A")), index_path(data, Path::new("c:/a")));
     }
 }

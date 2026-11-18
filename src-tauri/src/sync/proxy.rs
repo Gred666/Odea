@@ -15,10 +15,7 @@ HTTP 客户端：
 
 /// 按顺序找一个代理，形如 `http://127.0.0.1:7897`；都没有就直连
 pub fn resolve(configured: Option<&str>) -> Option<String> {
-    configured
-        .and_then(normalize)
-        .or_else(from_env)
-        .or_else(system)
+    configured.and_then(normalize).or_else(from_env).or_else(system)
 }
 
 fn from_env() -> Option<String> {

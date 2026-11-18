@@ -18,14 +18,9 @@ struct Node {
 
 async fn device() -> (TeamNet, SecretKey) {
     let key = SecretKey::generate();
-    let net = TeamNet::start(TeamOptions {
-        key: key.clone(),
-        relays: Vec::new(),
-        mdns: false,
-        places_file: None,
-    })
-    .await
-    .unwrap();
+    let net = TeamNet::start(TeamOptions { key: key.clone(), relays: Vec::new(), mdns: false, places_file: None })
+        .await
+        .unwrap();
     (net, key)
 }
 
@@ -43,13 +38,7 @@ fn listed(nets: &[&TeamNet]) -> Vec<Device> {
 fn join(net: TeamNet, name: &str, devices: Vec<Device>) -> Node {
     let (tx, events) = unbounded_channel();
     net.join(
-        TeamSpec {
-            id: TEAM.into(),
-            name: name.into(),
-            account: format!("github:{name}"),
-            devices,
-            root: None,
-        },
+        TeamSpec { id: TEAM.into(), name: name.into(), account: format!("github:{name}"), devices, root: None },
         tx,
     );
     Node { net, events }
@@ -63,11 +52,7 @@ async fn team(names: &[&str]) -> Vec<Node> {
     }
     let devices = listed(&nets.iter().collect::<Vec<_>>());
     let addrs: Vec<_> = nets.iter().map(TeamNet::addr).collect();
-    let mut out: Vec<Node> = nets
-        .into_iter()
-        .zip(names)
-        .map(|(net, name)| join(net, name, devices.clone()))
-        .collect();
+    let mut out: Vec<Node> = nets.into_iter().zip(names).map(|(net, name)| join(net, name, devices.clone())).collect();
     for device in &mut out {
         for addr in &addrs {
             if *addr.id.as_bytes() != device.net.key() {
@@ -120,21 +105,13 @@ async fn members_connect_and_see_each_others_presence() {
     until("三台都连上", || devices.iter().all(|device| device.net.online(TEAM) == 2)).await;
     devices[0].net.set_presence(
         TEAM,
-        vec![PresenceDoc {
-            doc: DOC.into(),
-            hosting: false,
-            session: None,
-            upstream: None,
-            root: None,
-        }],
+        vec![PresenceDoc { doc: DOC.into(), hosting: false, session: None, upstream: None, root: None }],
     );
     let zhang = data_encoding::HEXLOWER.encode(&devices[0].net.key());
     until("李四看到张三开着周会", || {
-        devices[1]
-            .net
-            .peers(TEAM)
-            .iter()
-            .any(|peer| peer.id == zhang && peer.online && peer.name == "张三" && peer.docs.iter().any(|doc| doc.doc == DOC))
+        devices[1].net.peers(TEAM).iter().any(|peer| {
+            peer.id == zhang && peer.online && peer.name == "张三" && peer.docs.iter().any(|doc| doc.doc == DOC)
+        })
     })
     .await;
     // 名单里的名字只是没连上时的；连上了用对方报的
@@ -162,11 +139,7 @@ async fn a_device_not_in_the_list_is_refused() {
     assert_eq!(stranger.net.online(TEAM), 0);
     // a 同步到了名单（外人那一行进来了）：下一轮就连上
     let mut both = a_devices;
-    both.push(Device {
-        key: stranger.net.key(),
-        account: "github:stranger".into(),
-        name: "外人".into(),
-    });
+    both.push(Device { key: stranger.net.key(), account: "github:stranger".into(), name: "外人".into() });
     a.net.set_devices(TEAM, both);
     until("名单对上以后连上", || a.net.online(TEAM) == 1 && stranger.net.online(TEAM) == 1).await;
     a.net.stop().await;
@@ -255,24 +228,10 @@ async fn a_doc_session_runs_through_the_host() {
     // 同步消息点对点
     b.net.send_sync(TEAM, host_for_b, DOC, SyncKind::Vector, b"sv-b".to_vec());
     let request = next(a, "李四的状态向量", |event| matches!(event, TeamEvent::SyncRequest { .. })).await;
-    assert_eq!(
-        request,
-        TeamEvent::SyncRequest {
-            from: b_on_a,
-            doc: DOC.into(),
-            vector: b"sv-b".to_vec(),
-        }
-    );
+    assert_eq!(request, TeamEvent::SyncRequest { from: b_on_a, doc: DOC.into(), vector: b"sv-b".to_vec() });
     a.net.send_sync(TEAM, b_on_a, DOC, SyncKind::Reply, b"missing".to_vec());
     let reply = next(b, "张三回的", |event| matches!(event, TeamEvent::Update { .. })).await;
-    assert_eq!(
-        reply,
-        TeamEvent::Update {
-            from: host_for_b,
-            doc: DOC.into(),
-            bytes: b"missing".to_vec(),
-        }
-    );
+    assert_eq!(reply, TeamEvent::Update { from: host_for_b, doc: DOC.into(), bytes: b"missing".to_vec() });
 
     // 李四的更新：张三收到，也转给王五
     b.net.send_update(TEAM, DOC, b"from-b".to_vec());
@@ -292,13 +251,7 @@ async fn a_doc_session_runs_through_the_host() {
         b.net.send_cursor(TEAM, DOC, b"caret");
         tokio::time::sleep(Duration::from_millis(50)).await;
         while let Ok(event) = c.events.try_recv() {
-            if event
-                == (TeamEvent::Cursor {
-                    from: b_on_c,
-                    doc: DOC.into(),
-                    bytes: b"caret".to_vec(),
-                })
-            {
+            if event == (TeamEvent::Cursor { from: b_on_c, doc: DOC.into(), bytes: b"caret".to_vec() }) {
                 seen_at_c = true;
             }
         }
@@ -386,19 +339,34 @@ async fn a_member_who_cannot_reach_the_host_goes_through_another_member() {
     c.net.open(TEAM, DOC, b_for_c).unwrap();
     next(&mut c, "王五接上李四", |event| matches!(event, TeamEvent::SyncStart { .. })).await;
     let c_on_b = member_of(&b.net, &c.net);
-    next(&mut b, "李四这边王五进来", |event| matches!(event, TeamEvent::SyncStart { with, .. } if *with == c_on_b)).await;
+    next(&mut b, "李四这边王五进来", |event| matches!(event, TeamEvent::SyncStart { with, .. } if *with == c_on_b))
+        .await;
 
     // 张三的到王五，王五的到张三，都经李四
     a.net.send_update(TEAM, DOC, b"from-a".to_vec());
-    next(&mut b, "李四收到张三的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-a")).await;
-    next(&mut c, "王五收到张三的（经李四）", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-a")).await;
+    next(&mut b, "李四收到张三的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-a"))
+        .await;
+    next(
+        &mut c,
+        "王五收到张三的（经李四）",
+        |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-a"),
+    )
+    .await;
     c.net.send_update(TEAM, DOC, b"from-c".to_vec());
-    next(&mut b, "李四收到王五的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-c")).await;
-    next(&mut a, "张三收到王五的（经李四）", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-c")).await;
+    next(&mut b, "李四收到王五的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-c"))
+        .await;
+    next(
+        &mut a,
+        "张三收到王五的（经李四）",
+        |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-c"),
+    )
+    .await;
     // 李四自己打的两头都到
     b.net.send_update(TEAM, DOC, b"from-b".to_vec());
-    next(&mut a, "张三收到李四的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-b")).await;
-    next(&mut c, "王五收到李四的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-b")).await;
+    next(&mut a, "张三收到李四的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-b"))
+        .await;
+    next(&mut c, "王五收到李四的", |event| matches!(event, TeamEvent::Update { bytes, .. } if bytes == b"from-b"))
+        .await;
 
     // 不转成环：李四不往自己的下游开流；王五接下游以后，李四开过去也不接
     let c_for_b = member_of(&b.net, &c.net);

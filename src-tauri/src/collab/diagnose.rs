@@ -95,17 +95,10 @@ pub fn conclude(invite: &Invite, facts: &Facts, use_relay: bool) -> Diagnosis {
         lan: Vec::new(),
         ipv6: Vec::new(),
         ipv4: Vec::new(),
-        relay: invite
-            .relay
-            .as_ref()
-            .filter(|_| use_relay)
-            .map(|relay| relay.label()),
+        relay: invite.relay.as_ref().filter(|_| use_relay).map(|relay| relay.label()),
         same_network: false,
         seen_nearby: facts.seen_nearby,
-        has_ipv6: facts
-            .networks
-            .iter()
-            .any(|(ip, _)| classify(*ip) == AddrKind::PublicV6),
+        has_ipv6: facts.networks.iter().any(|(ip, _)| classify(*ip) == AddrKind::PublicV6),
         cause: Cause::DifferentNetwork,
     };
     let mut loopback = false;
@@ -120,23 +113,15 @@ pub fn conclude(invite: &Invite, facts: &Facts, use_relay: bool) -> Diagnosis {
         }
     }
     // 同一台电脑上试（链接里有本机回环）也算同一个网络
-    diagnosis.same_network = loopback
-        || invite
-            .addrs
-            .iter()
-            .any(|addr| in_my_networks(addr, &facts.networks));
+    diagnosis.same_network = loopback || invite.addrs.iter().any(|addr| in_my_networks(addr, &facts.networks));
 
     let online = !facts.networks.is_empty();
     diagnosis.cause = if !online {
         Cause::Offline
     } else if let Some(cause) = match facts.relay.as_ref().filter(|_| diagnosis.relay.is_some()) {
-        Some(RelayFact::Denied(reason)) => Some(Cause::RelayDenied {
-            reason: reason.clone(),
-        }),
+        Some(RelayFact::Denied(reason)) => Some(Cause::RelayDenied { reason: reason.clone() }),
         Some(RelayFact::Outdated) => Some(Cause::RelayOutdated),
-        Some(RelayFact::Failed(error)) => Some(Cause::RelayDown {
-            error: error.clone(),
-        }),
+        Some(RelayFact::Failed(error)) => Some(Cause::RelayDown { error: error.clone() }),
         Some(RelayFact::Connected) => Some(Cause::HostAway),
         // 还在连中继：先按直连的情况说
         Some(RelayFact::Connecting) | None => None,
@@ -160,29 +145,19 @@ fn in_my_networks(addr: &SocketAddr, networks: &[(IpAddr, u8)]) -> bool {
     if !matches!(classify(ip), AddrKind::Lan | AddrKind::Shared) {
         return false;
     }
-    networks
-        .iter()
-        .any(|(mine, prefix)| same_prefix(ip, *mine, *prefix))
+    networks.iter().any(|(mine, prefix)| same_prefix(ip, *mine, *prefix))
 }
 
 fn same_prefix(a: IpAddr, b: IpAddr, prefix: u8) -> bool {
     match (a, b) {
         (IpAddr::V4(a), IpAddr::V4(b)) => {
             let prefix = u32::from(prefix.min(32));
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u32::MAX << (32 - prefix)
-            };
+            let mask = if prefix == 0 { 0 } else { u32::MAX << (32 - prefix) };
             u32::from(a) & mask == u32::from(b) & mask
         }
         (IpAddr::V6(a), IpAddr::V6(b)) => {
             let prefix = u32::from(prefix.min(128));
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u128::MAX << (128 - prefix)
-            };
+            let mask = if prefix == 0 { 0 } else { u128::MAX << (128 - prefix) };
             u128::from(a) & mask == u128::from(b) & mask
         }
         _ => false,
@@ -191,11 +166,7 @@ fn same_prefix(a: IpAddr, b: IpAddr, prefix: u8) -> bool {
 
 /// 我的网段。读不到网卡（极少见）时退回到端点知道的地址，按常见的前缀猜
 pub async fn my_networks(fallback: &[SocketAddr]) -> Vec<(IpAddr, u8)> {
-    let state = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        netwatch::interfaces::State::new(),
-    )
-    .await;
+    let state = tokio::time::timeout(std::time::Duration::from_secs(5), netwatch::interfaces::State::new()).await;
     let mut networks: Vec<(IpAddr, u8)> = match state {
         Ok(state) => state
             .interfaces
@@ -203,12 +174,8 @@ pub async fn my_networks(fallback: &[SocketAddr]) -> Vec<(IpAddr, u8)> {
             .filter(|interface| interface.is_up())
             .flat_map(|interface| {
                 interface.addrs().map(|net| match net {
-                    netwatch::interfaces::IpNet::V4(net) => {
-                        (IpAddr::V4(net.addr()), net.prefix_len())
-                    }
-                    netwatch::interfaces::IpNet::V6 { net, .. } => {
-                        (IpAddr::V6(net.addr()), net.prefix_len())
-                    }
+                    netwatch::interfaces::IpNet::V4(net) => (IpAddr::V4(net.addr()), net.prefix_len()),
+                    netwatch::interfaces::IpNet::V6 { net, .. } => (IpAddr::V6(net.addr()), net.prefix_len()),
                 })
             })
             .collect(),
@@ -220,16 +187,9 @@ pub async fn my_networks(fallback: &[SocketAddr]) -> Vec<(IpAddr, u8)> {
 
 /// 只有地址、没有前缀时按常见的猜：IPv4 /24、IPv6 /64
 pub fn guess_networks(addrs: &[SocketAddr]) -> Vec<(IpAddr, u8)> {
-    addrs
-        .iter()
-        .map(|addr| (addr.ip(), if addr.is_ipv4() { 24 } else { 64 }))
-        .filter(|(ip, _)| usable(*ip))
-        .collect()
+    addrs.iter().map(|addr| (addr.ip(), if addr.is_ipv4() { 24 } else { 64 })).filter(|(ip, _)| usable(*ip)).collect()
 }
 
 fn usable(ip: IpAddr) -> bool {
-    !matches!(
-        classify(ip),
-        AddrKind::Loopback | AddrKind::LinkLocal | AddrKind::Other
-    )
+    !matches!(classify(ip), AddrKind::Loopback | AddrKind::LinkLocal | AddrKind::Other)
 }

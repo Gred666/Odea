@@ -100,11 +100,7 @@ mod runtime {
             recent(a).cmp(&recent(b)).then_with(|| a.label.cmp(&b.label))
         });
         let journal = |workspace: &Workspace| {
-            workspace
-                .vault
-                .lock()
-                .map(|vault| vault.layout().has_plugin(crate::plugins::journal::ID))
-                .unwrap_or(false)
+            workspace.vault.lock().map(|vault| vault.layout().has_plugin(crate::plugins::journal::ID)).unwrap_or(false)
         };
         let with_journal = all.iter().find(|workspace| journal(workspace)).cloned();
         match with_journal {
@@ -130,7 +126,11 @@ mod runtime {
     /// 小窗：记下这一行。交给记到的那个仓库窗口去写，等它回话；返回仓库的名字
     #[tauri::command]
     #[specta::specta]
-    pub async fn capture_submit<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>, text: String) -> Result<String> {
+    pub async fn capture_submit<R: Runtime>(
+        app: AppHandle<R>,
+        state: State<'_, AppState>,
+        text: String,
+    ) -> Result<String> {
         use tauri_specta::Event;
         let text = text.trim().to_string();
         if text.is_empty() {

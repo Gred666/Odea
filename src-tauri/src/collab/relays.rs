@@ -63,10 +63,7 @@ impl Relay {
             Some(text) => Some(parse_fingerprint(text).ok_or(RelayError::BadFingerprint)?),
             None => None,
         };
-        let clean = |text: Option<String>| {
-            text.map(|text| text.trim().to_string())
-                .filter(|text| !text.is_empty())
-        };
+        let clean = |text: Option<String>| text.map(|text| text.trim().to_string()).filter(|text| !text.is_empty());
         Ok(Relay {
             url: normalize_url(url)?,
             token: clean(token),
@@ -76,9 +73,7 @@ impl Relay {
     }
 
     pub fn relay_url(&self) -> Result<RelayUrl, RelayError> {
-        self.url
-            .parse()
-            .map_err(|_| RelayError::BadUrl(self.url.clone()))
+        self.url.parse().map_err(|_| RelayError::BadUrl(self.url.clone()))
     }
 
     /// 给人看的：`relay.example.com`（不是默认端口的带上端口）
@@ -100,12 +95,9 @@ impl Relay {
         let bytes = ticket::decode_link(text, CODE_PREFIX, &["odea:relay/"])?;
         match bytes.split_first() {
             Some((&CODE_VERSION, rest)) => {
-                let relay: Relay =
-                    super::protocol::decode(rest).map_err(|_| LinkError::Malformed)?;
+                let relay: Relay = super::protocol::decode(rest).map_err(|_| LinkError::Malformed)?;
                 // 码是别人给的：照用户填的一样再规范化、校验一遍
-                let fingerprint = relay
-                    .fingerprint
-                    .map(|pin| data_encoding::HEXLOWER.encode(&pin));
+                let fingerprint = relay.fingerprint.map(|pin| data_encoding::HEXLOWER.encode(&pin));
                 Relay::new(&relay.url, relay.token, fingerprint.as_deref(), relay.name)
                     .map_err(|_| LinkError::Malformed)
             }
@@ -131,11 +123,7 @@ fn normalize_url(text: &str) -> Result<String, RelayError> {
     if text.is_empty() {
         return Err(RelayError::BadUrl("没填".into()));
     }
-    let with_scheme = if text.contains("://") {
-        text.to_string()
-    } else {
-        format!("https://{text}")
-    };
+    let with_scheme = if text.contains("://") { text.to_string() } else { format!("https://{text}") };
     let url = url_parse(&with_scheme).ok_or_else(|| RelayError::BadUrl(text.to_string()))?;
     if url.scheme() != "https" {
         return Err(RelayError::BadUrl("要 https:// 开头".into()));
@@ -172,11 +160,7 @@ pub fn display_host(url: &str) -> String {
 
 /// 十六进制的 SHA-256，冒号、空格、大小写都不管
 pub fn parse_fingerprint(text: &str) -> Option<[u8; 32]> {
-    let hex: String = text
-        .chars()
-        .filter(|c| !matches!(c, ':' | ' ' | '-'))
-        .collect::<String>()
-        .to_ascii_lowercase();
+    let hex: String = text.chars().filter(|c| !matches!(c, ':' | ' ' | '-')).collect::<String>().to_ascii_lowercase();
     let bytes = data_encoding::HEXLOWER.decode(hex.as_bytes()).ok()?;
     <[u8; 32]>::try_from(bytes.as_slice()).ok()
 }
@@ -221,20 +205,13 @@ pub fn add_pin(pins: &Pins, relay: &Relay) {
 pub fn tls_config(pins: Pins) -> CaTlsConfig {
     CaTlsConfig::custom_server_cert_verifier(Arc::new(move |provider: Arc<CryptoProvider>| {
         let fallback = CaTlsConfig::embedded().server_cert_verifier(provider.clone())?;
-        Ok(Arc::new(PinnedVerifier {
-            pins: pins.clone(),
-            fallback,
-            provider,
-        }) as Arc<dyn ServerCertVerifier>)
+        Ok(Arc::new(PinnedVerifier { pins: pins.clone(), fallback, provider }) as Arc<dyn ServerCertVerifier>)
     }))
 }
 
 /// 主机名比较前：小写、去掉末尾的点、IPv6 去掉方括号
 fn clean_host(host: &str) -> String {
-    host.trim_end_matches('.')
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_ascii_lowercase()
+    host.trim_end_matches('.').trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase()
 }
 
 #[derive(Debug)]
@@ -261,19 +238,9 @@ impl ServerCertVerifier for PinnedVerifier {
         let pin = self.pins.read().unwrap().get(&host).copied();
         match pin {
             // 只认这一张：自签名证书没有 CA，有效期、主机名也不再看（指纹就是全部的信任）
-            Some(pin) if fingerprint_of(end_entity.as_ref()) == pin => {
-                Ok(ServerCertVerified::assertion())
-            }
-            Some(_) => Err(rustls::Error::General(
-                "中继的证书和中继码里的指纹对不上".into(),
-            )),
-            None => self.fallback.verify_server_cert(
-                end_entity,
-                intermediates,
-                server_name,
-                ocsp_response,
-                now,
-            ),
+            Some(pin) if fingerprint_of(end_entity.as_ref()) == pin => Ok(ServerCertVerified::assertion()),
+            Some(_) => Err(rustls::Error::General("中继的证书和中继码里的指纹对不上".into())),
+            None => self.fallback.verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now),
         }
     }
 
@@ -283,12 +250,7 @@ impl ServerCertVerifier for PinnedVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
     }
 
     fn verify_tls13_signature(
@@ -297,18 +259,11 @@ impl ServerCertVerifier for PinnedVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.provider.signature_verification_algorithms,
-        )
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider
-            .signature_verification_algorithms
-            .supported_schemes()
+        self.provider.signature_verification_algorithms.supported_schemes()
     }
 }
 
@@ -373,12 +328,7 @@ pub fn probe_upgrade(relay: &Relay, offer: &str) -> Result<Option<String>, Strin
     if response.status() != 400 {
         return Ok(None);
     }
-    let body = response
-        .body_mut()
-        .with_config()
-        .limit(4096)
-        .read_to_string()
-        .map_err(|error| error.to_string())?;
+    let body = response.body_mut().with_config().limit(4096).read_to_string().map_err(|error| error.to_string())?;
     // iroh-relay 的原话：…unsupported relay version: we support iroh-relay-v3 but you only provide …
     Ok(body.find("unsupported relay version").map(|at| {
         let rest = &body[at..];
@@ -395,10 +345,7 @@ pub fn offered_versions() -> String {
 }
 
 /// 网络报告里这台中继的情况：延迟（取最快的一种探测）、UDP 通不通
-pub fn latency_of(
-    report: &iroh::unstable_net_report::NetReport,
-    url: &RelayUrl,
-) -> (Option<u32>, bool) {
+pub fn latency_of(report: &iroh::unstable_net_report::NetReport, url: &RelayUrl) -> (Option<u32>, bool) {
     let mut best: Option<Duration> = None;
     let mut udp = false;
     for (probe, relay, latency) in report.relay_latency.iter() {
@@ -410,22 +357,13 @@ pub fn latency_of(
         }
         best = Some(best.map_or(latency, |best| best.min(latency)));
     }
-    (
-        best.map(|latency| latency.as_millis().min(u32::MAX as u128) as u32),
-        udp,
-    )
+    (best.map(|latency| latency.as_millis().min(u32::MAX as u128) as u32), udp)
 }
 
 /// 连一下：最多等 `wait`。连上以后再等一会儿网络报告（延迟、UDP）
 pub async fn check(relay: &Relay, wait: Duration) -> RelayCheck {
-    let mut result = RelayCheck {
-        connected: false,
-        latency_ms: None,
-        denied: None,
-        error: None,
-        udp: None,
-        outdated: None,
-    };
+    let mut result =
+        RelayCheck { connected: false, latency_ms: None, denied: None, error: None, udp: None, outdated: None };
     let url = match relay.relay_url() {
         Ok(url) => url,
         Err(error) => {
@@ -498,8 +436,7 @@ pub async fn check(relay: &Relay, wait: Duration) -> RelayCheck {
     endpoint.close().await;
     if let Some(error) = result.error.clone().filter(|error| upgrade_refused(error)) {
         let probe = relay.clone();
-        let answer =
-            tokio::task::spawn_blocking(move || probe_upgrade(&probe, &offered_versions())).await;
+        let answer = tokio::task::spawn_blocking(move || probe_upgrade(&probe, &offered_versions())).await;
         match answer {
             Ok(Ok(Some(theirs))) => {
                 result.outdated = Some(theirs);

@@ -62,12 +62,7 @@ pub struct Doc<'a> {
 impl<'a> Doc<'a> {
     pub fn new(row: &'a DocRow) -> Self {
         let body = row.content_md.to_lowercase();
-        Self {
-            row,
-            title: row.title.to_lowercase(),
-            prose: without_code(&body),
-            body,
-        }
+        Self { row, title: row.title.to_lowercase(), prose: without_code(&body), body }
     }
 }
 
@@ -183,9 +178,7 @@ fn has_tag(body: &str, tag: &str) -> bool {
 
 /// 属性块里写的标签里有没有它：一样的，或者是它底下的一层（`复盘/周` 算 `复盘`）。都已经转小写
 fn in_tags(tags: &[String], tag: &str) -> bool {
-    tags.iter().any(|written| {
-        written.strip_prefix(tag).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-    })
+    tags.iter().any(|written| written.strip_prefix(tag).is_some_and(|rest| rest.is_empty() || rest.starts_with('/')))
 }
 
 /// 有没勾的待办：`- [ ]`、`* [ ]`、`+ [ ]`、`1. [ ]`

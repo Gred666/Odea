@@ -101,17 +101,9 @@ impl Vault {
             let kind: String = row.get("kind")?;
             let id: String = row.get("id")?;
             let key: Option<String> = row.get("key")?;
-            let target = if kind == NOTE {
-                DocRef::note(id)
-            } else {
-                DocRef::new(kind, key.unwrap_or(id))
-            };
-            let mut tags: Vec<String> = row
-                .get::<_, String>("tags")?
-                .split('\n')
-                .filter(|tag| !tag.is_empty())
-                .map(str::to_string)
-                .collect();
+            let target = if kind == NOTE { DocRef::note(id) } else { DocRef::new(kind, key.unwrap_or(id)) };
+            let mut tags: Vec<String> =
+                row.get::<_, String>("tags")?.split('\n').filter(|tag| !tag.is_empty()).map(str::to_string).collect();
             let links = if with_body {
                 let text = row.get_ref("body")?.as_str().unwrap_or("");
                 let prose = links::without_code(text);
@@ -150,9 +142,7 @@ impl Vault {
     /// 读一个视图文件
     pub fn base_read(&self, rel: &str) -> Result<BaseText> {
         check_rel(rel)?;
-        let text = self
-            .read(rel)?
-            .ok_or_else(|| AppError::NotFound(format!("这个视图文件不在了: {rel}")))?;
+        let text = self.read(rel)?.ok_or_else(|| AppError::NotFound(format!("这个视图文件不在了: {rel}")))?;
         let fingerprint = fsio::fingerprint(&text);
         Ok(BaseText { text, fingerprint })
     }
@@ -164,9 +154,7 @@ impl Vault {
         if text.len() > MAX_BYTES {
             return Err(AppError::Invalid("视图文件太大了".into()));
         }
-        let current = self
-            .read(rel)?
-            .ok_or_else(|| AppError::NotFound(format!("这个视图文件不在了: {rel}")))?;
+        let current = self.read(rel)?.ok_or_else(|| AppError::NotFound(format!("这个视图文件不在了: {rel}")))?;
         if fsio::fingerprint(&current) != expected {
             return Err(AppError::Invalid(STALE.into()));
         }

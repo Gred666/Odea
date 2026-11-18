@@ -17,16 +17,16 @@
 
 pub mod activity;
 pub mod bases;
+mod export;
 pub mod folders;
 pub mod frontmatter;
 pub mod fsio;
 pub mod guide;
+mod import;
 pub mod index;
 pub mod layout;
 pub mod legacy;
 pub mod links;
-mod export;
-mod import;
 mod logical;
 pub mod properties;
 pub mod query;
@@ -44,9 +44,9 @@ use rusqlite::Connection;
 
 use crate::db::now_ms;
 use crate::domain::model::{
-    Attachment, Backlink, BacklinkLine, DocRef, FindFile, FindMatch, FindOptions, FindResult,
-    FolderDeletion, LegacyText, LinkRewrite, Note, NoteSummary, Relink, TextHit, TextSearch, TrashedNote, TreeFile,
-    TypedDoc, VaultChange, VaultInfo, VaultLayout, WantedExtension, NOTE,
+    Attachment, Backlink, BacklinkLine, DocRef, FindFile, FindMatch, FindOptions, FindResult, FolderDeletion,
+    LegacyText, LinkRewrite, Note, NoteSummary, Relink, TextHit, TextSearch, TrashedNote, TreeFile, TypedDoc,
+    VaultChange, VaultInfo, VaultLayout, WantedExtension, NOTE,
 };
 use crate::domain::search;
 use crate::error::{AppError, Result};
@@ -288,9 +288,7 @@ impl Vault {
     pub fn set_plugin(&mut self, id: &str, on: bool) -> Result<Backlog> {
         let plugin = plugins::find(id).ok_or_else(|| AppError::Invalid(format!("没有这个插件: {id}")))?;
         let path = fsio::abs(&self.root, layout::VAULT_MARKER);
-        let marker = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok());
+        let marker = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str(&text).ok());
         let marker = layout::marker_with_switch(marker, id, on);
         fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker)?)?;
         let backlog = self.relayout()?;
@@ -310,9 +308,7 @@ impl Vault {
             return Err(AppError::Invalid(format!("版本范围不对: {}", version.unwrap_or_default())));
         }
         let path = fsio::abs(&self.root, layout::VAULT_MARKER);
-        let marker = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok());
+        let marker = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str(&text).ok());
         let marker = layout::marker_with_extension(marker, id, on, version);
         fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker)?)?;
         // 自己改的：换上新的这一份，文件监听再看到标记变了就不当成是别处改的（check_layout）
@@ -325,9 +321,7 @@ impl Vault {
     /// 文件一个都不动
     pub fn set_archive(&mut self, on: bool) -> Result<Backlog> {
         let path = fsio::abs(&self.root, layout::VAULT_MARKER);
-        let marker = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok());
+        let marker = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str(&text).ok());
         let marker = layout::marker_with_switch(marker, layout::ARCHIVE_SWITCH, on);
         fsio::write_atomic(&path, &serde_json::to_string_pretty(&marker)?)?;
         let backlog = self.relayout()?;
@@ -460,19 +454,14 @@ impl Vault {
     /// 照「这些都不在了」往下走会把它们从索引里去掉，回来以后不是应用写的笔记（id 只在索引里）都换了 id。
     /// 整扫、只重读几篇、后台读，凡是因为「文件不在」要 forget 的，先问这一句
     fn check_root(&self) -> Result<()> {
-        std::fs::read_dir(&self.root)
-            .map(drop)
-            .map_err(|error| AppError::Io(format!("仓库文件夹现在打不开: {error}")))
+        std::fs::read_dir(&self.root).map(drop).map_err(|error| AppError::Io(format!("仓库文件夹现在打不开: {error}")))
     }
 
     /// 扫描里不读文件的那一半：只 stat。消失了的从索引里去掉、文件夹列表更新，
     /// 返回修改时间或大小变了、要（重新）读进索引的文件，按该读的顺序
     fn plan_rescan(&mut self) -> Result<(VaultChange, Vec<fsio::FileEntry>)> {
         self.check_root()?;
-        let mut change = VaultChange {
-            layout: self.check_layout(),
-            ..VaultChange::default()
-        };
+        let mut change = VaultChange { layout: self.check_layout(), ..VaultChange::default() };
         let (mut files, attachments) = fsio::walk(&self.root, is_attachment_name);
         if attachments != self.attachments {
             self.attachments = attachments;
@@ -484,10 +473,8 @@ impl Vault {
         files.sort_by_key(|file| !layout::conflict_originals(layout::stem_of(&file.rel)).is_empty());
         let present: HashSet<&str> = files.iter().map(|file| file.rel.as_str()).collect();
         let known = index::file_states(&self.db)?;
-        let known_state: HashMap<&str, (i64, i64)> = known
-            .iter()
-            .map(|(rel, mtime, size)| (rel.as_str(), (*mtime, *size)))
-            .collect();
+        let known_state: HashMap<&str, (i64, i64)> =
+            known.iter().map(|(rel, mtime, size)| (rel.as_str(), (*mtime, *size))).collect();
 
         // 先删消失的：外部改名时新文件带着同一个 id，旧的那一行得先让位
         for (rel, _, _) in &known {
@@ -702,12 +689,7 @@ impl Vault {
                 if previous.mtime != mtime || previous.size != size {
                     index::touch(&self.db, &previous.id, mtime, size)?;
                 }
-                return Ok(DocRow {
-                    mtime,
-                    size,
-                    updated_at: mtime,
-                    ..previous.clone()
-                });
+                return Ok(DocRow { mtime, size, updated_at: mtime, ..previous.clone() });
             }
         }
 
@@ -734,10 +716,7 @@ impl Vault {
             archived: false,
             category: meta.category.clone(),
             archived_at: None,
-            created_at: meta
-                .created
-                .or_else(|| previous.as_ref().map(|row| row.created_at))
-                .unwrap_or(mtime),
+            created_at: meta.created.or_else(|| previous.as_ref().map(|row| row.created_at)).unwrap_or(mtime),
             updated_at: mtime,
             mtime,
             size,
@@ -863,8 +842,7 @@ impl Vault {
     pub fn write_and_index(&mut self, rel: &str, text: &str, change: &mut VaultChange) -> Result<DocRow> {
         let path = fsio::abs(&self.root, rel);
         fsio::write_atomic(&path, text)?;
-        let (mtime, size) = fsio::stat(&path)
-            .ok_or_else(|| AppError::Io(format!("写完读不到文件: {rel}")))?;
+        let (mtime, size) = fsio::stat(&path).ok_or_else(|| AppError::Io(format!("写完读不到文件: {rel}")))?;
         self.index_text(rel, text, true, mtime, size, change)
     }
 
@@ -942,7 +920,8 @@ impl Vault {
     fn conflict_note_rel(&self, rel: &str) -> String {
         let suffix = format!(" (冲突 {})", chrono::Local::now().format("%Y-%m-%d %H%M"));
         // 原名很长时截短一点：另存不下来的话，保存时这一篇一直存不进去，同步合并时对方那一版只剩在历史里
-        let stem = format!("{}{suffix}", fsio::fit_stem(layout::stem_of(rel), suffix.len() + NUMBER_TAIL + ".md".len()));
+        let stem =
+            format!("{}{suffix}", fsio::fit_stem(layout::stem_of(rel), suffix.len() + NUMBER_TAIL + ".md".len()));
         fsio::unique_rel(&self.root, layout::dir_of(rel), &stem, None)
     }
 
@@ -966,9 +945,8 @@ impl Vault {
         new_rel: Option<String>,
         edit: impl FnOnce(&mut FrontMatter),
     ) -> Result<(DocRow, VaultChange)> {
-        let text = self
-            .read(&row.rel_path)?
-            .ok_or_else(|| AppError::NotFound(format!("note {} 的文件不见了", row.id)))?;
+        let text =
+            self.read(&row.rel_path)?.ok_or_else(|| AppError::NotFound(format!("note {} 的文件不见了", row.id)))?;
         let external = fsio::fingerprint(&text) != row.hash;
         let (mut meta, body) = frontmatter::split(&text);
 
@@ -983,12 +961,9 @@ impl Vault {
             _ => row.rel_path.clone(),
         };
         // 换了文件夹：正文里相对路径的图片、链接改成从新位置出发，指向的还是同一个文件
-        let relinked = folders::relink(
-            &body,
-            layout::dir_of(&row.rel_path),
-            layout::dir_of(&rel),
-            |target| fsio::abs(&self.root, target).exists(),
-        );
+        let relinked = folders::relink(&body, layout::dir_of(&row.rel_path), layout::dir_of(&rel), |target| {
+            fsio::abs(&self.root, target).exists()
+        });
         let body_changed = relinked != body;
         meta.id = Some(row.id.clone());
         meta.title = title_meta(&rel, &row.title);
@@ -999,11 +974,7 @@ impl Vault {
         let saved = self.write_and_index(&rel, &frontmatter::render(&meta, &relinked), &mut change)?;
         // 磁盘上的正文和前端手里的不一样（外部刚改过，或者链接跟着位置改了）：
         // 让前端连这篇一起刷新，编辑器换上新正文
-        let change = if external || body_changed {
-            change
-        } else {
-            change.without(&saved)
-        };
+        let change = if external || body_changed { change } else { change.without(&saved) };
         Ok((saved, change))
     }
 
@@ -1026,10 +997,7 @@ impl Vault {
     /// 带正文的列表：只有测试还在用（前端早就不一次拿全文了，见 note_list）
     #[cfg(test)]
     pub fn note_list_full(&self, archived: bool) -> Result<Vec<Note>> {
-        index::notes(&self.db, archived)?
-            .iter()
-            .map(|row| self.note_of(row))
-            .collect()
+        index::notes(&self.db, archived)?.iter().map(|row| self.note_of(row)).collect()
     }
 
     pub fn note_get(&self, id: &str) -> Result<Note> {
@@ -1095,12 +1063,7 @@ impl Vault {
             return self.note_of(&row);
         }
         let stem = layout::file_stem_for_title(title);
-        let rel = fsio::unique_rel(
-            &self.root,
-            layout::dir_of(&row.rel_path),
-            &stem,
-            Some(&row.rel_path),
-        );
+        let rel = fsio::unique_rel(&self.root, layout::dir_of(&row.rel_path), &stem, Some(&row.rel_path));
         let (saved, change) = self.rewrite_note_meta(&row, Some(rel.clone()), |meta| {
             meta.title = title_meta(&rel, title);
         })?;
@@ -1120,12 +1083,7 @@ impl Vault {
         let (mut meta, _) = frontmatter::split(&self.read(&row.rel_path)?.unwrap_or_default());
         let rel = if title != row.title {
             let stem = layout::file_stem_for_title(title);
-            let rel = fsio::unique_rel(
-                &self.root,
-                layout::dir_of(&row.rel_path),
-                &stem,
-                Some(&row.rel_path),
-            );
+            let rel = fsio::unique_rel(&self.root, layout::dir_of(&row.rel_path), &stem, Some(&row.rel_path));
             if rel != row.rel_path {
                 fsio::move_file(&self.root, &row.rel_path, &rel)?;
                 index::rename(&self.db, &row.id, &rel)?;
@@ -1148,8 +1106,7 @@ impl Vault {
     pub fn note_set_pinned(&mut self, id: &str, pinned: bool) -> Result<()> {
         let row = self.note_row(id)?;
         let (saved, change) = self.rewrite_note_meta(&row, None, |meta| meta.pinned = pinned)?;
-        self.log
-            .record("note", &saved.id, if pinned { "pinned" } else { "unpinned" });
+        self.log.record("note", &saved.id, if pinned { "pinned" } else { "unpinned" });
         self.announce(change);
         Ok(())
     }
@@ -1159,25 +1116,15 @@ impl Vault {
     pub fn note_archive(&mut self, id: &str, category: Option<String>) -> Result<()> {
         self.layout.require_archive()?;
         let row = self.note_row(id)?;
-        let rel = fsio::unique_rel(
-            &self.root,
-            &self.layout.archive,
-            layout::stem_of(&row.rel_path),
-            None,
-        );
+        let rel = fsio::unique_rel(&self.root, &self.layout.archive, layout::stem_of(&row.rel_path), None);
         let from = layout::dir_of(&row.rel_path);
-        let archived_from = self
-            .layout
-            .folder_of_dir(from)
-            .filter(|folder| !folder.is_empty())
-            .map(|_| from.to_string());
+        let archived_from =
+            self.layout.folder_of_dir(from).filter(|folder| !folder.is_empty()).map(|_| from.to_string());
         let (saved, change) = self.rewrite_note_meta(&row, Some(rel), |meta| {
             meta.pinned = false;
             meta.archived = Some(now_ms());
             meta.archived_from = archived_from;
-            meta.category = category
-                .or_else(|| meta.category.take())
-                .or_else(|| Some("笔记".into()));
+            meta.category = category.or_else(|| meta.category.take()).or_else(|| Some("笔记".into()));
         })?;
         self.log.record("note", &saved.id, "archived");
         self.announce(change);
@@ -1190,11 +1137,7 @@ impl Vault {
         let (meta, _) = frontmatter::split(&self.read(&row.rel_path)?.unwrap_or_default());
         let dir = meta
             .archived_from
-            .filter(|dir| {
-                self.layout
-                    .folder_of_dir(dir)
-                    .is_some_and(|folder| self.layout.folder_dir(folder).is_ok())
-            })
+            .filter(|dir| self.layout.folder_of_dir(dir).is_some_and(|folder| self.layout.folder_dir(folder).is_ok()))
             .unwrap_or_else(|| self.layout.notes.clone());
         let rel = fsio::unique_rel(&self.root, &dir, layout::stem_of(&row.rel_path), None);
         let (saved, change) = self.rewrite_note_meta(&row, Some(rel), |meta| {
@@ -1259,9 +1202,7 @@ impl Vault {
 
     pub fn note_undelete(&mut self, id: &str) -> Result<()> {
         let trash = trash_rel(id);
-        let text = self
-            .read(&trash)?
-            .ok_or_else(|| AppError::NotFound(format!("deleted note {id}")))?;
+        let text = self.read(&trash)?.ok_or_else(|| AppError::NotFound(format!("deleted note {id}")))?;
         let (mut meta, body) = frontmatter::split(&text);
         // 回收站里的文件网盘也会同步：属性块里写的原处是外面来的，不是仓库里的普通路径（`../`、`D:/`）就放回「笔记」
         let from = meta
@@ -1269,16 +1210,8 @@ impl Vault {
             .take()
             .filter(|from| from.split('/').all(fsio::is_plain_name) && fsio::is_markdown(from))
             .unwrap_or_else(|| layout::join(&self.layout.notes, &format!("{}.md", layout::UNTITLED)));
-        let title = meta
-            .title
-            .clone()
-            .unwrap_or_else(|| layout::stem_of(&from).to_string());
-        let rel = fsio::unique_rel(
-            &self.root,
-            layout::dir_of(&from),
-            layout::stem_of(&from),
-            None,
-        );
+        let title = meta.title.clone().unwrap_or_else(|| layout::stem_of(&from).to_string());
+        let rel = fsio::unique_rel(&self.root, layout::dir_of(&from), layout::stem_of(&from), None);
         meta.id = Some(id.to_string());
         meta.title = title_meta(&rel, &title);
 
@@ -1340,8 +1273,7 @@ impl Vault {
             return self.tree_edit(|tree| tree.add_folder(parent, name), "created");
         }
         let parent_dir = self.existing_folder_dir(parent)?;
-        let name = layout::folder_name(name)
-            .ok_or_else(|| AppError::Invalid("文件夹名不能是空的".into()))?;
+        let name = layout::folder_name(name).ok_or_else(|| AppError::Invalid("文件夹名不能是空的".into()))?;
         let dir = folders::unique_dir(&self.root, &parent_dir, &name, None);
         std::fs::create_dir_all(fsio::abs(&self.root, &dir))?;
         self.folders = folders::list(&self.root, &self.layout);
@@ -1359,8 +1291,7 @@ impl Vault {
             return self.tree_edit(|tree| tree.rename(folder, name), "renamed");
         }
         let old_dir = self.existing_folder_dir(folder)?;
-        let name = layout::folder_name(name)
-            .ok_or_else(|| AppError::Invalid("文件夹名不能是空的".into()))?;
+        let name = layout::folder_name(name).ok_or_else(|| AppError::Invalid("文件夹名不能是空的".into()))?;
         let new_dir = folders::unique_dir(&self.root, layout::dir_of(&old_dir), &name, Some(&old_dir));
         if new_dir == old_dir {
             return Ok(folder.to_string());
@@ -1407,13 +1338,7 @@ impl Vault {
         // 删掉的笔记前端自己会拿掉；只把连带的变化（日历上的任务）告诉它
         change.notes.clear();
         self.announce(change);
-        Ok(FolderDeletion {
-            folder: folder.to_string(),
-            notes,
-            folders: removed,
-            kept,
-            nodes: None,
-        })
+        Ok(FolderDeletion { folder: folder.to_string(), notes, folders: removed, kept, nodes: None })
     }
 
     /// 撤销删除文件夹：目录重新建上，笔记从回收站放回原处
@@ -1449,9 +1374,7 @@ impl Vault {
         };
         let cutoff = now_ms() - older_than_ms;
         for entry in entries.flatten() {
-            let old = entry
-                .metadata()
-                .is_ok_and(|meta| meta.is_file() && fsio::mtime_ms(&meta) < cutoff);
+            let old = entry.metadata().is_ok_and(|meta| meta.is_file() && fsio::mtime_ms(&meta) < cutoff);
             if old {
                 let _ = std::fs::remove_file(entry.path());
             }
@@ -1478,17 +1401,10 @@ impl Vault {
             let deleted_at = fsio::mtime_ms(&meta);
             // 恢复按 id 找文件（trash_rel）：属性块里的 id 对得上这个文件就用它，对不上（手放进来的）用文件名
             let file = format!("{}/{name}", layout::TRASH_DIR);
-            let id = front
-                .id
-                .clone()
-                .filter(|id| trash_rel(id) == file)
-                .unwrap_or_else(|| stem.to_string());
+            let id = front.id.clone().filter(|id| trash_rel(id) == file).unwrap_or_else(|| stem.to_string());
             notes.push(TrashedNote {
                 id,
-                title: front
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| layout::stem_of(&from).to_string()),
+                title: front.title.clone().unwrap_or_else(|| layout::stem_of(&from).to_string()),
                 from,
                 excerpt: search::make_excerpt(&body, 80),
                 deleted_at,
@@ -1500,8 +1416,8 @@ impl Vault {
     }
 
     /* ---------------- 插件的文档（某一天、某个周期的目标……） ----------------
-       核心给插件开的那几样（docs/插件与跨端.md §5.1：L2 用得到的内部接口，不对外承诺）：
-       按类型取一篇、按类型存一篇，加上上面的 read / write_and_index / announce，和行为日志、索引 */
+    核心给插件开的那几样（docs/插件与跨端.md §5.1：L2 用得到的内部接口，不对外承诺）：
+    按类型取一篇、按类型存一篇，加上上面的 read / write_and_index / announce，和行为日志、索引 */
 
     /// 这个仓库怎么摆（开着哪些插件、它们的文档类型）
     pub fn layout(&self) -> &layout::Layout {
@@ -1582,11 +1498,7 @@ impl Vault {
             .into_iter()
             .map(|row| {
                 let (target, title) = target_and_title(&row, &self.layout.types);
-                TypedDoc {
-                    target,
-                    title,
-                    updated_at: row.updated_at,
-                }
+                TypedDoc { target, title, updated_at: row.updated_at }
             })
             .collect())
     }
@@ -1693,7 +1605,8 @@ impl Vault {
             let copy = self.conflict_copy_rel(rel);
             kept.rels.push(copy.clone());
             fsio::write_atomic_bytes(&fsio::abs(&self.root, &copy), bytes)?;
-            let name = if fsio::is_markdown(rel) { layout::stem_of(&copy) } else { copy.rsplit('/').next().unwrap_or(&copy) };
+            let name =
+                if fsio::is_markdown(rel) { layout::stem_of(&copy) } else { copy.rsplit('/').next().unwrap_or(&copy) };
             kept.names.push(name.to_string());
         }
         Ok(())
@@ -1746,12 +1659,7 @@ impl Vault {
                 backup: self.legacy_backup_rel(&rel, encoding).rsplit('/').next().unwrap_or_default().to_string(),
                 fingerprint,
             },
-            None => LegacyText {
-                encoding: None,
-                preview: String::new(),
-                backup: String::new(),
-                fingerprint,
-            },
+            None => LegacyText { encoding: None, preview: String::new(), backup: String::new(), fingerprint },
         })
     }
 
@@ -1795,11 +1703,7 @@ impl Vault {
         let stem = fsio::fit_stem(layout::stem_of(rel), suffix.len() + NUMBER_TAIL + ".txt".len());
         (1..)
             .map(|n| {
-                let name = if n == 1 {
-                    format!("{stem}{suffix}.txt")
-                } else {
-                    format!("{stem}{suffix} {n}.txt")
-                };
+                let name = if n == 1 { format!("{stem}{suffix}.txt") } else { format!("{stem}{suffix} {n}.txt") };
                 layout::join(dir, &name)
             })
             .find(|candidate| !fsio::abs(&self.root, candidate).exists())
@@ -1813,11 +1717,7 @@ impl Vault {
         let suffix = format!(" (冲突 {})", chrono::Local::now().format("%Y-%m-%d %H%M"));
         let stem = fsio::fit_stem(stem, suffix.len() + NUMBER_TAIL + 1 + ext.len());
         for n in 1.. {
-            let name = if n == 1 {
-                format!("{stem}{suffix}")
-            } else {
-                format!("{stem}{suffix} {n}")
-            };
+            let name = if n == 1 { format!("{stem}{suffix}") } else { format!("{stem}{suffix} {n}") };
             let file = if ext.is_empty() { name } else { format!("{name}.{ext}") };
             let copy = layout::join(dir, &file);
             if !fsio::abs(&self.root, &copy).exists() {
@@ -1855,10 +1755,7 @@ impl Vault {
                     continue;
                 }
                 let text = body_lines.get(hit.line).copied().unwrap_or_default();
-                lines.push(BacklinkLine {
-                    line: hit.line as i64,
-                    text: links::context_line(text, &note.title),
-                });
+                lines.push(BacklinkLine { line: hit.line as i64, text: links::context_line(text, &note.title) });
             }
             let (target, title) = target_and_title(&row, &self.layout.types);
             out.push(Backlink {
@@ -1890,22 +1787,14 @@ impl Vault {
         let sources: Vec<DocRow> = index::with_wikilinks(&self.db)?
             .into_iter()
             .filter(|row| row.id != note.id)
-            .filter(|row| {
-                links::wikilinks(&row.content_md)
-                    .iter()
-                    .any(|link| links::same_title(&link.title, old))
-            })
+            .filter(|row| links::wikilinks(&row.content_md).iter().any(|link| links::same_title(&link.title, old)))
             .collect();
         if sources.is_empty() {
             return Ok(result);
         }
 
         let titles = index::note_titles(&self.db)?;
-        let taken = |title: &str| {
-            titles
-                .iter()
-                .any(|(other, t)| *other != note.id && links::same_title(t, title))
-        };
+        let taken = |title: &str| titles.iter().any(|(other, t)| *other != note.id && links::same_title(t, title));
         result.skipped = if !links::linkable(&new) {
             Some(format!("新标题里有 [ ] | # ^，写不进双链：别处的 [[{old}]] 没有改"))
         } else if taken(old) {
@@ -1939,11 +1828,7 @@ impl Vault {
             self.log.record(self.entity_of(&saved), &saved.id, "updated");
             result.links += count as i64;
             result.docs.push(target_and_title(&saved, &self.layout.types).1);
-            result.rewrites.push(LinkRewrite {
-                rel_path: row.rel_path.clone(),
-                before,
-                after,
-            });
+            result.rewrites.push(LinkRewrite { rel_path: row.rel_path.clone(), before, after });
         }
         self.announce(change);
         Ok(result)
@@ -2042,9 +1927,7 @@ impl Vault {
         if !self.layout.is_attachment_of(&doc_rel, file_rel) {
             return Err(refuse());
         }
-        let dir = fsio::abs(&self.root, &self.layout.attachment_dir(&doc_rel))
-            .canonicalize()
-            .map_err(|_| refuse())?;
+        let dir = fsio::abs(&self.root, &self.layout.attachment_dir(&doc_rel)).canonicalize().map_err(|_| refuse())?;
         let file = fsio::abs(&self.root, file_rel)
             .canonicalize()
             .map_err(|_| AppError::Invalid("主持人那边找不到这个文件".into()))?;
@@ -2133,10 +2016,7 @@ pub const ATTACHMENT_EXTENSIONS: [&str; 39] = [
 pub fn is_attachment_name(name: &str) -> bool {
     let ext = split_name(name).1;
     !ext.is_empty()
-        && IMAGE_EXTENSIONS
-            .iter()
-            .chain(ATTACHMENT_EXTENSIONS.iter())
-            .any(|known| known.eq_ignore_ascii_case(ext))
+        && IMAGE_EXTENSIONS.iter().chain(ATTACHMENT_EXTENSIONS.iter()).any(|known| known.eq_ignore_ascii_case(ext))
 }
 
 /// 「截图 1.PNG」→ ("截图 1", "PNG")；没有扩展名时第二个是空串
@@ -2165,10 +2045,7 @@ fn retire_share(root: &Path) {
 
 fn trash_rel(id: &str) -> String {
     // id 来自属性块，理论上可能是任何字符串；只留安全的字符
-    let safe: String = id
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect();
+    let safe: String = id.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
     format!("{}/{safe}.md", layout::TRASH_DIR)
 }
 
@@ -2200,19 +2077,11 @@ pub fn search_text(
             .take(limit)
             .map(|hit| {
                 let (target, title) = target_and_title(&hit.doc, types);
-                TextHit {
-                    target,
-                    title,
-                    updated_at: hit.doc.updated_at,
-                    line: hit.line,
-                }
+                TextHit { target, title, updated_at: hit.doc.updated_at, line: hit.line }
             })
             .collect()
     };
-    Ok(Some(TextSearch {
-        notes: hits(notes),
-        docs: hits(docs),
-    }))
+    Ok(Some(TextSearch { notes: hits(notes), docs: hits(docs) }))
 }
 
 /// 搜出来的笔记怎么排：和两个列表接起来的顺序一样（index::notes）—— 笔记在归档前，置顶在前，
@@ -2256,12 +2125,7 @@ pub fn find_text(
     let finder = match search::Finder::new(query, options) {
         Ok(Some(finder)) => finder,
         Ok(None) => return Ok(Some(FindResult::default())),
-        Err(error) => {
-            return Ok(Some(FindResult {
-                error: Some(error),
-                ..FindResult::default()
-            }))
-        }
+        Err(error) => return Ok(Some(FindResult { error: Some(error), ..FindResult::default() })),
     };
     // 每一篇：命中的位置 (第几行（从 0 数）, 这一行里的字节区间)，和一共几处。位置一篇最多留
     // FIND_MATCH_LIMIT 个（再多也给不出去），一大篇里搜一个「的」不会攒下几十万个
@@ -2316,20 +2180,9 @@ pub fn find_text(
             .collect();
         budget -= matches.len();
         let (target, title) = target_and_title(&doc, types);
-        files.push(FindFile {
-            target,
-            title,
-            updated_at: doc.updated_at,
-            matches,
-            count: count as u32,
-        });
+        files.push(FindFile { target, title, updated_at: doc.updated_at, matches, count: count as u32 });
     }
-    Ok(Some(FindResult {
-        files,
-        total: total as u32,
-        truncated: total > FIND_MATCH_LIMIT,
-        error: None,
-    }))
+    Ok(Some(FindResult { files, total: total as u32, truncated: total > FIND_MATCH_LIMIT, error: None }))
 }
 
 /// 一处命中给前端的样子：位置按 UTF-16 算（编辑器里的位置），显示的那段前后各截一截

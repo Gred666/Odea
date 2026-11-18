@@ -23,7 +23,8 @@ use crate::domain::model::{DocRef, VaultChange};
 use crate::error::{AppError, Result};
 
 /// 应用自己的键：面板里不出现、不许写
-pub const MANAGED: [&str; 8] = ["id", "title", "created", "pinned", "archived", "category", "archived-from", "trashed-from"];
+pub const MANAGED: [&str; 8] =
+    ["id", "title", "created", "pinned", "archived", "category", "archived-from", "trashed-from"];
 /// 认得的类型（和 Obsidian 的 types.json 一样）
 pub const KINDS: [&str; 8] = ["text", "multitext", "number", "checkbox", "date", "datetime", "tags", "aliases"];
 
@@ -128,7 +129,8 @@ pub fn entries(text: &str) -> Vec<Entry> {
         if rest.is_empty() {
             if more.iter().all(|line| line.starts_with('-')) {
                 entry.list = !more.is_empty();
-                entry.values = more.iter().map(|line| unquote(line.trim_start_matches('-'))).filter(|v| !v.is_empty()).collect();
+                entry.values =
+                    more.iter().map(|line| unquote(line.trim_start_matches('-'))).filter(|v| !v.is_empty()).collect();
             } else {
                 entry.complex = true;
             }
@@ -182,9 +184,11 @@ pub fn catalog(props: impl Iterator<Item = String>) -> Vec<PropertyKey> {
             if MANAGED.contains(&entry.key.as_str()) || !seen.insert(entry.key.clone()) {
                 continue;
             }
-            let tally = keys
-                .entry(entry.key.clone())
-                .or_insert_with(|| Tally { count: 0, kinds: HashMap::new(), values: HashMap::new() });
+            let tally = keys.entry(entry.key.clone()).or_insert_with(|| Tally {
+                count: 0,
+                kinds: HashMap::new(),
+                values: HashMap::new(),
+            });
             tally.count += 1;
             if entry.complex {
                 continue;
@@ -297,10 +301,9 @@ impl Vault {
     pub fn doc_properties(&self, target: &DocRef) -> Result<DocProperties> {
         let rel = self.target_rel(target)?;
         Ok(match self.read_lossy(&rel)? {
-            Some(file) => DocProperties {
-                text: super::frontmatter::split(&file.text).0.extra.join("\n"),
-                editable: file.utf8,
-            },
+            Some(file) => {
+                DocProperties { text: super::frontmatter::split(&file.text).0.extra.join("\n"), editable: file.utf8 }
+            }
             None => DocProperties { text: String::new(), editable: false },
         })
     }
@@ -308,9 +311,7 @@ impl Vault {
     /// 换掉一篇的属性：只动属性块里用户自己的那几行，应用的键、正文一个字不动
     pub fn set_doc_properties(&mut self, target: &DocRef, text: &str) -> Result<DocProperties> {
         let rel = self.target_rel(target)?;
-        let file = self
-            .read(&rel)?
-            .ok_or_else(|| AppError::NotFound("这一篇还没写过，先写点什么再加属性".into()))?;
+        let file = self.read(&rel)?.ok_or_else(|| AppError::NotFound("这一篇还没写过，先写点什么再加属性".into()))?;
         let (mut meta, body) = super::frontmatter::split(&file);
         let lines = validate(text, &meta.extra)?;
         if meta.extra == lines {

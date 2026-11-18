@@ -23,8 +23,7 @@ pub const PATH: &str = "/sandbox.html";
 
 const PAGE: &str = include_str!("../../../src/plugins/sandbox/sandbox.html");
 
-const CSP: &str =
-    "default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:; sandbox allow-scripts";
+const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:; sandbox allow-scripts";
 
 /// 回一个请求：只有 /sandbox.html，别的都是 404
 pub fn respond(path: &str) -> (u16, Vec<(&'static str, &'static str)>, &'static [u8]) {

@@ -51,9 +51,7 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    tauri::async_runtime::spawn_blocking(f)
-        .await
-        .map_err(|e| AppError::Internal(format!("任务panic: {e}")))?
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| AppError::Internal(format!("任务panic: {e}")))?
 }
 
 /// 在阻塞线程池里拿这个窗口的仓库的锁做事（插件的命令也用它，plugins/journal/commands.rs）
@@ -64,9 +62,7 @@ where
 {
     let vault = ws.vault.clone();
     blocking(move || {
-        let mut vault = vault
-            .lock()
-            .map_err(|_| AppError::Internal("仓库锁坏了".into()))?;
+        let mut vault = vault.lock().map_err(|_| AppError::Internal("仓库锁坏了".into()))?;
         f(&mut vault)
     })
     .await

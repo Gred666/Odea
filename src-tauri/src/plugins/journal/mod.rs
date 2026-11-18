@@ -177,8 +177,7 @@ impl DocType for DayType {
     }
 
     fn path_of(&self, key: &str) -> Result<String> {
-        let date = parse_date(key)
-            .ok_or_else(|| AppError::Invalid(format!("日期应为 YYYY-MM-DD，收到: {key}")))?;
+        let date = parse_date(key).ok_or_else(|| AppError::Invalid(format!("日期应为 YYYY-MM-DD，收到: {key}")))?;
         Ok(if self.by_year {
             join(&join(&self.dir, &date.year().to_string()), &format!("{key}.md"))
         } else {
@@ -293,21 +292,17 @@ pub fn goal_key(horizon: &str, period_start: &str) -> String {
 
 /// `week:2026-09-21` → (尺度, 周期起点)
 pub fn split_goal_key(key: &str) -> Result<(&str, &str)> {
-    key.split_once(':')
-        .ok_or_else(|| AppError::Invalid(format!("目标应为「尺度:周期起点」，收到: {key}")))
+    key.split_once(':').ok_or_else(|| AppError::Invalid(format!("目标应为「尺度:周期起点」，收到: {key}")))
 }
 
 fn parse_date(s: &str) -> Option<NaiveDate> {
-    (s.len() == 10)
-        .then(|| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
-        .flatten()
+    (s.len() == 10).then(|| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()).flatten()
 }
 
 /// period_start 必须真的是周期起点：周一 / 1 号 / 1 月 1 日
 pub fn validate_period_start(horizon: &str, period_start: &str) -> Result<NaiveDate> {
-    let date = parse_date(period_start).ok_or_else(|| {
-        AppError::Invalid(format!("日期格式应为 YYYY-MM-DD，收到: {period_start}"))
-    })?;
+    let date = parse_date(period_start)
+        .ok_or_else(|| AppError::Invalid(format!("日期格式应为 YYYY-MM-DD，收到: {period_start}")))?;
     let ok = match horizon {
         "week" => date.weekday() == Weekday::Mon,
         "month" => date.day() == 1,
@@ -317,9 +312,7 @@ pub fn validate_period_start(horizon: &str, period_start: &str) -> Result<NaiveD
     if ok {
         Ok(date)
     } else {
-        Err(AppError::Invalid(format!(
-            "{period_start} 不是 {horizon} 周期的起点"
-        )))
+        Err(AppError::Invalid(format!("{period_start} 不是 {horizon} 周期的起点")))
     }
 }
 
@@ -350,10 +343,8 @@ pub fn goal_from_stem(stem: &str) -> Option<(&'static str, String)> {
     None
 }
 
-const CN_MONTH: [&str; 12] = [
-    "一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月",
-    "十二月",
-];
+const CN_MONTH: [&str; 12] =
+    ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
 
 /// 和前端 plugins/journal 的 goalTitle 一样：「第 39 周目标」「九月目标」「2026 年目标」
 pub fn goal_title(horizon: &str, period_start: &str) -> String {

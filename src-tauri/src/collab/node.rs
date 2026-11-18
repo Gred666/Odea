@@ -101,18 +101,8 @@ struct Inner {
 impl Node {
     /// 起端点（要两三秒，iroh 初始化网络监视）。要在 tokio 运行时里调
     pub async fn start(options: NodeOptions, events: Events) -> Result<Node, String> {
-        let Bound {
-            endpoint,
-            mdns,
-            pins,
-        } = endpoint::bind(
-            options.secret_key,
-            None,
-            options.mdns,
-            &options.relays,
-            &options.ports,
-        )
-        .await?;
+        let Bound { endpoint, mdns, pins } =
+            endpoint::bind(options.secret_key, None, options.mdns, &options.relays, &options.ports).await?;
         let inner = Arc::new(Inner {
             endpoint: endpoint.clone(),
             listen: mdns,
@@ -158,11 +148,7 @@ impl Node {
             return None;
         }
         let mut mapper = self.inner.mapper.lock().unwrap();
-        Some(
-            mapper
-                .get_or_insert_with(|| Mapper::start(&self.inner.endpoint))
-                .state(),
-        )
+        Some(mapper.get_or_insert_with(|| Mapper::start(&self.inner.endpoint)).state())
     }
 
     /// 真环境（会查防火墙）；单测里是 false
@@ -223,12 +209,7 @@ impl Node {
     }
 
     fn is_own(&self, relay: &Relay) -> bool {
-        self.inner
-            .relays
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|own| own.url == relay.url)
+        self.inner.relays.lock().unwrap().iter().any(|own| own.url == relay.url)
     }
 
     async fn insert_relay(&self, relay: &Relay) {
@@ -250,9 +231,7 @@ impl Node {
         // 广播里只有昵称，超长的截掉
         let name: String = self.inner.name.lock().unwrap().chars().take(40).collect();
         if let Ok(data) = UserData::try_from(name) {
-            self.inner
-                .endpoint
-                .set_user_data_for_address_lookup(Some(data));
+            self.inner.endpoint.set_user_data_for_address_lookup(Some(data));
         }
     }
 
@@ -278,10 +257,7 @@ impl Node {
     pub(crate) fn remove_host(&self, shared: &Arc<host::Shared>) {
         let none = {
             let mut hosts = self.inner.hosts.lock().unwrap();
-            hosts.retain(|host| {
-                host.upgrade()
-                    .is_some_and(|host| !Arc::ptr_eq(&host, shared))
-            });
+            hosts.retain(|host| host.upgrade().is_some_and(|host| !Arc::ptr_eq(&host, shared)));
             hosts.is_empty()
         };
         if none {
@@ -296,11 +272,11 @@ impl Node {
     }
 
     pub(crate) fn remove_guest(&self, shared: &Arc<guest::Shared>) {
-        self.inner.guests.lock().unwrap().retain(|guest| {
-            guest
-                .upgrade()
-                .is_some_and(|guest| !Arc::ptr_eq(&guest, shared))
-        });
+        self.inner
+            .guests
+            .lock()
+            .unwrap()
+            .retain(|guest| guest.upgrade().is_some_and(|guest| !Arc::ptr_eq(&guest, shared)));
     }
 
     fn start_advertising(&self) {
@@ -308,11 +284,7 @@ impl Node {
             return;
         }
         self.set_user_data();
-        match MdnsAddressLookup::builder()
-            .service_name(MDNS_SERVICE)
-            .advertise(true)
-            .build(self.inner.endpoint.id())
-        {
+        match MdnsAddressLookup::builder().service_name(MDNS_SERVICE).advertise(true).build(self.inner.endpoint.id()) {
             Ok(lookup) => {
                 if let Ok(services) = self.inner.endpoint.address_lookup() {
                     services.add(lookup.clone());
@@ -354,19 +326,13 @@ impl Node {
         };
         let weak = Arc::downgrade(&self.inner);
         let relays = self.relays();
-        let watch = reach::watch_reach(
-            self.inner.endpoint.clone(),
-            portmap,
-            firewall,
-            relays,
-            move |reach| {
-                let Some(inner) = weak.upgrade() else { return };
-                *inner.reach.lock().unwrap() = Some(reach.clone());
-                for host in live(&inner.hosts) {
-                    host::on_reach(&host, reach.clone());
-                }
-            },
-        );
+        let watch = reach::watch_reach(self.inner.endpoint.clone(), portmap, firewall, relays, move |reach| {
+            let Some(inner) = weak.upgrade() else { return };
+            *inner.reach.lock().unwrap() = Some(reach.clone());
+            for host in live(&inner.hosts) {
+                host::on_reach(&host, reach.clone());
+            }
+        });
         watching.push(watch);
         watching.extend(firewall_task);
     }
@@ -404,12 +370,7 @@ impl Node {
         if !self.relays().is_empty() {
             return false;
         }
-        self.inner
-            .endpoint
-            .addr()
-            .addrs
-            .iter()
-            .all(|addr| !matches!(addr, iroh::TransportAddr::Relay(_)))
+        self.inner.endpoint.addr().addrs.iter().all(|addr| !matches!(addr, iroh::TransportAddr::Relay(_)))
             && self.inner.endpoint.home_relay_status().get().is_empty()
     }
 
@@ -466,11 +427,7 @@ impl Node {
 
 /// 还活着的那几个（停了的、丢掉了的不算）
 fn live<T>(list: &Mutex<Vec<Weak<T>>>) -> Vec<Arc<T>> {
-    list.lock()
-        .unwrap()
-        .iter()
-        .filter_map(Weak::upgrade)
-        .collect()
+    list.lock().unwrap().iter().filter_map(Weak::upgrade).collect()
 }
 
 async fn accept_loop(endpoint: Endpoint, weak: Weak<Inner>) {
@@ -494,9 +451,7 @@ async fn accept_loop(endpoint: Endpoint, weak: Weak<Inner>) {
 /// 接进来的一条连接交给谁（见文件开头）
 async fn route(inner: &Arc<Inner>, conn: Connection) -> Result<(), String> {
     let remote = *conn.remote_id().as_bytes();
-    let waiting = live(&inner.guests)
-        .into_iter()
-        .find(|guest| guest::waiting_for(guest, &remote));
+    let waiting = live(&inner.guests).into_iter().find(|guest| guest::waiting_for(guest, &remote));
     let stream = match waiting {
         Some(guest) => match tokio::time::timeout(KNOCK_WAIT, conn.accept_bi()).await {
             Ok(Ok(stream)) => stream,
@@ -533,16 +488,12 @@ async fn knock(
     };
     let nearby = !dialed && hello.proof.is_none() && hello.session == [0; 16];
     if !nearby {
-        let host = live(&inner.hosts)
-            .into_iter()
-            .find(|host| host::session_of(host) == hello.session);
+        let host = live(&inner.hosts).into_iter().find(|host| host::session_of(host) == hello.session);
         if let Some(host) = host {
             return host::serve_knock(host, conn, send, recv, hello, dialed, None).await;
         }
         if !dialed {
-            let guest = live(&inner.guests)
-                .into_iter()
-                .find(|guest| guest::forwards(guest, &hello.session));
+            let guest = live(&inner.guests).into_iter().find(|guest| guest::forwards(guest, &hello.session));
             if let Some(guest) = guest {
                 guest::forward_for(guest, conn, send, recv, hello).await;
                 return Ok(Served::Gone);
@@ -553,10 +504,7 @@ async fn knock(
 
     // 「附近」点进来的
     let id = *conn.remote_id().as_bytes();
-    let hosts: Vec<_> = live(&inner.hosts)
-        .into_iter()
-        .filter(|host| !host::ended(host))
-        .collect();
+    let hosts: Vec<_> = live(&inner.hosts).into_iter().filter(|host| !host::ended(host)).collect();
     let target = if let Some(host) = hosts.iter().find(|host| host::approved(host, &id)) {
         // 断线重连：允许过他的那个
         Some((host.clone(), None))
@@ -565,28 +513,20 @@ async fn knock(
         hosts.first().map(|host| (host.clone(), None))
     } else {
         match ask(inner, &conn, id, &hello).await {
-            Some((session, permission)) => hosts
-                .iter()
-                .find(|host| host::session_of(host) == session)
-                .map(|host| (host.clone(), Some(permission))),
+            Some((session, permission)) => {
+                hosts.iter().find(|host| host::session_of(host) == session).map(|host| (host.clone(), Some(permission)))
+            }
             None => return host::reject(Some(&conn), send, RejectReason::Declined).await,
         }
     };
     match target {
-        Some((host, preset)) => {
-            host::serve_knock(host, conn, send, recv, hello, false, preset).await
-        }
+        Some((host, preset)) => host::serve_knock(host, conn, send, recv, hello, false, preset).await,
         None => host::reject(Some(&conn), send, RejectReason::Ended).await,
     }
 }
 
 /// 「附近」进来、我主持着好几个：问主持人进哪一个（不设时限，他走了就算了）
-async fn ask(
-    inner: &Arc<Inner>,
-    conn: &Connection,
-    id: [u8; 32],
-    hello: &Hello,
-) -> Choice {
+async fn ask(inner: &Arc<Inner>, conn: &Connection, id: [u8; 32], hello: &Hello) -> Choice {
     let request = inner.next_knock.fetch_add(1, Ordering::SeqCst);
     let (sender, receiver) = oneshot::channel();
     inner.knocks.lock().unwrap().insert(request, sender);
@@ -600,8 +540,6 @@ async fn ask(
         _ = conn.closed() => None,
     };
     inner.knocks.lock().unwrap().remove(&request);
-    let _ = inner
-        .events
-        .send(Event::Control(Control::NearbyKnockDone { request }));
+    let _ = inner.events.send(Event::Control(Control::NearbyKnockDone { request }));
     answer
 }

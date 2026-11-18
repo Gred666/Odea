@@ -38,11 +38,7 @@ pub async fn note_set_pinned(ws: Ws, id: String, pinned: bool) -> Result<()> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn note_archive(
-    ws: Ws,
-    id: String,
-    category: Option<String>,
-) -> Result<()> {
+pub async fn note_archive(ws: Ws, id: String, category: Option<String>) -> Result<()> {
     with_vault(&ws, move |v| v.note_archive(&id, category)).await
 }
 
@@ -304,12 +300,7 @@ pub async fn tree_export<R: Runtime>(app: AppHandle<R>, ws: Ws) -> Result<Option
     let picker = app.clone();
     let start = root.parent().map(PathBuf::from).unwrap_or_else(|| root.clone());
     let picked = blocking(move || {
-        Ok(picker
-            .dialog()
-            .file()
-            .set_title("导出到哪个文件夹下面")
-            .set_directory(start)
-            .blocking_pick_folder())
+        Ok(picker.dialog().file().set_title("导出到哪个文件夹下面").set_directory(start).blocking_pick_folder())
     })
     .await?;
     let Some(parent) = picked.and_then(|picked| picked.into_path().ok()) else {
@@ -321,7 +312,13 @@ pub async fn tree_export<R: Runtime>(app: AppHandle<R>, ws: Ws) -> Result<Option
     }
     let name = root.file_name().map_or_else(|| "Odea".into(), |name| name.to_string_lossy().into_owned());
     let dest = (1..)
-        .map(|n| if n == 1 { parent.join(format!("{name}（导出）")) } else { parent.join(format!("{name}（导出 {n}）")) })
+        .map(|n| {
+            if n == 1 {
+                parent.join(format!("{name}（导出）"))
+            } else {
+                parent.join(format!("{name}（导出 {n}）"))
+            }
+        })
         .find(|candidate| !candidate.exists())
         .expect("总有一个名字没被占用");
     let target = dest.clone();
@@ -426,11 +423,7 @@ pub async fn doc_history(ws: Ws, target: DocRef) -> Result<DocHistory> {
                 }
             })
             .collect();
-        Ok(DocHistory {
-            unavailable: None,
-            versions,
-            more: history.more,
-        })
+        Ok(DocHistory { unavailable: None, versions, more: history.more })
     })
     .await
 }

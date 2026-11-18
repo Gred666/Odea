@@ -64,10 +64,7 @@ fn id_prefix(name: &str) -> String {
 }
 
 fn guide_named(name: &str) -> Result<&'static Guide> {
-    GUIDES
-        .iter()
-        .find(|guide| guide.name == name)
-        .ok_or_else(|| AppError::Invalid(format!("没有叫 {name} 的使用指南")))
+    GUIDES.iter().find(|guide| guide.name == name).ok_or_else(|| AppError::Invalid(format!("没有叫 {name} 的使用指南")))
 }
 
 /// 这篇笔记是哪一份指南（看 id 的前缀）
@@ -277,8 +274,7 @@ impl Vault {
             .guide_notes()?
             .into_iter()
             .filter(|note| {
-                outdated(&note.mark, &fingerprint(note.guide.body))
-                    && fingerprint(&note.body) != note.mark.hash
+                outdated(&note.mark, &fingerprint(note.guide.body)) && fingerprint(&note.body) != note.mark.hash
             })
             .map(|note| GuideUpdate {
                 id: note.row.id,
@@ -292,8 +288,7 @@ impl Vault {
     /// 换上新版的话，前端先存正文再调这里 —— 记下的指纹和正文对得上，以后又能自动跟着升级
     pub fn guide_settle(&mut self, id: &str) -> Result<()> {
         let row = self.note_row(id)?;
-        let guide = guide_of(&row)
-            .ok_or_else(|| AppError::Invalid(format!("{id} 不是使用指南")))?;
+        let guide = guide_of(&row).ok_or_else(|| AppError::Invalid(format!("{id} 不是使用指南")))?;
         let shipped = fingerprint(guide.body);
         let (_, change) = self.rewrite_note_meta(&row, None, |meta| set_mark(meta, guide.name, &shipped))?;
         self.announce(change);
@@ -305,10 +300,7 @@ impl Vault {
         let guide = guide_named(name)?;
         let prefix = id_prefix(name);
         for archived in [false, true] {
-            if let Some(row) = index::notes(&self.db, archived)?
-                .into_iter()
-                .find(|row| row.id.starts_with(&prefix))
-            {
+            if let Some(row) = index::notes(&self.db, archived)?.into_iter().find(|row| row.id.starts_with(&prefix)) {
                 return Ok(row.id);
             }
         }
@@ -343,9 +335,7 @@ mod tests {
             *item = line.clone();
         }
         let mut change = VaultChange::default();
-        vault
-            .write_and_index(&row.rel_path, &frontmatter::render(&meta, old), &mut change)
-            .unwrap();
+        vault.write_and_index(&row.rel_path, &frontmatter::render(&meta, old), &mut change).unwrap();
         id
     }
 
@@ -403,11 +393,7 @@ mod tests {
         vault.note_update(&id, "欢迎使用 OnTheWay", &note.content_md).unwrap();
         let row = vault.note_row(&id).unwrap();
         assert!(row.rel_path.ends_with("欢迎使用 OnTheWay.md"));
-        let text = vault
-            .read(&row.rel_path)
-            .unwrap()
-            .unwrap()
-            .replace(MARK_KEY, crate::old_name::GUIDE_MARK);
+        let text = vault.read(&row.rel_path).unwrap().unwrap().replace(MARK_KEY, crate::old_name::GUIDE_MARK);
         let mut change = VaultChange::default();
         vault.write_and_index(&row.rel_path, &text, &mut change).unwrap();
 

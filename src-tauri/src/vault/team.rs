@@ -53,9 +53,7 @@ pub fn mark_team(root: &Path) -> Result<String> {
     if let Some(id) = team_id(root) {
         return Ok(id);
     }
-    let mut marker = read_marker(root)
-        .filter(Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
+    let mut marker = read_marker(root).filter(Value::is_object).unwrap_or_else(|| serde_json::json!({}));
     let id = uuid::Uuid::now_v7().simple().to_string();
     marker["team"] = serde_json::json!({ "id": id });
     let path = fsio::abs(root, layout::VAULT_MARKER);
@@ -82,13 +80,7 @@ fn valid_key(key: &str) -> bool {
 
 /// 名字里不能有 tab、换行（会把一行拆坏），最长 60 个字
 fn clean(text: &str) -> String {
-    text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect::<String>()
-        .trim()
-        .chars()
-        .take(60)
-        .collect()
+    text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().trim().chars().take(60).collect()
 }
 
 fn parse_line(line: &str) -> Option<Device> {
@@ -123,32 +115,20 @@ pub fn render(devices: &[Device]) -> String {
     sorted.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out = String::from(HEADER);
     for device in sorted {
-        out.push_str(&format!(
-            "{}\t{}\t{}\t{}\n",
-            device.key,
-            device.account,
-            device.updated,
-            clean(&device.name)
-        ));
+        out.push_str(&format!("{}\t{}\t{}\t{}\n", device.key, device.account, device.updated, clean(&device.name)));
     }
     out
 }
 
 pub fn read(root: &Path) -> Vec<Device> {
-    std::fs::read_to_string(fsio::abs(root, DEVICES_FILE))
-        .map(|text| parse(&text))
-        .unwrap_or_default()
+    std::fs::read_to_string(fsio::abs(root, DEVICES_FILE)).map(|text| parse(&text)).unwrap_or_default()
 }
 
 /// 写上 / 改好自己那一行（`own.updated` 是现在）。账号、名字都没变、也没有重复的就不写；返回写没写
 pub fn put_own(root: &Path, own: &Device) -> Result<bool> {
     let path = fsio::abs(root, DEVICES_FILE);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let mine: Vec<Device> = text
-        .lines()
-        .filter_map(parse_line)
-        .filter(|device| device.key == own.key)
-        .collect();
+    let mine: Vec<Device> = text.lines().filter_map(parse_line).filter(|device| device.key == own.key).collect();
     let name = clean(&own.name);
     if let [only] = mine.as_slice() {
         if only.account == own.account && only.name == name {
@@ -225,7 +205,8 @@ mod tests {
 
     #[test]
     fn the_list_reads_back_what_it_wrote_and_skips_bad_lines() {
-        let devices = vec![device('b', "github:xiaowang", 20, "小王的 笔记本"), device('a', "github:Gred666", 10, "书房的电脑")];
+        let devices =
+            vec![device('b', "github:xiaowang", 20, "小王的 笔记本"), device('a', "github:Gred666", 10, "书房的电脑")];
         let text = render(&devices);
         assert!(text.starts_with("# Odea"));
         // 按公钥排
@@ -282,12 +263,14 @@ mod tests {
         let root = dir.path();
         assert_eq!(team_id(root), None);
         std::fs::create_dir_all(root.join(".odea")).unwrap();
-        std::fs::write(root.join(layout::VAULT_MARKER), r#"{ "kind": "logical", "features": { "journal": true } }"#).unwrap();
+        std::fs::write(root.join(layout::VAULT_MARKER), r#"{ "kind": "logical", "features": { "journal": true } }"#)
+            .unwrap();
         let id = mark_team(root).unwrap();
         assert_eq!(id.len(), 32);
         assert_eq!(mark_team(root).unwrap(), id);
         assert_eq!(team_id(root).as_deref(), Some(id.as_str()));
-        let marker: Value = serde_json::from_str(&std::fs::read_to_string(root.join(layout::VAULT_MARKER)).unwrap()).unwrap();
+        let marker: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(layout::VAULT_MARKER)).unwrap()).unwrap();
         assert_eq!(marker["kind"], "logical");
         assert_eq!(marker["features"]["journal"], true);
         // 日程、摆法照旧
@@ -306,7 +289,8 @@ mod tests {
         assert!(!write_relays(root, &codes).unwrap(), "没变不写");
         // union 合并以后重复的行只算一次；注释、空行跳过
         let path = root.join(RELAYS_FILE);
-        let text = std::fs::read_to_string(&path).unwrap() + "odea:relay/aaa
+        let text = std::fs::read_to_string(&path).unwrap()
+            + "odea:relay/aaa
 
 # 备注
 ";

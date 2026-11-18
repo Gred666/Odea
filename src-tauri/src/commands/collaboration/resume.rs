@@ -18,7 +18,9 @@ pub async fn collab_resume_info(caller: Caller, state: State<'_, AppState>) -> R
         let base = collab_dir(&data_dir);
         // 一篇的：那篇笔记在这个仓库里才问；文件夹、整个仓库的：在有仓库的窗口里问
         let here = |note: &str| {
-            vault.as_ref().is_some_and(|vault| note.is_empty() || vault.lock().is_ok_and(|vault| vault.note_get(note).is_ok()))
+            vault
+                .as_ref()
+                .is_some_and(|vault| note.is_empty() || vault.lock().is_ok_and(|vault| vault.note_get(note).is_ok()))
         };
         let hosts = collab_record::hosts_left(&base)
             .into_iter()

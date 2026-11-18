@@ -17,34 +17,16 @@ use super::*;
 async fn frames_round_trip_and_end_cleanly() {
     let (mut a, mut b) = tokio::io::duplex(1 << 20);
     let big = vec![7u8; 300_000];
-    protocol::write_frame(&mut a, kind::UPDATE, b"hello")
-        .await
-        .unwrap();
-    protocol::write_frame(&mut a, kind::OPEN, b"note-1")
-        .await
-        .unwrap();
-    protocol::write_frame(&mut a, kind::SYNC2, &big)
-        .await
-        .unwrap();
+    protocol::write_frame(&mut a, kind::UPDATE, b"hello").await.unwrap();
+    protocol::write_frame(&mut a, kind::OPEN, b"note-1").await.unwrap();
+    protocol::write_frame(&mut a, kind::SYNC2, &big).await.unwrap();
     protocol::write_frame(&mut a, 200, b"future").await.unwrap();
     drop(a);
-    assert_eq!(
-        protocol::read_frame(&mut b).await.unwrap(),
-        Some((kind::UPDATE, b"hello".to_vec()))
-    );
-    assert_eq!(
-        protocol::read_frame(&mut b).await.unwrap(),
-        Some((kind::OPEN, b"note-1".to_vec()))
-    );
-    assert_eq!(
-        protocol::read_frame(&mut b).await.unwrap(),
-        Some((kind::SYNC2, big))
-    );
+    assert_eq!(protocol::read_frame(&mut b).await.unwrap(), Some((kind::UPDATE, b"hello".to_vec())));
+    assert_eq!(protocol::read_frame(&mut b).await.unwrap(), Some((kind::OPEN, b"note-1".to_vec())));
+    assert_eq!(protocol::read_frame(&mut b).await.unwrap(), Some((kind::SYNC2, big)));
     // 认不出的类型照样读出来，由上层跳过
-    assert_eq!(
-        protocol::read_frame(&mut b).await.unwrap(),
-        Some((200, b"future".to_vec()))
-    );
+    assert_eq!(protocol::read_frame(&mut b).await.unwrap(), Some((200, b"future".to_vec())));
     // 两帧之间正常结束
     assert_eq!(protocol::read_frame(&mut b).await.unwrap(), None);
 }
@@ -53,21 +35,14 @@ async fn frames_round_trip_and_end_cleanly() {
 async fn frames_cut_in_the_middle_and_oversized_ones_are_errors() {
     let (mut a, mut b) = tokio::io::duplex(1024);
     // 声称 100 字节，只给 3 个就断了
-    tokio::io::AsyncWriteExt::write_all(&mut a, &[100, kind::UPDATE, 1, 2])
-        .await
-        .unwrap();
+    tokio::io::AsyncWriteExt::write_all(&mut a, &[100, kind::UPDATE, 1, 2]).await.unwrap();
     drop(a);
     assert!(protocol::read_frame(&mut b).await.is_err());
 
     let (mut a, mut b) = tokio::io::duplex(1024);
     // 长度 64MB：不分配，直接报错
-    tokio::io::AsyncWriteExt::write_all(&mut a, &[0x80, 0x80, 0x80, 0x20, kind::UPDATE])
-        .await
-        .unwrap();
-    assert!(matches!(
-        protocol::read_frame(&mut b).await,
-        Err(protocol::FrameError::TooLarge(_))
-    ));
+    tokio::io::AsyncWriteExt::write_all(&mut a, &[0x80, 0x80, 0x80, 0x20, kind::UPDATE]).await.unwrap();
+    assert!(matches!(protocol::read_frame(&mut b).await, Err(protocol::FrameError::TooLarge(_))));
 }
 
 /// 只读帧头：正文还没到也回得来（主持人收附件先占位子、再读正文，审查 §5.6）
@@ -75,15 +50,11 @@ async fn frames_cut_in_the_middle_and_oversized_ones_are_errors() {
 async fn a_frame_head_is_read_without_waiting_for_the_body() {
     let (mut a, mut b) = tokio::io::duplex(1024);
     // 声称 1MB 的 ATTACH_PUT，正文一个字节都还没发
-    tokio::io::AsyncWriteExt::write_all(&mut a, &[0x81, 0x80, 0x40, kind::ATTACH_PUT])
-        .await
-        .unwrap();
-    let head = tokio::time::timeout(
-        Duration::from_secs(1),
-        protocol::read_frame_head(&mut b, protocol::MAX_ATTACH_FRAME),
-    )
-    .await
-    .expect("帧头不该等正文");
+    tokio::io::AsyncWriteExt::write_all(&mut a, &[0x81, 0x80, 0x40, kind::ATTACH_PUT]).await.unwrap();
+    let head =
+        tokio::time::timeout(Duration::from_secs(1), protocol::read_frame_head(&mut b, protocol::MAX_ATTACH_FRAME))
+            .await
+            .expect("帧头不该等正文");
     assert_eq!(head.unwrap(), Some((kind::ATTACH_PUT, (1 << 20))));
     let body = tokio::spawn(async move { tokio::io::AsyncWriteExt::write_all(&mut a, &vec![5u8; 1 << 20]).await });
     assert_eq!(protocol::read_frame_body(&mut b, 1 << 20).await.unwrap(), vec![5u8; 1 << 20]);
@@ -113,10 +84,7 @@ fn cursor_datagrams_carry_the_member() {
 fn sample_invite() -> Invite {
     Invite {
         host: [5u8; 32],
-        addrs: vec![
-            SocketAddr::from((Ipv4Addr::new(192, 168, 1, 23), 51234)),
-            "[fe80::1]:51234".parse().unwrap(),
-        ],
+        addrs: vec![SocketAddr::from((Ipv4Addr::new(192, 168, 1, 23), 51234)), "[fe80::1]:51234".parse().unwrap()],
         session: [6u8; 16],
         secret: [7u8; 32],
         permission: Permission::Edit,
@@ -133,29 +101,15 @@ fn invite_links_round_trip_and_tolerate_chat_apps() {
     assert_eq!(Invite::parse(&link).unwrap(), invite);
     // 前后空白、尖括号、大写、只粘了票据那一截
     assert_eq!(Invite::parse(&format!("  <{link}>\n")).unwrap(), invite);
-    assert_eq!(
-        Invite::parse(&link.to_uppercase().replace("ODEA://JOIN/", "odea://join/")).unwrap(),
-        invite
-    );
-    assert_eq!(
-        Invite::parse(link.trim_start_matches("odea://join/")).unwrap(),
-        invite
-    );
+    assert_eq!(Invite::parse(&link.to_uppercase().replace("ODEA://JOIN/", "odea://join/")).unwrap(), invite);
+    assert_eq!(Invite::parse(link.trim_start_matches("odea://join/")).unwrap(), invite);
 }
 
 #[test]
 fn broken_or_newer_links_say_why() {
-    assert_eq!(
-        Invite::parse("https://example.com"),
-        Err(LinkError::Malformed)
-    );
+    assert_eq!(Invite::parse("https://example.com"), Err(LinkError::Malformed));
     assert_eq!(Invite::parse("odea://join/"), Err(LinkError::Malformed));
-    let newer = format!(
-        "odea://join/{}",
-        data_encoding::BASE32_NOPAD
-            .encode(&[3, 1, 2, 3])
-            .to_lowercase()
-    );
+    let newer = format!("odea://join/{}", data_encoding::BASE32_NOPAD.encode(&[3, 1, 2, 3]).to_lowercase());
     assert_eq!(Invite::parse(&newer), Err(LinkError::TooNew));
 }
 
@@ -166,11 +120,7 @@ const WAIT: Duration = Duration::from_secs(15);
 const DOC: &str = "note-1";
 
 /// 等一个满足条件的事件，中间别的跳过
-async fn expect<T>(
-    events: &mut UnboundedReceiver<Event>,
-    what: &str,
-    pick: impl FnMut(&Event) -> Option<T>,
-) -> T {
+async fn expect<T>(events: &mut UnboundedReceiver<Event>, what: &str, pick: impl FnMut(&Event) -> Option<T>) -> T {
     expect_within(events, what, WAIT, pick).await
 }
 
@@ -193,11 +143,7 @@ async fn expect_within<T>(
 }
 
 /// 一段时间里没有满足条件的事件
-async fn expect_none(
-    events: &mut UnboundedReceiver<Event>,
-    what: &str,
-    pick: impl Fn(&Event) -> bool,
-) {
+async fn expect_none(events: &mut UnboundedReceiver<Event>, what: &str, pick: impl Fn(&Event) -> bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(600);
     while let Ok(Some(event)) = tokio::time::timeout_at(deadline, events.recv()).await {
         assert!(!pick(&event), "不该出现：{what}：{event:?}");
@@ -227,15 +173,7 @@ async fn test_node(secret_key: SecretKey, mdns: bool, relays: Vec<Relay>) -> Nod
 async fn test_node_on(secret_key: SecretKey, mdns: bool, relays: Vec<Relay>, ports: Vec<u16>) -> Node {
     let (events, _) = unbounded_channel();
     Node::start(
-        NodeOptions {
-            secret_key,
-            name: "林夕".into(),
-            mdns,
-            relays,
-            portmap: false,
-            firewall: false,
-            ports,
-        },
+        NodeOptions { secret_key, name: "林夕".into(), mdns, relays, portmap: false, firewall: false, ports },
         events,
     )
     .await
@@ -279,12 +217,7 @@ async fn join(name: &str, invite: Invite) -> (Guest, UnboundedReceiver<Event>) {
     let (events, rx) = unbounded_channel();
     let guest = Guest::join(
         &test_node(SecretKey::generate(), false, Vec::new()).await,
-        GuestOptions {
-            name: name.into(),
-            invite,
-            use_host_relay: true,
-            nearby: false,
-        },
+        GuestOptions { name: name.into(), invite, use_host_relay: true, nearby: false },
         events,
     )
     .await
@@ -301,12 +234,7 @@ async fn admitted(
 ) -> (Guest, UnboundedReceiver<Event>, u16) {
     let (guest, mut events) = join(name, loopback(host, host.invite())).await;
     let request = expect(host_events, "加入请求", |event| match event {
-        Event::Control(Control::JoinRequest {
-            request,
-            name: who,
-            invited,
-            ..
-        }) if who == name => {
+        Event::Control(Control::JoinRequest { request, name: who, invited, .. }) if who == name => {
             assert!(invited);
             Some(*request)
         }
@@ -315,11 +243,7 @@ async fn admitted(
     .await;
     assert!(host.answer(request, Decision::Allow(permission)));
     let member = expect(&mut events, "进来了", |event| match status_of(event) {
-        Some(Status::Connected {
-            member,
-            permission: got,
-            ..
-        }) => {
+        Some(Status::Connected { member, permission: got, .. }) => {
             assert_eq!(got, permission);
             Some(member)
         }
@@ -327,10 +251,8 @@ async fn admitted(
     })
     .await;
     // 双方都被叫去发 Sync1
-    expect(&mut events, "访客的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with: 0, .. }).then_some(())
-    })
-    .await;
+    expect(&mut events, "访客的 SyncStart", |event| matches!(event, Event::SyncStart { with: 0, .. }).then_some(()))
+        .await;
     expect(host_events, "主持人的 SyncStart", |event| {
         matches!(event, Event::SyncStart { with, .. } if *with == member).then_some(())
     })
@@ -352,8 +274,7 @@ async fn default_endpoint_talks_to_no_server() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn join_confirm_sync_forward_and_leave() {
     let (host, mut host_events) = start_host("周会记录").await;
-    let (guest, mut guest_events, member) =
-        admitted(&host, &mut host_events, "Alex", Permission::Edit).await;
+    let (guest, mut guest_events, member) = admitted(&host, &mut host_events, "Alex", Permission::Edit).await;
     assert_eq!(member, 1);
 
     // 访客这边的状态按顺序：连接中 → 等确认 → 已连上（上面 admitted 里已经等到了已连上）
@@ -406,18 +327,11 @@ async fn join_confirm_sync_forward_and_leave() {
     assert!(got.is_ok(), "主持人收不到访客的光标");
 
     // 第二位访客（只读）：成员表三个人；第一位访客的更新转给他；他的更新被丢掉
-    let (reader, mut reader_events, reader_member) =
-        admitted(&host, &mut host_events, "佐藤", Permission::Read).await;
+    let (reader, mut reader_events, reader_member) = admitted(&host, &mut host_events, "佐藤", Permission::Read).await;
     assert_eq!(reader_member, 2);
-    expect(
-        &mut guest_events,
-        "第一位访客看到三个人",
-        |event| {
-            members_of(event)
-                .filter(|members| members.len() == 3)
-                .map(|_| ())
-        },
-    )
+    expect(&mut guest_events, "第一位访客看到三个人", |event| {
+        members_of(event).filter(|members| members.len() == 3).map(|_| ())
+    })
     .await;
     guest.send_update(DOC, b"forwarded".to_vec());
     expect(&mut reader_events, "转发的更新", |event| {
@@ -455,13 +369,7 @@ async fn join_confirm_sync_forward_and_leave() {
     // 改成能编辑：他自己收到通知，更新也不再被丢
     host.set_permission(2, Permission::Edit);
     expect(&mut reader_events, "权限通知", |event| {
-        matches!(
-            event,
-            Event::Control(Control::Permission {
-                permission: Permission::Edit
-            })
-        )
-        .then_some(())
+        matches!(event, Event::Control(Control::Permission { permission: Permission::Edit })).then_some(())
     })
     .await;
     reader.send_update(DOC, b"now-editing".to_vec());
@@ -473,19 +381,15 @@ async fn join_confirm_sync_forward_and_leave() {
     // 第二位访客离开：主持人那边成员表少一个
     reader.leave().await;
     expect(&mut host_events, "离开后的成员表", |event| {
-        members_of(event)
-            .filter(|members| members.len() == 2)
-            .map(|_| ())
+        members_of(event).filter(|members| members.len() == 2).map(|_| ())
     })
     .await;
 
     // 主持人停止：访客知道是主持人停的
     host.stop().await;
-    let reason = expect(&mut guest_events, "结束", |event| {
-        match status_of(event) {
-            Some(Status::Ended { reason }) => Some(reason),
-            _ => None,
-        }
+    let reason = expect(&mut guest_events, "结束", |event| match status_of(event) {
+        Some(Status::Ended { reason }) => Some(reason),
+        _ => None,
     })
     .await;
     assert_eq!(reason, EndReason::HostStopped);
@@ -498,10 +402,7 @@ async fn declined_wrong_and_reset_links_are_turned_away() {
 
     // 主持人拒绝
     let (_declined, mut events) = join("路人", loopback(&host, host.invite())).await;
-    expect(&mut events, "等确认", |event| {
-        matches!(status_of(event), Some(Status::Waiting)).then_some(())
-    })
-    .await;
+    expect(&mut events, "等确认", |event| matches!(status_of(event), Some(Status::Waiting)).then_some(())).await;
     let request = expect(&mut host_events, "加入请求", |event| match event {
         Event::Control(Control::JoinRequest { request, .. }) => Some(*request),
         _ => None,
@@ -513,30 +414,18 @@ async fn declined_wrong_and_reset_links_are_turned_away() {
         _ => None,
     })
     .await;
-    assert_eq!(
-        reason,
-        EndReason::Rejected {
-            reason: RejectReason::Declined
-        }
-    );
+    assert_eq!(reason, EndReason::Rejected { reason: RejectReason::Declined });
 
     // 密钥不对：不问主持人，直接拒
     let mut forged = loopback(&host, host.invite());
     forged.secret = [0u8; 32];
     let (_forged, mut events) = join("冒充", forged).await;
-    let reason = expect(&mut events, "链接不对", |event| {
-        match status_of(event) {
-            Some(Status::Ended { reason }) => Some(reason),
-            _ => None,
-        }
+    let reason = expect(&mut events, "链接不对", |event| match status_of(event) {
+        Some(Status::Ended { reason }) => Some(reason),
+        _ => None,
     })
     .await;
-    assert_eq!(
-        reason,
-        EndReason::Rejected {
-            reason: RejectReason::BadInvite
-        }
-    );
+    assert_eq!(reason, EndReason::Rejected { reason: RejectReason::BadInvite });
 
     // 重置链接：旧链接作废
     let old = loopback(&host, host.invite());
@@ -548,12 +437,7 @@ async fn declined_wrong_and_reset_links_are_turned_away() {
         _ => None,
     })
     .await;
-    assert_eq!(
-        reason,
-        EndReason::Rejected {
-            reason: RejectReason::BadInvite
-        }
-    );
+    assert_eq!(reason, EndReason::Rejected { reason: RejectReason::BadInvite });
     expect_none(&mut host_events, "被拒的不该问主持人", |event| {
         matches!(event, Event::Control(Control::JoinRequest { .. }))
     })
@@ -568,8 +452,7 @@ async fn declined_wrong_and_reset_links_are_turned_away() {
     .await;
     waiting.leave().await;
     expect(&mut host_events, "请求撤掉", |event| {
-        matches!(event, Event::Control(Control::JoinCancelled { request: r }) if *r == request)
-            .then_some(())
+        matches!(event, Event::Control(Control::JoinCancelled { request: r }) if *r == request).then_some(())
     })
     .await;
     assert!(!host.answer(request, Decision::Allow(Permission::Edit)));
@@ -584,12 +467,7 @@ async fn kicked_guests_cannot_come_back() {
     let key = SecretKey::generate();
     let _guest = Guest::join(
         &test_node(key.clone(), false, Vec::new()).await,
-        GuestOptions {
-            name: "捣乱".into(),
-            invite: invite.clone(),
-            use_host_relay: true,
-            nearby: false,
-        },
+        GuestOptions { name: "捣乱".into(), invite: invite.clone(), use_host_relay: true, nearby: false },
         events_tx,
     )
     .await
@@ -617,12 +495,7 @@ async fn kicked_guests_cannot_come_back() {
     let (events_tx, mut events) = unbounded_channel();
     let _again = Guest::join(
         &test_node(key, false, Vec::new()).await,
-        GuestOptions {
-            name: "捣乱".into(),
-            invite,
-            use_host_relay: true,
-            nearby: false,
-        },
+        GuestOptions { name: "捣乱".into(), invite, use_host_relay: true, nearby: false },
         events_tx,
     )
     .await
@@ -632,20 +505,14 @@ async fn kicked_guests_cannot_come_back() {
         _ => None,
     })
     .await;
-    assert_eq!(
-        reason,
-        EndReason::Rejected {
-            reason: RejectReason::Kicked
-        }
-    );
+    assert_eq!(reason, EndReason::Rejected { reason: RejectReason::Kicked });
     host.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropped_connections_reconnect_without_asking_again() {
     let (host, mut host_events) = start_host("t").await;
-    let (guest, mut events, member) =
-        admitted(&host, &mut host_events, "Alex", Permission::Read).await;
+    let (guest, mut events, member) = admitted(&host, &mut host_events, "Alex", Permission::Read).await;
 
     // 网络断了一下（主持人这边把连接掐掉，不拉黑）
     host.drop_connection(member);
@@ -655,9 +522,7 @@ async fn dropped_connections_reconnect_without_asking_again() {
     .await;
     // 重连上：不再问主持人，还是原来的成员号和权限，双方再同步一次
     let (again, permission) = expect(&mut events, "重连上", |event| match status_of(event) {
-        Some(Status::Connected {
-            member, permission, ..
-        }) => Some((member, permission)),
+        Some(Status::Connected { member, permission, .. }) => Some((member, permission)),
         _ => None,
     })
     .await;
@@ -676,8 +541,7 @@ async fn dropped_connections_reconnect_without_asking_again() {
     .await;
     host.send_update(DOC, b"after-reconnect".to_vec());
     expect(&mut events, "重连后的更新", |event| {
-        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"after-reconnect")
-            .then_some(())
+        matches!(event, Event::Update { from: 0, bytes, .. } if bytes == b"after-reconnect").then_some(())
     })
     .await;
     guest.leave().await;
@@ -698,27 +562,18 @@ async fn unreachable_hosts_get_a_conclusion_not_a_spinner() {
     let (guest, mut events) = join("x", invite).await;
     // 从端点建好算起（建端点本身要 2–3 秒，在 iroh 的网络监视初始化里）
     let started = tokio::time::Instant::now();
-    let diagnosis = expect(&mut events, "连不上的结论", |event| {
-        match status_of(event) {
-            Some(Status::Unreachable { diagnosis }) => Some(diagnosis),
-            Some(Status::Ended { reason }) => panic!("不该结束：{reason:?}"),
-            _ => None,
-        }
+    let diagnosis = expect(&mut events, "连不上的结论", |event| match status_of(event) {
+        Some(Status::Unreachable { diagnosis }) => Some(diagnosis),
+        Some(Status::Ended { reason }) => panic!("不该结束：{reason:?}"),
+        _ => None,
     })
     .await;
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "3 秒该给结论，等了 {:?}",
-        started.elapsed()
-    );
+    assert!(started.elapsed() < Duration::from_secs(5), "3 秒该给结论，等了 {:?}", started.elapsed());
     // 链接里是本机回环：同一台电脑，算同一个网络 → 连不进去多半是防火墙
     assert!(diagnosis.same_network);
     assert_eq!(diagnosis.cause, diagnose::Cause::Blocked);
     // 不算结束：后台接着试
-    expect_none(&mut events, "连不上不该结束", |event| {
-        matches!(status_of(event), Some(Status::Ended { .. }))
-    })
-    .await;
+    expect_none(&mut events, "连不上不该结束", |event| matches!(status_of(event), Some(Status::Ended { .. }))).await;
     guest.leave().await;
 }
 
@@ -759,12 +614,7 @@ fn addresses_are_sorted_by_who_can_use_them() {
     ]);
     assert_eq!(
         sorted,
-        vec![
-            addr("58.33.10.2:7000"),
-            addr("[2408:8207:1234::1]:5"),
-            addr("192.168.1.2:5"),
-            addr("127.0.0.1:5"),
-        ]
+        vec![addr("58.33.10.2:7000"), addr("[2408:8207:1234::1]:5"), addr("192.168.1.2:5"), addr("127.0.0.1:5"),]
     );
 }
 
@@ -783,92 +633,40 @@ fn invite_to(addrs: &[&str], relay: Option<Relay>) -> Invite {
 fn diagnosis_names_the_likely_cause() {
     use diagnose::{conclude, Cause, Facts, RelayFact};
     let net = |text: &str, prefix: u8| (text.parse::<std::net::IpAddr>().unwrap(), prefix);
-    let home = Facts {
-        networks: vec![net("192.168.1.50", 24)],
-        ..Facts::default()
-    };
+    let home = Facts { networks: vec![net("192.168.1.50", 24)], ..Facts::default() };
     let cause = |invite: &Invite, facts: &Facts| conclude(invite, facts, true).cause;
 
     // 没网
-    assert_eq!(
-        cause(&invite_to(&["192.168.1.23:5"], None), &Facts::default()),
-        Cause::Offline
-    );
+    assert_eq!(cause(&invite_to(&["192.168.1.23:5"], None), &Facts::default()), Cause::Offline);
     // 同一个网段却连不进去：防火墙 / 客户端隔离
     let same = conclude(&invite_to(&["192.168.1.23:5"], None), &home, true);
     assert!(same.same_network);
     assert_eq!(same.cause, Cause::Blocked);
     // 不同网段、主持人只有局域网地址
-    assert_eq!(
-        cause(&invite_to(&["192.168.7.5:5"], None), &home),
-        Cause::DifferentNetwork
-    );
+    assert_eq!(cause(&invite_to(&["192.168.7.5:5"], None), &home), Cause::DifferentNetwork);
     // 网段对不上，但 mDNS 看到了：还是同一个网络
-    let seen = Facts {
-        seen_nearby: true,
-        ..home.clone()
-    };
-    assert_eq!(
-        cause(&invite_to(&["192.168.7.5:5"], None), &seen),
-        Cause::Blocked
-    );
+    let seen = Facts { seen_nearby: true, ..home.clone() };
+    assert_eq!(cause(&invite_to(&["192.168.7.5:5"], None), &seen), Cause::Blocked);
     // 主持人只有公网 IPv6、我没有
-    assert_eq!(
-        cause(
-            &invite_to(&["192.168.7.5:5", "[2408:8207::1]:5"], None),
-            &home
-        ),
-        Cause::NoIpv6
-    );
+    assert_eq!(cause(&invite_to(&["192.168.7.5:5", "[2408:8207::1]:5"], None), &home), Cause::NoIpv6);
     // 我也有 IPv6：那就是对方不放行
-    let with_v6 = Facts {
-        networks: vec![net("192.168.1.50", 24), net("2409:8a00::9", 64)],
-        ..Facts::default()
-    };
-    let firewalled = conclude(
-        &invite_to(&["192.168.7.5:5", "[2408:8207::1]:5"], None),
-        &with_v6,
-        true,
-    );
+    let with_v6 = Facts { networks: vec![net("192.168.1.50", 24), net("2409:8a00::9", 64)], ..Facts::default() };
+    let firewalled = conclude(&invite_to(&["192.168.7.5:5", "[2408:8207::1]:5"], None), &with_v6, true);
     assert!(firewalled.has_ipv6);
     assert_eq!(firewalled.cause, Cause::HostFirewalled);
     // 端口映射拿到的公网 IPv4 也连不进去
-    assert_eq!(
-        cause(
-            &invite_to(&["192.168.7.5:5", "58.33.10.2:7000"], None),
-            &home
-        ),
-        Cause::HostFirewalled
-    );
+    assert_eq!(cause(&invite_to(&["192.168.7.5:5", "58.33.10.2:7000"], None), &home), Cause::HostFirewalled);
 
     // 中继
     let relay = Relay::new("relay.example.com", Some("t".into()), None, None).unwrap();
     let via = invite_to(&["192.168.7.5:5"], Some(relay));
-    let with_relay = |fact: RelayFact| Facts {
-        relay: Some(fact),
-        ..home.clone()
-    };
-    assert!(matches!(
-        cause(&via, &with_relay(RelayFact::Denied("bad token".into()))),
-        Cause::RelayDenied { .. }
-    ));
-    assert!(matches!(
-        cause(&via, &with_relay(RelayFact::Failed("timeout".into()))),
-        Cause::RelayDown { .. }
-    ));
-    assert_eq!(
-        cause(&via, &with_relay(RelayFact::Outdated)),
-        Cause::RelayOutdated
-    );
-    assert_eq!(
-        cause(&via, &with_relay(RelayFact::Connected)),
-        Cause::HostAway
-    );
+    let with_relay = |fact: RelayFact| Facts { relay: Some(fact), ..home.clone() };
+    assert!(matches!(cause(&via, &with_relay(RelayFact::Denied("bad token".into()))), Cause::RelayDenied { .. }));
+    assert!(matches!(cause(&via, &with_relay(RelayFact::Failed("timeout".into()))), Cause::RelayDown { .. }));
+    assert_eq!(cause(&via, &with_relay(RelayFact::Outdated)), Cause::RelayOutdated);
+    assert_eq!(cause(&via, &with_relay(RelayFact::Connected)), Cause::HostAway);
     // 中继还在连：先按直连说
-    assert_eq!(
-        cause(&via, &with_relay(RelayFact::Connecting)),
-        Cause::DifferentNetwork
-    );
+    assert_eq!(cause(&via, &with_relay(RelayFact::Connecting)), Cause::DifferentNetwork);
     // 选了只直连：中继的事不提
     let direct = conclude(&via, &with_relay(RelayFact::Denied("x".into())), false);
     assert_eq!(direct.relay, None);
@@ -892,29 +690,15 @@ fn relay_addresses_and_fingerprints_are_normalized() {
     assert_eq!(relay.name.as_deref(), Some("公司"));
     assert_eq!(relay.host(), "relay.example.com");
     assert_eq!(
-        Relay::new("https://relay.example.com:8443/path?x=1", None, None, None)
-            .unwrap()
-            .url,
+        Relay::new("https://relay.example.com:8443/path?x=1", None, None, None).unwrap().url,
         "https://relay.example.com:8443/"
     );
     assert!(Relay::new("http://relay.example.com", None, None, None).is_err());
     assert!(Relay::new("", None, None, None).is_err());
-    assert_eq!(
-        Relay::new("relay.example.com", None, Some("12ab"), None),
-        Err(relays::RelayError::BadFingerprint)
-    );
+    assert_eq!(Relay::new("relay.example.com", None, Some("12ab"), None), Err(relays::RelayError::BadFingerprint));
     // 空令牌、空名字当没有
-    let bare = Relay::new(
-        "relay.example.com",
-        Some(" ".into()),
-        Some(""),
-        Some("".into()),
-    )
-    .unwrap();
-    assert_eq!(
-        (bare.token, bare.fingerprint, bare.name),
-        (None, None, None)
-    );
+    let bare = Relay::new("relay.example.com", Some(" ".into()), Some(""), Some("".into())).unwrap();
+    assert_eq!((bare.token, bare.fingerprint, bare.name), (None, None, None));
 }
 
 #[test]
@@ -937,13 +721,7 @@ fn links_carry_relays_and_callbacks_and_do_not_mix_up() {
     // P10.1 发出去的 v1 链接照样认（没有中继）
     let plain = sample_invite();
     let mut v1 = vec![1u8];
-    v1.extend(protocol::encode(&(
-        plain.host,
-        plain.addrs.clone(),
-        plain.session,
-        plain.secret,
-        plain.permission,
-    )));
+    v1.extend(protocol::encode(&(plain.host, plain.addrs.clone(), plain.session, plain.secret, plain.permission)));
     let v1 = ticket::encode_link("odea://join/", &v1);
     assert_eq!(Invite::parse(&v1).unwrap(), plain);
 
@@ -963,15 +741,7 @@ fn links_carry_relays_and_callbacks_and_do_not_mix_up() {
     let code = relay.to_code();
     assert!(code.starts_with("odea://relay/"));
     assert_eq!(Relay::parse_code(&code).unwrap(), relay);
-    assert_eq!(
-        Relay::parse_code(
-            &code
-                .to_uppercase()
-                .replace("ODEA://RELAY/", "odea://relay/")
-        )
-        .unwrap(),
-        relay
-    );
+    assert_eq!(Relay::parse_code(&code.to_uppercase().replace("ODEA://RELAY/", "odea://relay/")).unwrap(), relay);
 
     // 粘错了地方：不硬解
     assert_eq!(Callback::parse(&link), Err(LinkError::Malformed));
@@ -987,16 +757,11 @@ fn links_carry_relays_and_callbacks_and_do_not_mix_up() {
 struct TokenGate(&'static str);
 
 impl iroh_relay::server::AccessControl for TokenGate {
-    async fn on_connect(
-        &self,
-        request: &iroh_relay::server::ClientRequest,
-    ) -> iroh_relay::server::Access {
+    async fn on_connect(&self, request: &iroh_relay::server::ClientRequest) -> iroh_relay::server::Access {
         if request.auth_token().as_deref() == Some(self.0) {
             iroh_relay::server::Access::Allow
         } else {
-            iroh_relay::server::Access::Deny {
-                reason: Some("token rejected".into()),
-            }
+            iroh_relay::server::Access::Deny { reason: Some("token rejected".into()) }
         }
     }
 }
@@ -1006,10 +771,7 @@ pub(crate) async fn start_relay(token: &'static str) -> (iroh_relay::server::Ser
     use iroh_relay::server::{CertConfig, RelayConfig, Server, ServerConfig, TlsConfig};
     let (certs, server_config) = iroh_relay::server::testing::self_signed_tls_certs_and_config();
     let mut relay = RelayConfig::new((Ipv4Addr::LOCALHOST, 0));
-    relay.tls = Some(TlsConfig::new(
-        (Ipv4Addr::LOCALHOST, 0),
-        CertConfig::Manual { server_config },
-    ));
+    relay.tls = Some(TlsConfig::new((Ipv4Addr::LOCALHOST, 0), CertConfig::Manual { server_config }));
     relay.access = std::sync::Arc::new(TokenGate(token));
     let mut config = ServerConfig::default();
     config.relay = Some(relay);
@@ -1020,13 +782,7 @@ pub(crate) async fn start_relay(token: &'static str) -> (iroh_relay::server::Ser
 }
 
 pub(crate) fn relay_at(url: &str, token: Option<&str>, pin: &str) -> Relay {
-    Relay::new(
-        url,
-        token.map(Into::into),
-        Some(pin),
-        Some("测试中继".into()),
-    )
-    .unwrap()
+    Relay::new(url, token.map(Into::into), Some(pin), Some("测试中继".into())).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1043,11 +799,7 @@ async fn relay_check_reports_connected_denied_and_wrong_certificates() {
     assert!(denied.denied.is_some(), "令牌不对要说出来：{denied:?}");
 
     // 证书和指纹对不上：连不上，不会退回去当普通证书校验
-    let forged = relays::check(
-        &relay_at(&url, Some("secret"), &"00".repeat(32)),
-        Duration::from_secs(4),
-    )
-    .await;
+    let forged = relays::check(&relay_at(&url, Some("secret"), &"00".repeat(32)), Duration::from_secs(4)).await;
     assert!(!forged.connected, "{forged:?}");
     assert!(forged.error.is_some(), "{forged:?}");
 }
@@ -1119,8 +871,7 @@ async fn guests_reach_hosts_through_the_relay() {
     .await;
     guest.send_update(DOC, b"back-via-relay".to_vec());
     expect(&mut host_events, "访客经中继的更新", |event| {
-        matches!(event, Event::Update { from: 1, bytes, .. } if bytes == b"back-via-relay")
-            .then_some(())
+        matches!(event, Event::Update { from: 1, bytes, .. } if bytes == b"back-via-relay").then_some(())
     })
     .await;
     guest.leave().await;
@@ -1137,20 +888,16 @@ async fn wrong_relay_tokens_are_named_in_the_diagnosis() {
     invite.relay = Some(relay_at(&url, Some("stale-token"), &pin));
     let (guest, mut events) = join("拿着旧令牌", invite).await;
     // 第一次结论可能出在中继回话之前（3 秒），之后每次重试再看一遍：最多等到第二轮
-    let cause = expect_within(
-        &mut events,
-        "说出令牌不对",
-        Duration::from_secs(30),
-        |event| match status_of(event) {
+    let cause =
+        expect_within(&mut events, "说出令牌不对", Duration::from_secs(30), |event| match status_of(event) {
             Some(Status::Unreachable { diagnosis })
                 if matches!(diagnosis.cause, diagnose::Cause::RelayDenied { .. }) =>
             {
                 Some(diagnosis.cause)
             }
             _ => None,
-        },
-    )
-    .await;
+        })
+        .await;
     assert!(matches!(cause, diagnose::Cause::RelayDenied { .. }));
     guest.leave().await;
     host.stop().await;
@@ -1194,12 +941,7 @@ async fn callback_links_let_the_host_dial_the_guest() {
     .await;
     // 拨过去以后照样要主持人确认
     let request = expect(&mut host_events, "加入请求", |event| match event {
-        Event::Control(Control::JoinRequest {
-            request,
-            invited,
-            name,
-            ..
-        }) => {
+        Event::Control(Control::JoinRequest { request, invited, name, .. }) => {
             assert!(*invited);
             assert_eq!(name, "能被连的人");
             Some(*request)
@@ -1208,10 +950,8 @@ async fn callback_links_let_the_host_dial_the_guest() {
     })
     .await;
     host.answer(request, Decision::Allow(Permission::Edit));
-    expect(&mut events, "进来了", |event| {
-        matches!(status_of(event), Some(Status::Connected { .. })).then_some(())
-    })
-    .await;
+    expect(&mut events, "进来了", |event| matches!(status_of(event), Some(Status::Connected { .. })).then_some(()))
+        .await;
     expect(&mut host_events, "主持人的 SyncStart", |event| {
         matches!(event, Event::SyncStart { with: 1, .. }).then_some(())
     })
@@ -1229,9 +969,7 @@ async fn callback_links_let_the_host_dial_the_guest() {
     // 访客离开：主持人不再往回拨
     guest.leave().await;
     expect(&mut host_events, "离开后的成员表", |event| {
-        members_of(event)
-            .filter(|members| members.len() == 1)
-            .map(|_| ())
+        members_of(event).filter(|members| members.len() == 1).map(|_| ())
     })
     .await;
     host.stop().await;
@@ -1242,9 +980,7 @@ async fn hosts_report_reach_with_a_fresh_link() {
     let (host, mut host_events) = start_host("t").await;
     // 没开端口映射、没配中继：读完网卡（Windows 上两秒多）就有结论
     let (reach, link) = expect(&mut host_events, "自检", |event| match event {
-        Event::Control(Control::Reach { reach, link }) if !reach.checking => {
-            Some((reach.clone(), link.clone()))
-        }
+        Event::Control(Control::Reach { reach, link }) if !reach.checking => Some((reach.clone(), link.clone())),
         _ => None,
     })
     .await;
@@ -1278,17 +1014,13 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
         &test_node(key.clone(), false, Vec::new()).await,
-        HostOptions {
-            record: Some(dir.path().to_path_buf()),
-            ..host_options("周会")
-        },
+        HostOptions { record: Some(dir.path().to_path_buf()), ..host_options("周会") },
         events,
     )
     .await
     .unwrap();
     host.allow_docs(&[DOC]);
-    let (guest, mut guest_events, member) =
-        admitted(&host, &mut host_events, "Alex", Permission::Read).await;
+    let (guest, mut guest_events, member) = admitted(&host, &mut host_events, "Alex", Permission::Read).await;
     // 一个会话一个文件夹（§25.2）
     let session_dir = record::host_dir(dir.path(), &host.session());
     // 前端每隔几秒交来的 文档 状态（这里随便几个字节）
@@ -1297,10 +1029,7 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     assert_eq!(left.note, "note-1");
     assert_eq!(left.title, "周会");
     assert_eq!(left.approved.len(), 1);
-    assert_eq!(
-        (left.approved[0].member, left.approved[0].permission),
-        (member, Permission::Read)
-    );
+    assert_eq!((left.approved[0].member, left.approved[0].permission), (member, Permission::Read));
     let old_session = host.invite().session;
 
     // 主持人那台崩了：谁都没告诉，记录留着
@@ -1315,11 +1044,7 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
         &test_node_on(key, false, Vec::new(), left.ports.clone()).await,
-        HostOptions {
-            record: Some(dir.path().to_path_buf()),
-            resume: Some(left),
-            ..host_options("周会")
-        },
+        HostOptions { record: Some(dir.path().to_path_buf()), resume: Some(left), ..host_options("周会") },
         events,
     )
     .await
@@ -1327,13 +1052,9 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     host.allow_docs(&[DOC]);
     assert_eq!(host.invite().session, old_session);
     // 访客自己接上：不再问，还是原来的成员号和权限
-    let (again, permission) = expect(&mut guest_events, "接上了", |event| {
-        match status_of(event) {
-            Some(Status::Connected {
-                member, permission, ..
-            }) => Some((member, permission)),
-            _ => None,
-        }
+    let (again, permission) = expect(&mut guest_events, "接上了", |event| match status_of(event) {
+        Some(Status::Connected { member, permission, .. }) => Some((member, permission)),
+        _ => None,
     })
     .await;
     assert_eq!((again, permission), (member, Permission::Read));
@@ -1368,20 +1089,13 @@ async fn nearby_guests_ask_without_a_link() {
     let (events_tx, mut events) = unbounded_channel();
     let _guest = Guest::join(
         &test_node(SecretKey::generate(), false, Vec::new()).await,
-        GuestOptions {
-            name: "同一个 Wi-Fi".into(),
-            invite,
-            use_host_relay: true,
-            nearby: true,
-        },
+        GuestOptions { name: "同一个 Wi-Fi".into(), invite, use_host_relay: true, nearby: true },
         events_tx,
     )
     .await
     .unwrap();
     let request = expect(&mut host_events, "附近的加入请求", |event| match event {
-        Event::Control(Control::JoinRequest {
-            request, invited, ..
-        }) => {
+        Event::Control(Control::JoinRequest { request, invited, .. }) => {
             // 没拿着链接：界面上说「在同一个网络里，想加入」
             assert!(!invited);
             Some(*request)
@@ -1407,9 +1121,7 @@ async fn nearby_list_finds_a_sharing_host_over_mdns() {
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
         &test_node(SecretKey::generate(), true, Vec::new()).await,
-        HostOptions {
-            ..host_options("t")
-        },
+        HostOptions { ..host_options("t") },
         events,
     )
     .await
@@ -1418,40 +1130,25 @@ async fn nearby_list_finds_a_sharing_host_over_mdns() {
     let (scan_tx, mut scan) = unbounded_channel();
     let nearby = nearby::Nearby::start(scan_tx).await.expect("mDNS 起不来");
     let id = host.id();
-    expect_within(
-        &mut scan,
-        "列表里出现主持人",
-        Duration::from_secs(20),
-        |event| match event {
-            Event::Control(Control::Nearby { hosts }) => hosts
-                .iter()
-                .any(|found| found.id == id && found.name == "林夕")
-                .then_some(()),
-            _ => None,
-        },
-    )
+    expect_within(&mut scan, "列表里出现主持人", Duration::from_secs(20), |event| match event {
+        Event::Control(Control::Nearby { hosts }) => {
+            hosts.iter().any(|found| found.id == id && found.name == "林夕").then_some(())
+        }
+        _ => None,
+    })
     .await;
     let invite = nearby.invite(&id).expect("列表里的地址");
     nearby.stop().await;
     let (events_tx, _events) = unbounded_channel();
     let _guest = Guest::join(
         &test_node(SecretKey::generate(), true, Vec::new()).await,
-        GuestOptions {
-            name: "邻座".into(),
-            invite,
-            use_host_relay: true,
-            nearby: true,
-        },
+        GuestOptions { name: "邻座".into(), invite, use_host_relay: true, nearby: true },
         events_tx,
     )
     .await
     .unwrap();
     expect(&mut host_events, "加入请求", |event| {
-        matches!(
-            event,
-            Event::Control(Control::JoinRequest { invited: false, .. })
-        )
-        .then_some(())
+        matches!(event, Event::Control(Control::JoinRequest { invited: false, .. })).then_some(())
     })
     .await;
     host.stop().await;
@@ -1460,8 +1157,7 @@ async fn nearby_list_finds_a_sharing_host_over_mdns() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guests_fetch_referenced_attachments_and_hand_over_pasted_ones() {
     let (host, mut host_events) = start_host("t").await;
-    let (guest, _guest_events, _member) =
-        admitted(&host, &mut host_events, "Alex", Permission::Edit).await;
+    let (guest, _guest_events, _member) = admitted(&host, &mut host_events, "Alex", Permission::Edit).await;
 
     // 要一个文件：主持人那边变成事件，命令层回字节
     let files = guest.attachments();
@@ -1488,25 +1184,14 @@ async fn guests_fetch_referenced_attachments_and_hand_over_pasted_ones() {
     })
     .await;
     host.answer_attachment(request, Err("这个文件不在这篇正文里".into()));
-    assert_eq!(
-        fetch.await.unwrap(),
-        Err("这个文件不在这篇正文里".to_string())
-    );
+    assert_eq!(fetch.await.unwrap(), Err("这个文件不在这篇正文里".to_string()));
 
     // 粘贴的文件交给主持人存
     let files = guest.attachments();
     let put = tokio::spawn(async move { files.put(DOC, "截图.png", b"pasted".to_vec()).await });
     let request = expect(&mut host_events, "存附件", |event| match event {
-        Event::AttachPut {
-            request,
-            name,
-            bytes,
-            ..
-        } => {
-            assert_eq!(
-                (name.as_str(), bytes.as_slice()),
-                ("截图.png", &b"pasted"[..])
-            );
+        Event::AttachPut { request, name, bytes, .. } => {
+            assert_eq!((name.as_str(), bytes.as_slice()), ("截图.png", &b"pasted"[..]));
             Some(*request)
         }
         _ => None,
@@ -1520,14 +1205,10 @@ async fn guests_fetch_referenced_attachments_and_hand_over_pasted_ones() {
     assert!(guest.attachments().put(DOC, "big.bin", too_big).await.is_err());
 
     // 只读的人传不了：主持人那边连事件都没有
-    let (reader, _reader_events, _) =
-        admitted(&host, &mut host_events, "佐藤", Permission::Read).await;
+    let (reader, _reader_events, _) = admitted(&host, &mut host_events, "佐藤", Permission::Read).await;
     let refused = reader.attachments().put(DOC, "x.png", b"x".to_vec()).await;
     assert!(refused.unwrap_err().contains("只读"));
-    expect_none(&mut host_events, "只读的人的附件", |event| {
-        matches!(event, Event::AttachPut { .. })
-    })
-    .await;
+    expect_none(&mut host_events, "只读的人的附件", |event| matches!(event, Event::AttachPut { .. })).await;
     host.stop().await;
 }
 
@@ -1535,10 +1216,7 @@ async fn guests_fetch_referenced_attachments_and_hand_over_pasted_ones() {
 async fn slow_guests_get_one_resync_instead_of_a_long_queue() {
     let queue = queue::DocQueue::default();
     // 加入时的快照很大也不算积压
-    assert_eq!(
-        queue.push(kind::SYNC2, vec![0; 4 << 20]),
-        queue::Pushed::Queued
-    );
+    assert_eq!(queue.push(kind::SYNC2, vec![0; 4 << 20]), queue::Pushed::Queued);
     for _ in 0..queue::LAG_FRAMES - 1 {
         assert_eq!(queue.push(kind::UPDATE, vec![1; 20]), queue::Pushed::Queued);
     }
@@ -1562,10 +1240,7 @@ async fn slow_guests_get_one_resync_instead_of_a_long_queue() {
     for _ in 0..3 {
         queue.push(kind::UPDATE, vec![0; queue::LAG_BYTES / 4]);
     }
-    assert_eq!(
-        queue.push(kind::UPDATE, vec![0; queue::LAG_BYTES / 2]),
-        queue::Pushed::Collapsed
-    );
+    assert_eq!(queue.push(kind::UPDATE, vec![0; queue::LAG_BYTES / 2]), queue::Pushed::Collapsed);
     // 关掉：排着的取完就是 None，新的不收
     queue.close();
     assert_eq!(queue.push(kind::UPDATE, vec![1]), queue::Pushed::Closed);
@@ -1577,69 +1252,27 @@ async fn slow_guests_get_one_resync_instead_of_a_long_queue() {
 fn firewall_verdicts_follow_the_current_network() {
     use firewall::{evaluate, Firewall, Rule, PRIVATE, PUBLIC};
     let on = |_| true;
-    let allow_private = Rule {
-        allow: true,
-        profiles: PRIVATE,
-        udp: true,
-    };
+    let allow_private = Rule { allow: true, profiles: PRIVATE, udp: true };
     // Windows 弹窗里只勾了「专用」：给「公用」建了一条阻止规则
-    let block_public = Rule {
-        allow: false,
-        profiles: PUBLIC,
-        udp: true,
-    };
+    let block_public = Rule { allow: false, profiles: PUBLIC, udp: true };
     let rules = [allow_private.clone(), block_public];
-    assert_eq!(
-        evaluate(PRIVATE, on, &rules),
-        Firewall::Allowed { public: false }
-    );
-    assert_eq!(
-        evaluate(PUBLIC, on, &rules),
-        Firewall::Blocked { public: true }
-    );
+    assert_eq!(evaluate(PRIVATE, on, &rules), Firewall::Allowed { public: false });
+    assert_eq!(evaluate(PUBLIC, on, &rules), Firewall::Blocked { public: true });
     // 公用网络上防火墙关着：放行
-    assert_eq!(
-        evaluate(PUBLIC, |profile| profile != PUBLIC, &rules),
-        Firewall::Allowed { public: true }
-    );
+    assert_eq!(evaluate(PUBLIC, |profile| profile != PUBLIC, &rules), Firewall::Allowed { public: true });
     // 还没问过
-    assert_eq!(
-        evaluate(PUBLIC, on, &[]),
-        Firewall::NotAsked { public: true }
-    );
+    assert_eq!(evaluate(PUBLIC, on, &[]), Firewall::NotAsked { public: true });
     // 只管 TCP 的规则不算
-    let tcp_only = Rule {
-        allow: true,
-        profiles: PUBLIC,
-        udp: false,
-    };
-    assert_eq!(
-        evaluate(PUBLIC, on, &[tcp_only]),
-        Firewall::NotAsked { public: true }
-    );
+    let tcp_only = Rule { allow: true, profiles: PUBLIC, udp: false };
+    assert_eq!(evaluate(PUBLIC, on, &[tcp_only]), Firewall::NotAsked { public: true });
     // 阻止优先
-    let allow_all = Rule {
-        allow: true,
-        profiles: PRIVATE | PUBLIC,
-        udp: true,
-    };
-    let block_all = Rule {
-        allow: false,
-        profiles: PRIVATE | PUBLIC,
-        udp: true,
-    };
-    assert_eq!(
-        evaluate(PRIVATE, on, &[allow_all, block_all]),
-        Firewall::Blocked { public: false }
-    );
+    let allow_all = Rule { allow: true, profiles: PRIVATE | PUBLIC, udp: true };
+    let block_all = Rule { allow: false, profiles: PRIVATE | PUBLIC, udp: true };
+    assert_eq!(evaluate(PRIVATE, on, &[allow_all, block_all]), Firewall::Blocked { public: false });
     assert_eq!(evaluate(0, on, &[allow_private]), Firewall::Unknown);
     // 真的读一次本机（Windows 上走 COM，别的系统是 Unknown）：不能崩
     let started = std::time::Instant::now();
-    eprintln!(
-        "本机的防火墙：{:?}（{:?}）",
-        firewall::check(),
-        started.elapsed()
-    );
+    eprintln!("本机的防火墙：{:?}（{:?}）", firewall::check(), started.elapsed());
 }
 
 #[test]
@@ -1655,10 +1288,7 @@ fn records_round_trip_and_only_count_with_their_state() {
     let back = record::host_left(dir.path()).unwrap();
     assert_eq!(back, host);
     assert_eq!(back.session_bytes(), Some([1u8; 16]));
-    assert_eq!(
-        record::load_state(dir.path(), record::Role::Host, DOC).as_deref(),
-        Some(&b"state"[..])
-    );
+    assert_eq!(record::load_state(dir.path(), record::Role::Host, DOC).as_deref(), Some(&b"state"[..]));
     let guest = record::GuestRecord::new("odea://join/x".into(), false, true);
     record::save_json(dir.path(), record::GUEST_FILE, &guest).unwrap();
     record::save_state(dir.path(), record::Role::Guest, DOC, b"g").unwrap();
@@ -1673,12 +1303,7 @@ async fn join_as(key: &SecretKey, name: &str, invite: Invite) -> (Guest, Unbound
     let (events, rx) = unbounded_channel();
     let guest = Guest::join(
         &test_node(key.clone(), false, Vec::new()).await,
-        GuestOptions {
-            name: name.into(),
-            invite,
-            use_host_relay: true,
-            nearby: false,
-        },
+        GuestOptions { name: name.into(), invite, use_host_relay: true, nearby: false },
         events,
     )
     .await
@@ -1693,10 +1318,7 @@ async fn remembered_people_come_in_without_asking_until_forgotten() {
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
         &test_node(SecretKey::generate(), false, Vec::new()).await,
-        HostOptions {
-            trusted: [(id, Permission::Read)].into_iter().collect(),
-            ..host_options("周会")
-        },
+        HostOptions { trusted: [(id, Permission::Read)].into_iter().collect(), ..host_options("周会") },
         events,
     )
     .await
@@ -1705,11 +1327,9 @@ async fn remembered_people_come_in_without_asking_until_forgotten() {
 
     // 记住的人：不问，按记住的权限进来
     let (guest, mut guest_events) = join_as(&key, "Alex", loopback(&host, host.invite())).await;
-    let permission = expect(&mut guest_events, "直接进来", |event| {
-        match status_of(event) {
-            Some(Status::Connected { permission, .. }) => Some(permission),
-            _ => None,
-        }
+    let permission = expect(&mut guest_events, "直接进来", |event| match status_of(event) {
+        Some(Status::Connected { permission, .. }) => Some(permission),
+        _ => None,
     })
     .await;
     assert_eq!(permission, Permission::Read);
@@ -1724,19 +1344,12 @@ async fn remembered_people_come_in_without_asking_until_forgotten() {
     let old = loopback(&host, host.invite());
     let fresh = loopback(&host, host.reset_invite());
     let (_stale, mut stale_events) = join_as(&key, "Alex", old).await;
-    let reason = expect(&mut stale_events, "旧链接", |event| {
-        match status_of(event) {
-            Some(Status::Ended { reason }) => Some(reason),
-            _ => None,
-        }
+    let reason = expect(&mut stale_events, "旧链接", |event| match status_of(event) {
+        Some(Status::Ended { reason }) => Some(reason),
+        _ => None,
     })
     .await;
-    assert_eq!(
-        reason,
-        EndReason::Rejected {
-            reason: RejectReason::BadInvite
-        }
-    );
+    assert_eq!(reason, EndReason::Rejected { reason: RejectReason::BadInvite });
 
     // 会话中途忘掉：「允许过、重连不问」也一起清掉，离开再回来要问
     host.forget(&id);
@@ -1747,45 +1360,29 @@ async fn remembered_people_come_in_without_asking_until_forgotten() {
     })
     .await;
     assert!(host.answer(request, Decision::Allow(Permission::Edit)));
-    let member = expect(
-        &mut again_events,
-        "允许了又进来",
-        |event| match status_of(event) {
-            Some(Status::Connected { member, .. }) => Some(member),
-            _ => None,
-        },
-    )
+    let member = expect(&mut again_events, "允许了又进来", |event| match status_of(event) {
+        Some(Status::Connected { member, .. }) => Some(member),
+        _ => None,
+    })
     .await;
 
     // 移出：记住过的也忘掉（返回被移出的公钥，命令层据此从 config.json 里删），再来就拒
     host.trust(id, Permission::Edit);
     assert_eq!(host.kick(member), Some(id));
     let (_kicked, mut kicked_events) = join_as(&key, "Alex", fresh).await;
-    let reason = expect(
-        &mut kicked_events,
-        "移出以后",
-        |event| match status_of(event) {
-            Some(Status::Ended { reason }) => Some(reason),
-            _ => None,
-        },
-    )
+    let reason = expect(&mut kicked_events, "移出以后", |event| match status_of(event) {
+        Some(Status::Ended { reason }) => Some(reason),
+        _ => None,
+    })
     .await;
-    assert_eq!(
-        reason,
-        EndReason::Rejected {
-            reason: RejectReason::Kicked
-        }
-    );
+    assert_eq!(reason, EndReason::Rejected { reason: RejectReason::Kicked });
     host.stop().await;
 
     // 忘掉：下一次会话里照样问（这次会话里允许过的人重连不问，那是另一回事）
     let (events, mut host_events) = unbounded_channel();
     let host = Host::start(
         &test_node(SecretKey::generate(), false, Vec::new()).await,
-        HostOptions {
-            trusted: [(id, Permission::Edit)].into_iter().collect(),
-            ..host_options("周会")
-        },
+        HostOptions { trusted: [(id, Permission::Edit)].into_iter().collect(), ..host_options("周会") },
         events,
     )
     .await
@@ -1816,9 +1413,7 @@ fn cached_attachment_keeps_the_written_name() {
 /// 手工拨主持人、发一个指定版本的 Hello，读回主持人的回话（Reject 的原因）
 async fn hello_with_version(host: &Host, version: u16) -> RejectReason {
     let invite = loopback(host, host.invite());
-    let bound = endpoint::bind(SecretKey::generate(), None, false, &[], &[])
-        .await
-        .expect("起不来端点");
+    let bound = endpoint::bind(SecretKey::generate(), None, false, &[], &[]).await.expect("起不来端点");
     let addr = endpoint::dial_addr(&invite.host, &invite.addrs, None).unwrap();
     let conn = tokio::time::timeout(WAIT, bound.endpoint.connect(addr, protocol::ALPN))
         .await
@@ -1832,9 +1427,7 @@ async fn hello_with_version(host: &Host, version: u16) -> RejectReason {
         proof: None,
         name: "旧版的人".into(),
     };
-    protocol::write_frame(&mut send, kind::HELLO, &protocol::encode(&hello))
-        .await
-        .unwrap();
+    protocol::write_frame(&mut send, kind::HELLO, &protocol::encode(&hello)).await.unwrap();
     let (frame, payload) = tokio::time::timeout(WAIT, protocol::read_frame(&mut recv))
         .await
         .expect("等回话超时")
@@ -1842,9 +1435,7 @@ async fn hello_with_version(host: &Host, version: u16) -> RejectReason {
         .expect("主持人没回话");
     assert_eq!(frame, kind::REJECT);
     bound.endpoint.close().await;
-    protocol::decode::<protocol::Reject>(&payload)
-        .unwrap()
-        .reason
+    protocol::decode::<protocol::Reject>(&payload).unwrap().reason
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1852,16 +1443,9 @@ async fn version_mismatch_says_whose_odea_is_older() {
     let (host, mut host_events) = start_host("周会").await;
     // 对方的旧：主持人回自己的版本，主持人这边也知道一声（不打扰成加入请求）
     let reason = hello_with_version(&host, protocol::PROTOCOL_VERSION - 1).await;
-    assert_eq!(
-        reason,
-        RejectReason::Version {
-            theirs: protocol::PROTOCOL_VERSION
-        }
-    );
+    assert_eq!(reason, RejectReason::Version { theirs: protocol::PROTOCOL_VERSION });
     let older = expect(&mut host_events, "版本不对的知会", |event| match event {
-        Event::Control(Control::JoinOutdated { name, guest_older }) if name == "旧版的人" => {
-            Some(*guest_older)
-        }
+        Event::Control(Control::JoinOutdated { name, guest_older }) if name == "旧版的人" => Some(*guest_older),
         _ => None,
     })
     .await;
@@ -1874,11 +1458,9 @@ async fn version_mismatch_says_whose_odea_is_older() {
     })
     .await;
     assert!(!older);
-    expect_none(
-        &mut host_events,
-        "版本不对的不该问主持人",
-        |event| matches!(event, Event::Control(Control::JoinRequest { .. })),
-    )
+    expect_none(&mut host_events, "版本不对的不该问主持人", |event| {
+        matches!(event, Event::Control(Control::JoinRequest { .. }))
+    })
     .await;
     host.stop().await;
 }
@@ -1950,19 +1532,13 @@ connection: close
 
 #[test]
 fn upgrade_refusals_are_recognized() {
-    assert!(relays::upgrade_refused(
-        "Unexpected status during upgrade: 400 Bad Request"
-    ));
+    assert!(relays::upgrade_refused("Unexpected status during upgrade: 400 Bad Request"));
     assert!(relays::upgrade_refused(
         "Failed to connect to relay server: unable to connect: expected HTTP 101 Switching Protocols, got status code 400"
     ));
-    assert!(relays::upgrade_refused(
-        "Server replied with invalid iroh-relay version header: iroh-relay-v3"
-    ));
+    assert!(relays::upgrade_refused("Server replied with invalid iroh-relay version header: iroh-relay-v3"));
     assert!(!relays::upgrade_refused("timed out"));
-    assert!(!relays::upgrade_refused(
-        "Unexpected status during upgrade: 404 Not Found"
-    ));
+    assert!(!relays::upgrade_refused("Unexpected status during upgrade: 404 Not Found"));
     assert!(relays::offered_versions().contains("iroh-relay-v1"));
 }
 
@@ -1973,26 +1549,17 @@ async fn relay_check_says_when_the_relay_version_does_not_match() {
     let started = std::time::Instant::now();
     let check = relays::check(&relay_at(&url, Some("secret"), &pin), WAIT).await;
     assert!(!check.connected, "{check:?}");
-    assert_eq!(
-        check.outdated.as_deref(),
-        Some("iroh-relay-v3"),
-        "{check:?}"
-    );
+    assert_eq!(check.outdated.as_deref(), Some("iroh-relay-v3"), "{check:?}");
     assert_eq!(check.error, None, "{check:?}");
-    assert!(
-        started.elapsed() < WAIT,
-        "认出来就不用等满：{:?}",
-        started.elapsed()
-    );
+    assert!(started.elapsed() < WAIT, "认出来就不用等满：{:?}", started.elapsed());
 
     // 真的 iroh-relay：说一个它不认的版本，它的原话里有它支持的
     let (_server, url, pin) = start_relay("secret").await;
     let relay = relay_at(&url, None, &pin);
-    let theirs =
-        tokio::task::spawn_blocking(move || relays::probe_upgrade(&relay, "iroh-relay-v9"))
-            .await
-            .unwrap()
-            .expect("问得出来");
+    let theirs = tokio::task::spawn_blocking(move || relays::probe_upgrade(&relay, "iroh-relay-v9"))
+        .await
+        .unwrap()
+        .expect("问得出来");
     let theirs = theirs.expect("版本对不上");
     assert!(theirs.contains("iroh-relay-v2"), "{theirs}");
     // 正常的中继照样连得上，不会被认成版本不对
@@ -2003,77 +1570,52 @@ async fn relay_check_says_when_the_relay_version_does_not_match() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn renaming_during_a_session_reaches_everyone() {
     let (host, mut host_events) = start_host("周会").await;
-    let (guest, mut guest_events, member) =
-        admitted(&host, &mut host_events, "Alex", Permission::Edit).await;
+    let (guest, mut guest_events, member) = admitted(&host, &mut host_events, "Alex", Permission::Edit).await;
 
     // 访客改名：主持人的成员表换掉，再广播给访客
     guest.set_name("  阿历克斯 ");
     expect(&mut host_events, "主持人看到新名字", |event| match event {
         Event::Control(Control::Members { members })
-            if members
-                .iter()
-                .any(|m| m.member == member && m.name == "阿历克斯") =>
+            if members.iter().any(|m| m.member == member && m.name == "阿历克斯") =>
         {
             Some(())
         }
         _ => None,
     })
     .await;
-    expect(
-        &mut guest_events,
-        "访客那边的成员表也换了",
-        |event| match event {
-            Event::Control(Control::Members { members })
-                if members
-                    .iter()
-                    .any(|m| m.member == member && m.name == "阿历克斯") =>
-            {
-                Some(())
-            }
-            _ => None,
-        },
-    )
+    expect(&mut guest_events, "访客那边的成员表也换了", |event| match event {
+        Event::Control(Control::Members { members })
+            if members.iter().any(|m| m.member == member && m.name == "阿历克斯") =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
     .await;
 
     // 主持人改名：成员表里的主持人换掉，访客那边跟着换
     host.set_name("林夕（主持）");
-    assert!(host
-        .members()
-        .iter()
-        .any(|m| m.host && m.name == "林夕（主持）"));
-    expect(
-        &mut guest_events,
-        "访客看到主持人的新名字",
-        |event| match event {
-            Event::Control(Control::Members { members })
-                if members.iter().any(|m| m.host && m.name == "林夕（主持）") =>
-            {
-                Some(())
-            }
-            _ => None,
-        },
-    )
+    assert!(host.members().iter().any(|m| m.host && m.name == "林夕（主持）"));
+    expect(&mut guest_events, "访客看到主持人的新名字", |event| match event {
+        Event::Control(Control::Members { members }) if members.iter().any(|m| m.host && m.name == "林夕（主持）") => {
+            Some(())
+        }
+        _ => None,
+    })
     .await;
     // 空名字不算
     host.set_name("   ");
-    assert!(host
-        .members()
-        .iter()
-        .any(|m| m.host && m.name == "林夕（主持）"));
+    assert!(host.members().iter().any(|m| m.host && m.name == "林夕（主持）"));
     host.stop().await;
 }
 
 #[test]
 fn only_addresses_on_the_nic_count_as_a_public_ipv4() {
     use reach::{sort_addrs, Portmap, Reach};
-    let addrs: Vec<SocketAddr> = [
-        "192.168.1.2:5000",
-        "125.84.158.172:61234",
-        "58.33.10.2:5000",
-    ]
-    .iter()
-    .map(|text| text.parse().unwrap())
-    .collect();
+    let addrs: Vec<SocketAddr> = ["192.168.1.2:5000", "125.84.158.172:61234", "58.33.10.2:5000"]
+        .iter()
+        .map(|text| text.parse().unwrap())
+        .collect();
     let empty = || Reach {
         checking: false,
         lan: Vec::new(),
@@ -2101,8 +1643,7 @@ fn only_addresses_on_the_nic_count_as_a_public_ipv4() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
     let (host, mut host_events) = start_host("转发").await;
-    let (relay, mut relay_events, relay_member) =
-        admitted(&host, &mut host_events, "B", Permission::Edit).await;
+    let (relay, mut relay_events, relay_member) = admitted(&host, &mut host_events, "B", Permission::Edit).await;
 
     // B 的转发链接：指着 B，会话 id、邀请密钥照旧；单测里只走本机回环
     let made = relay.callbacks().forward_link().await;
@@ -2119,13 +1660,7 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
     // C 只连得上 B：主持人那边是一个「经由 B」的加入请求（B 核过他的证明）
     let (far, mut far_events) = join("C", invite.clone()).await;
     let request = expect(&mut host_events, "经由 B 的加入请求", |event| match event {
-        Event::Control(Control::JoinRequest {
-            request,
-            name,
-            invited,
-            via,
-            ..
-        }) if name == "C" => {
+        Event::Control(Control::JoinRequest { request, name, invited, via, .. }) if name == "C" => {
             assert!(*invited, "B 核过了证明");
             assert_eq!(via.as_deref(), Some("B"));
             Some(*request)
@@ -2140,19 +1675,13 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
     })
     .await;
     assert!(far_member != relay_member && far_member != 0);
-    expect(&mut far_events, "C 的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with: 0, .. }).then_some(())
-    })
-    .await;
+    expect(&mut far_events, "C 的 SyncStart", |event| matches!(event, Event::SyncStart { with: 0, .. }).then_some(()))
+        .await;
     expect(&mut host_events, "主持人和 C 的 SyncStart", |event| {
         matches!(event, Event::SyncStart { with, .. } if *with == far_member).then_some(())
     })
     .await;
-    let via = host
-        .members()
-        .into_iter()
-        .find(|member| member.member == far_member)
-        .and_then(|member| member.via);
+    let via = host.members().into_iter().find(|member| member.member == far_member).and_then(|member| member.via);
     assert_eq!(via, Some(relay_member), "成员表里记着经由谁");
 
     // 同步、两个方向的更新都经 B 走；B 自己也收到 C 的（主持人转给大家）
@@ -2169,8 +1698,7 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
     .await;
     far.send_update(DOC, b"from-c".to_vec());
     expect(&mut host_events, "主持人收到 C 的", |event| {
-        matches!(event, Event::Update { from, bytes, .. } if *from == far_member && bytes == b"from-c")
-            .then_some(())
+        matches!(event, Event::Update { from, bytes, .. } if *from == far_member && bytes == b"from-c").then_some(())
     })
     .await;
     expect(&mut relay_events, "B 收到 C 的（主持人转给大家）", |event| {
@@ -2214,14 +1742,15 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
     // 权限照主持人的：改成只读以后 C 的更新被丢
     host.set_permission(far_member, Permission::Read);
     expect(&mut far_events, "C 收到权限通知", |event| {
-        matches!(event, Event::Control(Control::Permission { permission: Permission::Read }))
-            .then_some(())
+        matches!(event, Event::Control(Control::Permission { permission: Permission::Read })).then_some(())
     })
     .await;
     far.send_update(DOC, b"c-read-only".to_vec());
-    expect_none(&mut host_events, "只读的 C 的更新", |event| {
-        matches!(event, Event::Update { bytes, .. } if bytes == b"c-read-only")
-    })
+    expect_none(
+        &mut host_events,
+        "只读的 C 的更新",
+        |event| matches!(event, Event::Update { bytes, .. } if bytes == b"c-read-only"),
+    )
     .await;
 
     // 证明不对的（链接被重置过）：B 当场拒，主持人那边没有请求
@@ -2233,23 +1762,18 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
         _ => None,
     })
     .await;
-    assert_eq!(
-        reason,
-        EndReason::Rejected {
-            reason: RejectReason::BadInvite
-        }
-    );
-    expect_none(&mut host_events, "拿错链接的人的请求", |event| {
-        matches!(event, Event::Control(Control::JoinRequest { name, .. }) if name == "拿错链接的人")
-    })
+    assert_eq!(reason, EndReason::Rejected { reason: RejectReason::BadInvite });
+    expect_none(
+        &mut host_events,
+        "拿错链接的人的请求",
+        |event| matches!(event, Event::Control(Control::JoinRequest { name, .. }) if name == "拿错链接的人"),
+    )
     .await;
 
     // C 离开：主持人那边成员表少了他，B 还在
     far.leave().await;
     expect(&mut host_events, "C 走了以后的成员表", |event| {
-        members_of(event)
-            .filter(|members| members.len() == 2)
-            .map(|_| ())
+        members_of(event).filter(|members| members.len() == 2).map(|_| ())
     })
     .await;
     relay.leave().await;
@@ -2261,8 +1785,7 @@ async fn a_guest_forwards_for_someone_who_cannot_reach_the_host() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_forwarded_guest_gets_the_same_attachment_limit_as_everyone() {
     let (host, mut host_events) = start_host("转发的附件").await;
-    let (relay, _relay_events, _relay_member) =
-        admitted(&host, &mut host_events, "B", Permission::Edit).await;
+    let (relay, _relay_events, _relay_member) = admitted(&host, &mut host_events, "B", Permission::Edit).await;
     let made = relay.callbacks().forward_link().await;
     let mut invite = Invite::parse(&made.link).unwrap();
     invite.addrs = relay
@@ -2318,11 +1841,11 @@ async fn a_forwarded_guest_gets_the_same_attachment_limit_as_everyone() {
     for fetch in fetches {
         results.push(fetch.await.unwrap());
     }
-    assert_eq!(results.iter().filter(|result| result.as_deref() == Ok(&b"png"[..])).count(), host::ATTACH_STREAMS as usize);
-    assert!(results
-        .iter()
-        .filter_map(|result| result.as_ref().err())
-        .all(|error| error == "同时要的文件太多了"));
+    assert_eq!(
+        results.iter().filter(|result| result.as_deref() == Ok(&b"png"[..])).count(),
+        host::ATTACH_STREAMS as usize
+    );
+    assert!(results.iter().filter_map(|result| result.as_ref().err()).all(|error| error == "同时要的文件太多了"));
     let files = far.attachments();
     let fetch = tokio::spawn(async move { files.fetch(DOC, "../附件/again.png").await });
     let request = expect(&mut host_events, "再要一个", |event| match event {
@@ -2346,11 +1869,7 @@ async fn start_folder_host() -> (Host, UnboundedReceiver<Event>) {
     let host = Host::start(
         &test_node(SecretKey::generate(), false, Vec::new()).await,
         HostOptions {
-            scope: protocol::Scope {
-                kind: protocol::ScopeKind::Folder,
-                doc: String::new(),
-                name: "周报".into(),
-            },
+            scope: protocol::Scope { kind: protocol::ScopeKind::Folder, doc: String::new(), name: "周报".into() },
             note: String::new(),
             ..host_options("周报")
         },
@@ -2412,13 +1931,12 @@ async fn a_folder_session_opens_docs_on_request_and_keeps_them_apart() {
     let (host, mut host_events) = start_folder_host().await;
     // 树在访客进来之前就给了：进来就收到
     host.set_tree(br#"{"docs":["a","b"]}"#.to_vec());
-    let (guest, mut guest_events, member) =
-        admitted_to_folder(&host, &mut host_events, "Alex", Permission::Edit).await;
+    let (guest, mut guest_events, member) = admitted_to_folder(&host, &mut host_events, "Alex", Permission::Edit).await;
     expect(&mut guest_events, "树", |event| match event {
         Event::Control(Control::Tree { tree }) => {
             let _: () = assert_eq!(tree, r#"{"docs":["a","b"]}"#);
             Some(())
-        },
+        }
         _ => None,
     })
     .await;
@@ -2453,7 +1971,7 @@ async fn a_folder_session_opens_docs_on_request_and_keeps_them_apart() {
         Event::Update { from: 0, doc, bytes } if doc == "a" => {
             let _: () = assert_eq!(bytes, b"a-update");
             Some(())
-        },
+        }
         Event::Update { doc, .. } if doc == "c" => panic!("没开 c 却收到了 c 的更新"),
         _ => None,
     })
@@ -2546,11 +2064,7 @@ async fn host_on(node: &Node, doc: &str, title: &str) -> (Host, UnboundedReceive
     let (events, rx) = unbounded_channel();
     let host = Host::start(
         node,
-        HostOptions {
-            note: doc.into(),
-            scope: protocol::Scope::doc(doc, title),
-            ..host_options(title)
-        },
+        HostOptions { note: doc.into(), scope: protocol::Scope::doc(doc, title), ..host_options(title) },
         events,
     )
     .await
@@ -2562,18 +2076,10 @@ async fn host_on(node: &Node, doc: &str, title: &str) -> (Host, UnboundedReceive
 /// 在这个端点上做客
 async fn join_on(node: &Node, name: &str, invite: Invite) -> (Guest, UnboundedReceiver<Event>) {
     let (events, rx) = unbounded_channel();
-    let guest = Guest::join(
-        node,
-        GuestOptions {
-            name: name.into(),
-            invite,
-            use_host_relay: true,
-            nearby: false,
-        },
-        events,
-    )
-    .await
-    .expect("访客起不来");
+    let guest =
+        Guest::join(node, GuestOptions { name: name.into(), invite, use_host_relay: true, nearby: false }, events)
+            .await
+            .expect("访客起不来");
     (guest, rx)
 }
 
@@ -2589,8 +2095,7 @@ async fn one_endpoint_hosts_two_sessions_and_keeps_them_apart() {
     assert_ne!(weekly.session(), plan.session());
     assert_eq!(weekly.bound_sockets(), plan.bound_sockets(), "两个会话共用一个端点");
 
-    let (alex, mut alex_events, _) =
-        admitted(&weekly, &mut weekly_events, "Alex", Permission::Edit).await;
+    let (alex, mut alex_events, _) = admitted(&weekly, &mut weekly_events, "Alex", Permission::Edit).await;
     let (sam, mut sam_events, _) = admitted(&plan, &mut plan_events, "Sam", Permission::Edit).await;
     // 各进各的：周报那边只看到 Alex，计划那边只看到 Sam
     assert_eq!(names(&weekly), ["林夕", "Alex"]);
@@ -2598,25 +2103,15 @@ async fn one_endpoint_hosts_two_sessions_and_keeps_them_apart() {
 
     weekly.send_update("note-weekly", b"weekly".to_vec());
     expect(&mut alex_events, "周报的更新", |event| {
-        matches!(event, Event::Update { doc, bytes, .. } if doc == "note-weekly" && bytes == b"weekly")
-            .then_some(())
+        matches!(event, Event::Update { doc, bytes, .. } if doc == "note-weekly" && bytes == b"weekly").then_some(())
     })
     .await;
-    expect_none(&mut sam_events, "周报的更新不该到计划那边", |event| {
-        matches!(event, Event::Update { .. })
-    })
-    .await;
+    expect_none(&mut sam_events, "周报的更新不该到计划那边", |event| matches!(event, Event::Update { .. })).await;
 
     // 停掉一个，另一个照常
     weekly.stop().await;
     expect(&mut alex_events, "主持人停了", |event| {
-        matches!(
-            status_of(event),
-            Some(Status::Ended {
-                reason: EndReason::HostStopped
-            })
-        )
-        .then_some(())
+        matches!(status_of(event), Some(Status::Ended { reason: EndReason::HostStopped })).then_some(())
     })
     .await;
     plan.send_update("note-plan", b"plan".to_vec());
@@ -2638,18 +2133,11 @@ async fn a_device_hosts_and_guests_at_once() {
     let (weekly, mut weekly_events) = host_on(&linxi, "note-weekly", "周报").await;
     let (plan, mut plan_events) = host_on(&sam, "note-plan", "计划").await;
 
-    let (sam_in_weekly, mut sam_guest_events) =
-        join_on(&sam, "Sam", loopback(&weekly, weekly.invite())).await;
-    let (linxi_in_plan, mut linxi_guest_events) =
-        join_on(&linxi, "林夕", loopback(&plan, plan.invite())).await;
-    for (host, events, who) in [
-        (&weekly, &mut weekly_events, "Sam"),
-        (&plan, &mut plan_events, "林夕"),
-    ] {
+    let (sam_in_weekly, mut sam_guest_events) = join_on(&sam, "Sam", loopback(&weekly, weekly.invite())).await;
+    let (linxi_in_plan, mut linxi_guest_events) = join_on(&linxi, "林夕", loopback(&plan, plan.invite())).await;
+    for (host, events, who) in [(&weekly, &mut weekly_events, "Sam"), (&plan, &mut plan_events, "林夕")] {
         let request = expect(events, "加入请求", |event| match event {
-            Event::Control(Control::JoinRequest { request, name, .. }) if name == who => {
-                Some(*request)
-            }
+            Event::Control(Control::JoinRequest { request, name, .. }) if name == who => Some(*request),
             _ => None,
         })
         .await;
@@ -2657,16 +2145,11 @@ async fn a_device_hosts_and_guests_at_once() {
     }
     // 两边的文档流都开好了（双方都被叫去发 Sync1）再发
     for events in [&mut sam_guest_events, &mut linxi_guest_events] {
-        expect(events, "访客的 SyncStart", |event| {
-            matches!(event, Event::SyncStart { with: 0, .. }).then_some(())
-        })
-        .await;
+        expect(events, "访客的 SyncStart", |event| matches!(event, Event::SyncStart { with: 0, .. }).then_some(()))
+            .await;
     }
     for events in [&mut weekly_events, &mut plan_events] {
-        expect(events, "主持人的 SyncStart", |event| {
-            matches!(event, Event::SyncStart { .. }).then_some(())
-        })
-        .await;
+        expect(events, "主持人的 SyncStart", |event| matches!(event, Event::SyncStart { .. }).then_some(())).await;
     }
     weekly.send_update("note-weekly", b"w".to_vec());
     plan.send_update("note-plan", b"p".to_vec());
@@ -2698,45 +2181,31 @@ async fn nearby_guests_are_asked_which_session_when_hosting_several() {
     let (events, mut guest_events) = unbounded_channel();
     let guest = Guest::join(
         &test_node(SecretKey::generate(), false, Vec::new()).await,
-        GuestOptions {
-            name: "Alex".into(),
-            invite,
-            use_host_relay: true,
-            nearby: true,
-        },
+        GuestOptions { name: "Alex".into(), invite, use_host_relay: true, nearby: true },
         events,
     )
     .await
     .unwrap();
     // 主持着两个：端点问主持人进哪一个（不经哪个会话问）
     let request = expect(&mut node_events, "问进哪一个", |event| match event {
-        Event::Control(Control::NearbyKnock { request, name, .. }) if name == "Alex" => {
-            Some(*request)
-        }
+        Event::Control(Control::NearbyKnock { request, name, .. }) if name == "Alex" => Some(*request),
         _ => None,
     })
     .await;
     assert!(node.answer_nearby(request, Some((plan.session(), Permission::Read))));
     // 挑了计划、只读：直接进去，计划那边不再问第二遍
-    let (scope, permission) = expect(&mut guest_events, "进了计划", |event| {
-        match status_of(event) {
-            Some(Status::Connected {
-                scope, permission, ..
-            }) => Some((scope, permission)),
-            _ => None,
-        }
+    let (scope, permission) = expect(&mut guest_events, "进了计划", |event| match status_of(event) {
+        Some(Status::Connected { scope, permission, .. }) => Some((scope, permission)),
+        _ => None,
     })
     .await;
     assert_eq!((scope.doc.as_str(), permission), ("note-plan", Permission::Read));
     expect(&mut node_events, "卡片收起", |event| {
-        matches!(event, Event::Control(Control::NearbyKnockDone { request: done }) if *done == request)
-            .then_some(())
+        matches!(event, Event::Control(Control::NearbyKnockDone { request: done }) if *done == request).then_some(())
     })
     .await;
-    expect_none(&mut plan_events, "不该再问", |event| {
-        matches!(event, Event::Control(Control::JoinRequest { .. }))
-    })
-    .await;
+    expect_none(&mut plan_events, "不该再问", |event| matches!(event, Event::Control(Control::JoinRequest { .. })))
+        .await;
     expect_none(&mut weekly_events, "周报那边什么都不知道", |event| {
         matches!(event, Event::Control(Control::JoinRequest { .. }))
     })
@@ -2766,10 +2235,7 @@ fn records_from_before_several_sessions_move_into_their_own_folders() {
     let hosts = record::hosts_left(base);
     assert_eq!(hosts.len(), 1);
     assert_eq!(record::dir_key(&hosts[0].0), host.session);
-    assert_eq!(
-        record::load_state(&hosts[0].0, record::Role::Host, DOC).as_deref(),
-        Some(&b"h"[..])
-    );
+    assert_eq!(record::load_state(&hosts[0].0, record::Role::Host, DOC).as_deref(), Some(&b"h"[..]));
     let guests = record::guests_left(base);
     assert_eq!(guests.len(), 1);
     assert_eq!(guests[0].1.link, "odea://join/x");

@@ -34,8 +34,7 @@ pub fn has_data(db_path: &Path) -> bool {
     if !db_path.is_file() {
         return false;
     }
-    let Ok(conn) = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-    else {
+    let Ok(conn) = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
         return false;
     };
     conn.query_row(
@@ -119,11 +118,7 @@ fn write_all(conn: &Connection, root: &Path, written: &mut Vec<PathBuf>) -> Resu
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (id, title, body, pinned, archived, category, archived_at, created, updated) in notes {
-        let dir = if archived {
-            layout::ARCHIVE_DIR
-        } else {
-            layout::NOTES_DIR
-        };
+        let dir = if archived { layout::ARCHIVE_DIR } else { layout::NOTES_DIR };
         let rel = fsio::unique_rel(root, dir, &layout::file_stem_for_title(&title), None);
         let meta = FrontMatter {
             id: Some(id),
@@ -148,9 +143,7 @@ fn write_all(conn: &Connection, root: &Path, written: &mut Vec<PathBuf>) -> Resu
     }
 
     /* ---------- 行为日志 ---------- */
-    let mut stmt = conn.prepare(
-        "SELECT at, local_date, entity_type, entity_id, action FROM activity ORDER BY id",
-    )?;
+    let mut stmt = conn.prepare("SELECT at, local_date, entity_type, entity_id, action FROM activity ORDER BY id")?;
     let entries = stmt
         .query_map(params![], |r| {
             Ok(Entry {
@@ -165,10 +158,8 @@ fn write_all(conn: &Connection, root: &Path, written: &mut Vec<PathBuf>) -> Resu
         .collect::<rusqlite::Result<Vec<_>>>()?;
     if !entries.is_empty() {
         let dir = fsio::abs(root, layout::ACTIVITY_DIR);
-        let months: std::collections::BTreeSet<String> = entries
-            .iter()
-            .map(|entry| entry.date.get(..7).unwrap_or("unknown").to_string())
-            .collect();
+        let months: std::collections::BTreeSet<String> =
+            entries.iter().map(|entry| entry.date.get(..7).unwrap_or("unknown").to_string()).collect();
         activity::append(&dir, &entries)?;
         for month in months {
             written.push(dir.join(format!("{month}.jsonl")));
@@ -248,12 +239,7 @@ mod tests {
         let report = import(&db, &root, &dir.path().join("scratch")).unwrap();
         assert_eq!(
             report,
-            Report {
-                notes: 2,
-                archived: 1,
-                plugins: vec![("days", 2), ("goals", 1), ("tasks", 2)],
-                activities: 1
-            }
+            Report { notes: 2, archived: 1, plugins: vec![("days", 2), ("goals", 1), ("tasks", 2)], activities: 1 }
         );
         assert_eq!(std::fs::read(&db).unwrap(), before, "旧库不该被改动");
         assert!(!dir.path().join("scratch").exists(), "临时拷贝没清掉");
@@ -269,10 +255,7 @@ mod tests {
         assert!(day.contains("title: \"完成专注模式原型\""));
         assert!(day.ends_with("- [ ] 走查\n\n## 当日安排\n\n- [x] 回顾第 35 周目标 @2026-08-29 16:00 #GOAL"));
         // 只有任务、没有文档的那一天也要有文件；认不出来的时间写进标题
-        assert_eq!(
-            read("日记/2026/2026-08-31.md"),
-            "## 当日安排\n\n- [ ] 力量训练（傍晚） @2026-08-31 #健康"
-        );
+        assert_eq!(read("日记/2026/2026-08-31.md"), "## 当日安排\n\n- [ ] 力量训练（傍晚） @2026-08-31 #健康");
         assert!(!fsio::abs(&root, "日记/2026/2026-08-30.md").exists(), "空的那一天不该建文件");
         assert_eq!(read("目标/2026/2026-W35.md"), "本周重点");
         assert!(!fsio::abs(&root, "目标/2026/2026-09.md").exists());
@@ -294,10 +277,7 @@ mod tests {
         assert_eq!(archived[0].archived_at, Some(1_786_000_000_000));
         assert_eq!(vault.day("2026-08-29", false).unwrap().title, "完成专注模式原型");
         assert_eq!(vault.goal("week", "2026-08-24").unwrap().content_md, "本周重点");
-        assert_eq!(
-            vault.marked_dates("2026-08-01", "2026-08-31").unwrap(),
-            vec!["2026-08-29", "2026-08-31"]
-        );
+        assert_eq!(vault.marked_dates("2026-08-01", "2026-08-31").unwrap(), vec!["2026-08-29", "2026-08-31"]);
     }
 
     #[test]

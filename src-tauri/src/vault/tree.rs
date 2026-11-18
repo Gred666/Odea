@@ -53,7 +53,10 @@ pub enum Item {
     /// 仓库里的相对路径：属性块里没写 id 的笔记
     File(String),
     /// 智能文件夹：存下来的筛选条件（vault/query.rs）
-    Query { name: String, query: String },
+    Query {
+        name: String,
+        query: String,
+    },
     /// 快捷方式：指向按 id 引用的一篇
     LinkNote(String),
     /// 快捷方式：指向按路径引用的一篇（属性块里没写 id 的）
@@ -200,10 +203,7 @@ fn parse_line(line: &str) -> Option<(String, Node)> {
         "file" => Item::File(content.replace('\\', "/")),
         "query" => {
             let (name, query) = content.split_once('|').unwrap_or((content, content));
-            Item::Query {
-                name: layout::folder_name(name)?,
-                query: query.trim().to_string(),
-            }
+            Item::Query { name: layout::folder_name(name)?, query: query.trim().to_string() }
         }
         "link" => {
             let (kind, target) = token(content);
@@ -217,14 +217,7 @@ fn parse_line(line: &str) -> Option<(String, Node)> {
         }
         _ => return None,
     };
-    Some((
-        id.to_string(),
-        Node {
-            parent: parent.to_string(),
-            key: clean_key(key),
-            item,
-        },
-    ))
+    Some((id.to_string(), Node { parent: parent.to_string(), key: clean_key(key), item }))
 }
 
 /// 下一个空白之前的那一段，和剩下的
@@ -259,11 +252,7 @@ pub fn key_between(a: Option<&str>, b: Option<&str>) -> String {
 fn midpoint(a: &[u8], b: Option<&[u8]>) -> String {
     if let Some(b) = b {
         // 公共前缀（a 不够长时当后面补了 0）原样留着，在后面那一截里找中点
-        let n = b
-            .iter()
-            .enumerate()
-            .take_while(|(i, d)| a.get(*i).copied().unwrap_or(b'0') == **d)
-            .count();
+        let n = b.iter().enumerate().take_while(|(i, d)| a.get(*i).copied().unwrap_or(b'0') == **d).count();
         if n > 0 && n < b.len() {
             let rest = a.get(n..).unwrap_or(&[]);
             return format!("{}{}", text(&b[..n]), midpoint(rest, Some(&b[n..])));
@@ -403,12 +392,8 @@ impl Tree {
 
     /// 没有排序键的（别的工具写坏了的）排到同一层最后
     fn fill_keys(&mut self) {
-        let missing: Vec<String> = self
-            .nodes
-            .iter()
-            .filter(|(_, node)| node.key.is_empty())
-            .map(|(id, _)| id.clone())
-            .collect();
+        let missing: Vec<String> =
+            self.nodes.iter().filter(|(_, node)| node.key.is_empty()).map(|(id, _)| id.clone()).collect();
         for id in missing {
             let parent = self.nodes[&id].parent.clone();
             let last = self
@@ -481,9 +466,10 @@ impl Tree {
         }
         let mut at = ROOT.to_string();
         for part in path.split('/') {
-            let next = self.nodes.iter().find(|(_, node)| {
-                node.parent == at && node.item.is_branch() && node.item.name() == part
-            })?;
+            let next = self
+                .nodes
+                .iter()
+                .find(|(_, node)| node.parent == at && node.item.is_branch() && node.item.name() == part)?;
             at = next.0.clone();
         }
         Some(at)
@@ -530,10 +516,7 @@ impl Tree {
 
     /// 按 id 引用这篇的节点
     pub fn find_note_id(&self, note: &str) -> Option<String> {
-        self.nodes
-            .iter()
-            .find(|(_, node)| matches!(&node.item, Item::Note(id) if id == note))
-            .map(|(id, _)| id.clone())
+        self.nodes.iter().find(|(_, node)| matches!(&node.item, Item::Note(id) if id == note)).map(|(id, _)| id.clone())
     }
 
     /// 智能文件夹的条件；路径不是智能文件夹返回 None
@@ -547,9 +530,7 @@ impl Tree {
 
     /// 文件夹（得是真的文件夹，不是智能文件夹）的节点 id；空串是根
     fn folder_id(&self, path: &str) -> Result<String> {
-        let id = self
-            .find_branch(path)
-            .ok_or_else(|| AppError::NotFound(format!("文件夹「{path}」不在了")))?;
+        let id = self.find_branch(path).ok_or_else(|| AppError::NotFound(format!("文件夹「{path}」不在了")))?;
         if id != ROOT && !matches!(self.nodes[&id].item, Item::Folder(_)) {
             return Err(AppError::Invalid(format!("「{path}」是智能文件夹，里面放不了东西")));
         }
@@ -704,12 +685,7 @@ impl Tree {
         let mut removed = Tree::default();
         let mut stack = vec![id];
         while let Some(id) = stack.pop() {
-            stack.extend(
-                self.nodes
-                    .iter()
-                    .filter(|(_, node)| node.parent == id)
-                    .map(|(child, _)| child.clone()),
-            );
+            stack.extend(self.nodes.iter().filter(|(_, node)| node.parent == id).map(|(child, _)| child.clone()));
             if let Some(node) = self.nodes.remove(&id) {
                 removed.nodes.insert(id, node);
             }
@@ -1021,10 +997,7 @@ mod tests {
         tree.add_folder("", "交易").unwrap();
         let order = |tree: &Tree| -> Vec<String> {
             let parent = tree.find_branch("交易").unwrap();
-            tree.children(&parent, false)
-                .into_iter()
-                .map(|id| tree.nodes[&id].item.name().to_string())
-                .collect()
+            tree.children(&parent, false).into_iter().map(|id| tree.nodes[&id].item.name().to_string()).collect()
         };
         for id in ["a", "b", "c"] {
             tree.place(None, note(id), Some("交易"), None).unwrap();

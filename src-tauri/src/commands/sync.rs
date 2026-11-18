@@ -31,18 +31,10 @@ pub fn sync_hooks<R: Runtime>(app: AppHandle<R>, label: String, data_dir: PathBu
 /// 这个仓库连云端用的令牌和代理。`rejected` = 刚才被云端拒了，GitHub 的令牌先续一次
 fn net_for(data_dir: &std::path::Path, repo: &SyncRepo, rejected: bool) -> SyncResult<Net> {
     let proxy = proxy::resolve(boot::Config::load(data_dir).sync_proxy.as_deref());
-    let provider = repo
-        .config_get(PROVIDER_KEY)
-        .as_deref()
-        .and_then(Provider::parse);
+    let provider = repo.config_get(PROVIDER_KEY).as_deref().and_then(Provider::parse);
     let credentials = match (provider, repo.config_get(LOGIN_KEY)) {
         (Some(provider), Some(login)) => {
-            let token = account::access_token(
-                provider,
-                &login,
-                || Http::new(proxy.as_deref()),
-                rejected,
-            )?;
+            let token = account::access_token(provider, &login, || Http::new(proxy.as_deref()), rejected)?;
             Some((login, token))
         }
         // 没登录的远端（比如本机的一个裸仓库）
@@ -101,11 +93,7 @@ pub(in crate::commands) fn with_token<T>(
     }
 }
 
-fn remember_account(
-    data_dir: &std::path::Path,
-    provider: Provider,
-    login: String,
-) -> Result<SyncAccount> {
+fn remember_account(data_dir: &std::path::Path, provider: Provider, login: String) -> Result<SyncAccount> {
     boot::edit_config(data_dir, |config| {
         config.sync_accounts.insert(provider.key().to_string(), login.clone());
         Ok(())
@@ -147,10 +135,7 @@ pub async fn sync_accounts(state: State<'_, AppState>) -> Result<Vec<SyncAccount
             .iter()
             .filter_map(|(key, login)| {
                 let provider = Provider::parse(key)?;
-                account::has_token(provider, login).then(|| SyncAccount {
-                    provider: key.clone(),
-                    login: login.clone(),
-                })
+                account::has_token(provider, login).then(|| SyncAccount { provider: key.clone(), login: login.clone() })
             })
             .collect())
     })
@@ -169,11 +154,7 @@ pub async fn sync_github_login_start(state: State<'_, AppState>) -> Result<SyncD
         verification_uri: code.verification_uri.clone(),
         expires_in: code.expires_in as u32,
     };
-    state
-        .sync_login
-        .lock()
-        .map_err(|_| AppError::Internal("登录状态锁坏了".into()))?
-        .put(pending);
+    state.sync_login.lock().map_err(|_| AppError::Internal("登录状态锁坏了".into()))?.put(pending);
     Ok(shown)
 }
 
@@ -198,11 +179,7 @@ pub async fn sync_github_login_wait(state: State<'_, AppState>) -> Result<SyncAc
 #[tauri::command]
 #[specta::specta]
 pub async fn sync_login_cancel(state: State<'_, AppState>) -> Result<()> {
-    state
-        .sync_login
-        .lock()
-        .map_err(|_| AppError::Internal("登录状态锁坏了".into()))?
-        .cancel();
+    state.sync_login.lock().map_err(|_| AppError::Internal("登录状态锁坏了".into()))?.cancel();
     Ok(())
 }
 
@@ -251,27 +228,16 @@ pub async fn sync_repos(state: State<'_, AppState>, provider: String) -> Result<
 /// 新建一个空的私有仓库
 #[tauri::command]
 #[specta::specta]
-pub async fn sync_create_repo(
-    state: State<'_, AppState>,
-    provider: String,
-    name: String,
-) -> Result<SyncRemoteRepo> {
+pub async fn sync_create_repo(state: State<'_, AppState>, provider: String, name: String) -> Result<SyncRemoteRepo> {
     let provider = provider_of(&provider)?;
     let name = name.trim().to_string();
-    let valid = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    let valid = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
     if !valid {
-        return Err(AppError::Invalid(
-            "仓库名只能用英文字母、数字和 - _ .".into(),
-        ));
+        return Err(AppError::Invalid("仓库名只能用英文字母、数字和 - _ .".into()));
     }
     let data_dir = state.data_dir.clone();
     blocking(move || {
-        let repo = with_token(&data_dir, provider, |http, token| {
-            provider.create_repo(http, token, &name)
-        })?;
+        let repo = with_token(&data_dir, provider, |http, token| provider.create_repo(http, token, &name))?;
         Ok(remote_info(repo))
     })
     .await
@@ -306,12 +272,7 @@ pub async fn sync_set_proxy(state: State<'_, AppState>, proxy: Option<String>) -
 /// 开启同步前先看一眼云端：在这里接上，还是要 clone 到新文件夹（放在哪）
 #[tauri::command]
 #[specta::specta]
-pub async fn sync_inspect(
-    ws: Ws,
-    state: State<'_, AppState>,
-    provider: String,
-    clone_url: String,
-) -> Result<SyncPlan> {
+pub async fn sync_inspect(ws: Ws, state: State<'_, AppState>, provider: String, clone_url: String) -> Result<SyncPlan> {
     let provider = provider_of(&provider)?;
     check_remote(provider, &clone_url)?;
     let data_dir = state.data_dir.clone();
@@ -329,8 +290,7 @@ pub async fn sync_inspect(
         let connect_here = reconnect || SyncRepo::remote_is_empty(&clone_url, &net)?;
         Ok(SyncPlan {
             connect_here,
-            clone_target: (!connect_here)
-                .then(|| setup::clone_target(&root).to_string_lossy().into_owned()),
+            clone_target: (!connect_here).then(|| setup::clone_target(&root).to_string_lossy().into_owned()),
             local_notes: fsio::has_markdown(&root),
         })
     })
@@ -392,11 +352,8 @@ pub async fn sync_enable<R: Runtime>(
             Ok(true)
         }
         None => {
-            let (hub, vault, hooks) = (
-                ws.sync.clone(),
-                ws.vault.clone(),
-                sync_hooks(app.clone(), ws.label.clone(), data_dir),
-            );
+            let (hub, vault, hooks) =
+                (ws.sync.clone(), ws.vault.clone(), sync_hooks(app.clone(), ws.label.clone(), data_dir));
             blocking(move || {
                 hub.start(vault, hooks)?;
                 // 前端早就 ready 了：第一轮现在就开始，不等那 30 秒

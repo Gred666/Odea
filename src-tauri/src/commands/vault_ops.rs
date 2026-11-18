@@ -78,11 +78,7 @@ impl Indexing {
 #[tauri::command]
 #[specta::specta]
 pub async fn index_progress(ws: Ws) -> Result<Option<IndexProgress>> {
-    Ok(ws
-        .indexing
-        .lock()
-        .map_err(|_| AppError::Internal("索引进度锁坏了".into()))?
-        .progress)
+    Ok(ws.indexing.lock().map_err(|_| AppError::Internal("索引进度锁坏了".into()))?.progress)
 }
 
 /// 在后台把 backlog 读完。每次拿着仓库的锁读 50ms 左右就放开、歇一下，前端的命令能插进来；
@@ -269,12 +265,7 @@ pub async fn vault_open_folder(ws: Ws) -> Result<()> {
 /// 一个字节一个数字的 JSON 数组，几 MB 的截图要序列化成几千万个字符。
 #[tauri::command]
 #[specta::specta]
-pub async fn vault_attach(
-    ws: Ws,
-    target: DocRef,
-    name: String,
-    data_base64: String,
-) -> Result<Attachment> {
+pub async fn vault_attach(ws: Ws, target: DocRef, name: String, data_base64: String) -> Result<Attachment> {
     use base64::Engine;
     let bytes = blocking(move || {
         base64::engine::general_purpose::STANDARD
@@ -288,11 +279,7 @@ pub async fn vault_attach(
 /// 拖进窗口的文件（桌面端拿到的是路径）存进「附件」文件夹
 #[tauri::command]
 #[specta::specta]
-pub async fn vault_attach_path(
-    ws: Ws,
-    target: DocRef,
-    path: String,
-) -> Result<Attachment> {
+pub async fn vault_attach_path(ws: Ws, target: DocRef, path: String) -> Result<Attachment> {
     with_vault(&ws, move |v| v.attach_path(&target, std::path::Path::new(&path))).await
 }
 
@@ -322,20 +309,13 @@ pub async fn vault_change_root<R: Runtime>(
     let picker = app.clone();
     let start = current.parent().map(PathBuf::from).unwrap_or_else(|| current.clone());
     let picked = blocking(move || {
-        Ok(picker
-            .dialog()
-            .file()
-            .set_title("选择笔记文件夹")
-            .set_directory(start)
-            .blocking_pick_folder())
+        Ok(picker.dialog().file().set_title("选择笔记文件夹").set_directory(start).blocking_pick_folder())
     })
     .await?;
     let Some(picked) = picked else {
         return Ok(None);
     };
-    let new_root = picked
-        .into_path()
-        .map_err(|error| AppError::Invalid(format!("这个位置用不了: {error}")))?;
+    let new_root = picked.into_path().map_err(|error| AppError::Invalid(format!("这个位置用不了: {error}")))?;
 
     let same = |a: &std::path::Path, b: &std::path::Path| {
         a.canonicalize().ok().zip(b.canonicalize().ok()).is_some_and(|(a, b)| a == b)
@@ -346,9 +326,7 @@ pub async fn vault_change_root<R: Runtime>(
     let canonical = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let (new_canonical, current_canonical) = (canonical(&new_root), canonical(&current));
     if new_canonical.starts_with(&current_canonical) || current_canonical.starts_with(&new_canonical) {
-        return Err(AppError::Invalid(
-            "新文件夹不能在现在的笔记文件夹里面，也不能包着它".into(),
-        ));
+        return Err(AppError::Invalid("新文件夹不能在现在的笔记文件夹里面，也不能包着它".into()));
     }
     // 两个窗口开同一个文件夹 = 两份监听、两个写入方（docs/仓库与启动器.md §4.4）
     if state.window_of(&new_root).is_some_and(|label| label != ws.label) {
@@ -431,10 +409,9 @@ async fn move_vault_to<R: Runtime>(
     stop_services(ws)?;
 
     let (from, to) = (current.clone(), new_root.clone());
-    let moved = blocking(move || {
-        boot::move_vault(&from, &to, |path| trash::delete(path).map_err(|error| error.to_string()))
-    })
-    .await;
+    let moved =
+        blocking(move || boot::move_vault(&from, &to, |path| trash::delete(path).map_err(|error| error.to_string())))
+            .await;
     let moved = match moved {
         Ok(moved) => moved,
         Err(error) => {
@@ -485,7 +462,12 @@ pub fn stop_services(ws: &Workspace) -> Result<()> {
 
 /// 仓库换上了（新开的窗口、换了文件夹）：后台读索引、文件监听、同步都起来，通知都只发给这个窗口。
 /// 同步线程第一轮要等前端 ready（技术方案 §5.9.6），这里只是起线程
-pub fn start_services<R: Runtime>(app: &AppHandle<R>, data_dir: &std::path::Path, ws: &Arc<Workspace>, backlog: Backlog) {
+pub fn start_services<R: Runtime>(
+    app: &AppHandle<R>,
+    data_dir: &std::path::Path,
+    ws: &Arc<Workspace>,
+    backlog: Backlog,
+) {
     spawn_backlog(app.clone(), ws.label.clone(), ws.vault.clone(), ws.indexing.clone(), backlog);
     // 文件监听处理完一批：戳一下同步（停笔一会儿后提交）
     let on_batch: watch::OnBatch = sync_poke(&ws.sync);
@@ -534,10 +516,7 @@ pub(in crate::commands) async fn switch_vault<R: Runtime>(
     // 先停旧的监听和同步，再换仓库
     stop_services(ws)?;
     {
-        let mut current = ws
-            .vault
-            .lock()
-            .map_err(|_| AppError::Internal("仓库锁坏了".into()))?;
+        let mut current = ws.vault.lock().map_err(|_| AppError::Internal("仓库锁坏了".into()))?;
         *current = vault;
         current.set_announcer(announcer(app.clone(), ws.label.clone()));
     }

@@ -112,10 +112,8 @@ pub fn link_addrs(addrs: impl IntoIterator<Item = SocketAddr>) -> Vec<SocketAddr
         AddrKind::Loopback => 5,
         AddrKind::LinkLocal => 6,
     };
-    let mut addrs: Vec<SocketAddr> = addrs
-        .into_iter()
-        .filter(|addr| classify(addr.ip()) != AddrKind::LinkLocal)
-        .collect();
+    let mut addrs: Vec<SocketAddr> =
+        addrs.into_iter().filter(|addr| classify(addr.ip()) != AddrKind::LinkLocal).collect();
     addrs.sort_by_key(|addr| (rank(addr), addr.ip().to_string(), addr.port()));
     addrs.dedup();
     addrs
@@ -213,8 +211,7 @@ pub fn sort_addrs(addrs: &[SocketAddr], reach: &mut Reach, local: Option<&[IpAdd
             AddrKind::PublicV6 => &mut reach.ipv6,
             // 端口映射拿到的那个已经在 portmap 里了；不在网卡上的是出口地址，不算
             AddrKind::PublicV4
-                if Some(addr.to_string()) != mapped
-                    && local.is_some_and(|local| local.contains(&addr.ip())) =>
+                if Some(addr.to_string()) != mapped && local.is_some_and(|local| local.contains(&addr.ip())) =>
             {
                 &mut reach.public_v4
             }
@@ -256,11 +253,7 @@ impl Mapper {
                 tokio::spawn(async {})
             }
         };
-        Mapper {
-            client,
-            state,
-            task,
-        }
+        Mapper { client, state, task }
     }
 
     pub fn state(&self) -> watch::Receiver<Portmap> {
@@ -287,12 +280,8 @@ async fn drive(client: portmapper::Client, endpoint: Endpoint, state: watch::Sen
     loop {
         let current: Option<SocketAddrV4> = *external.borrow_and_update();
         let next = match current {
-            Some(addr) if classify_v4(*addr.ip()) == AddrKind::PublicV4 => Portmap::Mapped {
-                addr: addr.to_string(),
-            },
-            Some(addr) => Portmap::Shared {
-                addr: addr.to_string(),
-            },
+            Some(addr) if classify_v4(*addr.ip()) == AddrKind::PublicV4 => Portmap::Mapped { addr: addr.to_string() },
+            Some(addr) => Portmap::Shared { addr: addr.to_string() },
             None if !supported || deadline.is_elapsed() => Portmap::Unavailable,
             None => Portmap::Checking,
         };
@@ -357,11 +346,7 @@ pub fn watch_reach(
             tokio::spawn(async move {
                 let mut addrs = endpoint.watch_addr();
                 loop {
-                    let ips = super::diagnose::my_networks(&[])
-                        .await
-                        .into_iter()
-                        .map(|(ip, _)| ip)
-                        .collect();
+                    let ips = super::diagnose::my_networks(&[]).await.into_iter().map(|(ip, _)| ip).collect();
                     if local_sender.send(Some(ips)).is_err() || addrs.updated().await.is_err() {
                         return;
                     }
@@ -371,13 +356,7 @@ pub fn watch_reach(
         let _reader = AbortOnDrop(reader);
         loop {
             let current = local.borrow_and_update().clone();
-            let mut reach = snapshot(
-                &endpoint,
-                &portmap.borrow_and_update(),
-                &relays,
-                started,
-                current.as_deref(),
-            );
+            let mut reach = snapshot(&endpoint, &portmap.borrow_and_update(), &relays, started, current.as_deref());
             reach.firewall = firewall.borrow_and_update().clone();
             if last.as_ref() != Some(&reach) {
                 notify(reach.clone());
@@ -426,10 +405,7 @@ pub fn snapshot(
     sort_addrs(&endpoint_addrs(endpoint), &mut reach, local);
     reach.checking = local.is_none()
         || matches!(reach.portmap, Portmap::Checking)
-        || reach
-            .relays
-            .iter()
-            .any(|relay| relay.state == RelayState::Connecting);
+        || reach.relays.iter().any(|relay| relay.state == RelayState::Connecting);
     reach
 }
 
@@ -440,31 +416,22 @@ fn relay_states(endpoint: &Endpoint, relays: &[Relay], late: bool) -> Vec<RelayR
         .iter()
         .map(|relay| {
             let url: Option<RelayUrl> = relay.relay_url().ok();
-            let current = url
-                .as_ref()
-                .and_then(|url| status.iter().find(|status| status.url() == url));
+            let current = url.as_ref().and_then(|url| status.iter().find(|status| status.url() == url));
             let state = match current {
                 Some(status) if status.is_connected() => RelayState::Connected {
-                    latency: url.as_ref().and_then(|url| {
-                        report
-                            .as_ref()
-                            .and_then(|report| relays::latency_of(report, url).0)
-                    }),
+                    latency: url
+                        .as_ref()
+                        .and_then(|url| report.as_ref().and_then(|report| relays::latency_of(report, url).0)),
                 },
-                Some(status) if status.auth_denied_reason().is_some() => RelayState::Denied {
-                    reason: status.auth_denied_reason().unwrap_or_default().to_string(),
-                },
+                Some(status) if status.auth_denied_reason().is_some() => {
+                    RelayState::Denied { reason: status.auth_denied_reason().unwrap_or_default().to_string() }
+                }
                 // 版本对不上：再等也连不上，不用等到「晚了」才说
                 Some(status)
-                    if status.last_error().is_some_and(|error| {
-                        relays::upgrade_refused(&relays::error_text(error))
-                    }) =>
+                    if status.last_error().is_some_and(|error| relays::upgrade_refused(&relays::error_text(error))) =>
                 {
                     RelayState::Outdated {
-                        error: status
-                            .last_error()
-                            .map(|error| relays::error_text(error))
-                            .unwrap_or_default(),
+                        error: status.last_error().map(|error| relays::error_text(error)).unwrap_or_default(),
                     }
                 }
                 Some(status) if late => RelayState::Failed {
@@ -476,21 +443,13 @@ fn relay_states(endpoint: &Endpoint, relays: &[Relay], late: bool) -> Vec<RelayR
                 // 还没轮到它当 home relay（iroh 只连延迟最低的那台）：看网络报告里量没量到
                 None if late => match url.as_ref().zip(report.as_ref()) {
                     Some((url, report)) if relays::latency_of(report, url).0.is_some() => {
-                        RelayState::Connected {
-                            latency: relays::latency_of(report, url).0,
-                        }
+                        RelayState::Connected { latency: relays::latency_of(report, url).0 }
                     }
-                    _ => RelayState::Failed {
-                        error: "连不上".into(),
-                    },
+                    _ => RelayState::Failed { error: "连不上".into() },
                 },
                 _ => RelayState::Connecting,
             };
-            RelayReach {
-                url: relay.url.clone(),
-                label: relay.label(),
-                state,
-            }
+            RelayReach { url: relay.url.clone(), label: relay.label(), state }
         })
         .collect()
 }

@@ -11,19 +11,11 @@ use crate::error::{AppError, Result};
 /// 空结果，甚至被当成一天存下来 —— 不如在边界上就报错。
 pub fn validate_date(s: &str) -> Result<()> {
     let well_formed = s.len() == 10
-        && s.bytes().enumerate().all(|(i, b)| {
-            if i == 4 || i == 7 {
-                b == b'-'
-            } else {
-                b.is_ascii_digit()
-            }
-        });
+        && s.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });
     if well_formed && chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
         Ok(())
     } else {
-        Err(AppError::Invalid(format!(
-            "日期应为真实存在的 YYYY-MM-DD，收到: {s}"
-        )))
+        Err(AppError::Invalid(format!("日期应为真实存在的 YYYY-MM-DD，收到: {s}")))
     }
 }
 

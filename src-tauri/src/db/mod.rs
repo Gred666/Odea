@@ -29,11 +29,7 @@ pub fn today_local() -> String {
 /// UTC 毫秒 → 本地日期 'YYYY-MM-DD'
 pub fn local_date_of(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms)
-        .map(|dt| {
-            dt.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d")
-                .to_string()
-        })
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
         .unwrap_or_else(today_local)
 }
 

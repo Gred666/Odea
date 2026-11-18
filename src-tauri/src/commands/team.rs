@@ -73,10 +73,7 @@ pub async fn team_info(ws: Ws, state: State<'_, AppState>) -> Result<TeamInfo> {
         };
         // 托管方那边：谁能推、谁的邀请还没接受。问不到也照样给名单里的
         let remote = with_token(&data_dir, provider, |http, token| {
-            Ok((
-                provider.collaborators(http, token, &full_name)?,
-                provider.pending_invites(http, token, &full_name)?,
-            ))
+            Ok((provider.collaborators(http, token, &full_name)?, provider.pending_invites(http, token, &full_name)?))
         });
         let (members, invited) = match remote {
             Ok((members, invited)) => (Some(members), invited.into_iter().map(|(_, login)| login).collect()),
@@ -253,9 +250,15 @@ impl TeamHub {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum TeamControl {
-    Peers { peers: Vec<crate::team::TeamPeer> },
+    Peers {
+        peers: Vec<crate::team::TeamPeer>,
+    },
     /// 一篇的流断了。做客的：主持人不给（refused）、不主持了、断线；主持的：这位访客走了
-    DocClosed { doc: String, member: u16, refused: Option<String> },
+    DocClosed {
+        doc: String,
+        member: u16,
+        refused: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
@@ -285,13 +288,9 @@ pub async fn team_start<R: Runtime>(app: AppHandle<R>, ws: Ws, state: State<'_, 
     let data_dir = state.data_dir.clone();
     let prepared = blocking(move || {
         let Some(team) = crate::vault::team::team_id(&root) else { return Ok(None) };
-        let account = sync_target(&root)
-            .map(|(provider, login, _)| provider.account_key(&login))
-            .unwrap_or_default();
-        let devices: Vec<crate::team::Device> = crate::vault::team::read(&root)
-            .iter()
-            .filter_map(crate::team::Device::from_row)
-            .collect();
+        let account = sync_target(&root).map(|(provider, login, _)| provider.account_key(&login)).unwrap_or_default();
+        let devices: Vec<crate::team::Device> =
+            crate::vault::team::read(&root).iter().filter_map(crate::team::Device::from_row).collect();
         Ok(Some((
             team,
             account,
@@ -334,24 +333,11 @@ pub async fn team_start<R: Runtime>(app: AppHandle<R>, ws: Ws, state: State<'_, 
     }
     let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
     net.join(
-        crate::team::TeamSpec {
-            id: team.clone(),
-            name: name.clone(),
-            account,
-            devices,
-            root: Some(root),
-        },
+        crate::team::TeamSpec { id: team.clone(), name: name.clone(), account, devices, root: Some(root) },
         events,
     );
     forward_team(app, hub.clone(), ws.label.clone(), team.clone(), receiver);
-    Ok(Some(TeamSelf {
-        member: net.my_member(&team),
-        id: net.me(),
-        peers: net.peers(&team),
-        team,
-        name,
-        firewall,
-    }))
+    Ok(Some(TeamSelf { member: net.my_member(&team), id: net.me(), peers: net.peers(&team), team, name, firewall }))
 }
 
 fn forward_team<R: Runtime>(
@@ -403,10 +389,7 @@ pub async fn end_team(state: &AppState, label: &str) {
 }
 
 fn team_call<T>(ws: &Ws, state: &AppState, f: impl FnOnce(&crate::team::TeamNet, &str) -> T) -> Result<T> {
-    let team = state
-        .team
-        .team_of(&ws.label)
-        .ok_or_else(|| AppError::Invalid("这个窗口没登记团队仓库".into()))?;
+    let team = state.team.team_of(&ws.label).ok_or_else(|| AppError::Invalid("这个窗口没登记团队仓库".into()))?;
     let net = state.team.net().ok_or_else(|| AppError::Invalid("团队端点没开着".into()))?;
     Ok(f(&net, &team))
 }
@@ -470,7 +453,11 @@ pub fn team_pipe(window: tauri::WebviewWindow, state: State<'_, AppState>, chann
 
 /// 前端发出来的团队字节（原始请求体，帧格式和 collab_send 一样）
 #[tauri::command]
-pub fn team_send(window: tauri::WebviewWindow, state: State<'_, AppState>, request: Request<'_>) -> std::result::Result<(), String> {
+pub fn team_send(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    request: Request<'_>,
+) -> std::result::Result<(), String> {
     let InvokeBody::Raw(frame) = request.body() else {
         return Err("team_send 要原始字节".into());
     };
@@ -546,7 +533,12 @@ pub async fn team_relays(ws: Ws, state: State<'_, AppState>) -> Result<Vec<TeamR
 /// 回答「这个团队仓库用中继 X，要用吗」
 #[tauri::command]
 #[specta::specta]
-pub async fn team_relay_answer(ws: Ws, state: State<'_, AppState>, url: String, accept: bool) -> Result<Vec<TeamRelay>> {
+pub async fn team_relay_answer(
+    ws: Ws,
+    state: State<'_, AppState>,
+    url: String,
+    accept: bool,
+) -> Result<Vec<TeamRelay>> {
     let (root, data_dir) = (ws.root(), state.data_dir.clone());
     let (relay, relays) = blocking(move || {
         let relay = crate::vault::team::read_relays(&root)

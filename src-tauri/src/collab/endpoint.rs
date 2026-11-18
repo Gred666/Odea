@@ -61,10 +61,8 @@ async fn bind_with(
     ports: &[u16],
 ) -> Result<Bound, String> {
     let idle = IdleTimeout::try_from(Duration::from_secs(12)).map_err(|error| error.to_string())?;
-    let transport = QuicTransportConfig::builder()
-        .keep_alive_interval(Duration::from_secs(5))
-        .max_idle_timeout(Some(idle))
-        .build();
+    let transport =
+        QuicTransportConfig::builder().keep_alive_interval(Duration::from_secs(5)).max_idle_timeout(Some(idle)).build();
     let pins = relays::pins(relays);
     let mut builder = Endpoint::builder(presets::Minimal)
         .secret_key(secret_key)
@@ -97,10 +95,7 @@ async fn bind_with(
             builder = builder.user_data_for_address_lookup(data);
         }
     }
-    let endpoint = builder
-        .bind()
-        .await
-        .map_err(|error| format!("打不开网络端口：{error}"))?;
+    let endpoint = builder.bind().await.map_err(|error| format!("打不开网络端口：{error}"))?;
     let mdns = if mdns {
         match MdnsAddressLookup::builder()
             .service_name(MDNS_SERVICE)
@@ -122,43 +117,24 @@ async fn bind_with(
     } else {
         None
     };
-    Ok(Bound {
-        endpoint,
-        mdns,
-        pins,
-    })
+    Ok(Bound { endpoint, mdns, pins })
 }
 
 /// 按链接里的公钥、地址和中继拼出拨号用的地址（地址都失效了的话，mDNS 还能按公钥找）
-pub fn dial_addr(
-    peer: &[u8; 32],
-    addrs: &[SocketAddr],
-    relay: Option<&Relay>,
-) -> Result<EndpointAddr, String> {
+pub fn dial_addr(peer: &[u8; 32], addrs: &[SocketAddr], relay: Option<&Relay>) -> Result<EndpointAddr, String> {
     let id = PublicKey::from_bytes(peer).map_err(|_| "链接里的公钥不对".to_string())?;
     let relay = relay.and_then(|relay| relay.relay_url().ok());
     Ok(EndpointAddr {
         id,
-        addrs: addrs
-            .iter()
-            .copied()
-            .map(TransportAddr::Ip)
-            .chain(relay.map(TransportAddr::Relay))
-            .collect(),
+        addrs: addrs.iter().copied().map(TransportAddr::Ip).chain(relay.map(TransportAddr::Relay)).collect(),
     })
 }
 
 /// 端点绑的端口：IPv4 的在前，IPv6 的（有的话）在后。落盘时记下来，继续协作时绑回去
 pub fn ports(endpoint: &Endpoint) -> Vec<u16> {
     let sockets = endpoint.bound_sockets();
-    let v4 = sockets
-        .iter()
-        .find(|addr| addr.is_ipv4())
-        .map(|addr| addr.port());
-    let v6 = sockets
-        .iter()
-        .find(|addr| addr.is_ipv6())
-        .map(|addr| addr.port());
+    let v4 = sockets.iter().find(|addr| addr.is_ipv4()).map(|addr| addr.port());
+    let v6 = sockets.iter().find(|addr| addr.is_ipv6()).map(|addr| addr.port());
     match (v4, v6) {
         (Some(v4), Some(v6)) => vec![v4, v6],
         (Some(v4), None) => vec![v4],
@@ -174,8 +150,6 @@ pub fn id_text(id: &[u8; 32]) -> String {
 pub fn random<const N: usize>() -> [u8; N] {
     use ring::rand::SecureRandom;
     let mut out = [0; N];
-    ring::rand::SystemRandom::new()
-        .fill(&mut out)
-        .expect("系统随机数不可用");
+    ring::rand::SystemRandom::new().fill(&mut out).expect("系统随机数不可用");
     out
 }

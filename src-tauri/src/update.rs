@@ -116,27 +116,25 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
     let hub = state.update.clone();
     let data_dir = state.data_dir.clone();
     let app = app.clone();
-    let spawned = std::thread::Builder::new()
-        .name("update-check".into())
-        .spawn(move || {
-            std::thread::sleep(FIRST_CHECK);
-            loop {
-                let wait = match tauri::async_runtime::block_on(check(&app, &hub, &data_dir)) {
-                    Ok(Checked::Unconfigured) => return,
-                    Ok(_) => EVERY,
-                    Err(error) => {
-                        eprintln!("检查更新失败: {error}");
-                        // 连不上的过一会儿再试；签名对不上这类的，过半小时也还是那个包，按平常的间隔来
-                        if matches!(error, AppError::Io(_)) {
-                            RETRY
-                        } else {
-                            EVERY
-                        }
+    let spawned = std::thread::Builder::new().name("update-check".into()).spawn(move || {
+        std::thread::sleep(FIRST_CHECK);
+        loop {
+            let wait = match tauri::async_runtime::block_on(check(&app, &hub, &data_dir)) {
+                Ok(Checked::Unconfigured) => return,
+                Ok(_) => EVERY,
+                Err(error) => {
+                    eprintln!("检查更新失败: {error}");
+                    // 连不上的过一会儿再试；签名对不上这类的，过半小时也还是那个包，按平常的间隔来
+                    if matches!(error, AppError::Io(_)) {
+                        RETRY
+                    } else {
+                        EVERY
                     }
-                };
-                std::thread::sleep(wait);
-            }
-        });
+                }
+            };
+            std::thread::sleep(wait);
+        }
+    });
     if let Err(error) = spawned {
         eprintln!("检查更新的线程没起来: {error}");
     }
@@ -224,11 +222,8 @@ struct Source {
 fn source<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Source>> {
     let config = app.config().plugins.0.get("updater");
     #[cfg_attr(not(debug_assertions), allow(unused_mut))]
-    let mut pubkey = config
-        .and_then(|updater| updater.get("pubkey"))
-        .and_then(|key| key.as_str())
-        .unwrap_or_default()
-        .to_string();
+    let mut pubkey =
+        config.and_then(|updater| updater.get("pubkey")).and_then(|key| key.as_str()).unwrap_or_default().to_string();
     #[cfg_attr(not(debug_assertions), allow(unused_mut))]
     let mut endpoints: Vec<tauri::Url> = config
         .and_then(|updater| updater.get("endpoints"))
@@ -255,12 +250,7 @@ fn source<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Source>> {
 }
 
 /// 只问这一个地址的 updater，请求走同步的代理
-fn updater<R: Runtime>(
-    app: &AppHandle<R>,
-    data_dir: &Path,
-    source: &Source,
-    endpoint: tauri::Url,
-) -> Result<Updater> {
+fn updater<R: Runtime>(app: &AppHandle<R>, data_dir: &Path, source: &Source, endpoint: tauri::Url) -> Result<Updater> {
     let mut builder = app
         .updater_builder()
         .timeout(CHECK_TIMEOUT)
@@ -309,10 +299,7 @@ pub async fn update_status(state: State<'_, AppState>) -> Result<Option<UpdateIn
 /// 命令面板「检查更新」：现在就查，有新版的话下好再返回。已经是最新的返回 None
 #[tauri::command]
 #[specta::specta]
-pub async fn update_check<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, AppState>,
-) -> Result<Option<UpdateInfo>> {
+pub async fn update_check<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>) -> Result<Option<UpdateInfo>> {
     match check(&app, &state.update, &state.data_dir).await? {
         Checked::Unconfigured => Err(AppError::Invalid("这个版本没有接自动更新".into())),
         Checked::Latest => Ok(None),
@@ -347,11 +334,8 @@ pub async fn update_install<R: Runtime>(
     // 和关窗口一样：窗口都先藏起来，开着同步的仓库各自把最后的改动推上去（一起推），最多等 3 秒。
     // 别的仓库窗口里编辑器的自动保存是停手 400ms 就存的，用户在这个窗口里点的「重启」，那边早存完了
     // 只藏、装不上时只放回本来就显示着的：速记小窗用过一次就一直藏着在（置顶），一起 show 出来就平白多一个窗口
-    let windows: Vec<_> = app
-        .webview_windows()
-        .into_values()
-        .filter(|other| other.is_visible().unwrap_or(false))
-        .collect();
+    let windows: Vec<_> =
+        app.webview_windows().into_values().filter(|other| other.is_visible().unwrap_or(false)).collect();
     for other in &windows {
         let _ = other.hide();
     }

@@ -40,13 +40,11 @@ impl Own {
     /// WebView2 只截 http 那个，https 的会去连本机 443 端口上别的程序，所以协议要一模一样
     pub fn new(app: Option<Url>, windows: bool) -> Own {
         let protocol = |scheme: &str| {
-            let base =
-                if windows { format!("http://{scheme}.localhost/") } else { format!("{scheme}://localhost/") };
+            let base = if windows { format!("http://{scheme}.localhost/") } else { format!("{scheme}://localhost/") };
             Url::parse(&base).expect("写死的地址解析得了")
         };
-        let sandbox = protocol(crate::plugins::sandbox::SCHEME)
-            .join(crate::plugins::sandbox::PATH)
-            .expect("写死的路径拼得上");
+        let sandbox =
+            protocol(crate::plugins::sandbox::SCHEME).join(crate::plugins::sandbox::PATH).expect("写死的路径拼得上");
         Own { app: app.unwrap_or_else(|| protocol("tauri")), sandbox }
     }
 }
@@ -233,7 +231,11 @@ mod tests {
             check(
                 window,
                 &own,
-                &["http://127.0.0.1:1420/", "http://127.0.0.1:1420/index.html?quiet", "http://127.0.0.1:1420/src/main.tsx"],
+                &[
+                    "http://127.0.0.1:1420/",
+                    "http://127.0.0.1:1420/index.html?quiet",
+                    "http://127.0.0.1:1420/src/main.tsx",
+                ],
                 &[
                     "http://127.0.0.1:14200/",
                     "http://127.0.0.1:142/",
@@ -280,7 +282,13 @@ mod tests {
                 &Window::Popout,
                 &own,
                 &["about:blank", "about:blank#x"],
-                &["about:blank?x", "about:srcdoc", "http://tauri.localhost/", "tauri://localhost/", "http://127.0.0.1:1420/"],
+                &[
+                    "about:blank?x",
+                    "about:srcdoc",
+                    "http://tauri.localhost/",
+                    "tauri://localhost/",
+                    "http://127.0.0.1:1420/",
+                ],
             );
             check(&Window::Popout, &own, &[], &FOREIGN);
         }

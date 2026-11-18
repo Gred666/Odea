@@ -73,10 +73,8 @@ impl Provider {
             Provider::Gitee => "gitee.com",
         };
         let url = url.trim();
-        let Some(rest) = url
-            .get(..8)
-            .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
-            .and_then(|_| url.get(8..))
+        let Some(rest) =
+            url.get(..8).filter(|scheme| scheme.eq_ignore_ascii_case("https://")).and_then(|_| url.get(8..))
         else {
             return false;
         };
@@ -109,11 +107,8 @@ impl Provider {
                 Ok(repos.into_iter().map(RemoteRepo::from).collect())
             }
             Provider::Gitee => {
-                let repos: Vec<GiteeRepo> = http.gitee_get(
-                    token,
-                    "/user/repos",
-                    &[("type", "all"), ("sort", "updated"), ("per_page", "100")],
-                )?;
+                let repos: Vec<GiteeRepo> =
+                    http.gitee_get(token, "/user/repos", &[("type", "all"), ("sort", "updated"), ("per_page", "100")])?;
                 Ok(repos.into_iter().map(RemoteRepo::from).collect())
             }
         }
@@ -124,9 +119,8 @@ impl Provider {
         match self {
             Provider::GitHub => {
                 let url = format!("{GITHUB_API}/repos/{}/collaborators/{}", repo_path(full_name)?, segment(login)?);
-                let request = http
-                    .github(http.agent.put(url), token)
-                    .send_json(serde_json::json!({ "permission": "push" }));
+                let request =
+                    http.github(http.agent.put(url), token).send_json(serde_json::json!({ "permission": "push" }));
                 // 201：发了邀请；204：他本来就有权限（已经是协作者、组织成员）
                 Ok(match read_status(request)? {
                     (204, _) => Invited::Already,
@@ -217,9 +211,7 @@ impl Provider {
                     "auto_init": false,
                     "description": "Odea 笔记",
                 });
-                let request = http
-                    .github(http.agent.post(format!("{GITHUB_API}/user/repos")), token)
-                    .send_json(body);
+                let request = http.github(http.agent.post(format!("{GITHUB_API}/user/repos")), token).send_json(body);
                 let repo: GitHubRepo = read_json(request)?;
                 Ok(repo.into())
             }
@@ -243,9 +235,8 @@ const GITEE_MEMBERS: &str = "Gitee 的仓库请在 Gitee 网页上的「仓库�
 
 /// 仓库在接口路径里的样子：`owner/name`，两段都只能是字母、数字和 - _ .
 fn repo_path(full_name: &str) -> SyncResult<String> {
-    let (owner, name) = full_name
-        .split_once('/')
-        .ok_or_else(|| SyncError::Local(format!("仓库名不对：{full_name}")))?;
+    let (owner, name) =
+        full_name.split_once('/').ok_or_else(|| SyncError::Local(format!("仓库名不对：{full_name}")))?;
     Ok(format!("{}/{}", segment(owner)?, segment(name)?))
 }
 
@@ -281,9 +272,7 @@ struct Owner {
 }
 
 fn owner_of(owner: Option<Owner>, full_name: &str) -> String {
-    owner
-        .map(|owner| owner.login)
-        .unwrap_or_else(|| full_name.split('/').next().unwrap_or_default().to_string())
+    owner.map(|owner| owner.login).unwrap_or_else(|| full_name.split('/').next().unwrap_or_default().to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -424,10 +413,7 @@ impl TokenReply {
     }
 
     fn problem(&self) -> String {
-        self.error_description
-            .clone()
-            .or_else(|| self.error.clone())
-            .unwrap_or_else(|| "GitHub 没有给令牌".into())
+        self.error_description.clone().or_else(|| self.error.clone()).unwrap_or_else(|| "GitHub 没有给令牌".into())
     }
 }
 
@@ -467,11 +453,7 @@ impl Http {
             .transpose()
             .map_err(|error| SyncError::Local(format!("代理地址用不了: {error}")))?;
         let config = ureq::Agent::config_builder()
-            .tls_config(
-                ureq::tls::TlsConfig::builder()
-                    .provider(ureq::tls::TlsProvider::NativeTls)
-                    .build(),
-            )
+            .tls_config(ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build())
             .proxy(proxy)
             .timeout_global(Some(Duration::from_secs(20)))
             .http_status_as_error(false)
@@ -529,22 +511,11 @@ impl Http {
     }
 
     fn github_get<T: DeserializeOwned>(&self, token: &str, path: &str) -> SyncResult<T> {
-        read_json(
-            self.github(self.agent.get(format!("{GITHUB_API}{path}")), token)
-                .call(),
-        )
+        read_json(self.github(self.agent.get(format!("{GITHUB_API}{path}")), token).call())
     }
 
-    fn gitee_get<T: DeserializeOwned>(
-        &self,
-        token: &str,
-        path: &str,
-        query: &[(&str, &str)],
-    ) -> SyncResult<T> {
-        let mut request = self
-            .agent
-            .get(format!("{GITEE_API}{path}"))
-            .query("access_token", token);
+    fn gitee_get<T: DeserializeOwned>(&self, token: &str, path: &str, query: &[(&str, &str)]) -> SyncResult<T> {
+        let mut request = self.agent.get(format!("{GITEE_API}{path}")).query("access_token", token);
         for (key, value) in query {
             request = request.query(*key, *value);
         }
@@ -557,31 +528,21 @@ fn now_ms() -> i64 {
 }
 
 /// 读回复：401 = 要登录；不是 2xx = 云端拒绝（带上它说的原因）；连不上 = 网络
-fn read_json<T: DeserializeOwned>(
-    response: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
-) -> SyncResult<T> {
+fn read_json<T: DeserializeOwned>(response: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> SyncResult<T> {
     let (_, text) = read_status(response)?;
-    serde_json::from_str(&text)
-        .map_err(|error| SyncError::Remote(format!("看不懂云端的回复: {error}")))
+    serde_json::from_str(&text).map_err(|error| SyncError::Remote(format!("看不懂云端的回复: {error}")))
 }
 
 /// 不用看内容的回复（204 没有正文）：状态码和正文
-fn read_status(
-    response: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
-) -> SyncResult<(u16, String)> {
+fn read_status(response: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> SyncResult<(u16, String)> {
     let mut response = response.map_err(|error| SyncError::Network(error.to_string()))?;
     let status = response.status().as_u16();
-    let text = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|error| SyncError::Network(error.to_string()))?;
+    let text = response.body_mut().read_to_string().map_err(|error| SyncError::Network(error.to_string()))?;
     if status == 401 {
         return Err(SyncError::Auth);
     }
     if !(200..300).contains(&status) {
-        return Err(SyncError::Remote(
-            api_message(&text).unwrap_or_else(|| format!("HTTP {status}")),
-        ));
+        return Err(SyncError::Remote(api_message(&text).unwrap_or_else(|| format!("HTTP {status}"))));
     }
     Ok((status, text))
 }
@@ -614,10 +575,7 @@ mod tests {
     #[test]
     fn device_polling_understands_every_answer() {
         let now = 1_000_000;
-        assert_eq!(
-            poll_result(reply(r#"{"error":"authorization_pending"}"#), now).unwrap(),
-            DevicePoll::Pending
-        );
+        assert_eq!(poll_result(reply(r#"{"error":"authorization_pending"}"#), now).unwrap(), DevicePoll::Pending);
         assert_eq!(
             poll_result(reply(r#"{"error":"slow_down","interval":10}"#), now).unwrap(),
             DevicePoll::SlowDown(10)
@@ -644,19 +602,14 @@ mod tests {
         );
         // 不过期的（App 关了令牌过期）
         let plain = poll_result(reply(r#"{"access_token":"gho_c","token_type":"bearer"}"#), now).unwrap();
-        assert_eq!(
-            plain,
-            DevicePoll::Done(Token { access: "gho_c".into(), refresh: None, expires_at: None })
-        );
+        assert_eq!(plain, DevicePoll::Done(Token { access: "gho_c".into(), refresh: None, expires_at: None }));
     }
 
     #[test]
     fn a_dead_refresh_token_means_logging_in_again() {
-        assert_eq!(
-            refresh_result(reply(r#"{"error":"bad_refresh_token"}"#), 0).unwrap_err(),
-            SyncError::Auth
-        );
-        let token = refresh_result(reply(r#"{"access_token":"ghu_new","expires_in":60,"refresh_token":"ghr_new"}"#), 5).unwrap();
+        assert_eq!(refresh_result(reply(r#"{"error":"bad_refresh_token"}"#), 0).unwrap_err(), SyncError::Auth);
+        let token = refresh_result(reply(r#"{"access_token":"ghu_new","expires_in":60,"refresh_token":"ghr_new"}"#), 5)
+            .unwrap();
         assert_eq!(token.expires_at, Some(60_005));
     }
 
@@ -749,10 +702,7 @@ mod tests {
         let code = http.github_device_code().unwrap();
         assert!(!code.user_code.is_empty());
         assert_eq!(code.verification_uri, "https://github.com/login/device");
-        assert_eq!(
-            http.github_device_poll(&code.device_code).unwrap(),
-            DevicePoll::Pending
-        );
+        assert_eq!(http.github_device_poll(&code.device_code).unwrap(), DevicePoll::Pending);
         // 令牌不对：两家都是「要登录」
         assert_eq!(Provider::GitHub.login_of(&http, "not-a-token").unwrap_err(), SyncError::Auth);
         assert_eq!(Provider::Gitee.login_of(&http, "not-a-token").unwrap_err(), SyncError::Auth);

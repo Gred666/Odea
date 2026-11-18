@@ -73,7 +73,8 @@ pub fn load(data_dir: &Path) -> ReminderSettings {
 }
 
 pub fn save(data_dir: &Path, settings: &ReminderSettings) -> Result<()> {
-    let json = serde_json::to_vec_pretty(settings).map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+    let json =
+        serde_json::to_vec_pretty(settings).map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
     let tmp = data_dir.join(format!("{FILE}.tmp"));
     std::fs::write(&tmp, json)?;
     std::fs::rename(&tmp, data_dir.join(FILE))?;
@@ -118,7 +119,8 @@ pub fn fire_time(row: &TaskRow, lead_minutes: u32) -> Option<(NaiveDateTime, Nai
 pub fn due_between(conn: &Connection, from: NaiveDateTime, to: NaiveDateTime, lead_minutes: u32) -> Result<Vec<Due>> {
     // 提前量会把明天凌晨的任务拉到今天响：日期往后多看提前量那么久；往前多看一天（⏰ 可以写在任务日期之前）
     let first = (from - Duration::days(1)).date().format("%Y-%m-%d").to_string();
-    let last = (to + Duration::minutes(i64::from(lead_minutes)) + Duration::days(1)).date().format("%Y-%m-%d").to_string();
+    let last =
+        (to + Duration::minutes(i64::from(lead_minutes)) + Duration::days(1)).date().format("%Y-%m-%d").to_string();
     let mut stmt = conn.prepare(&format!(
         "SELECT {TASK_COLUMNS} FROM task t JOIN doc d ON d.id = t.doc_id
          WHERE t.done = 0 AND d.is_archived = 0
@@ -319,10 +321,18 @@ mod runtime {
     /// 挂着的一条通知：是谁的、点了做什么
     #[derive(Clone)]
     enum Shown {
-        Task { window: String, due: Due },
+        Task {
+            window: String,
+            due: Due,
+        },
         /// 合成的一条：点了翻到日历的这一天
-        Group { window: String, date: String },
-        Test { window: String },
+        Group {
+            window: String,
+            date: String,
+        },
+        Test {
+            window: String,
+        },
     }
 
     #[derive(Default)]
@@ -364,8 +374,12 @@ mod runtime {
             loop {
                 // 睡到下一分钟的整点后 0.3 秒，最多睡 20 秒：睡眠醒来、改了系统时间都很快对上
                 let wall = Local::now().naive_local();
-                let into = std::time::Duration::from_millis(u64::from(wall.second()) * 1000 + u64::from(wall.nanosecond() / 1_000_000));
-                let wait = std::time::Duration::from_millis(60_300).saturating_sub(into).min(std::time::Duration::from_secs(20));
+                let into = std::time::Duration::from_millis(
+                    u64::from(wall.second()) * 1000 + u64::from(wall.nanosecond() / 1_000_000),
+                );
+                let wait = std::time::Duration::from_millis(60_300)
+                    .saturating_sub(into)
+                    .min(std::time::Duration::from_secs(20));
                 std::thread::sleep(wait.max(std::time::Duration::from_millis(200)));
                 tick(&app);
             }
@@ -396,12 +410,15 @@ mod runtime {
             .state::<AppState>()
             .all_workspaces()
             .into_iter()
-            .filter(|workspace| workspace.vault.lock().map(|vault| vault.layout().has_plugin(super::super::ID)).unwrap_or(false))
+            .filter(|workspace| {
+                workspace.vault.lock().map(|vault| vault.layout().has_plugin(super::super::ID)).unwrap_or(false)
+            })
             .collect();
         let several = workspaces.len() > 1;
 
         // 挂着的通知：任务在别处勾掉了、仓库窗口关了，收掉
-        let shown: Vec<(String, Shown)> = with_state(|state| state.shown.iter().map(|(tag, shown)| (tag.clone(), shown.clone())).collect());
+        let shown: Vec<(String, Shown)> =
+            with_state(|state| state.shown.iter().map(|(tag, shown)| (tag.clone(), shown.clone())).collect());
         let mut stale = Vec::new();
         for (tag, shown) in &shown {
             let window = match shown {
@@ -412,7 +429,11 @@ mod runtime {
                 continue;
             };
             if let Shown::Task { due, .. } = shown {
-                let open = workspace.vault.lock().ok().map(|vault| still_open(vault.db(), &due.doc_id, &due.raw).unwrap_or(true));
+                let open = workspace
+                    .vault
+                    .lock()
+                    .ok()
+                    .map(|vault| still_open(vault.db(), &due.doc_id, &due.raw).unwrap_or(true));
                 if open == Some(false) {
                     stale.push(tag.clone());
                 }
@@ -439,7 +460,9 @@ mod runtime {
         for workspace in &workspaces {
             let Ok(vault) = workspace.vault.lock() else { continue };
             match due_between(vault.db(), from, now, settings.lead_minutes) {
-                Ok(items) => found.extend(items.into_iter().map(|due| (workspace.label.clone(), vault_name(workspace), due))),
+                Ok(items) => {
+                    found.extend(items.into_iter().map(|due| (workspace.label.clone(), vault_name(workspace), due)))
+                }
                 Err(error) => eprintln!("查到点的任务失败: {error}"),
             }
         }
@@ -452,7 +475,11 @@ mod runtime {
         let mut items: Vec<Item> = Vec::new();
         for (window, due) in snoozed {
             let Some(workspace) = workspaces.iter().find(|workspace| workspace.label == window) else { continue };
-            let open = workspace.vault.lock().ok().is_some_and(|vault| still_open(vault.db(), &due.doc_id, &due.raw).unwrap_or(false));
+            let open = workspace
+                .vault
+                .lock()
+                .ok()
+                .is_some_and(|vault| still_open(vault.db(), &due.doc_id, &due.raw).unwrap_or(false));
             if open {
                 items.push(Item { window, vault: vault_name(workspace), due, snoozed: true });
             }
@@ -488,7 +515,14 @@ mod runtime {
         })
     }
 
-    fn deliver<R: Runtime>(app: &AppHandle<R>, settings: &ReminderSettings, items: Vec<Item>, away: bool, several: bool, now: NaiveDateTime) {
+    fn deliver<R: Runtime>(
+        app: &AppHandle<R>,
+        settings: &ReminderSettings,
+        items: Vec<Item>,
+        away: bool,
+        several: bool,
+        now: NaiveDateTime,
+    ) {
         let id = app_id(app);
         let system_sound = settings.sound == "system";
         let mut toasts: Vec<(Toast, Shown)> = Vec::new();
@@ -508,7 +542,9 @@ mod runtime {
                     launch: format!("day:{tag}"),
                     buttons: vec![
                         Button { label: "知道了".into(), argument: format!("dismiss:{tag}"), background: true },
-                        Button { label: "看今天的安排".into(), argument: format!("day:{tag}"), background: false },
+                        Button {
+                            label: "看今天的安排".into(), argument: format!("day:{tag}"), background: false
+                        },
                     ],
                     sticky: true,
                     system_sound: false,
@@ -519,7 +555,10 @@ mod runtime {
             for item in items {
                 let (title, line) = single_lines(&item.due, now, item.snoozed);
                 let tag = next_tag("r");
-                toasts.push((task_toast(&tag, title, line, several.then(|| item.vault.clone())), Shown::Task { window: item.window, due: item.due }));
+                toasts.push((
+                    task_toast(&tag, title, line, several.then(|| item.vault.clone())),
+                    Shown::Task { window: item.window, due: item.due },
+                ));
             }
         }
         if let Some((first, _)) = toasts.first_mut() {
@@ -593,7 +632,8 @@ mod runtime {
             }
             ("day", Shown::Group { window, date }) => {
                 crate::workspace::focus(app, &window);
-                let _ = crate::workspace::VaultGoto { page: "calendar".into(), arg: date }.emit_to(app, window.as_str());
+                let _ =
+                    crate::workspace::VaultGoto { page: "calendar".into(), arg: date }.emit_to(app, window.as_str());
             }
             ("open", Shown::Test { window }) => crate::workspace::focus(app, &window),
             _ => {}
@@ -620,7 +660,9 @@ mod runtime {
         let mut toast = task_toast(&tag, "这是一条试试的提醒".into(), "到点了就像这样 · 提醒设置".into(), None);
         // 示例点「完成」「10 分钟后」没有事可做：只留「打开」
         toast.buttons.retain(|button| button.argument.starts_with("open:"));
-        toast.buttons.insert(0, Button { label: "知道了".into(), argument: format!("dismiss:{tag}"), background: true });
+        toast
+            .buttons
+            .insert(0, Button { label: "知道了".into(), argument: format!("dismiss:{tag}"), background: true });
         toast.system_sound = settings.sound == "system";
         with_state(|state| state.shown.insert(tag.clone(), Shown::Test { window: window.into() }));
         let handle = app.clone();
@@ -662,8 +704,14 @@ mod tests {
 
     #[test]
     fn only_clock_times_ring_and_the_lead_moves_them_earlier() {
-        assert_eq!(fire_time(&row("2026-11-12", Some("18:00"), None), 0), Some((at("2026-11-12 18:00"), at("2026-11-12 18:00"))));
-        assert_eq!(fire_time(&row("2026-11-12", Some("9:05"), None), 10), Some((at("2026-11-12 09:05"), at("2026-11-12 08:55"))));
+        assert_eq!(
+            fire_time(&row("2026-11-12", Some("18:00"), None), 0),
+            Some((at("2026-11-12 18:00"), at("2026-11-12 18:00")))
+        );
+        assert_eq!(
+            fire_time(&row("2026-11-12", Some("9:05"), None), 10),
+            Some((at("2026-11-12 09:05"), at("2026-11-12 08:55")))
+        );
         // 提前量跨过零点
         assert_eq!(fire_time(&row("2026-11-13", Some("00:10"), None), 30).unwrap().1, at("2026-11-12 23:40"));
         assert_eq!(fire_time(&row("2026-11-12", Some("下午"), None), 0), None);
@@ -673,7 +721,10 @@ mod tests {
             fire_time(&row("2026-11-13", Some("18:00"), Some("2026-11-12 17:30")), 30),
             Some((at("2026-11-13 18:00"), at("2026-11-12 17:30")))
         );
-        assert_eq!(fire_time(&row("2026-11-12", Some("下午"), Some("2026-11-12 14:30")), 0), Some((at("2026-11-12 14:30"), at("2026-11-12 14:30"))));
+        assert_eq!(
+            fire_time(&row("2026-11-12", Some("下午"), Some("2026-11-12 14:30")), 0),
+            Some((at("2026-11-12 14:30"), at("2026-11-12 14:30")))
+        );
     }
 
     fn due(title: &str, time: &str) -> Due {
@@ -699,7 +750,8 @@ mod tests {
         assert_eq!(single_lines(&due("交周报", "2026-11-12 17:50"), now, false).1, "17:50 · 这周要做的");
         assert_eq!(single_lines(&due("交周报", "2026-11-13 00:10"), now, true).1, "稍后提醒 · 明天 00:10 · 这周要做的");
 
-        let items = [due("交周报", "2026-11-12 15:30"), due("对稿子", "2026-11-12 16:15"), due("开会", "2026-11-12 17:00")];
+        let items =
+            [due("交周报", "2026-11-12 15:30"), due("对稿子", "2026-11-12 16:15"), due("开会", "2026-11-12 17:00")];
         let (title, lines) = group_lines(&items, true, now);
         assert_eq!(title, "你不在的时候有 3 条到点了");
         assert_eq!(lines, vec!["15:30 交周报".to_string(), "16:15 对稿子 · 17:00 开会".to_string()]);

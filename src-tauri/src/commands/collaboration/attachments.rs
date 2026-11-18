@@ -55,7 +55,8 @@ pub async fn collab_open_attachment(
         return Err(AppError::Invalid(format!("不打开这种文件: {name}")));
     }
     blocking(move || {
-        tauri_plugin_opener::open_path(&file, None::<&str>).map_err(|error| AppError::Io(format!("打开文件失败: {error}")))
+        tauri_plugin_opener::open_path(&file, None::<&str>)
+            .map_err(|error| AppError::Io(format!("打开文件失败: {error}")))
     })
     .await
 }
@@ -114,7 +115,13 @@ pub async fn collab_put_attachment(
 /// 访客：从系统拖进来的文件（只有路径）
 #[tauri::command]
 #[specta::specta]
-pub async fn collab_put_attachment_path(caller: Caller, state: State<'_, AppState>, session: u16, doc: String, path: String) -> Result<Attachment> {
+pub async fn collab_put_attachment_path(
+    caller: Caller,
+    state: State<'_, AppState>,
+    session: u16,
+    doc: String,
+    path: String,
+) -> Result<Attachment> {
     let source = PathBuf::from(&path);
     let name = source
         .file_name()
@@ -149,11 +156,7 @@ async fn put_attachment(
         .extension()
         .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    Ok(Attachment {
-        is_image: crate::vault::IMAGE_EXTENSIONS.contains(&ext.as_str()),
-        name: file,
-        link,
-    })
+    Ok(Attachment { is_image: crate::vault::IMAGE_EXTENSIONS.contains(&ext.as_str()), name: file, link })
 }
 
 /// 访客连不上主持人时：生成回连链接发给主持人（设计 §8.4）。要等端口映射、中继有个结果，最多五秒

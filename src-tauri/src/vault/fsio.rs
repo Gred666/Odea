@@ -52,8 +52,10 @@ pub fn decode_legacy(bytes: &[u8]) -> Option<(&'static str, String)> {
         }
         // 长度是偶数，余下的那一截是空的
         let (pairs, _) = rest.as_chunks::<2>();
-        let units: Vec<u16> =
-            pairs.iter().map(|&pair| if little { u16::from_le_bytes(pair) } else { u16::from_be_bytes(pair) }).collect();
+        let units: Vec<u16> = pairs
+            .iter()
+            .map(|&pair| if little { u16::from_le_bytes(pair) } else { u16::from_be_bytes(pair) })
+            .collect();
         String::from_utf16(&units).ok()
     };
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
@@ -82,10 +84,7 @@ pub struct Decoded {
 pub fn decode(bytes: Vec<u8>) -> Decoded {
     match String::from_utf8(bytes) {
         Ok(text) => Decoded { text, utf8: true },
-        Err(error) => Decoded {
-            text: String::from_utf8_lossy(error.as_bytes()).into_owned(),
-            utf8: false,
-        },
+        Err(error) => Decoded { text: String::from_utf8_lossy(error.as_bytes()).into_owned(), utf8: false },
     }
 }
 
@@ -118,10 +117,7 @@ pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
 pub fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(dir)?;
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let tail = format!(".{}-{}.tmp", std::process::id(), TEMP_COUNTER.fetch_add(1, Ordering::Relaxed));
     // 临时文件的名字比原名多十几个字节：原名已经快到上限的（ext4 上 80 个汉字的标题，别的工具建的长名字）
     // 截短一点，不然连临时文件都建不了，这一篇就怎么也存不进去
@@ -213,20 +209,12 @@ pub fn walk(root: &Path, want: impl Fn(&str) -> bool) -> (Vec<FileEntry>, Vec<St
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
-            let rel = if rel_dir.is_empty() {
-                name.clone()
-            } else {
-                format!("{rel_dir}/{name}")
-            };
+            let rel = if rel_dir.is_empty() { name.clone() } else { format!("{rel_dir}/{name}") };
             if file_type.is_dir() {
                 stack.push((entry.path(), rel));
             } else if file_type.is_file() && is_markdown(&name) {
                 if let Ok(meta) = entry.metadata() {
-                    out.push(FileEntry {
-                        rel,
-                        mtime: mtime_ms(&meta),
-                        size: meta.len() as i64,
-                    });
+                    out.push(FileEntry { rel, mtime: mtime_ms(&meta), size: meta.len() as i64 });
                 }
             } else if file_type.is_file() && want(&name) {
                 others.push(rel);
@@ -250,11 +238,7 @@ pub fn has_markdown(root: &Path) -> bool {
 pub fn unique_rel(root: &Path, dir: &str, stem: &str, keep: Option<&str>) -> String {
     let keep = keep.map(str::to_lowercase);
     for n in 1.. {
-        let name = if n == 1 {
-            format!("{stem}.md")
-        } else {
-            format!("{stem} {n}.md")
-        };
+        let name = if n == 1 { format!("{stem}.md") } else { format!("{stem} {n}.md") };
         let rel = super::layout::join(dir, &name);
         if keep.as_deref() == Some(rel.to_lowercase().as_str()) || !abs(root, &rel).exists() {
             return rel;
@@ -304,10 +288,8 @@ mod tests {
         write_atomic(&path, "一").unwrap();
         write_atomic(&path, "二").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "二");
-        let names: Vec<_> = fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect();
+        let names: Vec<_> =
+            fs::read_dir(path.parent().unwrap()).unwrap().map(|entry| entry.unwrap().file_name()).collect();
         assert_eq!(names.len(), 1);
     }
 
@@ -382,10 +364,7 @@ mod tests {
         write_atomic(&abs(root, "笔记/周报.md"), "x").unwrap();
         write_atomic(&abs(root, "笔记/周报 2.md"), "x").unwrap();
         assert_eq!(unique_rel(root, "笔记", "周报", None), "笔记/周报 3.md");
-        assert_eq!(
-            unique_rel(root, "笔记", "周报", Some("笔记/周报.md")),
-            "笔记/周报.md"
-        );
+        assert_eq!(unique_rel(root, "笔记", "周报", Some("笔记/周报.md")), "笔记/周报.md");
         assert_eq!(unique_rel(root, "笔记", "新的", None), "笔记/新的.md");
     }
 

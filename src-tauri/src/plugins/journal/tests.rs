@@ -6,10 +6,7 @@ use crate::vault::layout::{classify, Layout, Slot};
 
 fn types_of(marker: Value, obsidian: Option<&str>) -> (Arc<dyn DocType>, Arc<dyn DocType>) {
     let folders = Folders::read(Some(&marker), || obsidian.map(String::from));
-    (
-        Arc::new(DayType { dir: folders.days, by_year: folders.days_by_year }),
-        Arc::new(GoalType { dir: folders.goals }),
-    )
+    (Arc::new(DayType { dir: folders.days, by_year: folders.days_by_year }), Arc::new(GoalType { dir: folders.goals }))
 }
 
 #[test]
@@ -37,11 +34,7 @@ fn goal_paths_round_trip_including_iso_week_years() {
         ("year", "2026-01-01"),
     ] {
         let path = goal_path(horizon, start).unwrap();
-        assert_eq!(
-            classify(&path),
-            Slot::Typed { kind: GOAL, key: goal_key(horizon, start) },
-            "{path}"
-        );
+        assert_eq!(classify(&path), Slot::Typed { kind: GOAL, key: goal_key(horizon, start) }, "{path}");
     }
     // 2024-12-30 是 2025 年第 1 周的周一
     assert_eq!(goal_path("week", "2024-12-30").unwrap(), "目标/2025/2025-W01.md");

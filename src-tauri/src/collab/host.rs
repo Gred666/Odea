@@ -37,15 +37,15 @@ use tokio::task::JoinHandle;
 use super::endpoint;
 use super::node::Node;
 use super::protocol::{
-    self, kind, AttachGet, AttachPut, CreateDoc, CreatedDoc, Forward, ForwardStream, Hello, Member,
-    Permission, Reject, RejectReason, Scope, Welcome,
+    self, kind, AttachGet, AttachPut, CreateDoc, CreatedDoc, Forward, ForwardStream, Hello, Member, Permission, Reject,
+    RejectReason, Scope, Welcome,
 };
 use super::queue::{spawn_queue_writer, DocQueue};
 use super::reach::{self, Reach};
 use super::record::{self, ApprovedRecord, HostRecord};
 use super::{
-    clean_name, spawn_writer, AttachReply, Callback, Control, EndReason, Event, Events, Invite,
-    MemberInfo, Status, SyncKind,
+    clean_name, spawn_writer, AttachReply, Callback, Control, EndReason, Event, Events, Invite, MemberInfo, Status,
+    SyncKind,
 };
 
 /// 握手每一步最多等多久（主持人确认不算）
@@ -159,7 +159,10 @@ struct Slot {
 enum Route {
     Direct(Connection),
     /// 转发他的那位访客的成员号和连接：他的流都开在这条连接上，数据报包一层再发
-    Via { member: u16, conn: Connection },
+    Via {
+        member: u16,
+        conn: Connection,
+    },
 }
 
 impl Route {
@@ -181,9 +184,7 @@ impl Route {
     fn send_datagram(&self, to: u16, datagram: &Bytes) {
         let _ = match self {
             Route::Direct(conn) => conn.send_datagram(datagram.clone()),
-            Route::Via { conn, .. } => {
-                conn.send_datagram(Bytes::from(protocol::wrap_forwarded(to, datagram)))
-            }
+            Route::Via { conn, .. } => conn.send_datagram(Bytes::from(protocol::wrap_forwarded(to, datagram))),
         };
     }
 
@@ -211,46 +212,23 @@ impl Host {
     pub async fn start(node: &Node, options: HostOptions, events: Events) -> Result<Host, String> {
         let resume = options.resume.as_ref();
         // 继续上次的：会话 id、邀请密钥、允许过谁、拉黑了谁都照旧
-        let session = resume
-            .and_then(HostRecord::session_bytes)
-            .unwrap_or_else(endpoint::random);
-        let record_dir = options
-            .record
-            .as_ref()
-            .map(|base| record::host_dir(base, &session));
-        let secret = resume
-            .and_then(HostRecord::secret_bytes)
-            .unwrap_or_else(endpoint::random);
+        let session = resume.and_then(HostRecord::session_bytes).unwrap_or_else(endpoint::random);
+        let record_dir = options.record.as_ref().map(|base| record::host_dir(base, &session));
+        let secret = resume.and_then(HostRecord::secret_bytes).unwrap_or_else(endpoint::random);
         let approved: HashMap<[u8; 32], (u16, Permission)> = resume
             .map(|record| {
                 record
                     .approved
                     .iter()
-                    .filter_map(|item| {
-                        Some((record::hex_array(&item.id)?, (item.member, item.permission)))
-                    })
+                    .filter_map(|item| Some((record::hex_array(&item.id)?, (item.member, item.permission))))
                     .collect()
             })
             .unwrap_or_default();
         let banned: HashSet<[u8; 32]> = resume
-            .map(|record| {
-                record
-                    .banned
-                    .iter()
-                    .filter_map(|id| record::hex_array(id))
-                    .collect()
-            })
+            .map(|record| record.banned.iter().filter_map(|id| record::hex_array(id)).collect())
             .unwrap_or_default();
         let next_member = resume
-            .map(|record| {
-                record.next_member.max(
-                    approved
-                        .values()
-                        .map(|(member, _)| member + 1)
-                        .max()
-                        .unwrap_or(1),
-                )
-            })
+            .map(|record| record.next_member.max(approved.values().map(|(member, _)| member + 1).max().unwrap_or(1)))
             .unwrap_or(1);
         let shared = Arc::new(Shared {
             events,
@@ -307,13 +285,7 @@ impl Host {
 
     /// 命令层对附件请求的回话（AttachGet / AttachPut 事件）。请求已经不在了（超时、对方走了）返回 false
     pub fn answer_attachment(&self, request: u32, reply: Result<AttachReply, String>) -> bool {
-        let sender = self
-            .shared
-            .state
-            .lock()
-            .unwrap()
-            .attach_pending
-            .remove(&request);
+        let sender = self.shared.state.lock().unwrap().attach_pending.remove(&request);
         sender.is_some_and(|sender| sender.send(reply).is_ok())
     }
 
@@ -350,10 +322,7 @@ impl Host {
     /// 拨通了接着就是那位的加入请求（照样要主持人确认）
     pub fn dial_back(&self, callback: Callback) -> Result<(), String> {
         if callback.session != self.shared.session {
-            return Err(
-                "这个回连链接不是这一次协作的（可能是上一次的），让对方用这次的邀请链接再生成一个"
-                    .into(),
-            );
+            return Err("这个回连链接不是这一次协作的（可能是上一次的），让对方用这次的邀请链接再生成一个".into());
         }
         if callback.guest == self.shared.id {
             return Err("这是你自己的回连链接".into());
@@ -405,10 +374,7 @@ impl Host {
         let (slots, dial_tasks) = {
             let mut state = self.shared.state.lock().unwrap();
             state.ended = true;
-            (
-                std::mem::take(&mut state.members),
-                std::mem::take(&mut state.dial_tasks),
-            )
+            (std::mem::take(&mut state.members), std::mem::take(&mut state.dial_tasks))
         };
         for task in dial_tasks {
             task.abort();
@@ -462,9 +428,7 @@ impl Host {
             };
             slot.permission = permission;
             let id = slot.id;
-            let _ = slot
-                .control
-                .send((kind::PERMISSION, protocol::encode(&permission)));
+            let _ = slot.control.send((kind::PERMISSION, protocol::encode(&permission)));
             if let Some(entry) = state.approved.get_mut(&id) {
                 entry.1 = permission;
             }
@@ -475,12 +439,7 @@ impl Host {
 
     /// 记住一个人（下次不问，按这个权限进来）；会话里接着就按这个来。存进 config.json 在命令层
     pub fn trust(&self, id: [u8; 32], permission: Permission) {
-        self.shared
-            .state
-            .lock()
-            .unwrap()
-            .trusted
-            .insert(id, permission);
+        self.shared.state.lock().unwrap().trusted.insert(id, permission);
     }
 
     /// 不再记住：下次进来照样问 —— 这次会话里也是：「允许过、重连不问」一起清掉（不然他离开再回来，
@@ -500,13 +459,10 @@ impl Host {
     pub fn kick(&self, member: u16) -> Option<[u8; 32]> {
         let (id, slot) = {
             let mut state = self.shared.state.lock().unwrap();
-            let id = state.members.get(&member).map(|slot| slot.id).or_else(|| {
-                state
-                    .approved
-                    .iter()
-                    .find(|(_, (approved, _))| *approved == member)
-                    .map(|(id, _)| *id)
-            })?;
+            let id =
+                state.members.get(&member).map(|slot| slot.id).or_else(|| {
+                    state.approved.iter().find(|(_, (approved, _))| *approved == member).map(|(id, _)| *id)
+                })?;
             state.banned.insert(id);
             state.approved.remove(&id);
             state.trusted.remove(&id);
@@ -585,11 +541,10 @@ impl Host {
         .await;
         // 端点是共用的：只从上面摘下来（最后一个会话结束时命令层关端点）
         self.shared.node.remove_host(&self.shared);
-        let _ = self.shared.events.send(Event::Control(Control::Status {
-            status: Status::Ended {
-                reason: EndReason::Left,
-            },
-        }));
+        let _ = self
+            .shared
+            .events
+            .send(Event::Control(Control::Status { status: Status::Ended { reason: EndReason::Left } }));
     }
 }
 
@@ -621,18 +576,13 @@ pub(crate) fn approved(shared: &Shared, id: &[u8; 32]) -> bool {
 /// 协议版本、特性对得上
 pub(crate) fn compatible(hello: &Hello) -> bool {
     hello.version == protocol::PROTOCOL_VERSION
-        && protocol::FEATURES
-            .iter()
-            .all(|feature| hello.features.iter().any(|f| f == feature))
+        && protocol::FEATURES.iter().all(|feature| hello.features.iter().any(|f| f == feature))
 }
 
 /// 分享前自检有了新结果：连同现在的邀请链接告诉前端
 pub(crate) fn on_reach(shared: &Shared, reach: Reach) {
     let link = invite_of(shared).to_link();
-    let _ = shared.events.send(Event::Control(Control::Reach {
-        reach,
-        link: Some(link),
-    }));
+    let _ = shared.events.send(Event::Control(Control::Reach { reach, link: Some(link) }));
 }
 
 /// 一位访客从连进来到离开（Hello 端点已经读出来了，会话 id 对的是这一次）。dialed = 主持人按回连链接
@@ -653,18 +603,9 @@ pub(crate) async fn serve_knock(
         .map_err(|_| "导不出密钥材料".to_string())?;
     let invited = {
         let state = shared.state.lock().unwrap();
-        hello
-            .proof
-            .map(|proof| protocol::verify_proof(&state.secret, &keying, &proof))
+        hello.proof.map(|proof| protocol::verify_proof(&state.secret, &keying, &proof))
     };
-    let knock = Knock {
-        id,
-        hello: &hello,
-        invited,
-        dialed,
-        via: None,
-        preset,
-    };
+    let knock = Knock { id, hello: &hello, invited, dialed, via: None, preset };
     let gone = async {
         conn.closed().await;
     };
@@ -673,37 +614,21 @@ pub(crate) async fn serve_knock(
         Err(Some(reason)) => return reject(Some(&conn), control_send, reason).await,
         Err(None) => return Ok(Served::Gone),
     };
-    protocol::write_frame(
-        &mut control_send,
-        kind::WELCOME,
-        &protocol::encode(&welcome),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
+    protocol::write_frame(&mut control_send, kind::WELCOME, &protocol::encode(&welcome))
+        .await
+        .map_err(|error| error.to_string())?;
 
     // 文档流之后由访客要哪篇开哪篇（accept_streams 里接）
     let route = Route::Direct(conn.clone());
-    let Some(generation) = install(
-        &shared,
-        member,
-        id,
-        clean_name(&hello.name),
-        permission,
-        route.clone(),
-        control_send,
-    ) else {
+    let Some(generation) =
+        install(&shared, member, id, clean_name(&hello.name), permission, route.clone(), control_send)
+    else {
         return Ok(Served::Gone);
     };
 
     let bye = Arc::new(AtomicBool::new(false));
     let readers = [
-        tokio::spawn(read_control(
-            shared.clone(),
-            member,
-            route,
-            control_recv,
-            bye.clone(),
-        )),
+        tokio::spawn(read_control(shared.clone(), member, route, control_recv, bye.clone())),
         tokio::spawn(read_datagrams(shared.clone(), member, conn.clone())),
         tokio::spawn(accept_streams(shared.clone(), member, conn.clone())),
     ];
@@ -714,10 +639,7 @@ pub(crate) async fn serve_knock(
     let removed = uninstall(&shared, member, generation);
     let gone = bye.load(Ordering::SeqCst)
         || !removed
-        || matches!(
-            closed,
-            ConnectionError::ApplicationClosed(_) | ConnectionError::LocallyClosed
-        );
+        || matches!(closed, ConnectionError::ApplicationClosed(_) | ConnectionError::LocallyClosed);
     Ok(if gone { Served::Gone } else { Served::Lost })
 }
 
@@ -750,14 +672,8 @@ async fn serve_forwarded(
     let id = forward.id;
     // 证明绑在他和转发那位的连接上，主持人自己核不了：转发的那位核过了才算拿着链接
     let invited = (hello.proof.is_some() && forward.proven).then_some(true);
-    let knock = Knock {
-        id,
-        hello: &hello,
-        invited,
-        dialed: false,
-        via: Some((via, via_name, via_permission)),
-        preset: None,
-    };
+    let knock =
+        Knock { id, hello: &hello, invited, dialed: false, via: Some((via, via_name, via_permission)), preset: None };
     // 等确认的时候他走了：转发的那位的连接断了，或者他那条控制流到头了（Welcome 之前他不会再发东西）
     let gone = async {
         tokio::select! {
@@ -773,26 +689,13 @@ async fn serve_forwarded(
         }
         Err(None) => return Ok(()),
     };
-    protocol::write_frame(
-        &mut control_send,
-        kind::WELCOME,
-        &protocol::encode(&welcome),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    let route = Route::Via {
-        member: via,
-        conn: via_conn.clone(),
-    };
-    let Some(generation) = install(
-        &shared,
-        member,
-        id,
-        clean_name(&hello.name),
-        permission,
-        route.clone(),
-        control_send,
-    ) else {
+    protocol::write_frame(&mut control_send, kind::WELCOME, &protocol::encode(&welcome))
+        .await
+        .map_err(|error| error.to_string())?;
+    let route = Route::Via { member: via, conn: via_conn.clone() };
+    let Some(generation) =
+        install(&shared, member, id, clean_name(&hello.name), permission, route.clone(), control_send)
+    else {
         return Ok(());
     };
     let bye = Arc::new(AtomicBool::new(false));
@@ -825,23 +728,14 @@ async fn admit(
     knock: Knock<'_>,
     gone: impl std::future::Future<Output = ()>,
 ) -> Result<(u16, Permission, Welcome), Option<RejectReason>> {
-    let Knock {
-        id,
-        hello,
-        invited,
-        dialed,
-        via,
-        preset,
-    } = knock;
+    let Knock { id, hello, invited, dialed, via, preset } = knock;
     if !compatible(hello) {
         // 告诉主持人一声（不然对方说连不上、他这边什么都没看到）：对方版本低、或者缺了特性，是对方旧
         let _ = shared.events.send(Event::Control(Control::JoinOutdated {
             name: clean_name(&hello.name),
             guest_older: hello.version <= protocol::PROTOCOL_VERSION,
         }));
-        return Err(Some(RejectReason::Version {
-            theirs: protocol::PROTOCOL_VERSION,
-        }));
+        return Err(Some(RejectReason::Version { theirs: protocol::PROTOCOL_VERSION }));
     }
     // 从「附近」点进来的：没有链接，不知道会话 id（全 0），也没有证明。照样问主持人
     let nearby = !dialed && hello.proof.is_none() && hello.session == [0; 16];
@@ -904,11 +798,7 @@ async fn admit(
             match decision {
                 Decision::Reject => {
                     let ended = shared.state.lock().unwrap().ended;
-                    return Err(Some(if ended {
-                        RejectReason::Ended
-                    } else {
-                        RejectReason::Declined
-                    }));
+                    return Err(Some(if ended { RejectReason::Ended } else { RejectReason::Declined }));
                 }
                 Decision::Allow(permission) => (None, cap(permission)),
             }
@@ -926,25 +816,11 @@ async fn admit(
         member
     });
     state.approved.insert(id, (member, permission));
-    let mut members: Vec<Member> = wire_members(shared, &state)
-        .into_iter()
-        .filter(|item| item.member != member)
-        .collect();
-    members.push(Member {
-        member,
-        id,
-        name,
-        permission,
-        via: via.as_ref().map(|(via, _, _)| *via),
-    });
+    let mut members: Vec<Member> =
+        wire_members(shared, &state).into_iter().filter(|item| item.member != member).collect();
+    members.push(Member { member, id, name, permission, via: via.as_ref().map(|(via, _, _)| *via) });
     members.sort_by_key(|item| item.member);
-    let welcome = Welcome {
-        member,
-        permission,
-        title: state.title.clone(),
-        members,
-        scope: shared.scope.clone(),
-    };
+    let welcome = Welcome { member, permission, title: state.title.clone(), members, scope: shared.scope.clone() };
     Ok((member, permission, welcome))
 }
 
@@ -1003,10 +879,7 @@ fn install(
 fn uninstall(shared: &Shared, member: u16, generation: u64) -> bool {
     let removed = {
         let mut state = shared.state.lock().unwrap();
-        let current = state
-            .members
-            .get(&member)
-            .is_some_and(|slot| slot.generation == generation);
+        let current = state.members.get(&member).is_some_and(|slot| slot.generation == generation);
         if current {
             state.members.remove(&member);
         }
@@ -1044,26 +917,18 @@ async fn dial_back_loop(shared: &Arc<Shared>, callback: &Callback) {
         if ended || banned {
             return;
         }
-        let addr =
-            match endpoint::dial_addr(&callback.guest, &callback.addrs, callback.relay.as_ref()) {
-                Ok(addr) => addr,
-                Err(detail) => {
-                    let _ = shared.events.send(Event::Control(Control::DialBack {
-                        ok: false,
-                        detail: Some(detail),
-                    }));
-                    return;
-                }
-            };
-        let attempt =
-            tokio::time::timeout(DIAL_BACK, shared.node.endpoint().connect(addr, protocol::ALPN)).await;
+        let addr = match endpoint::dial_addr(&callback.guest, &callback.addrs, callback.relay.as_ref()) {
+            Ok(addr) => addr,
+            Err(detail) => {
+                let _ = shared.events.send(Event::Control(Control::DialBack { ok: false, detail: Some(detail) }));
+                return;
+            }
+        };
+        let attempt = tokio::time::timeout(DIAL_BACK, shared.node.endpoint().connect(addr, protocol::ALPN)).await;
         match attempt {
             Ok(Ok(conn)) => {
                 if first {
-                    let _ = shared.events.send(Event::Control(Control::DialBack {
-                        ok: true,
-                        detail: None,
-                    }));
+                    let _ = shared.events.send(Event::Control(Control::DialBack { ok: true, detail: None }));
                 }
                 first = false;
                 failing_since = None;
@@ -1080,10 +945,7 @@ async fn dial_back_loop(shared: &Arc<Shared>, callback: &Callback) {
                         Ok(Err(error)) => format!("拨不通：{error}"),
                         _ => format!("等了 {} 秒还拨不通", DIAL_BACK.as_secs()),
                     };
-                    let _ = shared.events.send(Event::Control(Control::DialBack {
-                        ok: false,
-                        detail: Some(detail),
-                    }));
+                    let _ = shared.events.send(Event::Control(Control::DialBack { ok: false, detail: Some(detail) }));
                     return;
                 }
                 let since = *failing_since.get_or_insert_with(Instant::now);
@@ -1124,11 +986,7 @@ async fn serve_doc(shared: Arc<Shared>, member: u16, doc: String, send: SendStre
         state.doc_pending.insert(request, sender);
         (request, receiver)
     };
-    let _ = shared.events.send(Event::Control(Control::DocOpen {
-        request,
-        member,
-        doc: doc.clone(),
-    }));
+    let _ = shared.events.send(Event::Control(Control::DocOpen { request, member, doc: doc.clone() }));
     serve_allowed_doc(shared, member, doc, send, recv, (Some(request), receiver)).await
 }
 
@@ -1164,10 +1022,7 @@ async fn serve_allowed_doc(
         slot.writers.push(writer);
     }
     broadcast_members(&shared);
-    let _ = shared.events.send(Event::SyncStart {
-        with: member,
-        doc: doc.clone(),
-    });
+    let _ = shared.events.send(Event::SyncStart { with: member, doc: doc.clone() });
     read_doc(&shared, member, &doc, recv).await;
     let removed = {
         let mut state = shared.state.lock().unwrap();
@@ -1183,9 +1038,7 @@ async fn serve_allowed_doc(
     if removed {
         broadcast_members(&shared);
     }
-    let _ = shared
-        .events
-        .send(Event::Control(Control::DocClosed { member, doc }));
+    let _ = shared.events.send(Event::Control(Control::DocClosed { member, doc }));
 }
 
 /// 这一篇不给：回一句为什么，把流收尾，等对方读到
@@ -1211,22 +1064,16 @@ async fn read_doc(shared: &Shared, member: u16, doc: &str, mut recv: RecvStream)
                     continue;
                 }
                 forward(shared, member, doc, &payload);
-                let _ = shared.events.send(Event::Update {
-                    from: member,
-                    doc: doc.to_string(),
-                    bytes: payload,
-                });
+                let _ = shared.events.send(Event::Update { from: member, doc: doc.to_string(), bytes: payload });
             }
             kind::SYNC1 => {
                 // 不管是不是因为 Resync：之后要给他的更新照常排（这一份 Sync1 的回话里补齐）
-                if let Some(queue) = shared.state.lock().unwrap().members.get(&member).and_then(|slot| slot.docs.get(doc)) {
+                if let Some(queue) =
+                    shared.state.lock().unwrap().members.get(&member).and_then(|slot| slot.docs.get(doc))
+                {
                     queue.resynced();
                 }
-                let _ = shared.events.send(Event::SyncRequest {
-                    from: member,
-                    doc: doc.to_string(),
-                    vector: payload,
-                });
+                let _ = shared.events.send(Event::SyncRequest { from: member, doc: doc.to_string(), vector: payload });
             }
             _ => {}
         }
@@ -1246,11 +1093,8 @@ async fn accept_streams(shared: Arc<Shared>, member: u16, conn: Connection) {
         let conn = conn.clone();
         tokio::spawn(async move {
             // 先只读帧头：附件帧最多 50 MB，要先占上位子才读正文（serve_attachment_stream）
-            let head = tokio::time::timeout(
-                HANDSHAKE,
-                protocol::read_frame_head(&mut recv, protocol::MAX_ATTACH_FRAME),
-            )
-            .await;
+            let head =
+                tokio::time::timeout(HANDSHAKE, protocol::read_frame_head(&mut recv, protocol::MAX_ATTACH_FRAME)).await;
             let Ok(Ok(Some((frame_kind, length)))) = head else {
                 return;
             };
@@ -1285,9 +1129,7 @@ async fn forwarded_stream(
 ) {
     match forward.stream {
         ForwardStream::Control => {
-            if let Err(error) =
-                serve_forwarded(shared.clone(), via, conn, forward, send, recv).await
-            {
+            if let Err(error) = serve_forwarded(shared.clone(), via, conn, forward, send, recv).await {
                 eprintln!("协作：转发进来的接入失败：{error}");
             }
         }
@@ -1304,11 +1146,8 @@ async fn forwarded_stream(
         // 他要附件：按他自己的成员号、他自己的权限办（不是转发那位的），同时几个也记在他自己名下
         ForwardStream::Attach => {
             let Some(member) = forwarded_member(shared, via, &forward.id) else { return };
-            let head = tokio::time::timeout(
-                HANDSHAKE,
-                protocol::read_frame_head(&mut recv, protocol::MAX_ATTACH_FRAME),
-            )
-            .await;
+            let head =
+                tokio::time::timeout(HANDSHAKE, protocol::read_frame_head(&mut recv, protocol::MAX_ATTACH_FRAME)).await;
             if let Ok(Ok(Some((frame_kind, length)))) = head {
                 serve_attachment_stream(shared, member, frame_kind, length, send, recv).await;
             }
@@ -1325,10 +1164,7 @@ async fn small_body(recv: &mut RecvStream, length: usize) -> Option<Vec<u8>> {
     if length >= SMALL_FRAME {
         return None;
     }
-    tokio::time::timeout(HANDSHAKE, protocol::read_frame_body(recv, length))
-        .await
-        .ok()?
-        .ok()
+    tokio::time::timeout(HANDSHAKE, protocol::read_frame_body(recv, length)).await.ok()?.ok()
 }
 
 /// 经 via 转发的那一位（公钥是 id）现在的成员号
@@ -1379,13 +1215,7 @@ async fn serve_attachment_stream(
 
 /// 这位访客现在能不能改（只读的不能往主持人的仓库里放东西）
 fn editable(shared: &Shared, member: u16) -> bool {
-    shared
-        .state
-        .lock()
-        .unwrap()
-        .members
-        .get(&member)
-        .is_some_and(|slot| slot.permission == Permission::Edit)
+    shared.state.lock().unwrap().members.get(&member).is_some_and(|slot| slot.permission == Permission::Edit)
 }
 
 /// 一位访客正在办的一个附件请求：拿着就占着他的一个位子，办完（drop）还回去
@@ -1418,13 +1248,7 @@ impl Drop for AttachSlot {
     }
 }
 
-async fn serve_attachment(
-    shared: &Shared,
-    member: u16,
-    frame_kind: u8,
-    payload: Vec<u8>,
-    mut send: SendStream,
-) {
+async fn serve_attachment(shared: &Shared, member: u16, frame_kind: u8, payload: Vec<u8>, mut send: SendStream) {
     // 读正文之前看过一次；正文读着的时候可能刚被改成只读，再看一次
     let editable = editable(shared, member);
     let (request, receiver) = {
@@ -1436,34 +1260,23 @@ async fn serve_attachment(
         (request, receiver)
     };
     let event = match frame_kind {
-        kind::ATTACH_GET => protocol::decode::<AttachGet>(&payload)
-            .ok()
-            .map(|get| Event::AttachGet {
-                request,
-                from: member,
-                doc: get.doc,
-                path: get.path,
-            }),
+        kind::ATTACH_GET => protocol::decode::<AttachGet>(&payload).ok().map(|get| Event::AttachGet {
+            request,
+            from: member,
+            doc: get.doc,
+            path: get.path,
+        }),
         // 只读的人不能往主持人的仓库里放东西
-        kind::ATTACH_PUT if editable => {
-            protocol::decode::<AttachPut>(&payload)
-                .ok()
-                .map(|put| Event::AttachPut {
-                    request,
-                    from: member,
-                    doc: put.doc,
-                    name: put.name,
-                    bytes: put.bytes,
-                })
-        }
+        kind::ATTACH_PUT if editable => protocol::decode::<AttachPut>(&payload).ok().map(|put| Event::AttachPut {
+            request,
+            from: member,
+            doc: put.doc,
+            name: put.name,
+            bytes: put.bytes,
+        }),
         kind::ATTACH_PUT => {
             shared.state.lock().unwrap().attach_pending.remove(&request);
-            let _ = protocol::write_frame(
-                &mut send,
-                kind::ATTACH_ERR,
-                "你现在是只读的，不能加附件".as_bytes(),
-            )
-            .await;
+            let _ = protocol::write_frame(&mut send, kind::ATTACH_ERR, "你现在是只读的，不能加附件".as_bytes()).await;
             let _ = send.finish();
             return;
         }
@@ -1492,13 +1305,7 @@ async fn serve_attachment(
 }
 
 /// 控制流：访客只会发 Bye、改名、要新建一篇。读到头（转发的那一位走了）就返回
-async fn read_control(
-    shared: Arc<Shared>,
-    member: u16,
-    route: Route,
-    mut recv: RecvStream,
-    bye: Arc<AtomicBool>,
-) {
+async fn read_control(shared: Arc<Shared>, member: u16, route: Route, mut recv: RecvStream, bye: Arc<AtomicBool>) {
     while let Ok(Some((frame, payload))) = protocol::read_frame(&mut recv).await {
         if frame == kind::BYE {
             bye.store(true, Ordering::SeqCst);
@@ -1529,10 +1336,8 @@ async fn read_control(
             let mut state = shared.state.lock().unwrap();
             let Some(slot) = state.members.get(&member) else { continue };
             if slot.permission != Permission::Edit {
-                let reply = CreatedDoc {
-                    request: create.request,
-                    result: Err("你现在是只读的，不能新建".into()),
-                };
+                let reply =
+                    CreatedDoc { request: create.request, result: Err("你现在是只读的，不能新建".into()) };
                 let _ = slot.control.send((kind::CREATED, protocol::encode(&reply)));
                 continue;
             }
@@ -1580,11 +1385,7 @@ async fn read_datagrams(shared: Arc<Shared>, member: u16, conn: Connection) {
                 }
             }
         }
-        let _ = shared.events.send(Event::Cursor {
-            from,
-            doc: doc.to_string(),
-            bytes: cursor.to_vec(),
-        });
+        let _ = shared.events.send(Event::Cursor { from, doc: doc.to_string(), bytes: cursor.to_vec() });
     }
 }
 
@@ -1618,8 +1419,7 @@ fn persist(shared: &Shared) {
         if state.ended {
             return;
         }
-        let mut record =
-            HostRecord::new(shared.note.clone(), state.title.clone(), shared.permission);
+        let mut record = HostRecord::new(shared.note.clone(), state.title.clone(), shared.permission);
         record.scope = Some(shared.scope.clone());
         record.session = data_encoding::HEXLOWER.encode(&shared.session);
         record.secret = data_encoding::HEXLOWER.encode(&state.secret);
@@ -1698,9 +1498,7 @@ fn broadcast_members(shared: &Shared) {
         }
         members_of(shared, &state)
     };
-    let _ = shared
-        .events
-        .send(Event::Control(Control::Members { members }));
+    let _ = shared.events.send(Event::Control(Control::Members { members }));
 }
 
 /// 现在的邀请链接：地址现取；中继是 iroh 选中的那台（延迟最低的），还没选出来就用配的第一台
@@ -1718,11 +1516,7 @@ fn invite_of(shared: &Shared) -> Invite {
     let relays = shared.node.relays();
     let relay = relays
         .iter()
-        .find(|relay| {
-            relay
-                .relay_url()
-                .is_ok_and(|url| home.contains(&url.to_string()))
-        })
+        .find(|relay| relay.relay_url().is_ok_and(|url| home.contains(&url.to_string())))
         .or_else(|| relays.first())
         .cloned();
     let state = shared.state.lock().unwrap();
@@ -1742,12 +1536,7 @@ pub(crate) async fn reject(
     mut send: SendStream,
     reason: RejectReason,
 ) -> Result<Served, String> {
-    let _ = protocol::write_frame(
-        &mut send,
-        kind::REJECT,
-        &protocol::encode(&Reject { reason }),
-    )
-    .await;
+    let _ = protocol::write_frame(&mut send, kind::REJECT, &protocol::encode(&Reject { reason })).await;
     let _ = send.finish();
     match conn {
         Some(conn) => {

@@ -139,9 +139,7 @@ impl GuestRecord {
 }
 
 pub fn hex_array<const N: usize>(text: &str) -> Option<[u8; N]> {
-    let bytes = data_encoding::HEXLOWER
-        .decode(text.trim().to_ascii_lowercase().as_bytes())
-        .ok()?;
+    let bytes = data_encoding::HEXLOWER.decode(text.trim().to_ascii_lowercase().as_bytes()).ok()?;
     <[u8; N]>::try_from(bytes.as_slice()).ok()
 }
 
@@ -163,11 +161,7 @@ pub fn cached_name(path: &str) -> String {
         _ => (name.as_str(), ""),
     };
     let ext = ext.to_ascii_lowercase();
-    let ext = if ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
-        ext
-    } else {
-        String::new()
-    };
+    let ext = if ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()) { ext } else { String::new() };
     let mut stem = crate::vault::layout::attachment_stem(stem);
     if stem.is_empty() {
         stem = "图片".into();
@@ -186,11 +180,7 @@ fn percent_decode(text: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         let hex = |b: u8| (b as char).to_digit(16);
-        match (
-            bytes[i],
-            bytes.get(i + 1).copied().and_then(hex),
-            bytes.get(i + 2).copied().and_then(hex),
-        ) {
+        match (bytes[i], bytes.get(i + 1).copied().and_then(hex), bytes.get(i + 2).copied().and_then(hex)) {
             (b'%', Some(high), Some(low)) => {
                 out.push((high * 16 + low) as u8);
                 i += 3;
@@ -228,8 +218,7 @@ pub fn load_json<T: for<'de> Deserialize<'de>>(dir: &Path, file: &str) -> Option
 
 /// 一篇的快照放在哪：文件名是文档 id 的十六进制（id 里可能有不能进文件名的字）
 fn state_path(dir: &Path, role: Role, doc: &str) -> PathBuf {
-    dir.join(role.files().1)
-        .join(format!("{}.loro", data_encoding::HEXLOWER.encode(doc.as_bytes())))
+    dir.join(role.files().1).join(format!("{}.loro", data_encoding::HEXLOWER.encode(doc.as_bytes())))
 }
 
 pub fn save_state(dir: &Path, role: Role, doc: &str, bytes: &[u8]) -> std::io::Result<()> {
@@ -237,9 +226,7 @@ pub fn save_state(dir: &Path, role: Role, doc: &str, bytes: &[u8]) -> std::io::R
 }
 
 pub fn load_state(dir: &Path, role: Role, doc: &str) -> Option<Vec<u8>> {
-    std::fs::read(state_path(dir, role, doc))
-        .ok()
-        .filter(|bytes| !bytes.is_empty())
+    std::fs::read(state_path(dir, role, doc)).ok().filter(|bytes| !bytes.is_empty())
 }
 
 /// 存着快照的那几篇（文档 id）

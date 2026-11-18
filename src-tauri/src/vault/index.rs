@@ -119,9 +119,7 @@ pub fn with_reader<T: Default>(
     cancelled: &dyn Fn() -> bool,
     scan: impl FnOnce(&Connection) -> Result<Option<T>>,
 ) -> Result<T> {
-    let mut slot = READER
-        .lock()
-        .map_err(|_| crate::error::AppError::Internal("搜索的连接坏了".into()))?;
+    let mut slot = READER.lock().map_err(|_| crate::error::AppError::Internal("搜索的连接坏了".into()))?;
     if cancelled() {
         return Ok(T::default());
     }
@@ -155,9 +153,8 @@ pub fn release_reader(main: &Connection) {
 /// 清空，下次扫描每个文件按新的摆法重新认。`assumed` = 还没记过时当它是哪一种（P11.2 以前的索引
 /// 都是按 Odea 的老规矩建的，那样的仓库不用重读）。清空了返回 true
 pub fn sync_layout(conn: &Connection, fingerprint: &str, assumed: &str) -> Result<bool> {
-    let stored: Option<String> = conn
-        .query_row("SELECT value FROM meta WHERE key = 'layout'", [], |r| r.get(0))
-        .optional()?;
+    let stored: Option<String> =
+        conn.query_row("SELECT value FROM meta WHERE key = 'layout'", [], |r| r.get(0)).optional()?;
     let stale = stored.as_deref().unwrap_or(assumed) != fingerprint;
     if stale {
         keep_note_ids(conn)?;
@@ -346,21 +343,14 @@ fn row(r: &Row) -> rusqlite::Result<DocRow> {
         hash: r.get("hash")?,
         file_id: r.get("file_id")?,
         not_utf8: r.get::<_, i64>("not_utf8")? != 0,
-        tags: r
-            .get::<_, String>("tags")?
-            .split('\n')
-            .filter(|tag| !tag.is_empty())
-            .map(str::to_string)
-            .collect(),
+        tags: r.get::<_, String>("tags")?.split('\n').filter(|tag| !tag.is_empty()).map(str::to_string).collect(),
         props: r.get("props")?,
     })
 }
 
 /// 按条件取一篇（插件拿它查自己的文档，plugins/journal）
 pub fn one(conn: &Connection, filter: &str, args: impl rusqlite::Params) -> Result<Option<DocRow>> {
-    Ok(conn
-        .query_row(&format!("SELECT {COLUMNS} FROM doc WHERE {filter}"), args, row)
-        .optional()?)
+    Ok(conn.query_row(&format!("SELECT {COLUMNS} FROM doc WHERE {filter}"), args, row).optional()?)
 }
 
 fn many(conn: &Connection, rest: &str, args: impl rusqlite::Params) -> Result<Vec<DocRow>> {
@@ -432,10 +422,8 @@ pub fn scan_text(
 ) -> Result<Option<Vec<TextMatch>>> {
     let needle = Needle::new(needle);
     let columns = COLUMNS.replace("content_md", "'' AS content_md");
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {columns}, content_md AS body FROM doc WHERE {}",
-        text_filter(archived_only)
-    ))?;
+    let mut stmt =
+        conn.prepare(&format!("SELECT {columns}, content_md AS body FROM doc WHERE {}", text_filter(archived_only)))?;
     let body_at = stmt.column_index("body")?;
     let mut rows = stmt.query([])?;
     let mut found = Vec::new();
@@ -494,11 +482,7 @@ impl<'a> Needle<'a> {
         if !self.direct || (self.i_or_k && (content.contains('\u{130}') || content.contains('\u{212A}'))) {
             return line_with(content, self.text);
         }
-        let at = if self.letters {
-            find_ignore_ascii_case(content, self.text)?
-        } else {
-            content.find(self.text)?
-        };
+        let at = if self.letters { find_ignore_ascii_case(content, self.text)? } else { content.find(self.text)? };
         line_around(content, &content[..at])
     }
 }
@@ -561,11 +545,7 @@ fn find_ignore_ascii_case(hay: &str, needle: &str) -> Option<usize> {
 
 /// 搜正文要看的每一篇（连同正文）：笔记（含归档；archived_only 只要归档里的）和写过东西的插件文档。
 /// visit 返回 false 就不往下看了（又来了新的搜索），这时返回 false
-pub fn each_text_doc(
-    conn: &Connection,
-    archived_only: bool,
-    mut visit: impl FnMut(DocRow) -> bool,
-) -> Result<bool> {
+pub fn each_text_doc(conn: &Connection, archived_only: bool, mut visit: impl FnMut(DocRow) -> bool) -> Result<bool> {
     let filter = text_filter(archived_only);
     let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM doc WHERE {filter}"))?;
     let mut rows = stmt.query([])?;
@@ -622,9 +602,7 @@ pub fn note_refs(conn: &Connection) -> Result<Vec<(String, String, Option<String
 
 /// meta 表里记着的一个值
 pub fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>> {
-    Ok(conn
-        .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0))
-        .optional()?)
+    Ok(conn.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| r.get(0)).optional()?)
 }
 
 pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
@@ -643,11 +621,10 @@ pub fn file_states(conn: &Connection) -> Result<Vec<(String, i64, i64)>> {
 }
 
 pub fn id_taken(conn: &Connection, id: &str, except_path: &str) -> Result<bool> {
-    let n: i64 = conn.query_row(
-        "SELECT count(*) FROM doc WHERE id = ?1 AND rel_path != ?2",
-        params![id, except_path],
-        |r| r.get(0),
-    )?;
+    let n: i64 =
+        conn.query_row("SELECT count(*) FROM doc WHERE id = ?1 AND rel_path != ?2", params![id, except_path], |r| {
+            r.get(0)
+        })?;
     Ok(n > 0)
 }
 
@@ -697,8 +674,7 @@ pub fn put(conn: &Connection, doc: &DocRow, parts: &[&'static dyn IndexPart]) ->
     // 这个路径上的笔记认回来了（用的是留着的 id，或者属性块里有、留着的被别的文件占了）：留着的那一行没用了。
     // 插件的文档不删：关掉插件它又是笔记，那时还要还给它
     if doc.kind == NOTE {
-        conn.prepare_cached("DELETE FROM kept_ids WHERE rel_path = ?1")?
-            .execute(params![doc.rel_path])?;
+        conn.prepare_cached("DELETE FROM kept_ids WHERE rel_path = ?1")?.execute(params![doc.rel_path])?;
     }
     tx.commit()?;
     Ok(changed)
@@ -706,10 +682,7 @@ pub fn put(conn: &Connection, doc: &DocRow, parts: &[&'static dyn IndexPart]) ->
 
 /// 只更新文件状态（内容没变，比如 mtime 被别的程序碰了一下）
 pub fn touch(conn: &Connection, id: &str, mtime: i64, size: i64) -> Result<()> {
-    conn.execute(
-        "UPDATE doc SET mtime = ?1, size = ?2, updated_at = ?1 WHERE id = ?3",
-        params![mtime, size, id],
-    )?;
+    conn.execute("UPDATE doc SET mtime = ?1, size = ?2, updated_at = ?1 WHERE id = ?3", params![mtime, size, id])?;
     Ok(())
 }
 
@@ -717,10 +690,7 @@ pub fn touch(conn: &Connection, id: &str, mtime: i64, size: i64) -> Result<()> {
 /// 旧路径那一行还占着同一个 id，新文件会被当成一篇重复的笔记。
 /// 指纹清掉：标题可能来自文件名、归档与否来自位置，内容一样也得重新解析。
 pub fn rename(conn: &Connection, id: &str, rel: &str) -> Result<()> {
-    conn.execute(
-        "UPDATE doc SET rel_path = ?1, hash = '' WHERE id = ?2",
-        params![rel, id],
-    )?;
+    conn.execute("UPDATE doc SET rel_path = ?1, hash = '' WHERE id = ?2", params![rel, id])?;
     Ok(())
 }
 
@@ -843,8 +813,29 @@ mod tests {
             String::new(),
         ];
         let needles = [
-            "rust", "hello world", "进度", "末行", "ｒｕｓｔ", "école", "σας", "σ", "kelvin", "k", "istanbul", "i",
-            "i\u{307}", "😀", "a😀b", "123，", "「引号」", "odea笔记", "odea 笔", "\n", "在这里", "rust 在这里", "没有",
+            "rust",
+            "hello world",
+            "进度",
+            "末行",
+            "ｒｕｓｔ",
+            "école",
+            "σας",
+            "σ",
+            "kelvin",
+            "k",
+            "istanbul",
+            "i",
+            "i\u{307}",
+            "😀",
+            "a😀b",
+            "123，",
+            "「引号」",
+            "odea笔记",
+            "odea 笔",
+            "\n",
+            "在这里",
+            "rust 在这里",
+            "没有",
         ];
         for content in &contents {
             for needle in needles {

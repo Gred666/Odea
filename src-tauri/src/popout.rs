@@ -99,9 +99,8 @@ fn without_reload_keys<R: Runtime>(window: &WebviewWindow<R>) {
             let mut key = 0u32;
             args.VirtualKey(&mut key)?;
             let ctrl = GetKeyState(i32::from(VK_CONTROL.0)) < 0;
-            let reload = key == u32::from(VK_F5.0)
-                || key == u32::from(VK_BROWSER_REFRESH.0)
-                || (ctrl && key == u32::from(b'R'));
+            let reload =
+                key == u32::from(VK_F5.0) || key == u32::from(VK_BROWSER_REFRESH.0) || (ctrl && key == u32::from(b'R'));
             if reload {
                 args.SetHandled(true)?;
             }

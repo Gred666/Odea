@@ -340,24 +340,30 @@ fn clean_vault_path(path: &str) -> Option<String> {
 /// 主持人：访客要的附件。只给这篇正文里引用了的、规范化之后落在这篇的附件文件夹里的（设计 §7.2；
 /// Odea 的仓库是「附件」，Obsidian 的库照它的设置）：不然写个 `../../` 就能读到主持人硬盘上的任意文件，
 /// 写个 `其他笔记.md` 就能读到别的笔记
-async fn read_attachment(hub: &CollabHub, label: &str, session: u16, doc: &str, path: &str) -> std::result::Result<Vec<u8>, String> {
+async fn read_attachment(
+    hub: &CollabHub,
+    label: &str,
+    session: u16,
+    doc: &str,
+    path: &str,
+) -> std::result::Result<Vec<u8>, String> {
     let note = doc.to_string();
     let (vault, vault_path) = hub
-        .with(label, session, |found| (found.vault.clone(), found.refs.get(doc).and_then(|refs| refs.get(path)).cloned()))
+        .with(label, session, |found| {
+            (found.vault.clone(), found.refs.get(doc).and_then(|refs| refs.get(path)).cloned())
+        })
         .ok_or_else(|| "协作已经停了".to_string())?;
     let vault = vault.ok_or_else(|| "这一边没开仓库".to_string())?;
     let vault_path = vault_path.ok_or_else(|| "这个文件不在这篇正文里".to_string())?;
     let clean = clean_vault_path(&vault_path).ok_or_else(|| "只给这篇笔记的附件".to_string())?;
     let vault = vault.clone();
     let read = tauri::async_runtime::spawn_blocking(move || -> std::result::Result<Vec<u8>, String> {
-        let file = vault
-            .lock()
-            .map_err(|_| "仓库锁坏了".to_string())?
-            .attachment_for_guest(&note, &clean)
-            .map_err(|error| match error {
+        let file = vault.lock().map_err(|_| "仓库锁坏了".to_string())?.attachment_for_guest(&note, &clean).map_err(
+            |error| match error {
                 AppError::Invalid(message) => message,
                 other => other.to_string(),
-            })?;
+            },
+        )?;
         let size = std::fs::metadata(&file).map_err(|error| error.to_string())?.len();
         if size > collab::protocol::MAX_ATTACHMENT as u64 {
             return Err("文件太大了，附件最多 50 MB".into());
@@ -469,7 +475,8 @@ fn forward_collab<R: Runtime>(
                     if guest {
                         note_guest(&dir, &control);
                     }
-                    if let Err(error) = (CollabEvent { session: Some(session), control }).emit_to(&app, label.as_str()) {
+                    if let Err(error) = (CollabEvent { session: Some(session), control }).emit_to(&app, label.as_str())
+                    {
                         eprintln!("通知前端失败: {error}");
                     }
                     continue;
@@ -485,7 +492,8 @@ fn forward_collab<R: Runtime>(
                 collab::Event::AttachPut { request, doc, name, bytes, .. } => {
                     let (hub, label) = (hub.clone(), label.clone());
                     tauri::async_runtime::spawn(async move {
-                        let reply = store_attachment(&hub, &label, session, doc, name, bytes).await.map(AttachReply::Link);
+                        let reply =
+                            store_attachment(&hub, &label, session, doc, name, bytes).await.map(AttachReply::Link);
                         hub.host(&label, session, |host| host.answer_attachment(request, reply));
                     });
                     continue;
@@ -626,7 +634,8 @@ async fn end_session(state: &AppState, key: &SessionKey) {
 pub async fn end_collab(state: &AppState, label: &str) {
     let hub = &state.collab;
     let mut slot = hub.node.lock().await;
-    let keys: Vec<SessionKey> = hub.sessions.lock().unwrap().keys().filter(|(owner, _)| owner == label).cloned().collect();
+    let keys: Vec<SessionKey> =
+        hub.sessions.lock().unwrap().keys().filter(|(owner, _)| owner == label).cloned().collect();
     for key in keys {
         end_session(state, &key).await;
     }
@@ -647,10 +656,7 @@ pub async fn collab_identity(state: State<'_, AppState>) -> Result<CollabIdentit
     let data_dir = state.data_dir.clone();
     blocking(move || {
         let key = device_key(&data_dir);
-        Ok(CollabIdentity {
-            id: collab::id_text(key.public().as_bytes()),
-            name: collab_name(&data_dir),
-        })
+        Ok(CollabIdentity { id: collab::id_text(key.public().as_bytes()), name: collab_name(&data_dir) })
     })
     .await
 }
@@ -860,7 +866,11 @@ pub async fn collab_stop(caller: Caller, state: State<'_, AppState>, session: u1
 /// 最近的仓库。那个窗口收到 CollabCopyReady 以后来取（collab_take_copy），新建一篇、存图片、存正文
 #[tauri::command]
 #[specta::specta]
-pub async fn collab_copy_to_vault<R: Runtime>(app: AppHandle<R>, state: State<'_, AppState>, copy: SharedCopy) -> Result<()> {
+pub async fn collab_copy_to_vault<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    copy: SharedCopy,
+) -> Result<()> {
     *state.collab.pending_copy.lock().unwrap() = Some(copy);
     let handle = app.clone();
     let label = blocking(move || crate::workspace::recent_vault_window(&handle)).await?;
@@ -892,7 +902,11 @@ pub fn collab_pipe(window: tauri::WebviewWindow, state: State<'_, AppState>, cha
 
 /// 前端发出来的字节（不经 tauri-specta：原始请求体，不是一字节一个数字的 JSON 数组）
 #[tauri::command]
-pub fn collab_send(window: tauri::WebviewWindow, state: State<'_, AppState>, request: Request<'_>) -> std::result::Result<(), String> {
+pub fn collab_send(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    request: Request<'_>,
+) -> std::result::Result<(), String> {
     let InvokeBody::Raw(frame) = request.body() else {
         return Err("collab_send 要原始字节".into());
     };

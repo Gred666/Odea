@@ -128,11 +128,7 @@ fn parse_line(line: usize, raw: &str) -> Option<ScheduledTask> {
 
         // ⏰ 2026-11-12 15:20、⏰ 15:20（⏰ 和后面可以连着写）。认不出的照原样当字
         if let Some(rest) = token.strip_prefix('⏰') {
-            let (first, glued) = if rest.is_empty() {
-                (tokens.get(index).copied(), false)
-            } else {
-                (Some(rest), true)
-            };
+            let (first, glued) = if rest.is_empty() { (tokens.get(index).copied(), false) } else { (Some(rest), true) };
             let skip = usize::from(!glued);
             match first {
                 Some(date) if is_date(date) => {
@@ -246,8 +242,7 @@ pub fn is_time(s: &str) -> bool {
     let Some((hour, minute)) = s.split_once(':') else {
         return false;
     };
-    let hour_ok = (1..=2).contains(&hour.len())
-        && hour.parse::<u32>().is_ok_and(|hour| hour < 24);
+    let hour_ok = (1..=2).contains(&hour.len()) && hour.parse::<u32>().is_ok_and(|hour| hour < 24);
     let minute_ok = minute.len() == 2 && minute.parse::<u32>().is_ok_and(|minute| minute < 60);
     hour_ok && minute_ok
 }
@@ -270,8 +265,8 @@ pub fn complete_line(raw: &str) -> Option<String> {
 }
 
 /* ---------------- 在索引里另存的那一张表（plugins::IndexPart） ----------------
-   每篇文档（笔记、某一天、目标都算）读进索引时扫一遍正文，带日期的任务记进 task 表，和文档同一个事务。
-   日历的当日安排、月网格上的记号都从这里查 */
+每篇文档（笔记、某一天、目标都算）读进索引时扫一遍正文，带日期的任务记进 task 表，和文档同一个事务。
+日历的当日安排、月网格上的记号都从这里查 */
 
 const SCHEMA: &str = "
 CREATE TABLE task (
@@ -315,10 +310,7 @@ impl IndexPart for Tasks {
             previous.extend(doc_tasks(conn, id)?);
         }
         let same = previous.len() == scheduled.len()
-            && previous
-                .iter()
-                .zip(&scheduled)
-                .all(|(a, b)| a.line == b.line && a.raw == b.raw);
+            && previous.iter().zip(&scheduled).all(|(a, b)| a.line == b.line && a.raw == b.raw);
         for id in replaced {
             conn.execute("DELETE FROM task WHERE doc_id = ?1", params![id])?;
         }
@@ -443,11 +435,7 @@ pub fn task(conn: &Connection, id: &str) -> Result<Option<TaskRow>> {
 
 /// 日历上的记号。written：写过记录的日子，和有做完了的任务的日子；
 /// open：还有没做完的任务的日子。归档里的文档不算
-pub fn calendar_marks(
-    conn: &Connection,
-    from: &str,
-    to: &str,
-) -> Result<(Vec<String>, Vec<String>)> {
+pub fn calendar_marks(conn: &Connection, from: &str, to: &str) -> Result<(Vec<String>, Vec<String>)> {
     let dates = |sql: &str, args: &[&dyn rusqlite::ToSql]| -> Result<Vec<String>> {
         let mut stmt = conn.prepare(sql)?;
         let rows = stmt.query_map(args, |r| r.get::<_, String>(0))?;
@@ -472,7 +460,6 @@ pub fn calendar_marks(
     )?;
     Ok((written, open))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -542,10 +529,7 @@ mod tests {
 
     #[test]
     fn toggles_only_the_checkbox() {
-        assert_eq!(
-            toggle_line("  - [ ] 事情 [x] @2026-09-01").as_deref(),
-            Some("  - [x] 事情 [x] @2026-09-01")
-        );
+        assert_eq!(toggle_line("  - [ ] 事情 [x] @2026-09-01").as_deref(), Some("  - [x] 事情 [x] @2026-09-01"));
         assert_eq!(toggle_line("1) [X] 完成").as_deref(), Some("1) [ ] 完成"));
         assert!(toggle_line("- 普通列表").is_none());
     }

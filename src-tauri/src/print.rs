@@ -19,11 +19,11 @@
 
 // 起名字的两个纯函数不带 Tauri，CI 的 --no-default-features 也测得到；别的都要 Tauri
 use std::path::PathBuf;
+#[cfg(feature = "desktop-runtime")]
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 use std::{path::Path, sync::Mutex};
-#[cfg(feature = "desktop-runtime")]
-use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 use tauri::{AppHandle, Manager, Runtime};
@@ -69,10 +69,8 @@ impl Kind {
 
 /// 标题 → 文件名（不带扩展名）：Windows 不让用的字符换成空格，太长的截断，空的叫「导出」
 pub fn file_stem(title: &str) -> String {
-    let cleaned: String = title
-        .chars()
-        .map(|c| if c.is_control() || r#"\/:*?"<>|"#.contains(c) { ' ' } else { c })
-        .collect();
+    let cleaned: String =
+        title.chars().map(|c| if c.is_control() || r#"\/:*?"<>|"#.contains(c) { ' ' } else { c }).collect();
     let squeezed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     // 结尾的点 Windows 会吞掉
     let trimmed = squeezed.trim_end_matches('.').trim();
@@ -339,11 +337,7 @@ pub async fn export_folder_pick<R: Runtime>(
         .filter(|dir| dir.is_dir())
         .or_else(|| app.path().document_dir().ok());
     let picked = blocking(move || {
-        let mut dialog = picker
-            .dialog()
-            .file()
-            .set_parent(&window)
-            .set_title("导出到哪个文件夹里");
+        let mut dialog = picker.dialog().file().set_parent(&window).set_title("导出到哪个文件夹里");
         if let Some(start) = start {
             dialog = dialog.set_directory(start);
         }

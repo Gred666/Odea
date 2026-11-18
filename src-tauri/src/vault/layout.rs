@@ -53,32 +53,37 @@ pub struct Wanted {
 /// 一个 .md 文件按它的位置是哪种文档
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Slot {
-    Note { archived: bool },
+    Note {
+        archived: bool,
+    },
     /// 插件声明的一种（DocType）：类型 id 和 key
-    Typed { kind: &'static str, key: String },
+    Typed {
+        kind: &'static str,
+        key: String,
+    },
 }
 
 /* ---------------- 这个仓库怎么摆（.odea/vault.json） ----------------
-   {
-     "kind": "logical",
-     "plugins": { "odea.journal": { "enabled": true }, "odea.archive": { "enabled": true } },
-     "features": { "journal": true, "archive": true },
-     "folders": { "notes": "笔记", "days": "日记", "goals": "目标", "archive": "归档" }
-   }
-   - plugins（P14.1 起）记开着哪些插件。features 是老版本（0.7.0 及以前）认的那一份：新版本两边一起写
-     （marker_with_switch），读的时候以 plugins 为准。有老开关的那几个两边对不上，说明是老版本后来改了
-     features（团队里有人还没升级），听 features 的
-   - 两样都没有的（P11.2 以前写的标记、老用户的仓库）：照 Odea 的摆法，日程、归档开着、文件树的根是「笔记」
-   - features 里没写 archive 的（0.4.2 以前写的）：归档跟着那时唯一的开关 features.journal
-   - 新建的、空文件夹：上面这一份。打开一个已经有笔记的文件夹：都关着，不往别人的文件夹里建日记、目标
-     （boot::prepare）
-   - 日程这类插件（roots_tree_at_notes）都关着时文件树的根一律是整个仓库：日记、目标这时候都只是普通文件夹；
-     归档关着时「归档」也是
-   - 插件自己的文件夹（folders.days、folders.goals）、别的工具的设置（Obsidian 的日记）由插件读（plugins/journal）
-   - `kind: "logical"`（或者有 .odea/tree）是逻辑目录（docs/仓库与启动器.md §7）：树是清单里摆的那一棵，
-     和文件在哪无关；新建的笔记平放在 notes（新建的逻辑目录是仓库根）。启动器「新建」建的就是它
-   - plugins 里内置开关以外的键是第三方插件（P14.2 起，L0）：`{ "enabled": true, "version": "^0.1" }`。
-     不认文档类型、不影响文件怎么认，只报给前端（Layout::extensions）；老版本不认识，原样留着 */
+{
+  "kind": "logical",
+  "plugins": { "odea.journal": { "enabled": true }, "odea.archive": { "enabled": true } },
+  "features": { "journal": true, "archive": true },
+  "folders": { "notes": "笔记", "days": "日记", "goals": "目标", "archive": "归档" }
+}
+- plugins（P14.1 起）记开着哪些插件。features 是老版本（0.7.0 及以前）认的那一份：新版本两边一起写
+  （marker_with_switch），读的时候以 plugins 为准。有老开关的那几个两边对不上，说明是老版本后来改了
+  features（团队里有人还没升级），听 features 的
+- 两样都没有的（P11.2 以前写的标记、老用户的仓库）：照 Odea 的摆法，日程、归档开着、文件树的根是「笔记」
+- features 里没写 archive 的（0.4.2 以前写的）：归档跟着那时唯一的开关 features.journal
+- 新建的、空文件夹：上面这一份。打开一个已经有笔记的文件夹：都关着，不往别人的文件夹里建日记、目标
+  （boot::prepare）
+- 日程这类插件（roots_tree_at_notes）都关着时文件树的根一律是整个仓库：日记、目标这时候都只是普通文件夹；
+  归档关着时「归档」也是
+- 插件自己的文件夹（folders.days、folders.goals）、别的工具的设置（Obsidian 的日记）由插件读（plugins/journal）
+- `kind: "logical"`（或者有 .odea/tree）是逻辑目录（docs/仓库与启动器.md §7）：树是清单里摆的那一棵，
+  和文件在哪无关；新建的笔记平放在 notes（新建的逻辑目录是仓库根）。启动器「新建」建的就是它
+- plugins 里内置开关以外的键是第三方插件（P14.2 起，L0）：`{ "enabled": true, "version": "^0.1" }`。
+  不认文档类型、不影响文件怎么认，只报给前端（Layout::extensions）；老版本不认识，原样留着 */
 
 /// 一个仓库的文件摆法。打开仓库时读一次（Vault::bare），开关插件时换一份（Vault::set_plugin）
 #[derive(Clone)]
@@ -350,11 +355,7 @@ fn plugin_on(marker: &Value, plugin: &dyn Plugin) -> bool {
 
 /// 标记里写的一个文件夹（folders 里的键），按 clean_dir 的规矩清理过；没写、写得不对的是 None
 pub fn marker_folder(marker: &Value, key: &str) -> Option<String> {
-    marker
-        .get("folders")
-        .and_then(|folders| folders.get(key))
-        .and_then(Value::as_str)
-        .and_then(clean_dir)
+    marker.get("folders").and_then(|folders| folders.get(key)).and_then(Value::as_str).and_then(clean_dir)
 }
 
 /// dir 是 base 本身或者在它底下
@@ -396,10 +397,8 @@ fn obsidian_attachments(root: &Path) -> Option<AttachDir> {
 
 /// 标记里有哪几个开关：内置的插件，和归档。(plugins 里的键, features 里的老键)
 fn switches() -> Vec<(&'static str, Option<&'static str>)> {
-    let mut all: Vec<(&'static str, Option<&'static str>)> = plugins::builtin()
-        .iter()
-        .map(|plugin| (plugin.id(), plugin.legacy_feature()))
-        .collect();
+    let mut all: Vec<(&'static str, Option<&'static str>)> =
+        plugins::builtin().iter().map(|plugin| (plugin.id(), plugin.legacy_feature())).collect();
     all.push((ARCHIVE_SWITCH, Some("archive")));
     all
 }
@@ -411,11 +410,7 @@ fn write_switch(marker: &mut Value, id: &str, legacy: Option<&str>, on: bool) {
     if !plugins.is_object() {
         *plugins = serde_json::json!({});
     }
-    let entry = plugins
-        .as_object_mut()
-        .expect("上面保证了是对象")
-        .entry(id)
-        .or_insert_with(|| serde_json::json!({}));
+    let entry = plugins.as_object_mut().expect("上面保证了是对象").entry(id).or_insert_with(|| serde_json::json!({}));
     if !entry.is_object() {
         *entry = serde_json::json!({});
     }
@@ -461,11 +456,8 @@ fn marker_written(marker: Option<Value>) -> Value {
     };
     let current = Layout::from_marker(&marker, None);
     if marker.get("features").is_none() && marker.get("plugins").is_none() {
-        let folders = marker
-            .as_object_mut()
-            .expect("上面保证了是对象")
-            .entry("folders")
-            .or_insert_with(|| serde_json::json!({}));
+        let folders =
+            marker.as_object_mut().expect("上面保证了是对象").entry("folders").or_insert_with(|| serde_json::json!({}));
         if let Some(folders) = folders.as_object_mut() {
             folders.entry("notes").or_insert_with(|| NOTES_DIR.into());
         }
@@ -550,9 +542,7 @@ pub fn classify(rel: &str) -> Slot {
 pub fn stem_of(rel: &str) -> &str {
     let name = rel.rsplit('/').next().unwrap_or(rel);
     match name.len().checked_sub(3) {
-        Some(cut) if name.is_char_boundary(cut) && name[cut..].eq_ignore_ascii_case(".md") => {
-            &name[..cut]
-        }
+        Some(cut) if name.is_char_boundary(cut) && name[cut..].eq_ignore_ascii_case(".md") => &name[..cut],
         _ => name,
     }
 }
@@ -583,12 +573,7 @@ pub fn join(dir: &str, name: &str) -> String {
 /// 空的返回 None
 pub fn folder_name(raw: &str) -> Option<String> {
     // file_stem_for_title 会把空名字换成「无标题笔记」；文件夹名空着就是没起名
-    let blank = raw
-        .trim()
-        .trim_start_matches('.')
-        .trim_end_matches(['.', ' '])
-        .trim()
-        .is_empty();
+    let blank = raw.trim().trim_start_matches('.').trim_end_matches(['.', ' ']).trim().is_empty();
     // 开头的点去掉之后可能露出空格：目录名两头不留空白（folder_dir 不收）
     (!blank).then(|| file_stem_for_title(raw).trim().to_string())
 }
@@ -639,15 +624,15 @@ pub fn file_stem_for_title(title: &str) -> String {
 }
 
 /* ---------------- 网盘的冲突副本 ----------------
-   两台机器都改了同一篇、同步时撞上，网盘不覆盖，而是把其中一版另存一份：
-     Dropbox     「周报 (张三's conflicted copy 2026-10-06).md」「周报 (张三的冲突副本 …).md」
-     Syncthing   「周报.sync-conflict-20261006-153012-ABCDEFG.md」
-     OneDrive    「周报-DESKTOP-ABC1234.md」（机器名）
-     Google Drive / 百度网盘「周报 (1).md」「周报(1).md」
-     本应用自己  「周报 (冲突 2026-10-06 1530).md」
-   iCloud 的「周报 2.md」和本应用给重名笔记起的名字一样，只能靠属性块里重复的 id 认。
-   这里只看名字给出「原文可能叫什么」，原文在不在同一个文件夹里由调用方核对 ——
-   光看名字，「方案 (1)」也可能就是一篇正经起名的笔记。 */
+两台机器都改了同一篇、同步时撞上，网盘不覆盖，而是把其中一版另存一份：
+  Dropbox     「周报 (张三's conflicted copy 2026-10-06).md」「周报 (张三的冲突副本 …).md」
+  Syncthing   「周报.sync-conflict-20261006-153012-ABCDEFG.md」
+  OneDrive    「周报-DESKTOP-ABC1234.md」（机器名）
+  Google Drive / 百度网盘「周报 (1).md」「周报(1).md」
+  本应用自己  「周报 (冲突 2026-10-06 1530).md」
+iCloud 的「周报 2.md」和本应用给重名笔记起的名字一样，只能靠属性块里重复的 id 认。
+这里只看名字给出「原文可能叫什么」，原文在不在同一个文件夹里由调用方核对 ——
+光看名字，「方案 (1)」也可能就是一篇正经起名的笔记。 */
 
 /// 这个文件名若是冲突副本，原文件可能叫什么（不含 .md），按可信程度排。
 pub fn conflict_originals(stem: &str) -> Vec<String> {
@@ -686,9 +671,7 @@ pub fn conflict_originals(stem: &str) -> Vec<String> {
         for (index, _) in name.match_indices('-').collect::<Vec<_>>().into_iter().rev() {
             let suffix = &name[index + 1..];
             let machine = (3..=24).contains(&suffix.len())
-                && suffix
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
+                && suffix.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
                 && suffix.chars().any(|c| c.is_ascii_uppercase());
             if machine {
                 push(&name[..index]);
@@ -747,8 +730,25 @@ pub fn attachment_stem(raw: &str) -> String {
             || c.is_control()
             || matches!(
                 c,
-                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '#' | '%' | '[' | ']' | '(' | ')'
-                    | '{' | '}' | '^' | '`' | '!'
+                '/' | '\\'
+                    | ':'
+                    | '*'
+                    | '?'
+                    | '"'
+                    | '<'
+                    | '>'
+                    | '|'
+                    | '#'
+                    | '%'
+                    | '['
+                    | ']'
+                    | '('
+                    | ')'
+                    | '{'
+                    | '}'
+                    | '^'
+                    | '`'
+                    | '!'
             );
         let c = if bad { '-' } else { c };
         if c == '-' && out.ends_with('-') {
@@ -775,10 +775,7 @@ mod tests {
         assert_eq!(first("周报 (冲突 2026-10-06 1530) 2").as_deref(), Some("周报"));
         assert_eq!(first("周报 (张三's conflicted copy 2026-10-06)").as_deref(), Some("周报"));
         assert_eq!(first("周报 (张三的冲突副本 2026-10-06)").as_deref(), Some("周报"));
-        assert_eq!(
-            first("周报.sync-conflict-20261006-153012-ABCDEFG").as_deref(),
-            Some("周报")
-        );
+        assert_eq!(first("周报.sync-conflict-20261006-153012-ABCDEFG").as_deref(), Some("周报"));
         assert_eq!(first("周报 (1)").as_deref(), Some("周报"));
         assert_eq!(first("周报(2)").as_deref(), Some("周报"));
         assert_eq!(first("周报（冲突副本）").as_deref(), Some("周报"));
@@ -810,10 +807,7 @@ mod tests {
         assert_eq!(classify("归档/旧版路线图.md"), Slot::Note { archived: true });
         // 开着的插件声明的文档按插件的路径规则认（plugins/journal 里有完整的规则）；
         // 规则对不上的就是普通笔记，不会消失
-        assert_eq!(
-            classify("日记/2026/2026-09-26.md"),
-            Slot::Typed { kind: journal::DAY, key: "2026-09-26".into() }
-        );
+        assert_eq!(classify("日记/2026/2026-09-26.md"), Slot::Typed { kind: journal::DAY, key: "2026-09-26".into() });
         assert_eq!(classify("日记/2026/杂记.md"), Slot::Note { archived: false });
     }
 
@@ -991,20 +985,14 @@ mod tests {
         assert_eq!(marker["plugins"]["someone.callouts-cn"], json!({ "enabled": true, "version": "^0.1" }));
         let layout = layout_of(marker.clone());
         assert!(layout.has_plugin(journal::ID) && layout.archiving);
-        assert_eq!(
-            layout.extensions,
-            vec![Wanted { id: "someone.callouts-cn".into(), version: Some("^0.1".into()) }]
-        );
+        assert_eq!(layout.extensions, vec![Wanted { id: "someone.callouts-cn".into(), version: Some("^0.1".into()) }]);
         // 内置开关、关着的、id 写得不对的都不算；版本范围写坏了当没写
         let mut other = marker.clone();
         other["plugins"]["Bad ID"] = json!({ "enabled": true });
         other["plugins"]["someone.off"] = json!({ "enabled": false });
         other["plugins"]["someone.loose"] = json!({ "enabled": true, "version": "latest" });
         let ids: Vec<_> = layout_of(other).extensions.into_iter().map(|w| (w.id, w.version)).collect();
-        assert_eq!(
-            ids,
-            vec![("someone.callouts-cn".into(), Some("^0.1".into())), ("someone.loose".into(), None)]
-        );
+        assert_eq!(ids, vec![("someone.callouts-cn".into(), Some("^0.1".into())), ("someone.loose".into(), None)]);
         // 关掉：只改 enabled，版本留着；不再算开着。不给版本时原来的留着
         let off = marker_with_extension(Some(marker), "someone.callouts-cn", false, None);
         assert_eq!(off["plugins"]["someone.callouts-cn"], json!({ "enabled": false, "version": "^0.1" }));
