@@ -1,6 +1,7 @@
 import { openDocument } from "@/app/navigate";
 import { type PaletteDialog, hasListColumn, useApp } from "@/app/store";
 import { DEFAULT_BODY_SIZE, MEASURES, stepBodySize } from "@/app/typography";
+import { createBase } from "@/bases/create";
 import { useRelays } from "@/collab/relayStore";
 import { overlapOf, sessionName, useCollab } from "@/collab/store";
 import { releaseOf } from "@/content/changelog";
@@ -75,6 +76,7 @@ import {
   Server,
   Sparkles,
   Sun,
+  Table2,
   TextSearch,
   Trash2,
   Type,
@@ -610,6 +612,21 @@ export function CommandPalette({
             keywords: "logical 逻辑目录 树 手动排序 文件夹 整理 转换 智能文件夹",
             run: () => void makeLogical(),
           },
+      // 视图文件（docs/视图文件.md）：建在列表栏停着的那个文件夹里；逻辑目录的树上还放不了
+      ...(logical
+        ? []
+        : [
+            {
+              id: "new-base",
+              group: "文件",
+              icon: Table2,
+              label: "新建视图文件",
+              hint: "按属性把笔记列成表格、看板（Obsidian 的 .base）",
+              keywords:
+                "base bases view table kanban board database 视图 表格 看板 数据库 卡片 属性 筛选 obsidian",
+              run: () => void createBase(smartQuery(noteFolder) === undefined ? noteFolder : ""),
+            } satisfies Item,
+          ]),
       {
         id: "import-folder",
         group: "文件",

@@ -1,6 +1,7 @@
 import { MAX_PANES, type NotePane } from "@/app/panes";
 import { popOut } from "@/app/popout";
 import { type NoteTab, useApp } from "@/app/store";
+import { baseOfTab, baseTitle } from "@/bases/ids";
 import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, useData } from "@/data/store";
 import { cn } from "@/lib/cn";
@@ -231,7 +232,9 @@ const Tab = memo(function Tab({
   const note = useData((s) => s.notes.find((item) => item.id === tab.noteId));
   // 有修改没存进去（保存失败）：× 的位置是一个小圆点，悬停变回 ×
   const unsaved = useData((s) => !!s.drafts[`note:${tab.noteId}`]);
-  const title = note ? note.title.trim() || NEW_NOTE_TITLE : "";
+  // 视图文件（docs/视图文件.md §3.5）：标签上写文件名
+  const base = baseOfTab(tab.noteId);
+  const title = base ? baseTitle(base) : note ? note.title.trim() || NEW_NOTE_TITLE : "";
   const folder = note ? folderOf(note) : "";
   const close = () => useApp.getState().closeTab(tab.id);
 

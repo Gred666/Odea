@@ -899,6 +899,50 @@ async vaultSetPropertyType(key: string, kind: string | null) : Promise<Result<Pa
 }
 },
 /**
+ * 视图文件（docs/视图文件.md）要的每一篇 Markdown 文档：属性原文、标签；with_body 时加上正文里的标签、双链
+ */
+async baseDocs(withBody: boolean) : Promise<Result<BaseDoc[], AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("base_docs", { withBody }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 读一个视图文件（`.base`）：全文和指纹
+ */
+async baseRead(relPath: string) : Promise<Result<BaseText, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("base_read", { relPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 写回一个视图文件。fingerprint 是读的时候的那一版：磁盘上已经变了就不写（bases::STALE）
+ */
+async baseWrite(relPath: string, text: string, fingerprint: string) : Promise<Result<BaseText, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("base_write", { relPath, text, fingerprint }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 在树上的这个文件夹里新建一个视图文件，返回相对路径
+ */
+async baseCreate(folder: string, name: string, text: string) : Promise<Result<string, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("base_create", { folder, name, text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 转成 UTF-8，原文按原字节另存在旁边。fingerprint 是 doc_legacy_text 给的那一版，文件之后被改过就不转
  */
 async docConvertUtf8(target: DocRef, fingerprint: string) : Promise<Result<null, AppError>> {
@@ -2148,6 +2192,38 @@ line: number;
  * 去掉列表符号之类、截过长度的那一行，双链原样保留（前端再画成小块）
  */
 text: string }
+/**
+ * 视图里的一行：一篇 Markdown 文档（笔记、归档的、插件的某一天 / 目标）
+ */
+export type BaseDoc = { target: DocRef; relPath: string; 
+/**
+ * 笔记的标题；插件的文档没有标题时是空串（前端拿文件名）
+ */
+title: string; createdAt: number; updatedAt: number; 
+/**
+ * 文件大小（字节）
+ */
+size: number; archived: boolean; 
+/**
+ * 不是 UTF-8：只能看，属性改不了
+ */
+notUtf8: boolean; 
+/**
+ * 属性块里用户自己的那几行（原文，同属性面板）
+ */
+props: string; 
+/**
+ * 标签：属性块里写的；with_body 时加上正文里的 `#标签`。小写、不带 #、不重复
+ */
+tags: string[]; 
+/**
+ * 正文里 `[[双链]]` 的目标（标题，去掉了 `|别名`、`#小节`）。没要正文时是 None
+ */
+links: string[] | null }
+/**
+ * 一个视图文件的全文和指纹（写回时交回来核对）
+ */
+export type BaseText = { text: string; fingerprint: string }
 /**
  * 日历月网格上的两种记号
  */

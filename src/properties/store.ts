@@ -29,6 +29,24 @@ export function cachedProperties(target: DocumentRef): DocProps | null {
   return cache.get(propKey(target)) ?? null;
 }
 
+/* ---------------- 这个窗口里改了一篇的属性 ----------------
+   属性面板、视图文件的表格（docs/视图文件.md §3.7）都能改同一篇的属性。Rust 写好以后不为自己发
+   vault-changed，两边经这里互相告诉：同一篇正开着的面板、正开着的视图跟着换 */
+
+type WrittenListener = (target: DocumentRef, props: DocProps) => void;
+const writtenListeners = new Set<WrittenListener>();
+
+/** 写好了一篇的属性（Rust 回的那一版）：放进缓存，告诉别的地方 */
+export function announceProperties(target: DocumentRef, props: DocProps): void {
+  primeProperties(target, props.text, props.editable);
+  for (const listener of writtenListeners) listener(target, props);
+}
+
+export function onPropertiesWritten(listener: WrittenListener): () => void {
+  writtenListeners.add(listener);
+  return () => writtenListeners.delete(listener);
+}
+
 /* ---------------- 整个仓库的一览 ---------------- */
 
 interface CatalogState {

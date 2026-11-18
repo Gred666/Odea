@@ -1256,6 +1256,60 @@ fn the_tree_lists_images_and_pdfs_of_a_plain_folder() {
     assert!(f.vault.tree_files().is_empty());
 }
 
+/* ---------------- 视图文件（docs/视图文件.md） ---------------- */
+
+#[test]
+fn bases_get_every_markdown_doc_with_properties_tags_and_links() {
+    let mut f = fixture();
+    f.write_externally(
+        "笔记/项目/甲.md",
+        "---\nstatus: 进行中\ntags: [项目]\n---\n正文 #复盘/周 [[乙|别名]] [[乙]] `#代码` [[丙#小节]]\n```\n#围栏里 [[丁]]\n```\n",
+    );
+    f.write_externally("笔记/乙.md", "就一行");
+    f.vault.rescan().unwrap();
+    let id = f.vault.note_create("丙", "正文").unwrap();
+    f.vault.note_archive(&id, None).unwrap();
+
+    let docs = f.vault.base_docs(false).unwrap();
+    let jia = docs.iter().find(|doc| doc.rel_path == "笔记/项目/甲.md").unwrap();
+    assert_eq!(jia.props, "status: 进行中\ntags: [项目]");
+    assert_eq!(jia.tags, ["项目"], "不要正文时只有属性块里的");
+    assert_eq!(jia.links, None);
+    assert!(jia.target.is_note() && jia.title == "甲");
+    // 归档的也是 Markdown 文件，照 Obsidian 一样列（要排掉写 !file.inFolder("归档")）
+    assert!(docs.iter().any(|doc| doc.archived && doc.title == "丙"));
+
+    let docs = f.vault.base_docs(true).unwrap();
+    let jia = docs.iter().find(|doc| doc.rel_path == "笔记/项目/甲.md").unwrap();
+    assert_eq!(jia.tags, ["项目", "复盘/周"], "正文里的标签，代码里的不算");
+    assert_eq!(jia.links.as_deref(), Some(&["乙".to_string(), "丙".to_string()][..]), "同一篇只算一次");
+}
+
+#[test]
+fn a_base_file_is_listed_read_and_written_only_if_unchanged() {
+    let mut f = fixture();
+    let rel = f.vault.base_create("项目", "看板", "views:\n  - type: table\n").unwrap();
+    assert_eq!(rel, "笔记/项目/看板.base");
+    assert_eq!(f.vault.base_create("项目", "看板", "views: []\n").unwrap(), "笔记/项目/看板 2.base", "重名加序号");
+    let listed: Vec<_> = f.vault.tree_files().into_iter().map(|file| (file.rel_path, file.kind)).collect();
+    assert!(listed.contains(&(rel.clone(), "base".to_string())), "{listed:?}");
+
+    let read = f.vault.base_read(&rel).unwrap();
+    assert_eq!(read.text, "views:\n  - type: table\n");
+    let written = f.vault.base_write(&rel, "views:\n  - type: kanban\n", &read.fingerprint).unwrap();
+    assert_eq!(f.read(&rel), "views:\n  - type: kanban\n");
+
+    // 别处改过以后，拿着旧指纹写不进去
+    f.write_externally(&rel, "views:\n  - type: cards\n");
+    let error = f.vault.base_write(&rel, "views: []\n", &written.fingerprint).unwrap_err();
+    assert!(matches!(&error, AppError::Invalid(message) if message == bases::STALE), "{error:?}");
+    assert_eq!(f.read(&rel), "views:\n  - type: cards\n");
+
+    assert!(f.vault.base_read("笔记/乙.md").is_err(), "只认 .base");
+    assert!(f.vault.base_read("../外面.base").is_err());
+    assert!(matches!(f.vault.base_read("笔记/没有.base"), Err(AppError::NotFound(_))));
+}
+
 #[test]
 fn the_vault_keeps_a_list_of_every_attachment_for_wiki_embeds() {
     // `![[图.png]]`、`![[说明书.pdf]]` 只写名字：整个仓库里的附件都要在清单里，「附件」、日程的文件夹也算，

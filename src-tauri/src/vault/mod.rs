@@ -16,6 +16,7 @@
 ============================================================ */
 
 pub mod activity;
+pub mod bases;
 pub mod folders;
 pub mod frontmatter;
 pub mod fsio;

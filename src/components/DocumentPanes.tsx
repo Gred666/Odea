@@ -1,6 +1,7 @@
 import { selectNeighbor } from "@/app/navigate";
 import type { NotePane } from "@/app/panes";
 import { useApp } from "@/app/store";
+import { BaseHost } from "@/bases/BaseHost";
 import { usePaneDocument } from "@/data/adapter";
 import { useData } from "@/data/store";
 import { type DocumentModel, type DocumentRef, NOTE, isShared, vaultRef } from "@/data/types";
@@ -195,17 +196,21 @@ const PaneBody = memo(function PaneBody({
         focused={focused || count === 1}
         last={index === count - 1}
       />
-      <DocumentView
-        doc={doc}
-        onDelete={handleDelete}
-        onSaveDocument={onSaveDocument}
-        onSaveTitle={onSaveTitle}
-        tabBar={tabsShown}
-        focused={focused && !popoutActive}
-        first={index === 0}
-        last={index === count - 1}
-        outline={count === 1 || wide}
-      />
+      {doc.base ? (
+        <BaseHost relPath={doc.base.relPath} />
+      ) : (
+        <DocumentView
+          doc={doc}
+          onDelete={handleDelete}
+          onSaveDocument={onSaveDocument}
+          onSaveTitle={onSaveTitle}
+          tabBar={tabsShown}
+          focused={focused && !popoutActive}
+          first={index === 0}
+          last={index === count - 1}
+          outline={count === 1 || wide}
+        />
+      )}
     </>
   );
 });

@@ -1,4 +1,5 @@
 import { useApp } from "@/app/store";
+import { baseOfTab, baseTitle } from "@/bases/ids";
 import { useCollab } from "@/collab/store";
 import { formatFullCN, formatRelativeTime, formatTimestampFull, toISODate } from "@/lib/date";
 import { installedPlugins, noteTemplateContext } from "@/plugins/registry";
@@ -168,7 +169,21 @@ function useNoteDocument(noteId: string, active: boolean): DocumentModel {
     const session = hostedDocs[id];
     return session ? { session, readOnly: false } : undefined;
   };
-  const note = useShownNote(notes.find((n) => n.id === noteId) ?? notes[0], active);
+  // 视图文件（docs/视图文件.md §3.5）：不取正文、不退到第一篇
+  const base = baseOfTab(noteId);
+  const note = useShownNote(
+    base ? undefined : (notes.find((n) => n.id === noteId) ?? notes[0]),
+    active && !base,
+  );
+  if (base) {
+    return {
+      key: `base-${base}`,
+      title: baseTitle(base),
+      bodyMd: "",
+      statusParts: [],
+      base: { relPath: base },
+    };
+  }
   if (!note) {
     return emptyDoc(
       indexing

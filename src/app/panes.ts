@@ -9,6 +9,8 @@
    得在正文里另起一行，就是 Obsidian 那种又重又挤的样子（设计 §12）。
    ============================================================ */
 
+import { isBaseTab } from "@/bases/ids";
+
 export interface NoteTab {
   id: string;
   noteId: string;
@@ -381,8 +383,10 @@ export function bringBack(layout: PaneLayout, tabs: NoteTab[]): PaneLayout {
 
 /** 笔记列表变了：指着已经不在的笔记的标签关掉（往回走的记录里的也去掉） */
 export function prune(layout: PaneLayout, alive: ReadonlySet<string>): PaneLayout {
-  const dropped = dropTabs(layout, (tab) => !!tab.noteId && !alive.has(tab.noteId)).layout;
-  const clean = (ids: string[]) => ids.filter((id) => alive.has(id));
+  // 视图文件不跟着笔记列表走（docs/视图文件.md §3.5）：不在了由视图里说，标签留着让人自己关
+  const live = (id: string) => alive.has(id) || isBaseTab(id);
+  const dropped = dropTabs(layout, (tab) => !!tab.noteId && !live(tab.noteId)).layout;
+  const clean = (ids: string[]) => ids.filter(live);
   let changed = dropped !== layout;
   const panes = dropped.panes.map((pane) => {
     let touched = false;
@@ -401,7 +405,12 @@ export function prune(layout: PaneLayout, alive: ReadonlySet<string>): PaneLayou
 }
 
 /** 笔记的 id 整个换了（开关日程以后按路径认回来）：认不回来的、认回来在同一个窗格里撞成同一篇的关掉 */
-export function remap(layout: PaneLayout, map: (noteId: string) => string | undefined): PaneLayout {
+export function remap(
+  layout: PaneLayout,
+  mapNote: (noteId: string) => string | undefined,
+): PaneLayout {
+  // 视图文件按路径开着，换摆法不改路径
+  const map = (id: string) => (isBaseTab(id) ? id : mapNote(id));
   const mapIds = (ids: string[]) => ids.map(map).filter((id): id is string => !!id);
   const mapped: PaneLayout = {
     ...layout,

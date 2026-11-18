@@ -1,5 +1,7 @@
 import { LIST_ROWS, selectNeighbor } from "@/app/navigate";
 import { type NoteSort, useApp } from "@/app/store";
+import { createBase } from "@/bases/create";
+import { baseTabId, baseTitle, isBaseTab } from "@/bases/ids";
 import { EmptyState } from "@/components/EmptyArt";
 import {
   ColumnButton,
@@ -66,6 +68,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  Table2,
   TextQuote,
   Trash2,
 } from "lucide-react";
@@ -252,7 +255,9 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
   // 落到列表里看得见的第一篇（正文那边已经退到了第一篇，见 adapter），高亮得跟过去 ——
   // 否则右边显示着一篇笔记、左边却没有任何一行是亮的。
   useEffect(() => {
-    if (notes.length === 0 || notes.some((n) => n.id === selectedId)) return;
+    // 开着的是视图文件（docs/视图文件.md §3.5）：它不在笔记列表里，不算「没了」
+    if (notes.length === 0 || notes.some((n) => n.id === selectedId) || isBaseTab(selectedId))
+      return;
     const alive = new Set(notes.map((note) => note.id));
     const firstVisible = [...document.querySelectorAll<HTMLElement>(LIST_ROWS)]
       .map((row) => row.dataset.noteRow ?? "")
@@ -935,6 +940,12 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
                         label: "新建文件夹",
                         icon: FolderPlus,
                         onSelect: () => startNewFolder(folder),
+                      },
+                      {
+                        id: "base",
+                        label: "新建视图",
+                        icon: Table2,
+                        onSelect: () => void createBase(folder),
                       },
                       {
                         id: "import",
@@ -1633,6 +1644,17 @@ function folderActions(
       icon: FolderPlus,
       onSelect: () => tree.startNewFolder(path),
     },
+    // 视图文件（docs/视图文件.md）：逻辑目录的树是清单，还放不了
+    ...(tree.logical
+      ? []
+      : [
+          {
+            id: "new-base",
+            label: "新建视图",
+            icon: Table2,
+            onSelect: () => void createBase(path),
+          },
+        ]),
     ...(tree.logical
       ? [
           {
@@ -2066,6 +2088,88 @@ function fileSource(vaultRoot: string | null, relPath: string): string {
  * PDF 交给系统的默认程序。「…」里能用默认程序打开、在文件夹中显示
  */
 const TreeFileRow = memo(function TreeFileRow({
+  file,
+  depth,
+  hint,
+}: { file: TreeFile; depth: number; hint?: boolean }) {
+  if (file.kind === "base") return <BaseFileRow file={file} depth={depth} hint={hint} />;
+  return <AttachmentRow file={file} depth={depth} hint={hint} />;
+});
+
+/**
+ * 树上的一个视图文件（docs/视图文件.md §3.5）：和笔记一样开在标签里 —— 单击当前标签，
+ * Ctrl / 中键新标签；开着的那个亮。名字不带 .base
+ */
+function BaseFileRow({ file, depth, hint }: { file: TreeFile; depth: number; hint?: boolean }) {
+  const id = baseTabId(file.relPath);
+  const selected = useApp((s) => s.selectedNoteId === id);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const open = (newTab = false) => {
+    const app = useApp.getState();
+    if (newTab) app.openNoteTab(id);
+    else app.selectNote(id);
+  };
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-current={selected ? "true" : undefined}
+      data-file-row={file.relPath}
+      onClick={(event) => open(wantsNewTab(event))}
+      {...middleClick(() => open(true))}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          open();
+        }
+      }}
+      title={file.relPath}
+      style={{ paddingLeft: ROW_PAD + depth * INDENT }}
+      className={TREE_ROW}
+    >
+      <span
+        className={cn(
+          "absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors duration-[150ms]",
+          selected ? "bg-accent-wash" : menuOpen ? "bg-raised/40" : "group-hover:bg-raised/40",
+        )}
+      />
+      <span className="relative z-10 grid h-5 w-5 shrink-0 place-items-center text-faint">
+        <Table2 size={16} strokeWidth={1.8} />
+      </span>
+      <span className="relative z-10 min-w-0 flex-1 truncate text-[14px] text-body">
+        {baseTitle(file.name)}
+        {hint && file.folder && (
+          <span className="ml-1.5 text-[12px] text-muted">{folderLabel(file.folder)}</span>
+        )}
+      </span>
+      <div
+        className="odea-row-actions relative z-20 -mr-1 shrink-0"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <RowMenu
+          onOpenChange={setMenuOpen}
+          actions={[
+            { id: "tab", label: "在新标签页打开", icon: PanelTop, onSelect: () => open(true) },
+            {
+              id: "reveal",
+              label: "在文件夹中显示",
+              icon: FolderOpen,
+              onSelect: () => void useData.getState().openTreeFile(file.relPath, true),
+            },
+          ]}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 树上的一个图片、PDF：见上面 TreeFileRow 的说明
+ */
+const AttachmentRow = memo(function AttachmentRow({
   file,
   depth,
   hint,

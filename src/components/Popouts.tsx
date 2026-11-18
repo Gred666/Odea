@@ -1,5 +1,6 @@
 import { type PopoutHandle, paneOfLabel, popoutHandle } from "@/app/popout";
 import { type NotePane, useApp } from "@/app/store";
+import { BaseHost } from "@/bases/BaseHost";
 import { usePaneDocument } from "@/data/adapter";
 import { NEW_NOTE_TITLE, useData } from "@/data/store";
 import { NOTE, vaultRef } from "@/data/types";
@@ -200,17 +201,21 @@ const PopoutBody = memo(function PopoutBody({
       <TitleBar controls={controls} />
       <div ref={hostRef} data-pane={pane.id} className="relative h-full min-w-0 flex-1">
         <NoteTabs pane={pane} shown={initialized} focused last />
-        <DocumentView
-          doc={doc}
-          onDelete={handleDelete}
-          onSaveDocument={onSaveDocument}
-          onSaveTitle={onSaveTitle}
-          tabBar={initialized}
-          focused={active}
-          first={false}
-          last
-          outline={wide}
-        />
+        {doc.base ? (
+          <BaseHost relPath={doc.base.relPath} />
+        ) : (
+          <DocumentView
+            doc={doc}
+            onDelete={handleDelete}
+            onSaveDocument={onSaveDocument}
+            onSaveTitle={onSaveTitle}
+            tabBar={initialized}
+            focused={active}
+            first={false}
+            last
+            outline={wide}
+          />
+        )}
       </div>
     </div>
   );

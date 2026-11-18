@@ -126,6 +126,8 @@ interface MockState {
   props?: Record<string, string>;
   /** 记着的属性类型（桌面版是 .obsidian/types.json 或 .odea/types.json） */
   propTypes?: Record<string, string>;
+  /** 视图文件（docs/视图文件.md）：相对路径 → 全文 */
+  bases?: Record<string, string>;
 }
 
 function load(): MockState {
@@ -574,6 +576,34 @@ function mockCatalog(texts: string[]): PropertyKey[] {
         .map(([value]) => value),
     }))
     .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+}
+
+/* ---------------- 视图文件（docs/视图文件.md） ---------------- */
+
+const NOTES_DIR = ODEA_LAYOUT.notesDir;
+/** 写回时磁盘上已经不是读的那一版（同 Rust 的 bases::STALE） */
+const BASE_STALE = "这个视图文件在别处改过了";
+/** 视图文件上次改的时间（树上的 updatedAt：开着的视图看它变了就重读）。只在内存里 */
+const baseTimes = new Map<string, number>();
+const mockTextFingerprint = (text: string) => `mock-${text.length}-${guideFingerprint(text)}`;
+
+/** 属性块里写的标签（同 FrontMatter::tags）：小写、去掉 # 和引号 */
+function propertyTags(props: string): string[] {
+  const entry = parseProperties(props).entries.find((e) => /^tags?$/i.test(e.key));
+  if (!entry) return [];
+  const raw = entry.shape === "list" ? entry.items : entry.value.split(/[,\s]+/);
+  return [...new Set(raw.map((tag) => tag.trim().replace(/^#/, "").toLowerCase()).filter(Boolean))];
+}
+
+/** 正文里的 #标签（同 vault/bases.rs 的 body_tags）：代码里的不算，全是数字的不算 */
+function bodyTags(body: string): string[] {
+  const prose = body.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, " ");
+  const tags: string[] = [];
+  for (const match of prose.matchAll(/(^|[^\p{L}\p{N}_\-#/])#([\p{L}\p{N}_\-/]+)/gu)) {
+    const tag = match[2]!.replace(/\/+$/, "").toLowerCase();
+    if (tag && !/^\d+$/.test(tag) && !tags.includes(tag)) tags.push(tag);
+  }
+  return tags;
 }
 
 /* ---------------- 别处的改动 ----------------
@@ -1085,19 +1115,30 @@ export const mockBackend: Backend = {
   // 看树上的文件行；逻辑目录、Odea 的仓库（树根是「笔记」）本来就不列
   async treeFiles(): Promise<TreeFile[]> {
     await tick();
-    if (state.tree || !new URLSearchParams(window.location.search).has("files")) return [];
-    const file = (relPath: string, folder: string, kind: string): TreeFile => ({
+    if (state.tree) return [];
+    const file = (relPath: string, folder: string, kind: string, updatedAt = 0): TreeFile => ({
       relPath,
       folder,
       name: relPath.slice(relPath.lastIndexOf("/") + 1),
       kind,
       size: 1024,
-      updatedAt: Date.now(),
+      updatedAt,
     });
+    // 视图文件：和 Odea 的仓库一样只列「笔记」下面的
+    const bases = Object.keys(state.bases ?? {})
+      .filter((rel) => rel.startsWith(`${NOTES_DIR}/`))
+      .sort()
+      .map((rel) => {
+        const inner = rel.slice(NOTES_DIR.length + 1);
+        const folder = inner.includes("/") ? inner.slice(0, inner.lastIndexOf("/")) : "";
+        return file(rel, folder, "base", baseTimes.get(rel) ?? 0);
+      });
+    if (!new URLSearchParams(window.location.search).has("files")) return bases;
     const first = [...(state.folders ?? [])].sort()[0] ?? "";
     return [
-      file("favicon.svg", "", "image"),
-      file(`${first ? `${first}/` : ""}说明.pdf`, first, "pdf"),
+      file("favicon.svg", "", "image", Date.now()),
+      file(`${first ? `${first}/` : ""}说明.pdf`, first, "pdf", Date.now()),
+      ...bases,
     ];
   },
 
@@ -1578,6 +1619,72 @@ export const mockBackend: Backend = {
     state.propTypes = types;
     save(state);
     return { ...types };
+  },
+
+  // 视图文件（docs/视图文件.md）：规矩照 vault/bases.rs
+  async baseDocs(withBody) {
+    await tick();
+    const notes = new Map(state.notes.map((note) => [note.id, note]));
+    return linkSources().map((source) => {
+      const note = source.ref.type === NOTE ? notes.get(source.ref.key) : undefined;
+      const props = state.props?.[propKey(source.ref)] ?? "";
+      const body = source.get();
+      const tags = propertyTags(props);
+      if (withBody) {
+        for (const tag of bodyTags(body)) if (!tags.includes(tag)) tags.push(tag);
+      }
+      const links: string[] = [];
+      for (const hit of withBody ? findWikiLinks(body) : []) {
+        if (!links.some((known) => sameTitle(known, hit.title))) links.push(hit.title);
+      }
+      const updatedAt = note?.updatedAt ?? Date.now();
+      return {
+        target: source.ref,
+        relPath: source.relPath,
+        title: note ? note.title : "",
+        createdAt: note?.createdAt ?? updatedAt,
+        updatedAt,
+        size: new TextEncoder().encode(body).length,
+        archived: note?.isArchived ?? false,
+        notUtf8: note?.notUtf8 ?? false,
+        props,
+        tags,
+        links: withBody ? links : null,
+      };
+    });
+  },
+
+  async baseRead(relPath) {
+    await tick();
+    const text = state.bases?.[relPath];
+    if (text === undefined) notFound(`这个视图文件不在了: ${relPath}`);
+    return { text, fingerprint: mockTextFingerprint(text) };
+  },
+
+  async baseWrite(relPath, text, fingerprint) {
+    await tick();
+    const current = state.bases?.[relPath];
+    if (current === undefined) notFound(`这个视图文件不在了: ${relPath}`);
+    if (mockTextFingerprint(current) !== fingerprint)
+      throw { kind: "Invalid", message: BASE_STALE };
+    state.bases = { ...state.bases, [relPath]: text };
+    baseTimes.set(relPath, Date.now());
+    save(state);
+    return { text, fingerprint: mockTextFingerprint(text) };
+  },
+
+  async baseCreate(folder, name, text) {
+    await tick();
+    if (state.tree) throw { kind: "Invalid", message: "逻辑目录里还不能放视图文件" };
+    if (!hasFolder(folder)) notFound(`文件夹「${folder}」不在了`);
+    const dir = folder ? `${NOTES_DIR}/${folder}` : NOTES_DIR;
+    const stem = fileStemFor(name) || "未命名视图";
+    let rel = `${dir}/${stem}.base`;
+    for (let n = 2; state.bases?.[rel] !== undefined; n += 1) rel = `${dir}/${stem} ${n}.base`;
+    state.bases = { ...state.bases, [rel]: text };
+    baseTimes.set(rel, Date.now());
+    save(state);
+    return rel;
   },
 
   // 不是 UTF-8 的笔记（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）。浏览器预览里只有笔记会是这样（调界面时手动标的）
