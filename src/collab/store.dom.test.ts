@@ -469,16 +469,21 @@ describe("P10.1 的遗留", () => {
     const stopScan = vi.spyOn(net, "nearbyStop");
     store().startNearby();
     expect(store().nearby).toEqual([]);
-    await until("列表", () => (store().nearby?.length ?? 0) === 2);
+    await until("列表", () => (store().nearby?.length ?? 0) === 3);
     expect(start).toHaveBeenCalledTimes(1);
-    expect(store().nearby?.map((host) => host.name)).toEqual(["林夕", "Sam"]);
+    // 经由别人的那一条：主持人的名字 + 经由谁（docs/协同编辑.md §29.2）
+    expect(store().nearby?.map((host) => [host.name, host.via])).toEqual([
+      ["林夕", null],
+      ["Sam", null],
+      ["Alex", "Bea"],
+    ]);
     await store().joinNearby("mock-linxi");
     // 加入时列表收起（Rust 那边顺手把端点关了，这边不再多关一次）
     expect(store().nearby).toBeNull();
     expect(stopScan).not.toHaveBeenCalled();
     await until("进来了", () => phase() === "guest");
     // 关了以后晚到的列表不收
-    handleControl(null, { type: "nearby", hosts: [{ id: "x", name: "晚到的" }] });
+    handleControl(null, { type: "nearby", hosts: [{ id: "x", name: "晚到的", via: null }] });
     expect(store().nearby).toBeNull();
   });
 

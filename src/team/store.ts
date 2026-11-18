@@ -4,18 +4,20 @@ import { FIREWALL_FIX } from "@/collab/reach";
 import type { CollabSession } from "@/collab/session";
 import { conflictOriginalTitle } from "@/data/conflicts";
 import { saveKeyOf, useData } from "@/data/store";
-import { type DocumentModel, type DocumentRef, NOTE, isShared } from "@/data/types";
+import { type DocumentModel, type DocumentRef, NOTE, isShared, vaultRef } from "@/data/types";
 import { flushEditorsComposed, registerBeforeClose } from "@/editor/saveBus";
 import { type Firewall, type TeamPeer, type TeamRelay, commands } from "@/lib/bindings";
 import { isTauri } from "@/lib/tauri";
 import { documentType } from "@/plugins/registry";
+import { useEffect, useRef } from "react";
 import { create } from "zustand";
 import type { TeamController, TeamDocSession, TeamIO, TeamView } from "./controller";
 import { type TeamNet, tauriTeamNet } from "./net";
 
 /* ============================================================
    这个仓库窗口里的团队（docs/协同编辑.md §22.4）：团队仓库打开时起团队端点、登记（initTeam），
-   编辑器里换了哪一篇告诉 controller（setTeamView），controller 定的会话交给 data/adapter 绑到编辑器上。
+   每个窗格（主窗口的、弹出窗口的）显示着哪一篇告诉 controller（useTeamView），controller 定的会话交给
+   data/adapter 绑到编辑器上。
    团队的中继（仓库里的 .odea/relays）：没用过的问一句（TeamRelayToast），自己的中继可以给团队用（中继对话框）。
    第一次起团队端点时 Windows 会问防火墙：先说一句；挡着的话说怎么改
 
@@ -89,17 +91,19 @@ function firewallNotice(firewall: Firewall): string | null {
 
 let controller: TeamController | null = null;
 let started = false;
-let pendingView: TeamView | null = null;
+/** 每个窗格报的「我这里显示着哪一篇」：窗格 id → 那一篇（docs/协同编辑.md §29.3） */
+const views = new Map<string, TeamView>();
 
 /** 文档 id 最长多少字节（Rust 那边 1 字节长度） */
 const MAX_DOC_ID = 255;
 const utf8 = new TextEncoder();
 
 /**
- * 编辑器里开着的这一篇上一次算出来的团队 id。开着的时候不换：改了标题（文件跟着改名）、第一次存盘把 id
- * 写进了属性块，都还是这一篇的那份会话 —— 换了 id 就成了另一篇，会话当场分成两份
+ * 开着的那几篇上一次算出来的团队 id（按 keyOf(target)）。开着的时候不换：改了标题（文件跟着改名）、第一次存盘
+ * 把 id 写进了属性块，都还是这一篇的那份会话 —— 换了 id 就成了另一篇，会话当场分成两份。
+ * 以前只记一篇：分屏时两个窗格轮流算、互相挤掉，开着的那篇存一次盘 id 就变了。哪个窗格都不显示了才忘掉
  */
-let viewing: { key: string; doc: string } | null = null;
+const openIds = new Map<string, string>();
 
 /**
  * 这一篇在团队里的 id（docs/协同编辑.md §22.4）。笔记是属性块里的 id（`note-<id>`）：改名、挪位置都不变，
@@ -112,9 +116,10 @@ export function teamDocId(doc: DocumentModel): string | null {
   // 文件不是 UTF-8 的只能看（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1）：不进团队的会话，别人改的存不进去
   if (!target || isShared(target) || doc.notUtf8) return null;
   const key = keyOf(target);
-  if (viewing?.key === key) return viewing.doc;
+  const known = openIds.get(key);
+  if (known) return known;
   const id = teamIdOf(target, doc.relPath, doc.idInFile ?? false);
-  viewing = id ? { key, doc: id } : null;
+  if (id) openIds.set(key, id);
   return id;
 }
 
@@ -142,9 +147,7 @@ export async function holdTeamDoc(
 ): Promise<{ session: CollabSession; release: () => void } | null> {
   // 编辑器里正开着这一篇：用开着时定下的那个 id（和团队那边的会话对得上）
   const doc =
-    viewing?.key === keyOf(target)
-      ? viewing.doc
-      : teamIdOf(target, note?.relPath, note?.idInFile ?? false);
+    openIds.get(keyOf(target)) ?? teamIdOf(target, note?.relPath, note?.idInFile ?? false);
   const owner = controller;
   if (!doc || !owner) return null;
   const session = await owner.hold({ doc, target });
@@ -169,9 +172,7 @@ function teamSessionOf(target: DocumentRef): TeamDocSession | undefined {
         )
       : undefined;
   const doc =
-    viewing?.key === keyOf(target)
-      ? viewing.doc
-      : teamIdOf(target, note?.relPath, note?.idInFile ?? false);
+    openIds.get(keyOf(target)) ?? teamIdOf(target, note?.relPath, note?.idInFile ?? false);
   return doc ? useTeam.getState().sessions[doc] : undefined;
 }
 
@@ -261,18 +262,19 @@ export async function initTeam(net: TeamNet = tauriTeamNet): Promise<void> {
       import("./controller"),
       import("@/collab/loro").then((loro) => loro.ensureLoro()),
     ]);
-    controller = new TeamController(net, self, io, (snapshot) =>
+    const owner = new TeamController(net, self, io, (snapshot) =>
       useTeam.setState({ peers: snapshot.peers, sessions: snapshot.sessions }),
     );
-    await net.openPipe((frame) => controller?.receive(frame));
-    await net.onControl((control) => controller?.control(control));
+    controller = owner;
+    // 交给这一个 controller，不是「现在的那个」：收掉以后这条网络晚到的事件不会落到下一个 controller 身上
+    await net.openPipe((frame) => owner.receive(frame));
+    await net.onControl((control) => owner.control(control));
     // 起端点到开始听之间连上的人、发的 Presence 没听到：要一次现在的
     const peers = await net.peers().catch(() => null);
-    if (peers) controller.control({ type: "peers", peers });
-    useTeam.setState({ active: true, me: self.id, peers: controller.snapshot().peers });
-    controller.view(pendingView);
+    if (peers) owner.control({ type: "peers", peers });
+    useTeam.setState({ active: true, me: self.id, peers: owner.snapshot().peers });
+    owner.views(currentViews());
     // 关窗口：主持着的先存、先说不主持了再断开 —— 别人马上接手，不用等 10 秒（当成断线）
-    const owner = controller;
     registerBeforeClose(() => owner.destroy());
     const notice = firewallNotice(self.firewall);
     if (notice) useData.setState({ notice });
@@ -303,10 +305,44 @@ export function hideTeamUnseen(doc: string): void {
   controller?.hideUnseen(doc);
 }
 
-/** 编辑器里现在是哪一篇（正文到了才算） */
-export function setTeamView(view: TeamView | null): void {
-  pendingView = view;
-  controller?.view(view);
+/** 现在显示着的那几篇（同一篇开在两个窗格里只算一次） */
+function currentViews(): TeamView[] {
+  return [...new Map([...views.values()].map((view) => [view.doc, view])).values()];
+}
+
+/** 攒到下一个任务再交给 controller（见 setTeamView） */
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * 窗格 source 现在显示着哪一篇（正文到了才算；null：不是能协作的文档、窗格关了）。
+ * 攒到下一个任务再交给 controller：一个窗格摘下又挂上（重新渲染）、一篇从一个窗格挪到另一个，中间那一下
+ * 不算「不看了」—— 不然先退出会话、马上又加入一次
+ */
+export function setTeamView(source: string, view: TeamView | null): void {
+  if (view) views.set(source, view);
+  else views.delete(source);
+  flushTimer ??= setTimeout(() => {
+    flushTimer = null;
+    // 哪个窗格都不显示了的那几篇：忘掉开着时定下的 id，下次打开重新算
+    const open = new Set([...views.values()].map((each) => keyOf(each.target)));
+    for (const key of openIds.keys()) if (!open.has(key)) openIds.delete(key);
+    controller?.views(currentViews());
+  }, 0);
+}
+
+/**
+ * 窗格里显示着的这一篇报给团队（docs/协同编辑.md §22.4、§29.3）：别人也开着就进同一份会话，「也在看」里有我。
+ * 主窗口的每个窗格、弹出窗口的每个窗格都报，不只正在写的那个；窗格关了撤掉
+ */
+export function useTeamView(source: string, doc: DocumentModel): void {
+  const teamDoc = teamDocId(doc);
+  const target = useRef(doc.editor?.target);
+  target.current = doc.editor?.target;
+  useEffect(() => {
+    const ref = vaultRef(target.current);
+    setTeamView(source, teamDoc && ref ? { doc: teamDoc, target: ref } : null);
+  }, [source, teamDoc]);
+  useEffect(() => () => setTeamView(source, null), [source]);
 }
 
 /** 测试：收掉 */
@@ -314,7 +350,9 @@ export async function resetTeam(): Promise<void> {
   await controller?.destroy();
   controller = null;
   started = false;
-  pendingView = null;
-  viewing = null;
+  views.clear();
+  openIds.clear();
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = null;
   useTeam.setState({ active: false, me: null, peers: [], sessions: {}, relays: [] });
 }

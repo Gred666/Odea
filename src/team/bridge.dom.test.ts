@@ -89,7 +89,7 @@ describe("一份文档两条链路", () => {
     // 这个窗口：团队里做客
     const mine = hub.device("b2", "李四");
     await initTeam(mine.net);
-    setTeamView({ doc: DOC, target: noteRef("n1") });
+    setTeamView("main", { doc: DOC, target: noteRef("n1") });
     await until("加入了张三的会话", () => useTeam.getState().sessions[DOC]?.remote === true);
     const teamSession = useTeam.getState().sessions[DOC]!.session;
 

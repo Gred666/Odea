@@ -2780,9 +2780,17 @@ docs: string[] }
  */
 export type NearbyHost = { 
 /**
- * 设备公钥（十六进制）：点哪一个就按它拨，也按它挑颜色
+ * 设备公钥（十六进制）：点哪一个就按它拨，也按它挑颜色。经由别人的是转发那位的
  */
-id: string; name: string }
+id: string; 
+/**
+ * 主持人的名字
+ */
+name: string; 
+/**
+ * 经由谁（替主持人转发的访客的名字）；主持人自己广播的是空
+ */
+via: string | null }
 export type Note = { id: string; title: string; contentMd: string; excerpt: string; wordCount: number; isPinned: boolean; isArchived: boolean; archiveCategory: string | null; archivedAt: number | null; createdAt: number; updatedAt: number; 
 /**
  * 在仓库里的相对路径（正斜杠）。正文里的相对图片路径以它所在的文件夹为基准

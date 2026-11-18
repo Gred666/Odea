@@ -25,6 +25,9 @@ use super::relays::{self, Pins, Relay};
 
 /// mDNS 的服务名：`<公钥>._odea-collab._udp.local`
 pub const MDNS_SERVICE: &str = "odea-collab";
+/// 访客替人转发时广播的服务名（「附近」里的「经由 B」，docs/协同编辑.md §29.2）。和主持人的分开：
+/// 0.9.0 以前的「附近」只听上面那个，看不到这一种，不会把它当成主持人列出来
+pub const VIA_SERVICE: &str = "odea-collab-via";
 
 pub struct Bound {
     pub endpoint: Endpoint,

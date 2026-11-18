@@ -18,7 +18,8 @@ import type { TeamNet } from "./net";
    团队仓库里同一篇谁主持、谁做客（docs/协同编辑.md §22.2、§22.4）。不碰界面：数据层的读写从 TeamIO 进来，
    测试里一个进程起好几台（mockNet.ts 的 hub）。
 
-   每台设备一次只看一篇（编辑器里的那篇，view）。每篇在 Presence 里写：开着、主持着没有、在哪一份会话里
+   每台设备看着的是几篇（分屏的每个窗格、每个弹出窗口里开着的那篇，views，docs/协同编辑.md §29.3）。
+   每篇在 Presence 里写：开着、主持着没有、在哪一份会话里
    （session：主持人建会话时起的 id，访客跟着主持人的）。按别人的 Presence 定自己该怎么做：
 
    - 一个人开着（solo）：不建会话，照常编辑、存盘
@@ -211,25 +212,34 @@ export class TeamController {
 
   /* ---------------- 外面进来的 ---------------- */
 
-  /** 编辑器里现在是哪一篇（null：不是能协作的文档，或者还没取到正文） */
+  /** 只看着一篇（null：一篇都没有）：views 的简写 */
   view(next: TeamView | null): void {
+    this.views(next ? [next] : []);
+  }
+
+  /**
+   * 编辑器里现在开着哪几篇（窗格、弹出窗口里显示着的；不是能协作的文档、还没取到正文的不算）。
+   * 每一篇各自按 Presence 定角色，和只看一篇时一样；Presence 本来就是一张表，协议不用动（§29.3）
+   */
+  views(next: TeamView[]): void {
     if (this.destroyed) return;
+    const wanted = new Map(next.map((view) => [view.doc, view]));
     for (const entry of [...this.entries.values()]) {
-      if (entry.viewing && entry.doc !== next?.doc) {
+      if (entry.viewing && !wanted.has(entry.doc)) {
         entry.viewing = false;
         // 正在加入、做客：马上断开（加入的那个异步做到一半回来看到 epoch 变了就停）。主持人要交接，等它做完
         if (entry.busy && entry.role !== "host" && !this.isOpen(entry)) this.leave(entry);
         else this.evaluate(entry);
       }
     }
-    if (next) {
-      let entry = this.entries.get(next.doc);
+    for (const view of wanted.values()) {
+      let entry = this.entries.get(view.doc);
       if (!entry) {
-        entry = this.newEntry(next);
-        this.entries.set(next.doc, entry);
+        entry = this.newEntry(view);
+        this.entries.set(view.doc, entry);
       }
       entry.viewing = true;
-      entry.target = next.target;
+      entry.target = view.target;
       this.evaluate(entry);
     }
     this.publish();

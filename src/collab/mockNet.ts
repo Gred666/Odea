@@ -638,8 +638,9 @@ export function createMockNet(options: MockNetOptions = {}): MockNet {
         emitGlobal({
           type: "nearby",
           hosts: [
-            { id: "mock-linxi", name: "林夕" },
-            { id: "mock-sam", name: "Sam" },
+            { id: "mock-linxi", name: "林夕", via: null },
+            { id: "mock-sam", name: "Sam", via: null },
+            { id: "mock-bea", name: "Alex", via: "Bea" },
           ],
         });
       });

@@ -7,7 +7,8 @@
 - 第一个会话开始时起，最后一个结束时关（命令层管），平时不占端口
 - 端点、端口映射、防火墙、分享前自检、mDNS、中继都在这里，只做一份：
   - mDNS：只听的那一份一直在（访客按公钥找主持人、诊断里「同一个网络里看到了他」）；有在主持的会话时
-    另加一份广播昵称的，主持的都停了就拿掉 —— 光做客的设备照旧不广播
+    另加一份广播昵称的，主持的都停了就拿掉。没在主持、只在一个会话里做客、直连着主持人时，在另一个服务名上
+    广播「经由我」（nearby.rs 的 via_data，§29.2），「附近」点进来的转给那位主持人
   - 自检：第一个主持的会话开始时起，变了告诉每个主持的会话（各自的邀请链接跟着变）
   - 中继：自己配的起端点时带上，后来新配的当场接上；访客借链接里主持人的那台，走了还回去（按次数）
 - 接进来的连接怎么分（Hello 里本来就带着会话 id，协议不用改）：
@@ -15,7 +16,8 @@
      没开是按回连链接拨过来的，交给那个访客（回连时是访客开控制流）
   2. 别的读 Hello：会话 id 是我主持的哪个就交给它；是我做客的哪个，就是来找我转发的（§20.9）
   3. 「附近」点进来的（会话 id 全 0、没证明）：在哪个会话里允许过他就进哪个；只主持着一个就进它；
-     好几个就问主持人挑（NearbyKnock），挑了直接按给的权限进去，不再问第二遍
+     好几个就问主持人挑（NearbyKnock），挑了直接按给的权限进去，不再问第二遍。一个都没主持、只在一个会话里
+     做客（广播着「经由我」）：替他转给那位主持人，主持人照样确认
   4. 都对不上回 BadInvite
 - 主持人按回连链接拨通了，也按对方 Hello 里的会话 id 分（serve_dialed）
 ============================================================ */
@@ -32,7 +34,7 @@ use iroh_mdns_address_lookup::MdnsAddressLookup;
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 
-use super::endpoint::{self, Bound, MDNS_SERVICE};
+use super::endpoint::{self, Bound, MDNS_SERVICE, VIA_SERVICE};
 use super::host::{self, Served};
 use super::protocol::{self, kind, Hello, Permission, RejectReason};
 use super::reach::{self, Mapper, Portmap, Reach};
@@ -63,6 +65,30 @@ pub struct NodeOptions {
 /// 主持人挑的：进哪个会话（会话 id）、给什么权限；None 是拒绝
 type Choice = Option<([u8; 16], Permission)>;
 
+/// 在 mDNS 上广播的是什么（UserData 里的那一串）
+#[derive(Clone, PartialEq)]
+enum Advert {
+    /// 主持着会话：我的昵称
+    Host(String),
+    /// 替人转发：nearby.rs 的 via_data
+    Via(String),
+}
+
+impl Advert {
+    fn service(&self) -> &'static str {
+        match self {
+            Advert::Host(_) => MDNS_SERVICE,
+            Advert::Via(_) => VIA_SERVICE,
+        }
+    }
+
+    fn data(&self) -> &str {
+        match self {
+            Advert::Host(data) | Advert::Via(data) => data,
+        }
+    }
+}
+
 /// 端点的把手（克隆的是同一个）
 #[derive(Clone)]
 pub struct Node {
@@ -73,8 +99,8 @@ struct Inner {
     endpoint: Endpoint,
     /// 只听的那一份 mDNS
     listen: Option<MdnsAddressLookup>,
-    /// 广播昵称的那一份：有在主持的会话时才有
-    advertise: Mutex<Option<MdnsAddressLookup>>,
+    /// 在广播的那一份（广播什么见 Advert）
+    advert: Mutex<Option<(Advert, MdnsAddressLookup)>>,
     mdns: bool,
     pins: Pins,
     /// 自己配的中继（后来新配的也加进来）
@@ -96,6 +122,12 @@ struct Inner {
     knocks: Mutex<HashMap<u32, oneshot::Sender<Choice>>>,
     next_knock: AtomicU32,
     accept: Mutex<Option<JoinHandle<()>>>,
+    /// 有会话挂上来过没有。端点先起、会话后挂（开始协作、继续上次的协作都是这个顺序）：这中间进来的连接
+    /// 读完 Hello 先等第一个会话挂上再分 —— 不然按「链接不对」拒了，正在重连的访客就此放弃（§29.5）
+    started: watch::Sender<bool>,
+    /// 单测：等过「第一个会话挂上」的连接有几条
+    #[cfg(test)]
+    held: AtomicU32,
 }
 
 impl Node {
@@ -106,7 +138,7 @@ impl Node {
         let inner = Arc::new(Inner {
             endpoint: endpoint.clone(),
             listen: mdns,
-            advertise: Mutex::new(None),
+            advert: Mutex::new(None),
             mdns: options.mdns,
             pins,
             relays: Mutex::new(options.relays),
@@ -123,6 +155,9 @@ impl Node {
             knocks: Mutex::new(HashMap::new()),
             next_knock: AtomicU32::new(1),
             accept: Mutex::new(None),
+            started: watch::Sender::new(false),
+            #[cfg(test)]
+            held: AtomicU32::new(0),
         });
         let accept = tokio::spawn(accept_loop(endpoint, Arc::downgrade(&inner)));
         *inner.accept.lock().unwrap() = Some(accept);
@@ -222,17 +257,7 @@ impl Node {
     /// 改了名字：在广播的话广播的昵称跟着换
     pub fn set_name(&self, name: &str) {
         *self.inner.name.lock().unwrap() = clean_name(name);
-        if self.inner.advertise.lock().unwrap().is_some() {
-            self.set_user_data();
-        }
-    }
-
-    fn set_user_data(&self) {
-        // 广播里只有昵称，超长的截掉
-        let name: String = self.inner.name.lock().unwrap().chars().take(40).collect();
-        if let Ok(data) = UserData::try_from(name) {
-            self.inner.endpoint.set_user_data_for_address_lookup(Some(data));
-        }
+        self.advertise();
     }
 
     /// 一个主持的会话开始了：第一个的话开始广播、起自检；自检已经有结果的话先告诉它
@@ -243,8 +268,9 @@ impl Node {
             hosts.push(Arc::downgrade(shared));
             hosts.len() == 1
         };
+        self.inner.started.send_replace(true);
         if first {
-            self.start_advertising();
+            self.advertise();
         }
         self.start_watching();
         let known = self.inner.reach.lock().unwrap().clone();
@@ -261,14 +287,18 @@ impl Node {
             hosts.is_empty()
         };
         if none {
-            self.stop_advertising();
+            self.advertise();
         }
     }
 
     pub(crate) fn add_guest(&self, shared: &Arc<guest::Shared>) {
-        let mut guests = self.inner.guests.lock().unwrap();
-        guests.retain(|guest| guest.strong_count() > 0);
-        guests.push(Arc::downgrade(shared));
+        {
+            let mut guests = self.inner.guests.lock().unwrap();
+            guests.retain(|guest| guest.strong_count() > 0);
+            guests.push(Arc::downgrade(shared));
+        }
+        self.inner.started.send_replace(true);
+        self.advertise();
     }
 
     pub(crate) fn remove_guest(&self, shared: &Arc<guest::Shared>) {
@@ -277,38 +307,60 @@ impl Node {
             .lock()
             .unwrap()
             .retain(|guest| guest.upgrade().is_some_and(|guest| !Arc::ptr_eq(&guest, shared)));
+        self.advertise();
     }
 
-    fn start_advertising(&self) {
+    /// 该广播什么就广播什么（主持的会话、做客的会话、连没连着主持人、名字一变就叫一次）：
+    /// 主持着会话 → 昵称；一个都没主持、只在一个会话里做客、直连着主持人 → 「经由我」；别的不广播
+    pub(crate) fn advertise(&self) {
         if !self.inner.mdns {
             return;
         }
-        self.set_user_data();
-        match MdnsAddressLookup::builder().service_name(MDNS_SERVICE).advertise(true).build(self.inner.endpoint.id()) {
+        let want = if !live(&self.inner.hosts).is_empty() {
+            // 广播里只有昵称，超长的截掉
+            Some(Advert::Host(self.inner.name.lock().unwrap().chars().take(40).collect()))
+        } else {
+            let mut vias = live(&self.inner.guests).into_iter().filter(|guest| guest::relays_nearby(guest));
+            match (vias.next(), vias.next()) {
+                (Some(guest), None) => guest::via_data(&guest).map(Advert::Via),
+                _ => None,
+            }
+        };
+        let mut advert = self.inner.advert.lock().unwrap();
+        if advert.as_ref().map(|(now, _)| now) == want.as_ref() {
+            return;
+        }
+        // 换了服务名、不广播了：拿掉旧的那一份。查找服务只能整个清掉，清完把只听的那一份放回去
+        let same =
+            matches!((advert.as_ref(), want.as_ref()), (Some((now, _)), Some(next)) if now.service() == next.service());
+        if !same && advert.take().is_some() {
+            self.inner.endpoint.set_user_data_for_address_lookup(None);
+            if let Ok(services) = self.inner.endpoint.address_lookup() {
+                services.clear();
+                if let Some(listen) = &self.inner.listen {
+                    services.add(listen.clone());
+                }
+            }
+        }
+        let Some(want) = want else { return };
+        if let Ok(data) = UserData::try_from(want.data().to_string()) {
+            self.inner.endpoint.set_user_data_for_address_lookup(Some(data));
+        }
+        if let Some((now, _)) = advert.as_mut() {
+            *now = want;
+            return;
+        }
+        match MdnsAddressLookup::builder().service_name(want.service()).advertise(true).build(self.inner.endpoint.id())
+        {
             Ok(lookup) => {
                 if let Ok(services) = self.inner.endpoint.address_lookup() {
                     services.add(lookup.clone());
                 }
-                *self.inner.advertise.lock().unwrap() = Some(lookup);
+                *advert = Some((want, lookup));
             }
             // 局域网发现起不来（网卡都没有组播）不影响按链接里的地址直连
             Err(error) => eprintln!("协作：mDNS 广播起不来：{error}"),
         }
-    }
-
-    /// 拿掉广播的那一份：查找服务只能整个清掉，清完把只听的那一份放回去
-    fn stop_advertising(&self) {
-        let Some(lookup) = self.inner.advertise.lock().unwrap().take() else {
-            return;
-        };
-        self.inner.endpoint.set_user_data_for_address_lookup(None);
-        if let Ok(services) = self.inner.endpoint.address_lookup() {
-            services.clear();
-            if let Some(listen) = &self.inner.listen {
-                services.add(listen.clone());
-            }
-        }
-        drop(lookup);
     }
 
     /// 分享前自检（第一个主持的会话开始时起一次）：端口映射、防火墙、能被谁连进来
@@ -388,7 +440,7 @@ impl Node {
         if let Some(mapper) = mapper {
             mapper.stop().await;
         }
-        self.inner.advertise.lock().unwrap().take();
+        self.inner.advert.lock().unwrap().take();
         for (_, sender) in self.inner.knocks.lock().unwrap().drain() {
             let _ = sender.send(None);
         }
@@ -409,14 +461,23 @@ impl Node {
                 std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).is_ok()
             }
         };
-        for _ in 0..50 {
+        // 等端口真的空出来；一直不空就直说（不然重启的那个悄悄换了随机端口，访客那边只看到「等不到：接上了」）
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
             let v4 = ports.first().is_none_or(|port| free(*port, false));
             let v6 = ports.get(1).is_none_or(|port| free(*port, true));
             if v4 && v6 {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(tokio::time::Instant::now() < deadline, "崩了的端点 10 秒还没放开端口 {ports:?}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    /// 单测：等过「第一个会话挂上」的连接有几条
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> u32 {
+        self.inner.held.load(Ordering::SeqCst)
     }
 
     /// 只听的那一份 mDNS（访客订阅它：同一个网络里看到主持人了没有）
@@ -486,6 +547,7 @@ async fn knock(
             return Err("对方没发 Hello".into());
         }
     };
+    started(inner).await;
     let nearby = !dialed && hello.proof.is_none() && hello.session == [0; 16];
     if !nearby {
         let host = live(&inner.hosts).into_iter().find(|host| host::session_of(host) == hello.session);
@@ -505,6 +567,14 @@ async fn knock(
     // 「附近」点进来的
     let id = *conn.remote_id().as_bytes();
     let hosts: Vec<_> = live(&inner.hosts).into_iter().filter(|host| !host::ended(host)).collect();
+    if hosts.is_empty() {
+        // 一个都没主持：广播着「经由我」的那个做客的会话（只在一个会话里做客时才广播），替他转给主持人
+        let mut guests = live(&inner.guests).into_iter().filter(|guest| guest::relays_nearby(guest));
+        if let (Some(guest), None) = (guests.next(), guests.next()) {
+            guest::forward_for(guest, conn, send, recv, hello).await;
+            return Ok(Served::Gone);
+        }
+    }
     let target = if let Some(host) = hosts.iter().find(|host| host::approved(host, &id)) {
         // 断线重连：允许过他的那个
         Some((host.clone(), None))
@@ -523,6 +593,17 @@ async fn knock(
         Some((host, preset)) => host::serve_knock(host, conn, send, recv, hello, false, preset).await,
         None => host::reject(Some(&conn), send, RejectReason::Ended).await,
     }
+}
+
+/// 等第一个会话挂上（Inner::started）。等不到（那个会话没起来）照常往下分，对不上的照旧拒
+async fn started(inner: &Inner) {
+    let mut started = inner.started.subscribe();
+    if *started.borrow_and_update() {
+        return;
+    }
+    #[cfg(test)]
+    inner.held.fetch_add(1, Ordering::SeqCst);
+    let _ = tokio::time::timeout(HANDSHAKE, started.wait_for(|started| *started)).await;
 }
 
 /// 「附近」进来、我主持着好几个：问主持人进哪一个（不设时限，他走了就算了）
