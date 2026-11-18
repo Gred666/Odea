@@ -20,6 +20,7 @@ import { focusedDocument, liveEditor } from "@/lib/liveDocuments";
 import { IS_WINDOWS } from "@/lib/platform";
 import { isTauri } from "@/lib/tauri";
 import { resolveVaultFile } from "@/lib/wikiFiles";
+import { linkedNote } from "@/lib/wikilinks";
 import staticCss from "@/render/static.css?raw";
 import {
   type StaticOptions,
@@ -309,8 +310,7 @@ function exportOptions(relPath: string | null, run: RenderRun, nested: boolean):
 /** `![[笔记]]`：按标题找那一篇（和编辑器一样，不分大小写），排好它（或它的一节） */
 async function embedNote(target: EmbedTarget, run: RenderRun): Promise<string | null> {
   const { notes, archived, loadBody } = useData.getState();
-  const wanted = target.title.trim().toLowerCase();
-  const note = [...notes, ...archived].find((item) => item.title.trim().toLowerCase() === wanted);
+  const note = linkedNote(target.title, notes, archived);
   if (!note) return null;
   const body = await loadBody(note.id);
   if (body === undefined) return null;

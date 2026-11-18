@@ -259,6 +259,13 @@ const searchPhrases = EditorState.phrases.of({
   "on line": "位于行",
 });
 
+/** `[[` 列表里一篇的小字：所在文件夹（归档的写「归档」）；有同名的再说一句「同名 N 篇」 */
+function wikiHint(note: WikiCandidate, twins = 0): string | undefined {
+  const where = note.archived ? "归档" : note.folder;
+  if (!twins) return where || undefined;
+  return `${where ? `${where} · ` : ""}同名 ${twins + 1} 篇`;
+}
+
 export function MarkdownEditor({
   initialMarkdown,
   onSave,
@@ -1206,7 +1213,7 @@ export function MarkdownEditor({
               icon: wikiIcon(item),
               label: item.note.title,
               ranges,
-              hint: item.note.archived ? "归档" : item.note.folder || undefined,
+              hint: wikiHint(item.note, item.twins),
             }
           : {
               id: "new",

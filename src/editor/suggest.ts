@@ -332,29 +332,56 @@ export interface WikiCandidate {
 }
 
 export type WikiItem =
-  | { kind: "note"; note: WikiCandidate }
+  /** twins：同名的还有几篇（不算这一篇）。链接只写标题，点开的是这一篇（没归档的、最近改过的那篇） */
+  | { kind: "note"; note: WikiCandidate; twins?: number }
   /** 还没有这篇：照样写进链接，Ctrl+点击时新建 */
   | { kind: "new"; title: string };
 
 const WIKI_LIMIT = 30;
 
+/**
+ * 同名的几篇只列一行：链接只写标题，选哪一行插进去的都是同一个 `[[标题]]`，点开的是没归档的、最近改过的那篇
+ * （DocumentView 的 handleWikiLink 照这个顺序找）。以前列成几行一模一样的字，看着像能挑（审查 2026-11-13 §5.11）
+ */
+function oneEach(candidates: WikiCandidate[]): { note: WikiCandidate; twins: number }[] {
+  const byTitle = new Map<string, { note: WikiCandidate; twins: number }>();
+  const ordered = [
+    ...candidates.filter((note) => !note.archived),
+    ...candidates.filter((note) => note.archived),
+  ];
+  for (const note of ordered) {
+    const key = note.title.trim().toLowerCase();
+    const seen = byTitle.get(key);
+    if (seen) seen.twins += 1;
+    else byTitle.set(key, { note, twins: 0 });
+  }
+  // 顺序照传进来的（最近改过的在前）
+  const kept = new Set([...byTitle.values()].map((entry) => entry.note));
+  return candidates
+    .filter((note) => kept.has(note))
+    .map((note) => byTitle.get(note.title.trim().toLowerCase())!);
+}
+
 /** 有筛选词按命中程度排（归档的靠后），没有就是传进来的顺序（最近改过的在前） */
 export function wikiItems(query: string, candidates: WikiCandidate[]): Ranked<WikiItem>[] {
   const q = query.trim();
+  const unique = oneEach(candidates);
+  const item = (note: WikiCandidate, twins: number): WikiItem =>
+    twins ? { kind: "note", note, twins } : { kind: "note", note };
   if (!q) {
-    return candidates
-      .slice(0, WIKI_LIMIT)
-      .map((note) => ({ item: { kind: "note" as const, note } }));
+    return unique.slice(0, WIKI_LIMIT).map(({ note, twins }) => ({ item: item(note, twins) }));
   }
-  const scored: { note: WikiCandidate; ranges: Range[]; score: number }[] = [];
-  for (const note of candidates) {
+  const scored: { note: WikiCandidate; twins: number; ranges: Range[]; score: number }[] = [];
+  for (const { note, twins } of unique) {
     const hit = matchText(note.title, q);
-    if (hit) scored.push({ note, ranges: hit.ranges, score: hit.score - (note.archived ? 10 : 0) });
+    if (hit) {
+      scored.push({ note, twins, ranges: hit.ranges, score: hit.score - (note.archived ? 10 : 0) });
+    }
   }
   scored.sort((a, b) => b.score - a.score);
   const out: Ranked<WikiItem>[] = scored
     .slice(0, WIKI_LIMIT)
-    .map(({ note, ranges }) => ({ item: { kind: "note", note }, ranges }));
+    .map(({ note, twins, ranges }) => ({ item: item(note, twins), ranges }));
   if (!candidates.some((note) => sameTitle(note.title, q))) {
     out.push({ item: { kind: "new", title: q } });
   }

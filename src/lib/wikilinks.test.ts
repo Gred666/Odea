@@ -3,6 +3,7 @@ import {
   contextLine,
   findWikiLinks,
   linkableTitle,
+  linkedNote,
   retargetWikiLinks,
   sameTitle,
   splitWikiSegments,
@@ -79,5 +80,18 @@ describe("双链", () => {
     expect(contextLine("- [ ] 回看 [[周报]] 的结论")).toBe("回看 [[周报]] 的结论");
     expect(contextLine("> ## 参考 [[周报]]")).toBe("参考 [[周报]]");
     expect(contextLine("3. 见 [[周报]]")).toBe("见 [[周报]]");
+  });
+});
+
+// 同名的几篇：`[[` 的提示里只列一篇（审查 2026-11-13 §5.11），点开、嵌进来的得是同一篇
+describe("linkedNote", () => {
+  const note = (id: string, title: string, updatedAt: number) => ({ id, title, updatedAt });
+  it("picks the most recently edited note, archived ones only when nothing else has the title", () => {
+    // 置顶的排在列表前面，但不该因此被选上
+    const notes = [note("pinned-old", "样张", 1), note("new", "样张 ", 5), note("x", "别的", 9)];
+    const archived = [note("archived", "样张", 99), note("only", "旧的", 1)];
+    expect(linkedNote(" 样张", notes, archived)?.id).toBe("new");
+    expect(linkedNote("旧的", notes, archived)?.id).toBe("only");
+    expect(linkedNote("没有", notes, archived)).toBeUndefined();
   });
 });
