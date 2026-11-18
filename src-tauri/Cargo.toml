@@ -168,6 +168,8 @@ windows = { version = "0.61", features = [
   "UI_Notifications",
   "Win32_Media_Audio",
   "Win32_UI_Shell",
+  # 弹出窗口拦重载键时看 Ctrl 按没按着（popout.rs 的 without_reload_keys）
+  "Win32_UI_Input_KeyboardAndMouse",
 ] }
 # 读「勿扰」开没开（ntdll 的 NtQueryWnfStateData，notify.rs）：和 windows 用的同一个导入宏。依赖树里本来就有
 windows-link = "0.2"

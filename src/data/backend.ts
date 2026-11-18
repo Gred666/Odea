@@ -1,5 +1,7 @@
 import {
   events,
+  type BaseDoc,
+  type BaseText,
   type DocProperties,
   type Result as IpcResult,
   type PropertyCatalog,
@@ -193,6 +195,14 @@ export interface Backend {
   propertyCatalog(): Promise<PropertyCatalog>;
   /** 记下（null 是忘掉）一个键是什么类型，返回记着的全部 */
   setPropertyType(key: string, kind: string | null): Promise<Record<string, string>>;
+  /** 视图文件（docs/视图文件.md）要的每一篇：属性原文、标签；withBody 再给正文里的标签、双链 */
+  baseDocs(withBody: boolean): Promise<BaseDoc[]>;
+  /** 读一个视图文件（.base）：全文和指纹 */
+  baseRead(relPath: string): Promise<BaseText>;
+  /** 写回一个视图文件；磁盘上已经不是 fingerprint 那一版就不写（bases::STALE） */
+  baseWrite(relPath: string, text: string, fingerprint: string): Promise<BaseText>;
+  /** 在树上的这个文件夹里新建一个视图文件，返回相对路径 */
+  baseCreate(folder: string, name: string, text: string): Promise<string>;
   /** 不是 UTF-8 的一篇按什么编码认出来、转过去是什么样（转之前给用户看） */
   docLegacyText(target: DocumentRef): Promise<LegacyText>;
   /** 转成 UTF-8，原文另存在旁边。fingerprint 是 docLegacyText 给的，文件之后被改过就不转 */
@@ -390,6 +400,10 @@ const tauriBackend: Backend = {
   propertyCatalog: () => unwrap(commands.vaultPropertyCatalog()),
   setPropertyType: async (key, kind) =>
     (await unwrap(commands.vaultSetPropertyType(key, kind))) as Record<string, string>,
+  baseDocs: (withBody) => unwrap(commands.baseDocs(withBody)),
+  baseRead: (relPath) => unwrap(commands.baseRead(relPath)),
+  baseWrite: (relPath, text, fingerprint) => unwrap(commands.baseWrite(relPath, text, fingerprint)),
+  baseCreate: (folder, name, text) => unwrap(commands.baseCreate(folder, name, text)),
   docLegacyText: (target) => unwrap(commands.docLegacyText(target)),
   docConvertUtf8: async (target, fingerprint) => {
     await unwrap(commands.docConvertUtf8(target, fingerprint));

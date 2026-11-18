@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { offerEditorFocus } from "./focusHandoff";
+import { addWindowListener } from "./paneWindow";
 
 /* ============================================================
    模态对话框的焦点（命令面板、提醒设置、同步、历史版本……都是 role="dialog" aria-modal="true"）：
@@ -22,6 +23,8 @@ let lastOutside: HTMLElement | null = null;
 /** 开着的面板，后开的在后面 */
 const stack: HTMLElement[] = [];
 let tracking = false;
+/** 面板开着时听 Tab 的那个（每个窗口都听） */
+let stopTab: (() => void) | null = null;
 
 /**
  * 遮罩：每个对话框都是「遮罩按钮 + 紧跟着的、装着面板的那一层」。点遮罩关掉时，按下的那一下焦点先落到遮罩上 ——
@@ -37,10 +40,17 @@ function isBackdrop(node: Element): boolean {
  */
 const MENU = '[role="menu"]';
 
+/**
+ * 是不是一个元素。不用 instanceof：弹出窗口里的元素是那个窗口的 HTMLElement（另一个全局），
+ * 主窗口的 instanceof HTMLElement 认不出来（docs/标签页与分屏.md §20.2）
+ */
+const isElement = (node: unknown): node is HTMLElement =>
+  typeof node === "object" && node !== null && (node as Node).nodeType === 1;
+
 function outsideModal(node: unknown): node is HTMLElement {
   return (
-    node instanceof HTMLElement &&
-    node !== document.body &&
+    isElement(node) &&
+    node !== node.ownerDocument.body &&
     !node.closest(MODAL) &&
     !node.closest(MENU) &&
     !isBackdrop(node)
@@ -50,7 +60,8 @@ function outsideModal(node: unknown): node is HTMLElement {
 function track() {
   if (tracking) return;
   tracking = true;
-  document.addEventListener(
+  // 主窗口和弹出窗口都听：命令面板也会开在弹出窗口里（docs/标签页与分屏.md §20.2）
+  addWindowListener(
     "focusin",
     (event) => {
       if (outsideModal(event.target)) lastOutside = event.target;
@@ -80,8 +91,8 @@ function onTab(event: KeyboardEvent) {
   const panel = stack.at(-1);
   if (!panel) return;
   const items = tabbables(panel);
-  const active = document.activeElement;
-  const inside = active instanceof Node && panel.contains(active);
+  const active = panel.ownerDocument.activeElement;
+  const inside = !!active && panel.contains(active);
   const first = items[0];
   const last = items.at(-1);
   let to: HTMLElement | undefined;
@@ -109,17 +120,22 @@ export function useModalFocus(open: boolean): (el: HTMLElement | null) => void {
     const el = panel.current;
     if (!open || !el) return;
     track();
-    const from = document.activeElement;
+    // 面板在哪个窗口（弹出窗口里开的命令面板在那边的文档里）
+    const doc = el.ownerDocument;
+    const from = doc.activeElement;
     if (outsideModal(from)) lastOutside = from;
     stack.push(el);
-    if (stack.length === 1) document.addEventListener("keydown", onTab, true);
-    if (!el.contains(document.activeElement)) el.focus({ preventScroll: true });
+    if (stack.length === 1) stopTab = addWindowListener("keydown", onTab, true);
+    if (!el.contains(doc.activeElement)) el.focus({ preventScroll: true });
     return () => {
-      const active = document.activeElement;
-      const lost = !active || active === document.body || el.contains(active) || isBackdrop(active);
+      const active = doc.activeElement;
+      const lost = !active || active === doc.body || el.contains(active) || isBackdrop(active);
       const at = stack.lastIndexOf(el);
       if (at >= 0) stack.splice(at, 1);
-      if (stack.length === 0) document.removeEventListener("keydown", onTab, true);
+      if (stack.length === 0) {
+        stopTab?.();
+        stopTab = null;
+      }
       if (!lost) return;
       // 底下还有一层开着的：还给那一层；没有了：还给打开之前的那个
       const below = stack.at(-1);
@@ -128,7 +144,7 @@ export function useModalFocus(open: boolean): (el: HTMLElement | null) => void {
       else if (lastOutside?.classList.contains("cm-content")) {
         // 从命令面板打开了另一篇：原来的正文编辑器已经换掉了，交给新挂上的那个（lib/focusHandoff.ts）。
         // 面板退场时还挂着一会儿，焦点先从它身上拿下来，不然新编辑器看焦点不在 body 上就不接
-        if (active instanceof HTMLElement && el.contains(active)) active.blur();
+        if (isElement(active) && el.contains(active)) active.blur();
         offerEditorFocus(el.ownerDocument);
       }
     };

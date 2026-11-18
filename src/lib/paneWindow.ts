@@ -37,7 +37,35 @@ const popoutWindows = new Set<Window>();
 
 export function registerPopoutWindow(win: Window): () => void {
   popoutWindows.add(win);
-  return () => popoutWindows.delete(win);
+  for (const entry of everyWindow) win.addEventListener(entry.type, entry.listener, entry.capture);
+  return () => {
+    popoutWindows.delete(win);
+    for (const entry of everyWindow)
+      win.removeEventListener(entry.type, entry.listener, entry.capture);
+  };
+}
+
+/** 每个窗口都要听的（命令面板、全局搜索的快捷键）：主窗口和开着的、以后开的弹出窗口 */
+const everyWindow = new Set<{ type: string; listener: EventListener; capture: boolean }>();
+
+/**
+ * 在主窗口和每个弹出窗口上都听（docs/标签页与分屏.md §20.2）：弹出窗口里按 Ctrl+K、Ctrl+Shift+F 也开面板。
+ * 以后开的弹出窗口登记时补上。返回停掉的函数
+ */
+export function addWindowListener<K extends keyof WindowEventMap>(
+  type: K,
+  listener: (event: WindowEventMap[K]) => void,
+  capture = false,
+): () => void {
+  const entry = { type, listener: listener as EventListener, capture };
+  everyWindow.add(entry);
+  const wins = [window, ...[...popoutWindows].filter((win) => !win.closed)];
+  for (const win of wins) win.addEventListener(type, entry.listener, capture);
+  return () => {
+    everyWindow.delete(entry);
+    for (const win of [window, ...popoutWindows])
+      win.removeEventListener(type, entry.listener, capture);
+  };
 }
 
 /**

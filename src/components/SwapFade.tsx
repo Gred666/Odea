@@ -67,7 +67,7 @@ export class SwapFade extends Component<{
     const host = node?.closest<HTMLElement>(`[${SWAP_HOST}]`);
     if (!node || !host) return null;
 
-    const layer = document.createElement("div");
+    const layer = host.ownerDocument.createElement("div");
     layer.className = "odea-swap-ghost";
     layer.setAttribute("aria-hidden", "true");
     layer.inert = true;

@@ -178,6 +178,39 @@ pub async fn vault_property_catalog(ws: Ws) -> Result<crate::vault::properties::
     with_vault(&ws, move |v| v.property_catalog()).await
 }
 
+/// 视图文件（docs/视图文件.md）要的每一篇 Markdown 文档：属性原文、标签；with_body 时加上正文里的标签、双链
+#[tauri::command]
+#[specta::specta]
+pub async fn base_docs(ws: Ws, with_body: bool) -> Result<Vec<crate::vault::bases::BaseDoc>> {
+    with_vault(&ws, move |v| v.base_docs(with_body)).await
+}
+
+/// 读一个视图文件（`.base`）：全文和指纹
+#[tauri::command]
+#[specta::specta]
+pub async fn base_read(ws: Ws, rel_path: String) -> Result<crate::vault::bases::BaseText> {
+    with_vault(&ws, move |v| v.base_read(&rel_path)).await
+}
+
+/// 写回一个视图文件。fingerprint 是读的时候的那一版：磁盘上已经变了就不写（bases::STALE）
+#[tauri::command]
+#[specta::specta]
+pub async fn base_write(
+    ws: Ws,
+    rel_path: String,
+    text: String,
+    fingerprint: String,
+) -> Result<crate::vault::bases::BaseText> {
+    with_vault(&ws, move |v| v.base_write(&rel_path, &text, &fingerprint)).await
+}
+
+/// 在树上的这个文件夹里新建一个视图文件，返回相对路径
+#[tauri::command]
+#[specta::specta]
+pub async fn base_create(ws: Ws, folder: String, name: String, text: String) -> Result<String> {
+    with_vault(&ws, move |v| v.base_create(&folder, &name, &text)).await
+}
+
 /// 记下（kind 是 null 是忘掉）一个键是什么类型
 #[tauri::command]
 #[specta::specta]

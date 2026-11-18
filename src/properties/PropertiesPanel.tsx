@@ -34,9 +34,11 @@ import {
 } from "react";
 import {
   type DocProps,
+  announceProperties,
   cachedProperties,
   invalidateCatalog,
   loadCatalog,
+  onPropertiesWritten,
   primeProperties,
   propKey,
   setPropertySource,
@@ -103,7 +105,7 @@ function leave(event: { currentTarget: HTMLElement; preventDefault(): void }): v
   else field.blur();
 }
 
-const KIND_META: Record<Kind, { label: string; icon: LucideIcon }> = {
+export const KIND_META: Record<Kind, { label: string; icon: LucideIcon }> = {
   text: { label: "文字", icon: Type },
   multitext: { label: "列表", icon: List },
   number: { label: "数字", icon: Hash },
@@ -168,6 +170,12 @@ export function PropertiesPanel({
       }
     };
     void refetch();
+    // 这个窗口里别处（视图文件的表格）改了这一篇：自己没在写的时候跟上
+    const stopWritten = onPropertiesWritten((written, props) => {
+      if (propKey(written) !== propKey(targetRef.current)) return;
+      if (queue.current.done < queue.current.asked) return;
+      setDoc(props);
+    });
     const stop = backend().then((api) =>
       api.onVaultChanged((change) => {
         if (touches(change, targetRef.current)) {
@@ -178,6 +186,7 @@ export function PropertiesPanel({
     );
     return () => {
       alive = false;
+      stopWritten();
       void stop.then((unlisten) => unlisten());
     };
   }, [key]);
@@ -241,8 +250,8 @@ export function PropertiesPanel({
         try {
           const saved = await api.docSetProperties(at, next);
           queue.current.done = Math.max(queue.current.done, mine);
-          primeProperties(at, saved.text, saved.editable);
           if (here() && last()) setDoc(saved);
+          announceProperties(at, saved);
           invalidateCatalog();
         } catch (cause) {
           queue.current.done = Math.max(queue.current.done, mine);
@@ -628,7 +637,8 @@ const INPUT =
   "h-[26px] w-full min-w-0 rounded-[5px] border border-transparent bg-transparent px-1.5 text-[14px] text-body outline-none " +
   "placeholder:text-faint enabled:hover:border-line-strong focus:border-accent focus:bg-canvas";
 
-function ValueCell({
+/** 一条属性的值按类型给编辑器。视图文件的表格格子也用它（docs/视图文件.md §3.6） */
+export function ValueCell({
   entry,
   kind,
   misfit,

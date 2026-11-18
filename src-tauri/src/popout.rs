@@ -76,6 +76,48 @@ pub fn create<R: Runtime>(
     }
 }
 
+/// 弹出窗口里不让 F5、Ctrl+R、Ctrl+Shift+R（和键盘上的「刷新」键）重载页面。它的页面是一张 about:blank，
+/// 里面的东西都是仓库窗口画的：一重载就成了一张白纸（2026-11-18 给它的渲染窗口发真的 F5 实测会重载）。
+/// 页面里 keydown 的 preventDefault 拦不住，`AreBrowserAcceleratorKeysEnabled` 设了也不管用（要等下一次导航才生效，
+/// 这张页面不会再导航）：在宿主这一层的 AcceleratorKeyPressed 里把这几个键标成处理过了。别的快捷键照旧。
+/// 要在 WebView2 的 controller 建好以后挂，画好第一帧要显示时一定好了（docs/标签页与分屏.md §20.1）
+#[cfg(windows)]
+fn without_reload_keys<R: Runtime>(window: &WebviewWindow<R>) {
+    use webview2_com::AcceleratorKeyPressedEventHandler;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_BROWSER_REFRESH, VK_CONTROL, VK_F5};
+    let _ = window.with_webview(|platform| unsafe {
+        let handler = AcceleratorKeyPressedEventHandler::create(Box::new(|_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
+            args.KeyEventKind(&mut kind)?;
+            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN {
+                return Ok(());
+            }
+            let mut key = 0u32;
+            args.VirtualKey(&mut key)?;
+            let ctrl = GetKeyState(i32::from(VK_CONTROL.0)) < 0;
+            let reload = key == u32::from(VK_F5.0)
+                || key == u32::from(VK_BROWSER_REFRESH.0)
+                || (ctrl && key == u32::from(b'R'));
+            if reload {
+                args.SetHandled(true)?;
+            }
+            Ok(())
+        }));
+        let mut token = 0;
+        if let Err(error) = platform.controller().add_AcceleratorKeyPressed(&handler, &mut token) {
+            eprintln!("弹出窗口拦重载键失败: {error}");
+        }
+    });
+}
+
+/// WKWebView / WebKitGTK 没有浏览器的重载快捷键（万一重载了由前端的 pagehide 兜底）
+#[cfg(not(windows))]
+fn without_reload_keys<R: Runtime>(_window: &WebviewWindow<R>) {}
+
 /// lib.rs 的 CloseRequested：用户关弹出窗口，交给仓库窗口去存、去放回标签（它再调 close）。
 /// 仓库窗口已经没了的话照常关
 pub fn on_close_requested<R: Runtime>(window: &tauri::Window<R>, api: &tauri::CloseRequestApi) {
@@ -135,6 +177,8 @@ pub fn popout_window(window: WebviewWindow, label: String, op: PopoutOp) -> bool
         PopoutOp::Show => {
             #[cfg(all(windows, feature = "desktop-runtime"))]
             crate::use_app_icon_resource(&target);
+            // 建窗口那一下 WebView2 的 controller 还没好（CoreWebView2 取不到），画好第一帧要显示时一定好了
+            without_reload_keys(&target);
             target.show().is_ok() && target.set_focus().is_ok()
         }
         PopoutOp::Focus => target.unminimize().is_ok() && target.set_focus().is_ok(),

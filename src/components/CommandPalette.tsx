@@ -1,6 +1,7 @@
 import { openDocument } from "@/app/navigate";
 import { type PaletteDialog, hasListColumn, useApp } from "@/app/store";
 import { DEFAULT_BODY_SIZE, MEASURES, stepBodySize } from "@/app/typography";
+import { createBase } from "@/bases/create";
 import { useRelays } from "@/collab/relayStore";
 import { overlapOf, sessionName, useCollab } from "@/collab/store";
 import { releaseOf } from "@/content/changelog";
@@ -25,6 +26,7 @@ import { runEditorCommand } from "@/lib/editorCommands";
 import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, spring, tween } from "@/lib/motion";
 import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/paletteSearch";
+import { addWindowListener } from "@/lib/paneWindow";
 import { isMac } from "@/lib/platform";
 import {
   type PaletteCommand,
@@ -75,6 +77,7 @@ import {
   Server,
   Sparkles,
   Sun,
+  Table2,
   TextSearch,
   Trash2,
   Type,
@@ -255,8 +258,8 @@ export function CommandPalette({
     };
     // 捕获阶段：编辑器（CodeMirror）在 contentDOM 上监听并会 preventDefault，
     // 冒泡阶段注册的话，光标一在正文里 ⌘K 就永远打不开面板。
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    // 弹出窗口里也听：在那边按就开在那边（docs/标签页与分屏.md §20.2，Shell 的 InActiveWindow）
+    return addWindowListener("keydown", onKey, true);
   }, [setOpen]);
 
   useEffect(() => {
@@ -610,6 +613,21 @@ export function CommandPalette({
             keywords: "logical 逻辑目录 树 手动排序 文件夹 整理 转换 智能文件夹",
             run: () => void makeLogical(),
           },
+      // 视图文件（docs/视图文件.md）：建在列表栏停着的那个文件夹里；逻辑目录的树上还放不了
+      ...(logical
+        ? []
+        : [
+            {
+              id: "new-base",
+              group: "文件",
+              icon: Table2,
+              label: "新建视图文件",
+              hint: "按属性把笔记列成表格、看板（Obsidian 的 .base）",
+              keywords:
+                "base bases view table kanban board database 视图 表格 看板 数据库 卡片 属性 筛选 obsidian",
+              run: () => void createBase(smartQuery(noteFolder) === undefined ? noteFolder : ""),
+            } satisfies Item,
+          ]),
       {
         id: "import-folder",
         group: "文件",

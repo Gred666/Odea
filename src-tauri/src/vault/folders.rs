@@ -21,13 +21,16 @@ pub fn list(root: &Path, tree: &layout::Layout) -> Vec<String> {
     scan(root, tree, false).0
 }
 
-/// 文件树上列出来的文件：图片、PDF（Obsidian 也列）。别的文件（压缩包、表格）不列
+/// 文件树上列出来的文件：图片、PDF（Obsidian 也列）、视图文件 `.base`（docs/视图文件.md）。
+/// 别的文件（压缩包、表格）不列
 pub fn tree_file_kind(name: &str) -> Option<&'static str> {
     let ext = layout::stem_and_ext(name).1.to_ascii_lowercase();
     if super::IMAGE_EXTENSIONS.contains(&ext.as_str()) {
         Some("image")
     } else if ext == "pdf" {
         Some("pdf")
+    } else if ext == super::bases::EXT {
+        Some("base")
     } else {
         None
     }

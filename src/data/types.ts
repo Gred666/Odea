@@ -671,6 +671,11 @@ export interface DocumentModel {
   };
   /** 统一的 Markdown 正文 */
   bodyMd: string;
+  /**
+   * 这一栏开的是视图文件（docs/视图文件.md §3.5）：正文区画视图，不画编辑器。
+   * 只出现在笔记区的标签里（标签存 `base:` + 相对路径，bases/ids.ts）
+   */
+  base?: { relPath: string };
   /** 正文后面的一段（槽位）：日历某一天的「当日安排」。有它的时候编辑器不撑满一屏 */
   afterBody?: ReactNode;
   /** 这篇能用的模板（槽位）：在一行里只写 `/模板` 就弹出来 */
