@@ -26,6 +26,7 @@ import { runEditorCommand } from "@/lib/editorCommands";
 import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, spring, tween } from "@/lib/motion";
 import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/paletteSearch";
+import { addWindowListener } from "@/lib/paneWindow";
 import { isMac } from "@/lib/platform";
 import {
   type PaletteCommand,
@@ -257,8 +258,8 @@ export function CommandPalette({
     };
     // 捕获阶段：编辑器（CodeMirror）在 contentDOM 上监听并会 preventDefault，
     // 冒泡阶段注册的话，光标一在正文里 ⌘K 就永远打不开面板。
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    // 弹出窗口里也听：在那边按就开在那边（docs/标签页与分屏.md §20.2，Shell 的 InActiveWindow）
+    return addWindowListener("keydown", onKey, true);
   }, [setOpen]);
 
   useEffect(() => {

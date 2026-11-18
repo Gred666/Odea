@@ -14,6 +14,7 @@ import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/date";
 import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
+import { addWindowListener } from "@/lib/paneWindow";
 import { documentType } from "@/plugins/registry";
 import { Archive, ArrowDown, ArrowUp, CornerDownLeft, FileText, TextSearch } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -89,7 +90,7 @@ export function FindDialog() {
           inputRef.current?.focus();
           inputRef.current?.select();
         } else {
-          setOpen(true, selectionSeed());
+          setOpen(true, selectionSeed(e.view ?? window));
         }
       } else if (e.key === "Escape" && useApp.getState().findOpen && !e.isComposing) {
         e.preventDefault();
@@ -97,9 +98,8 @@ export function FindDialog() {
         else setOpen(false);
       }
     };
-    // 捕获阶段：理由同命令面板（编辑器在 contentDOM 上监听按键）
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    // 捕获阶段：理由同命令面板（编辑器在 contentDOM 上监听按键）；弹出窗口里也听（同命令面板）
+    return addWindowListener("keydown", onKey, true);
   }, [setOpen, back]);
 
   useEffect(() => {
@@ -394,9 +394,10 @@ export function FindDialog() {
 }
 
 /** 按快捷键时正文里选着的一段字（一行之内、不太长）：就搜它（同 VS Code） */
-function selectionSeed(): string | undefined {
-  if (!document.activeElement?.closest(".cm-editor")) return undefined;
-  const text = window.getSelection()?.toString() ?? "";
+function selectionSeed(win: Window): string | undefined {
+  // 按快捷键的那个窗口（弹出窗口里选中的字在它自己的文档里）
+  if (!win.document.activeElement?.closest(".cm-editor")) return undefined;
+  const text = win.getSelection()?.toString() ?? "";
   return text && !text.includes("\n") && text.length <= 100 ? text : undefined;
 }
 
