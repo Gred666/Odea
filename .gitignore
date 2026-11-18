@@ -15,3 +15,6 @@ src-tauri/backups/
 Thumbs.db
 *.log
 .vite/
+
+# 子 agent 的 git worktree（Claude Code 的 isolation: worktree）
+.claude/worktrees/

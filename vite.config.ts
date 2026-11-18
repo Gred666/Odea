@@ -3,6 +3,7 @@ import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
 
 /** vitest 跑的时候：Loro 用 node 版（加载即就绪），见 src/collab/loro.ts */
 const testing = !!process.env.VITEST;
@@ -34,6 +35,8 @@ export default defineConfig({
   test: {
     // happy-dom 和浏览器不一样的地方在这里补齐（见文件里的说明）
     setupFiles: ["./src/test/setup.ts"],
+    // 子 agent 的 git worktree 放在 .claude/worktrees/ 下，里面是整份代码，别把它们的测试也跑一遍
+    exclude: [...configDefaults.exclude, ".claude/**"],
   },
 
   build: {
