@@ -176,7 +176,6 @@ pub struct Conflict {
 pub struct Pulled {
     /// 工作区里被改到的文件（新增、修改、删除），相对路径、正斜杠
     pub changed: Vec<String>,
-    pub conflicts: Vec<Conflict>,
     /// 做了三方合并（不是快进，也不是本来就是最新的）。同步线程用不上，单测靠它分两种情况
     #[cfg_attr(not(test), allow(dead_code))]
     pub merged: bool,
@@ -576,7 +575,6 @@ impl SyncRepo {
             self.repo.set_head(&refname)?;
             return Ok(Pulled {
                 changed: self.changed_paths(old_tree.as_ref(), &new_tree)?,
-                conflicts: Vec::new(),
                 merged: false,
             });
         }
@@ -608,7 +606,6 @@ impl SyncRepo {
         )?;
         Ok(Pulled {
             changed: self.changed_paths(old_tree.as_ref(), &tree)?,
-            conflicts,
             merged: true,
         })
     }
