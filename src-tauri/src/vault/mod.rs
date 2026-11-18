@@ -113,6 +113,18 @@ pub struct Vault {
     tree_build: bool,
     /// 索引和磁盘对齐过一遍了（后台那批读完了）。没读完的时候，索引里找不到的笔记不一定是没了
     indexed_all: bool,
+    /// 扫描时读不了、跳过的 .md（别的程序正独占着它）。文件监听隔一会儿拿去再读（take_unread，watch.rs）：
+    /// 有的程序占着不改、放开时没有文件事件，不再读的话外部改动一直进不了索引（审查 §5.4）
+    unread: Vec<String>,
+}
+
+/// keep_theirs 另存下的冲突副本：合并做成了交给 absorb_merge 通知前端，没做成交给 drop_kept 收回
+#[derive(Default)]
+pub struct KeptCopies {
+    /// 副本的名字（笔记是标题，附件是文件名），同步的提示用
+    pub names: Vec<String>,
+    rels: Vec<String>,
+    change: VaultChange,
 }
 
 impl VaultChange {
@@ -190,6 +202,14 @@ fn title_meta(rel: &str, title: &str) -> Option<String> {
     (layout::stem_of(rel) != title).then(|| title.to_string())
 }
 
+impl Drop for Vault {
+    /// 主连接（db 字段，在这之后才释放）要关了：先关掉搜正文那个连着同一个索引的只读连接，
+    /// 主连接才是最后一个、把 WAL 合回去（index::release_reader）
+    fn drop(&mut self) {
+        index::release_reader(&self.db);
+    }
+}
+
 impl Vault {
     /// 打开仓库并把索引和文件对齐（增量：只重读变过的文件）。应用里用 open_quick
     #[cfg(test)]
@@ -251,6 +271,7 @@ impl Vault {
             tree_text: String::new(),
             tree_build: false,
             indexed_all: false,
+            unread: Vec::new(),
         };
         vault.load_tree();
         Ok(vault)
@@ -412,14 +433,26 @@ impl Vault {
     /// 扫描时读一个文件。读不了的（别的程序正独占着它：网盘、杀毒、别的编辑器存到一半，
     /// Windows 上是 os error 32）记一笔、跳过：索引里它还是旧的，下次扫描再读。
     /// 不能让它把整批拦下 —— 排在后面的文件就进不了索引，已经认出来的删除也发不到前端
-    fn read_for_index(&self, rel: &str) -> Option<fsio::Decoded> {
+    fn read_for_index(&mut self, rel: &str) -> Option<fsio::Decoded> {
         match self.read_lossy(rel) {
             Ok(decoded) => decoded,
             Err(error) => {
-                eprintln!("读 {rel} 进索引失败，下次再读: {error}");
+                eprintln!("读 {rel} 进索引失败，等一会儿再读: {error}");
+                self.note_unread(rel);
                 None
             }
         }
+    }
+
+    fn note_unread(&mut self, rel: &str) {
+        if !self.unread.iter().any(|known| known == rel) {
+            self.unread.push(rel.to_string());
+        }
+    }
+
+    /// 上次拿走以后，扫描时读不了、跳过的那些 .md（文件监听隔一会儿再读，见 watch.rs）
+    pub fn take_unread(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.unread)
     }
 
     /// 仓库文件夹整个打不开（移动硬盘拔了、网络盘断了、网盘的文件夹被挪走）：说明不了笔记被删了。
@@ -531,6 +564,7 @@ impl Vault {
             while let Some(rel) = backlog.files.pop_front() {
                 if let Err(error) = vault.index_file(&rel, &mut change) {
                     eprintln!("读 {rel} 进索引失败: {error}");
+                    vault.note_unread(&rel);
                 }
                 if budget.is_some_and(|budget| start.elapsed() >= budget) {
                     break;
@@ -899,15 +933,24 @@ impl Vault {
     /// 「标题 (冲突 2026-09-27 1030).md」，放在原文件旁边。它是一篇新的笔记：
     /// 去掉 id（不和原文件抢）、去掉写在属性块里的标题（否则两篇同名，分不清）。
     fn write_conflict_copy(&mut self, rel: &str, text: &str, change: &mut VaultChange) -> Result<DocRow> {
+        let copy = self.conflict_note_rel(rel);
+        self.write_conflict_copy_at(&copy, text, change)
+    }
+
+    /// 笔记的冲突副本放在哪：「笔记/周报.md」→「笔记/周报 (冲突 2026-10-07 1030).md」，重名加序号
+    fn conflict_note_rel(&self, rel: &str) -> String {
+        let suffix = format!(" (冲突 {})", chrono::Local::now().format("%Y-%m-%d %H%M"));
+        // 原名很长时截短一点：另存不下来的话，保存时这一篇一直存不进去，同步合并时对方那一版只剩在历史里
+        let stem = format!("{}{suffix}", fsio::fit_stem(layout::stem_of(rel), suffix.len() + NUMBER_TAIL + ".md".len()));
+        fsio::unique_rel(&self.root, layout::dir_of(rel), &stem, None)
+    }
+
+    fn write_conflict_copy_at(&mut self, copy: &str, text: &str, change: &mut VaultChange) -> Result<DocRow> {
         let (mut meta, body) = frontmatter::split(text);
         meta.id = None;
         meta.title = None;
         meta.pinned = false;
-        let suffix = format!(" (冲突 {})", chrono::Local::now().format("%Y-%m-%d %H%M"));
-        // 原名很长时截短一点：另存不下来的话，保存时这一篇一直存不进去，同步合并时对方那一版只剩在历史里
-        let stem = format!("{}{suffix}", fsio::fit_stem(layout::stem_of(rel), suffix.len() + NUMBER_TAIL + ".md".len()));
-        let copy = fsio::unique_rel(&self.root, layout::dir_of(rel), &stem, None);
-        let row = self.write_and_index(&copy, &frontmatter::render(&meta, &body), change)?;
+        let row = self.write_and_index(copy, &frontmatter::render(&meta, &body), change)?;
         // 自己另存的这一份已经在 conflicts 里报了，不再当「新发现的副本」报一遍
         change.found_copies.retain(|title| *title != row.title);
         change.conflicts.push(row.title.clone());
@@ -1179,13 +1222,38 @@ impl Vault {
         meta.title = Some(row.title.clone());
         meta.created.get_or_insert(row.created_at);
         meta.trashed_from = Some(row.rel_path.clone());
-        fsio::write_atomic(
-            &fsio::abs(&self.root, &trash_rel(&row.id)),
-            &frontmatter::render(&meta, &body),
-        )?;
-        self.remove_doc(row, change)?;
+        let trashed = fsio::abs(&self.root, &trash_rel(&row.id));
+        fsio::write_atomic(&trashed, &frontmatter::render(&meta, &body))?;
+        if let Err(error) = self.remove_doc(row, change) {
+            // 原文删不掉（别的程序开着它、不许删）：回收站里那一份收回去，不然它在回收站里列着、原文也还在
+            if fsio::abs(&self.root, &row.rel_path).exists() {
+                let _ = std::fs::remove_file(&trashed);
+            }
+            return Err(error);
+        }
         self.log.record("note", &row.id, "deleted");
         Ok(())
+    }
+
+    /// 删文件夹时把底下的笔记一篇篇放进回收站。半路有一篇放不进去（别的程序独占着、盘满了）就把已经放进去的
+    /// 放回原处、报错：文件夹要么整个删了（前端拿到 FolderDeletion、能撤销），要么一篇都没动。
+    /// 以前已经进了回收站的那几篇撤销不了；逻辑目录还更糟，内存里的树已经摘了、磁盘上的清单没写（审查 §5.14）
+    fn trash_all(&mut self, rows: &[DocRow], change: &mut VaultChange) -> Result<Vec<String>> {
+        let mut trashed: Vec<String> = Vec::new();
+        for row in rows {
+            if let Err(error) = self.trash(row, change) {
+                for id in trashed.iter().rev() {
+                    if let Err(undo) = self.note_undelete(id) {
+                        // 两样都出错才会到这里：那一篇还在回收站里，从回收站放得回来
+                        eprintln!("删文件夹半路出错，放回 {id} 也没成（还在回收站里）: {undo}");
+                    }
+                }
+                let name = row.rel_path.rsplit('/').next().unwrap_or(&row.rel_path);
+                return Err(AppError::Io(format!("「{name}」删不了，文件夹没删（{}）", error.detail())));
+            }
+            trashed.push(row.id.clone());
+        }
+        Ok(trashed)
     }
 
     pub fn note_undelete(&mut self, id: &str) -> Result<()> {
@@ -1331,15 +1399,7 @@ impl Vault {
             return Err(not_utf8(&row.rel_path));
         }
         let mut change = VaultChange::default();
-        let mut notes = Vec::new();
-        for row in rows {
-            if let Err(error) = self.trash(&row, &mut change) {
-                // 删到一半出错（文件被别的程序占着之类）：已经进了回收站的告诉前端，别让它还列着
-                self.announce(change);
-                return Err(error);
-            }
-            notes.push(row.id);
-        }
+        let notes = self.trash_all(&rows, &mut change)?;
         let kept = !folders::remove_empty_tree(&fsio::abs(&self.root, &dir));
         self.folders = folders::list(&self.root, &self.layout);
         self.log.record("folder", &dir, "deleted");
@@ -1568,6 +1628,18 @@ impl Vault {
         })
     }
 
+    /// 测试用：冲突副本写下了文件、进索引时失败（盘满了时 SQLite 写不进去就是这样）
+    #[cfg(test)]
+    pub fn fail_conflict_copies(&self, fail: bool) {
+        let sql = if fail {
+            "CREATE TEMP TRIGGER fail_conflict_copies BEFORE INSERT ON doc WHEN NEW.rel_path LIKE '%(冲突 %' \
+             BEGIN SELECT RAISE(ABORT, '测试：写不进去'); END;"
+        } else {
+            "DROP TRIGGER fail_conflict_copies;"
+        };
+        self.db.execute_batch(sql).unwrap();
+    }
+
     /// 把磁盘上那一版另存一份冲突副本，返回它的标题。应用里的保存不再走这一步（版本对不上时
     /// keep_unseen_edits 自己另存），留给测试搭「已经有冲突副本」的场景
     #[cfg(test)]
@@ -1582,39 +1654,81 @@ impl Vault {
         Ok(Some(copy.title))
     }
 
-    /// 同步合并完之后调（技术方案 §5.9.5）。`theirs` 是两边都改了的文件：原处已经是本机的
-    /// 版本，把对方的版本另存在旁边 —— Markdown 走冲突副本（去掉 id 和属性块里的标题），
+    /// 同步合并、检出之前调（技术方案 §5.9.5）。`theirs` 是两边都改了的文件：原处留本机的版本，
+    /// 把对方的版本另存在旁边 —— Markdown 走冲突副本（去掉 id 和属性块里的标题），
     /// 附件按原字节存成「名字 (冲突 时间).扩展名」，以点开头的路径（.odea、.gitignore）
-    /// 不另存，留本机的就行。然后整个仓库增量扫一遍（合并改了哪些文件、多了哪些文件夹），
-    /// 通知前端。返回另存的副本的名字（笔记是标题，附件是文件名），提示由同步那边发。
-    pub fn absorb_merge(&mut self, theirs: &[(String, Vec<u8>)]) -> Result<Vec<String>> {
-        let mut change = VaultChange::default();
-        let mut copies = Vec::new();
-        for (rel, bytes) in theirs {
-            // 以点开头的不另存；不是普通名字的（盘符这些）也不往磁盘上写
-            if !rel.split('/').all(fsio::is_plain_name) {
-                continue;
-            }
-            let text = fsio::is_markdown(rel).then(|| std::str::from_utf8(bytes).ok()).flatten();
-            if let Some(text) = text {
-                copies.push(self.write_conflict_copy(rel, text, &mut change)?.title);
-            } else if fsio::is_markdown(rel) {
-                // 不是 UTF-8 的笔记改不了属性块（改了就是换过字的一份）：和附件一样按原字节另存
-                let copy = self.conflict_copy_rel(rel);
-                fsio::write_atomic_bytes(&fsio::abs(&self.root, &copy), bytes)?;
-                copies.push(layout::stem_of(&copy).to_string());
-            } else {
-                let copy = self.conflict_copy_rel(rel);
-                fsio::write_atomic_bytes(&fsio::abs(&self.root, &copy), bytes)?;
-                copies.push(copy.rsplit('/').next().unwrap_or(&copy).to_string());
+    /// 不另存，留本机的就行。
+    ///
+    /// 先另存、再合并提交：合并提交做了以后下一轮就不再冲突，那时另存失败，对方那一版只剩在 git 历史里、
+    /// 用户不知道（`REVIEWS/2026-11-13-全项目审查.md` §5.5）。所以这里一份存不下来（盘满了、没权限），
+    /// 就把这一次已经存下的收回去、报错：同步那边不合并，下一轮整个重来。
+    pub fn keep_theirs(&mut self, theirs: &[(&str, &[u8])]) -> Result<KeptCopies> {
+        let mut kept = KeptCopies::default();
+        for &(rel, bytes) in theirs {
+            if let Err(error) = self.keep_one(rel, bytes, &mut kept) {
+                self.drop_kept(kept);
+                return Err(error);
             }
         }
         // 冲突副本的提示是给「编辑器里有没存的修改时外部改动到了」的，这里由同步自己说
-        change.conflicts.clear();
-        let mut scanned = self.rescan()?;
-        scanned.absorb(change);
-        self.announce(scanned);
-        Ok(copies)
+        kept.change.conflicts.clear();
+        Ok(kept)
+    }
+
+    fn keep_one(&mut self, rel: &str, bytes: &[u8], kept: &mut KeptCopies) -> Result<()> {
+        // 以点开头的不另存；不是普通名字的（盘符这些）也不往磁盘上写
+        if !rel.split('/').all(fsio::is_plain_name) {
+            return Ok(());
+        }
+        let text = fsio::is_markdown(rel).then(|| std::str::from_utf8(bytes).ok()).flatten();
+        // 先记下要写的地方再写：写下了文件、进索引时才失败的，drop_kept 也收得到
+        if let Some(text) = text {
+            let copy = self.conflict_note_rel(rel);
+            kept.rels.push(copy.clone());
+            let row = self.write_conflict_copy_at(&copy, text, &mut kept.change)?;
+            kept.names.push(row.title);
+        } else {
+            // 不是 UTF-8 的笔记改不了属性块（改了就是换过字的一份）：和附件一样按原字节另存
+            let copy = self.conflict_copy_rel(rel);
+            kept.rels.push(copy.clone());
+            fsio::write_atomic_bytes(&fsio::abs(&self.root, &copy), bytes)?;
+            let name = if fsio::is_markdown(rel) { layout::stem_of(&copy) } else { copy.rsplit('/').next().unwrap_or(&copy) };
+            kept.names.push(name.to_string());
+        }
+        Ok(())
+    }
+
+    /// 合并没做成（另存到一半失败、检出被拒、提交失败）：把 keep_theirs 另存的收回去。
+    /// 下一轮合并会再另存一遍，不收的话每失败一轮就多一份一模一样的副本。
+    /// 这些文件是刚才这一下自己写的、对方那一版还在 git 里，收掉不丢东西；前端还没被告知过它们
+    pub fn drop_kept(&mut self, kept: KeptCopies) {
+        let mut ignored = VaultChange::default();
+        for rel in &kept.rels {
+            if let Err(error) = std::fs::remove_file(fsio::abs(&self.root, rel)) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("收回没用上的冲突副本失败（下次扫描当外来的新文件）: {rel}: {error}");
+                    continue;
+                }
+            }
+            if let Ok(Some(row)) = index::by_path(&self.db, rel) {
+                if let Err(error) = self.forget(&row, &mut ignored) {
+                    eprintln!("收回没用上的冲突副本，索引里那一行删不掉（下次扫描再删）: {rel}: {error}");
+                }
+            }
+        }
+    }
+
+    /// 同步合并、检出、提交完之后调：整个仓库增量扫一遍（合并改了哪些文件、多了哪些文件夹），
+    /// 连同 keep_theirs 另存的一起通知前端（副本已经在磁盘上了，扫描出错也照样报它们）。提示由同步那边发
+    pub fn absorb_merge(&mut self, kept: KeptCopies) -> Result<()> {
+        // 扫描的放前面：absorb 不并 attachments（附件变没变由扫描自己认）
+        let (mut change, scanned) = match self.rescan() {
+            Ok(scanned) => (scanned, Ok(())),
+            Err(error) => (VaultChange::default(), Err(error)),
+        };
+        change.absorb(kept.change);
+        self.announce(change);
+        scanned
     }
 
     /* ---------------- 不是 UTF-8 的文件（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.1） ---------------- */

@@ -307,3 +307,77 @@ export function fitsKind(entry: Entry, kind: Kind): boolean {
   const value = singleValue(entry);
   return value !== null && valueFits(value, kind);
 }
+
+/* ---------------- 源码框存的时候和外面的改动合起来（REVIEWS/2026-11-15-桌面端验证.md §4.9） ----------------
+   源码框里改着的时候别处（另一个窗口、外部程序、协作的对方）改了这一篇的属性：按属性逐个三方合。
+   base 是草稿开始时显示的那一版，mine 是框里的，theirs 是外面现在的。一条属性比的是它那几行原样的字 */
+
+export interface PropertiesMerge {
+  text: string;
+  /** 两边都改了（或者一边改、一边删）的键：以框里的为准 */
+  conflicts: string[];
+  /** 有一边读不出来、没法逐个合：整块以框里的为准，外面的改动被盖掉 */
+  unreadable: boolean;
+}
+
+/** 能不能逐条合：每一行都属于某一条属性（空行、`#` 注释除外），键不重名 */
+function mergeable(parsed: Parsed): boolean {
+  const owned = new Set<number>();
+  for (const entry of parsed.entries) {
+    for (let line = entry.start; line < entry.end; line += 1) owned.add(line);
+  }
+  const stray = parsed.lines.some(
+    (line, index) => !owned.has(index) && line.trim() !== "" && !line.startsWith("#"),
+  );
+  return !stray && new Set(parsed.entries.map((entry) => entry.key)).size === parsed.entries.length;
+}
+
+/** 一条属性原样的那几行 */
+function rawOf(parsed: Parsed, entry: Entry): string {
+  return parsed.lines.slice(entry.start, entry.end).join("\n");
+}
+
+function byKey(parsed: Parsed): Map<string, string> {
+  return new Map(parsed.entries.map((entry) => [entry.key, rawOf(parsed, entry)]));
+}
+
+/**
+ * 框里没动、外面改了的键用外面的；外面没动、框里改了的用框里的；外面新加的加上（放在最后一条属性后面），
+ * 外面删了、框里没动的删掉；两边都改了同一个键的以框里的为准（conflicts 点名）。顺序跟着框里的。
+ * 读不出来的（有不属于任何属性的行、键重名）退回整块以框里的为准
+ */
+export function mergeProperties(base: string, mine: string, theirs: string): PropertiesMerge {
+  if (theirs === base || theirs === mine) return { text: mine, conflicts: [], unreadable: false };
+  if (mine === base) return { text: theirs, conflicts: [], unreadable: false };
+  const [b, m, t] = [parse(base), parse(mine), parse(theirs)];
+  if (!mergeable(b) || !mergeable(m) || !mergeable(t)) {
+    return { text: mine, conflicts: [], unreadable: true };
+  }
+  const [was, ours, now] = [byKey(b), byKey(m), byKey(t)];
+  const conflicts: string[] = [];
+  const out: string[] = [];
+  let cursor = 0;
+  for (const entry of m.entries) {
+    out.push(...m.lines.slice(cursor, entry.start));
+    cursor = entry.end;
+    const mineRaw = ours.get(entry.key);
+    const baseRaw = was.get(entry.key);
+    const theirsRaw = now.get(entry.key);
+    let chosen = mineRaw;
+    if (mineRaw === baseRaw) chosen = theirsRaw;
+    else if (theirsRaw !== baseRaw && theirsRaw !== mineRaw) conflicts.push(entry.key);
+    // undefined：框里没动、外面删了
+    if (chosen !== undefined) out.push(...chosen.split("\n"));
+  }
+  // 框里删了、外面改了：以框里的为准（删掉），也点名
+  for (const [key, baseRaw] of was) {
+    const theirsRaw = now.get(key);
+    if (!ours.has(key) && theirsRaw !== undefined && theirsRaw !== baseRaw) conflicts.push(key);
+  }
+  const added = t.entries
+    .filter((entry) => !was.has(entry.key) && !ours.has(entry.key))
+    .flatMap((entry) => rawOf(t, entry).split("\n"));
+  const rest = m.lines.slice(cursor);
+  const lines = m.entries.length > 0 ? [...out, ...added, ...rest] : [...rest, ...added];
+  return { text: lines.join("\n"), conflicts, unreadable: false };
+}

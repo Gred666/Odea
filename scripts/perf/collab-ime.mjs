@@ -24,10 +24,16 @@
 // 会话挂上来时正在组字，之前上屏的那个词只在编辑器里。
 // 一半的轮主持人的机器人打在同一行（挂上时要对齐的改动碰到组字那一行，得等上屏），一半打在文档开头。
 // 查：访客打的词（加入前、挂上时正在组的、挂上后的）一个不丢不重复；主持人那边没看到过拼音；两边一致
+//
+//   node scripts/perf/collab-ime.mjs [地址] [轮数] joincompose # 加入（记本机正文）的那一刻正在组字（§27.5），默认 8 轮
+//
+// 和 attach 一样开 late=1，只是在组一个词的半路点加入：记本机正文、三方合要等组完字（flushEditorsComposed），
+// 不然拼音当成本机那一版合进会话、主持人那边闪一下拼音。查的三样同 attach
 import { launch, sleep } from "./cdp.mjs";
 
 const BASE = process.argv[2] ?? "http://localhost:1420/";
-const ATTACH = process.argv[4] === "attach";
+const JOIN_COMPOSE = process.argv[4] === "joincompose";
+const ATTACH = process.argv[4] === "attach" || JOIN_COMPOSE;
 const ROUNDS = Number(process.argv[3] ?? (ATTACH ? 8 : 40));
 const NEAR = process.argv[4] === "near";
 const WORDS = [
@@ -40,7 +46,8 @@ const WORDS = [
   ["shurufa", "输入法"],
 ];
 
-const page = await launch(9346);
+// 调试端口：几个会话同时跑时用 CDP_PORT 错开
+const page = await launch(Number(process.env.CDP_PORT ?? 9346));
 const { send, evaluate } = page;
 let failed = false;
 
@@ -70,7 +77,8 @@ async function attachRounds() {
   let ok = true;
   let composingAtAttach = 0;
   for (let round = 0; round < ROUNDS; round++) {
-    const near = round % 2 === 1;
+    // joincompose 不打同一行：主持人也改了那一行时三方合跳过、本机那一版不进会话（另有提示，§28），测不出拼音
+    const near = !JOIN_COMPOSE && round % 2 === 1;
     await send("Page.navigate", { url: new URL("?lab=collab&late=1&latency=20", BASE).href });
     for (let i = 0; i < 150 && !(await evaluate("!!window.__collabLab")); i++) await sleep(100);
     await sleep(600);
@@ -105,6 +113,28 @@ async function attachRounds() {
       const text = lab.members[0].session.toString();
       lab.typeHeadless(0, ${near} ? text.indexOf("组字的时候") : 0);
     })()`);
+    if (JOIN_COMPOSE) {
+      // 组一个词的半路点加入：记本机正文要等这个词组完
+      const [pinyin, word] = WORDS[(round + 1) % WORDS.length];
+      // 拼音组到第三个字母（主持人那边认拼音看的是前三个字母）再点加入
+      for (let length = 1; length <= 3; length++) {
+        await send("Input.imeSetComposition", { text: pinyin.slice(0, length), selectionStart: length, selectionEnd: length });
+        await sleep(20);
+      }
+      await evaluate(`(() => {
+        const view = document.querySelector('[data-lab-peer="lab-guest-1"] .cm-content').cmTile?.view;
+        window.__attachedComposing = !!view?.compositionStarted;
+        window.__collabLab.joinLate(300);
+      })()`);
+      for (let length = 4; length <= pinyin.length; length++) {
+        await send("Input.imeSetComposition", { text: pinyin.slice(0, length), selectionStart: length, selectionEnd: length });
+        await sleep(120);
+      }
+      await send("Input.insertText", { text: word });
+      typed.push(word);
+      await sleep(500);
+      await typeWord(WORDS[(round + 2) % WORDS.length]);
+    } else {
     // 加入：300ms 后会话交给编辑器。这期间先快快打完一个词（记下正文以后、挂上之前上屏的，靠 origin 对齐），
     // 再慢慢组下一个词，挂上的那一刻正组着
     await evaluate(`(() => {
@@ -118,6 +148,7 @@ async function attachRounds() {
     await typeWord(WORDS[(round + 1) % WORDS.length], 8);
     await typeWord(WORDS[(round + 2) % WORDS.length], 70);
     await typeWord(WORDS[(round + 3) % WORDS.length]);
+    }
     await evaluate("window.__collabLab.stopHeadless()");
     await sleep(1500);
     const result = await evaluate(`(() => {
@@ -140,12 +171,12 @@ async function attachRounds() {
     ];
     const bad = checks.filter(([, pass]) => !pass);
     console.log(
-      `第 ${round + 1} 轮（${near ? "同一行" : "别的行"}，挂上时${result.composing ? "正在组字" : "没在组字"}）：${bad.length ? "✗" : "✓"}`,
+      `第 ${round + 1} 轮（${near ? "同一行" : "别的行"}，${JOIN_COMPOSE ? "点加入" : "挂上"}时${result.composing ? "正在组字" : "没在组字"}）：${bad.length ? "✗" : "✓"}`,
     );
     for (const [name, , detail] of bad) console.log(`  ✗ ${name}\n  ${detail}`);
     if (bad.length) ok = false;
   }
-  console.log(`${ROUNDS} 轮里 ${composingAtAttach} 轮挂上的那一刻正在组字`);
+  console.log(`${ROUNDS} 轮里 ${composingAtAttach} 轮${JOIN_COMPOSE ? "点加入" : "挂上"}的那一刻正在组字`);
   if (composingAtAttach < ROUNDS / 2) {
     console.log("✗ 挂上时正在组字的轮太少，没测到");
     ok = false;

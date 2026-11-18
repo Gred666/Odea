@@ -1998,6 +1998,30 @@ fn a_kept_id_is_not_handed_to_another_note_later() {
     assert_ne!(note_ids(&vault)["随手记.md"], before["随手记.md"]);
 }
 
+/// 搜过正文以后关仓库（关窗口、换仓库、退出）：搜正文的只读连接先关、主连接最后关，WAL 合回主文件。
+/// 以前只读连接是个不关的 static，主连接不是最后一个，WAL 一直留着、下次打开先读一遍（桌面端验证 §4.8）
+#[test]
+fn closing_a_vault_after_a_search_folds_the_wal_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    let index_file = dir.path().join("index.db");
+    let mut vault = Vault::open(&root, &index_file).unwrap();
+    for n in 0..40 {
+        vault.note_create(&format!("第{n}篇"), &"向日葵".repeat(300)).unwrap();
+    }
+    let wal = dir.path().join("index.db-wal");
+    assert!(wal.exists());
+    let count: i64 = index::with_reader(index_file.clone(), &|| false, |conn| {
+        Ok(Some(conn.query_row("SELECT count(*) FROM doc", [], |row| row.get(0))?))
+    })
+    .unwrap();
+    assert!(count >= 40);
+
+    drop(vault);
+    let left = std::fs::metadata(&wal).map_or(0, |meta| meta.len());
+    assert_eq!(left, 0, "WAL 没合回去，还有 {left} 字节");
+}
+
 #[test]
 fn kept_ids_wait_for_files_that_could_not_be_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -2237,6 +2261,47 @@ fn deleting_a_logical_folder_with_a_note_that_is_not_utf8_touches_nothing() {
     assert_eq!(vault.folders(), ["交易"]);
     assert_eq!(placements(&vault)[&a], "交易");
     assert_eq!(std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap(), manifest);
+}
+
+/// 逻辑目录删文件夹，进回收站半路失败（第二篇被别的程序独占着）：已经进去的放回来，树、清单、回收站都原样；
+/// 以前内存里的树已经摘了、磁盘上的清单没写，前面那几篇撤销不了，重启以后文件夹又回来、里面剩一半（审查 §5.14）
+#[test]
+fn a_logical_folder_whose_note_is_held_is_not_deleted_halfway() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    new_logical(&root);
+    let mut vault = Vault::open_in_memory(&root);
+    vault.folder_create("", "交易").unwrap();
+    let ids: Vec<String> = ["甲", "乙", "丙"].iter().map(|title| vault.note_create_in("交易", title, "正文").unwrap()).collect();
+    let manifest = std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap();
+    let before = file_states(&root);
+    let held = fsio::abs(&root, &index::by_id(&vault.db, &ids[1]).unwrap().unwrap().rel_path);
+
+    {
+        let Some(_hold) = hold_exclusively(&held) else {
+            return; // 这台机器上占不住（Unix 上用 root 跑的）：测不了
+        };
+        let error = vault.folder_delete("交易").unwrap_err().to_string();
+        assert!(error.contains("乙.md") && error.contains("文件夹没删"), "{error}");
+    }
+    for id in &ids {
+        assert_eq!(placements(&vault)[id], "交易", "{id} 还在文件夹里");
+        assert_eq!(vault.note_get(id).unwrap().content_md, "正文");
+    }
+    assert_eq!(vault.folders(), ["交易"]);
+    assert!(vault.trash_list().unwrap().is_empty(), "回收站里没留东西");
+    assert_eq!(std::fs::read_to_string(root.join(tree::TREE_FILE)).unwrap(), manifest);
+    let mut after: Vec<String> = file_states(&root).into_iter().map(|(rel, _, _)| rel).collect();
+    after.sort();
+    let mut expected: Vec<String> = before.into_iter().map(|(rel, _, _)| rel).collect();
+    expected.sort();
+    assert_eq!(after, expected, "文件都在原处");
+
+    // 放开以后照常删、照常撤销
+    let deletion = vault.folder_delete("交易").unwrap();
+    assert_eq!(deletion.notes.len(), 3);
+    vault.folder_undelete(&deletion).unwrap();
+    assert!(ids.iter().all(|id| placements(&vault)[id] == "交易"));
 }
 
 #[test]
@@ -2579,8 +2644,9 @@ fn renaming_leaves_links_in_files_that_are_not_utf8_alone() {
 fn a_merged_version_that_is_not_utf8_is_kept_byte_for_byte() {
     let mut f = fixture();
     f.vault.note_create("周报", "本机的").unwrap();
-    let copies = f.vault.absorb_merge(&[("笔记/周报.md".into(), GBK.to_vec())]).unwrap();
-    assert_eq!(copies.len(), 1);
+    let kept = f.vault.keep_theirs(&[("笔记/周报.md", GBK)]).unwrap();
+    assert_eq!(kept.names.len(), 1);
+    f.vault.absorb_merge(kept).unwrap();
     let copy = f.files().into_iter().find(|rel| rel.contains("冲突")).unwrap();
     assert_eq!(f.bytes(&copy), GBK, "对方那一版原样另存，不换成 U+FFFD");
 }
@@ -2913,14 +2979,14 @@ fn a_file_another_program_holds_does_not_stop_the_rest_of_the_scan() {
 
 /// 让这个文件读不了，返回的东西拿着就一直读不了。占不住返回 None
 #[cfg(windows)]
-fn hold_exclusively(path: &Path) -> Option<std::fs::File> {
+pub(super) fn hold_exclusively(path: &Path) -> Option<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     // 不和任何人共享：别的进程（和本进程别处）再打开都是 os error 32
     std::fs::OpenOptions::new().read(true).share_mode(0).open(path).ok()
 }
 
 #[cfg(unix)]
-fn hold_exclusively(path: &Path) -> Option<Unreadable> {
+pub(super) fn hold_exclusively(path: &Path) -> Option<Unreadable> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).ok()?;
     let guard = Unreadable(path.to_path_buf());
@@ -2928,7 +2994,7 @@ fn hold_exclusively(path: &Path) -> Option<Unreadable> {
 }
 
 #[cfg(unix)]
-struct Unreadable(PathBuf);
+pub(super) struct Unreadable(PathBuf);
 
 #[cfg(unix)]
 impl Drop for Unreadable {
@@ -2949,8 +3015,10 @@ fn a_conflict_copy_of_a_long_named_note_still_gets_written() {
     f.write_externally("笔记/短.md", "短的");
     f.vault.rescan().unwrap();
 
-    let theirs = [(long.clone(), "那一版".as_bytes().to_vec()), ("笔记/短.md".to_string(), "短的那一版".as_bytes().to_vec())];
-    assert_eq!(f.vault.absorb_merge(&theirs).unwrap().len(), 2);
+    let theirs = [(long.as_str(), "那一版".as_bytes()), ("笔记/短.md", "短的那一版".as_bytes())];
+    let kept = f.vault.keep_theirs(&theirs).unwrap();
+    assert_eq!(kept.names.len(), 2);
+    f.vault.absorb_merge(kept).unwrap();
 
     let id = f.vault.note_list(false).unwrap().into_iter().find(|note| note.title == stem).unwrap().id;
     f.write_externally(&long, "外面又改了");
@@ -2961,6 +3029,38 @@ fn a_conflict_copy_of_a_long_named_note_still_gets_written() {
     bodies.sort();
     assert_eq!(bodies, ["外面又改了", "我改的", "短的", "短的那一版", "那一版"]);
     assert!(f.files().iter().all(|rel| rel.rsplit('/').next().unwrap().len() <= 255));
+}
+
+/// 同步合并前另存对方那一版，一份存不下来（盘满了、没权限）：这一次已经存下的都收回去、报错，
+/// 同步那边就不合并，下一轮整个重来 —— 不然每失败一轮多一份一模一样的副本（审查 §5.5）
+#[test]
+fn keeping_theirs_rolls_back_when_one_copy_cannot_be_written() {
+    let mut f = fixture();
+    f.vault.note_create("周报", "本机的").unwrap();
+    // 「坏」在磁盘上是个文件：它底下的附件副本建不了文件夹
+    f.write_bytes_externally("坏", b"x");
+    let before = f.files();
+    f.announced.lock().unwrap().clear();
+
+    let theirs: [(&str, &[u8]); 2] = [("笔记/周报.md", "对方的".as_bytes()), ("坏/图.png", &[1, 2, 3])];
+    assert!(f.vault.keep_theirs(&theirs).is_err());
+    assert_eq!(f.files(), before, "先存下的那份笔记副本收回去了");
+    let titles: Vec<String> = f.vault.note_list(false).unwrap().into_iter().map(|note| note.title).collect();
+    assert_eq!(titles, ["周报"], "索引里也没有它");
+    assert!(f.announced.lock().unwrap().is_empty(), "没做成的不通知前端");
+
+    // 进索引时才失败的（文件已经写下了）也收得回去
+    f.vault.fail_conflict_copies(true);
+    assert!(f.vault.keep_theirs(&theirs[..1]).is_err());
+    assert_eq!(f.files(), before);
+    f.vault.fail_conflict_copies(false);
+
+    // 修好了再来一次：照常另存
+    let kept = f.vault.keep_theirs(&theirs[..1]).unwrap();
+    f.vault.absorb_merge(kept).unwrap();
+    let bodies: Vec<String> = f.vault.note_list_full(false).unwrap().into_iter().map(|note| note.content_md).collect();
+    assert_eq!(bodies.len(), 2);
+    assert!(bodies.contains(&"对方的".to_string()), "{bodies:?}");
 }
 
 /// 文件夹里有一篇不是 UTF-8 的：删文件夹先说、一篇都不动。以前删到它才报错，排在前面的已经进了回收站
@@ -2978,6 +3078,29 @@ fn deleting_a_folder_with_a_note_that_is_not_utf8_touches_nothing() {
     assert!(error.contains("乙.md"), "{error}");
     assert_eq!(f.files(), before);
     assert!(f.vault.trash_list().unwrap().is_empty());
+}
+
+/// 普通文件夹也一样：删到第二篇它被别的程序独占着，第一篇放回原处、文件夹原样，回收站里不留东西。
+/// 以前第一篇进了回收站、前端拿不到能撤销的 FolderDeletion（审查 §5.14）
+#[test]
+fn a_folder_whose_note_is_held_is_not_deleted_halfway() {
+    let mut f = fixture();
+    f.vault.folder_create("", "工作").unwrap();
+    let ids: Vec<String> = ["甲", "乙", "丙"].iter().map(|title| f.vault.note_create_in("工作", title, "正文").unwrap()).collect();
+    let before = f.files();
+    let held = fsio::abs(&f.root, "笔记/工作/乙.md");
+    {
+        let Some(_hold) = hold_exclusively(&held) else {
+            return; // 这台机器上占不住（Unix 上用 root 跑的）：测不了
+        };
+        let error = f.vault.folder_delete("工作").unwrap_err().to_string();
+        assert!(error.contains("乙.md"), "{error}");
+    }
+    assert_eq!(f.files(), before);
+    assert!(f.vault.trash_list().unwrap().is_empty());
+    assert!(ids.iter().all(|id| f.vault.note_get(id).is_ok()));
+    let deletion = f.vault.folder_delete("工作").unwrap();
+    assert_eq!(deletion.notes.len(), 3);
 }
 
 /// 前端、访客（协作时新建一篇交的文件夹）、同步来的配置和文件里写的路径，拼进仓库之前每一段都得是普通的名字。

@@ -455,17 +455,10 @@ impl Vault {
         if let Some(row) = rows.iter().find(|row| row.not_utf8) {
             return Err(super::not_utf8(&row.rel_path));
         }
-        self.tree = Some(rest);
+        // 一篇篇进回收站，半路失败就都放回去、树原样不动（trash_all）；都进去了才换上摘过的树
         let mut change = VaultChange::default();
-        let mut notes = Vec::new();
-        for row in rows {
-            if let Err(error) = self.trash(&row, &mut change) {
-                // 删到一半出错：已经进了回收站的告诉前端
-                self.announce(change);
-                return Err(error);
-            }
-            notes.push(row.id);
-        }
+        let notes = self.trash_all(&rows, &mut change)?;
+        self.tree = Some(rest);
         self.save_tree()?;
         self.log.record("folder", folder, "deleted");
         // 删掉的笔记前端自己会拿掉；只把连带的变化（日历上的任务）告诉它

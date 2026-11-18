@@ -5,14 +5,42 @@ import { flushViewMemory } from "@/lib/viewMemory";
 export type FlushEditor = () => Promise<void>;
 
 const flushers = new Set<FlushEditor>();
+/** 各个编辑器「正在用输入法组字吗」 */
+const composers = new Set<() => boolean>();
 
-export function registerEditorFlush(flush: FlushEditor): () => void {
+/** 组完字最多等多久：整句模式能组好几秒，再久就当输入法卡住了，照样往下走 */
+const COMPOSE_WAIT_MS = 10_000;
+const COMPOSE_POLL_MS = 50;
+
+export function registerEditorFlush(flush: FlushEditor, composing?: () => boolean): () => void {
   flushers.add(flush);
-  return () => flushers.delete(flush);
+  if (composing) composers.add(composing);
+  return () => {
+    flushers.delete(flush);
+    if (composing) composers.delete(composing);
+  };
 }
 
 export async function flushAllEditors(): Promise<void> {
   await Promise.all([...flushers].map((flush) => flush()));
+}
+
+/**
+ * 等编辑器都组完字（最多 COMPOSE_WAIT_MS）。建协作会话、加入一篇之前用：组字时正文里是拼音，
+ * 这时存下去、读出来当本机那一版，三方合会把拼音合进会话，别人那里闪一下拼音（docs/协同编辑.md §27.5）。
+ * 只在这种一次性的时候轮询；平时的存盘不等（组字时防抖存盘自己会往后挪，见 debouncedSave.ts）
+ */
+export async function untilEditorsComposed(maxMs = COMPOSE_WAIT_MS): Promise<void> {
+  const until = Date.now() + maxMs;
+  while ([...composers].some((composing) => composing()) && Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, COMPOSE_POLL_MS));
+  }
+}
+
+/** 组完字再存：要拿磁盘上的正文去建会话、三方合的地方用它，别用 flushAllEditors */
+export async function flushEditorsComposed(): Promise<void> {
+  await untilEditorsComposed();
+  await flushAllEditors();
 }
 
 /**

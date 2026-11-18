@@ -35,6 +35,7 @@ import { usePaneWindow } from "@/lib/paneWindow";
 import { MOD_KEY } from "@/lib/platform";
 import { win, windowKind } from "@/lib/tauri";
 import { resolveVaultFile } from "@/lib/wikiFiles";
+import { linkedNote } from "@/lib/wikilinks";
 import { PropertiesPanel } from "@/properties/PropertiesPanel";
 import {
   AlertTriangle,
@@ -184,9 +185,7 @@ export function DocumentView({
       else useData.setState({ error: `仓库里找不到「${title.trim()}」` });
       return;
     }
-    const hit =
-      notes.find((note) => note.title.trim().toLowerCase() === wanted) ??
-      archived.find((note) => note.title.trim().toLowerCase() === wanted);
+    const hit = linkedNote(title, notes, archived);
     if (hit) {
       openDocument(noteRef(hit.id), heading ? { heading } : undefined, newTab);
       return;

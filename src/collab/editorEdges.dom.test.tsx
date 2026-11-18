@@ -374,6 +374,61 @@ describe("MarkdownEditor", () => {
     expect(host.session.toString()).toBe("【甲你乙\n第二行");
   });
 
+  it("会话收掉时正在组字、又攒着对方的字：组完字攒着的字进编辑器，之后才解绑（§27.5）", async () => {
+    const { scheduler, host, guest } = room("甲乙\n第二行");
+    await scheduler.advance(20);
+    let view = render({
+      initialMarkdown: "甲乙\n第二行",
+      cacheKey: "note:unbind",
+      collab: host.session,
+    });
+    const fire = (type: "compositionstart" | "compositionend") =>
+      view.contentDOM.dispatchEvent(new CompositionEvent(type, { bubbles: true, data: "" }));
+    fire("compositionstart");
+    view.dispatch({
+      changes: { from: 1, insert: "ni" },
+      selection: { anchor: 3 },
+      userEvent: "input.type.compose",
+    });
+    guest.session.insertText(0, "【");
+    await scheduler.advance(20);
+    expect(view.state.doc.toString()).toBe("甲ni乙\n第二行");
+
+    // 主持人停了协作：编辑器还开着，组字没被打断
+    view = render({ initialMarkdown: "甲乙\n第二行", cacheKey: "note:unbind", collab: null });
+    expect(view.state.doc.toString()).toBe("甲ni乙\n第二行");
+
+    // 上屏：攒着的「【」进了编辑器
+    fire("compositionend");
+    view.dispatch({
+      changes: { from: 1, to: 3, insert: "你" },
+      selection: { anchor: 2 },
+      userEvent: "input.type.compose",
+    });
+    await scheduler.advance(60);
+    await Promise.resolve();
+    expect(view.state.doc.toString()).toBe("【甲你乙\n第二行");
+    expect(host.session.toString()).toBe("【甲你乙\n第二行");
+
+    // 之后解绑了：这边再打的字不进会话
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert: "！" },
+      userEvent: "input.type",
+    });
+    await scheduler.advance(20);
+    expect(host.session.toString()).toBe("【甲你乙\n第二行");
+  });
+
+  it("会话收掉时没在组字：当场解绑", async () => {
+    const { scheduler, host } = room("正文");
+    await scheduler.advance(20);
+    let view = render({ initialMarkdown: "正文", cacheKey: "note:unbind2", collab: host.session });
+    view = render({ initialMarkdown: "正文", cacheKey: "note:unbind2", collab: null });
+    view.dispatch({ changes: { from: 2, insert: "！" }, userEvent: "input.type" });
+    await scheduler.advance(20);
+    expect(host.session.toString()).toBe("正文");
+  });
+
   it("「[[」菜单开着时别人在前面加了字：菜单还是这一个，不收起", async () => {
     const { scheduler, host, guest } = room("前面一段\n\n");
     const view = render({

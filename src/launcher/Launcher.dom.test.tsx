@@ -154,4 +154,51 @@ describe("启动器", () => {
     expect(alert?.textContent).toContain("已经有了");
     expect(scrolled).toContain(alert);
   });
+
+  // 用键盘「从列表里移除」：那一行连同「更多操作」一起没了，焦点给下一个仓库，不落在 body（审查 2026-11-13 §5.12）
+  it("removing a vault from the list with the keyboard leaves focus on the next one", async () => {
+    vi.spyOn(launcherApi, "forget").mockImplementation(async (path) =>
+      (await launcherApi.vaults()).filter((vault) => vault.path !== path),
+    );
+    act(() => root.render(<Launcher />));
+    await settle();
+    const rows = () => [...container.querySelectorAll<HTMLElement>("[data-vault-row]")];
+    const before = rows().length;
+    const [first, second] = rows();
+    const nextOpen = second!.querySelector("button")!;
+    const more = first!.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')!;
+    act(() => {
+      more.focus();
+      more.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle(100);
+    const item = [...document.querySelectorAll<HTMLElement>("[role=menuitem]")].find((node) =>
+      node.textContent?.includes("从列表里移除"),
+    );
+    act(() => item?.click());
+    await settle(200);
+    expect(rows().length).toBe(before - 1);
+    expect(document.activeElement).toBe(nextOpen);
+  });
+
+  // 「文档」被重定向到不存在的盘、选位置的对话框起不来：以前没人接，位置一栏空着、「创建」一直灰着（审查 2026-11-13 §5.9）
+  it("says so when the default location or the folder picker fails", async () => {
+    vi.spyOn(launcherApi, "defaultParent").mockRejectedValue(new Error("系统找不到指定的路径"));
+    const pick = vi.spyOn(launcherApi, "pickParent").mockRejectedValue(new Error("对话框起不来"));
+    act(() => root.render(<Launcher />));
+    await settle();
+    press(button("新建"));
+    await settle(500);
+    expect(container.querySelector("[role=alert]")?.textContent).toContain("没找到默认的位置");
+    press(button("换个位置…"));
+    await settle();
+    expect(pick).toHaveBeenCalled();
+    expect(container.querySelector("[role=alert]")?.textContent).toContain("对话框起不来");
+
+    // 选上了：那一句收起
+    pick.mockResolvedValue("D:\\笔记");
+    press(button("换个位置…"));
+    await settle();
+    expect(container.querySelector("[role=alert]")).toBeNull();
+  });
 });

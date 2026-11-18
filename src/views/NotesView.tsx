@@ -35,6 +35,7 @@ import { type Shortcut, moveBranch } from "@/data/tree";
 import { type NoteSummary, type TreeFile, noteRef } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { animatedEmojiText } from "@/lib/emojiText";
+import { afterPaint, rememberNeighbors } from "@/lib/focusNeighbor";
 import { spring, tween } from "@/lib/motion";
 import { isTauri } from "@/lib/tauri";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -980,7 +981,15 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
                     setPicker(null);
                     if (picker.mode === "jump") navigate(path);
                     else if (picker.mode === "shortcut") void addShortcut(picker.noteId, path);
-                    else void move(picker.noteId, path);
+                    else {
+                      // 挪走的这一行连同焦点要还的「…」一起拆掉：焦点给相邻的那一行（审查 §5.12）
+                      const id = picker.noteId;
+                      const settle = rememberNeighbors(
+                        LIST_ROWS,
+                        (row) => row.dataset.noteRow === id,
+                      );
+                      void move(picker.noteId, path).then(() => afterPaint(settle));
+                    }
                   }}
                 />
               )}

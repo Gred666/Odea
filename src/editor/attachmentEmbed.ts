@@ -209,6 +209,8 @@ export class AttachmentWidget extends OtwWidget {
         kind: media,
         icon: ICONS[media],
         height: () => this.estimatedHeight,
+        // 附件被删、改了名：清单里按这个名字找不到这个地址了（这一刻的 facet 是新的那一份）
+        present: () => host()?.resolve(name)?.src === src,
       };
       mountMedia(view, frame, holder, about, () => {
         const player = element(media, "cm-odea-file-media");

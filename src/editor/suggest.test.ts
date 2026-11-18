@@ -120,4 +120,21 @@ describe("wikiItems", () => {
   it("does not offer a new note when one with that exact title exists", () => {
     expect(wikiItems("周末采购", notes).map(({ item }) => item.kind)).toEqual(["note"]);
   });
+
+  // 两篇同名：选哪一行插进去的都是 `[[样张]]`，点开的是没归档的、最近改过的那篇 —— 只列它，说一句同名几篇（审查 2026-11-13 §5.11）
+  it("lists same-titled notes once: the one the link opens, with how many share the title", () => {
+    const twins: WikiCandidate[] = [
+      { id: "old", title: "样张", folder: "", archived: true },
+      { id: "new", title: "样张", folder: "排版", archived: false },
+      { id: "x", title: "别的", folder: "", archived: false },
+      { id: "other", title: "样张 ", folder: "", archived: false },
+    ];
+    const all = wikiItems("", twins);
+    expect(all.map(({ item }) => item.kind === "note" && item.note.id)).toEqual(["new", "x"]);
+    expect(all[0]?.item).toEqual({ kind: "note", note: twins[1], twins: 2 });
+    const found = wikiItems("样张", twins);
+    expect(found.map(({ item }) => (item.kind === "note" ? item.note.id : item.kind))).toEqual([
+      "new",
+    ]);
+  });
 });

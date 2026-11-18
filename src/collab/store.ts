@@ -6,7 +6,7 @@ import { folderOf } from "@/data/folders";
 import { useData } from "@/data/store";
 import { noteRef } from "@/data/types";
 import type { ImageResolver } from "@/editor/html";
-import { flushAllEditors, registerBeforeClose } from "@/editor/saveBus";
+import { flushEditorsComposed, registerBeforeClose } from "@/editor/saveBus";
 import type {
   Attachment,
   CollabCallback,
@@ -879,8 +879,9 @@ async function hostDoc(id: number, doc: string, resumeState?: Uint8Array): Promi
     registerHosted(id, doc, link.session);
     return entry;
   }
-  // 编辑器里还没存的先存下去：会话从磁盘上的这一版开始，外部改动才有准确的分叉点
-  await flushAllEditors();
+  // 编辑器里还没存的先存下去：会话从磁盘上的这一版开始，外部改动才有准确的分叉点。
+  // 正在组字的等组完：不然拼音成了会话的第一版（docs/协同编辑.md §27.5）
+  await flushEditorsComposed();
   const disk = await useData.getState().loadBody(doc);
   if (disk === undefined) throw new Error("这篇笔记已经不在了");
   heavyModules ??= await heavy();

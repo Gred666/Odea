@@ -59,7 +59,7 @@ const DIAL_BACK_GIVE_UP: Duration = Duration::from_secs(10 * 60);
 /// 附件请求等命令层回话最多等多久（读一个 50MB 的文件也够了）
 const ATTACH_ANSWER: Duration = Duration::from_secs(30);
 /// 一位访客同时最多开几条附件流（一篇里几十张图也是排着要）
-const ATTACH_STREAMS: u32 = 8;
+pub(super) const ATTACH_STREAMS: u32 = 8;
 /// 访客要开一篇：等前端回话（在不在范围里、建会话）最多等多久
 const DOC_ANSWER: Duration = Duration::from_secs(10);
 
@@ -125,6 +125,8 @@ struct State {
     dialing: HashSet<[u8; 32]>,
     dial_tasks: Vec<JoinHandle<()>>,
     next_attach: u32,
+    /// 每位访客正在办的附件请求有几个（成员号 → 个数，AttachSlot）
+    attach_open: HashMap<u16, u32>,
     /// 附件请求：等命令层回话
     attach_pending: HashMap<u32, oneshot::Sender<Result<AttachReply, String>>>,
     /// 范围里的树（前端给的 JSON）：新来的人一进来就发
@@ -275,6 +277,7 @@ impl Host {
                 dialing: HashSet::new(),
                 dial_tasks: Vec::new(),
                 next_attach: 1,
+                attach_open: HashMap::new(),
                 attach_pending: HashMap::new(),
                 tree: None,
                 next_doc_request: 1,
@@ -1238,32 +1241,35 @@ fn open_doc_id(frame_kind: u8, payload: &[u8]) -> Option<String> {
 /// 一位自己连上来的访客后来开的流：文档流（第一帧 Open）、附件请求（一个请求一条），或者他替别人开的
 /// 转发流（第一帧是 Forward，设计 §20.9）。附件转成事件交给命令层，等它回话
 async fn accept_streams(shared: Arc<Shared>, member: u16, conn: Connection) {
-    let open = Arc::new(std::sync::atomic::AtomicU32::new(0));
     while let Ok((send, mut recv)) = conn.accept_bi().await {
         let shared = shared.clone();
-        let open = open.clone();
         let conn = conn.clone();
         tokio::spawn(async move {
-            let frame = tokio::time::timeout(
+            // 先只读帧头：附件帧最多 50 MB，要先占上位子才读正文（serve_attachment_stream）
+            let head = tokio::time::timeout(
                 HANDSHAKE,
-                protocol::read_frame_up_to(&mut recv, protocol::MAX_ATTACH_FRAME),
+                protocol::read_frame_head(&mut recv, protocol::MAX_ATTACH_FRAME),
             )
             .await;
-            let Ok(Ok(Some((frame_kind, payload)))) = frame else {
+            let Ok(Ok(Some((frame_kind, length)))) = head else {
                 return;
             };
             if frame_kind == kind::FORWARD {
+                let Some(payload) = small_body(&mut recv, length).await else { return };
                 let Ok(forward) = protocol::decode::<Forward>(&payload) else {
                     return;
                 };
                 forwarded_stream(&shared, member, conn, forward, send, recv).await;
                 return;
             }
-            if let Some(doc) = open_doc_id(frame_kind, &payload) {
-                serve_doc(shared, member, doc, send, recv).await;
+            if frame_kind == kind::OPEN {
+                let Some(payload) = small_body(&mut recv, length).await else { return };
+                if let Some(doc) = open_doc_id(frame_kind, &payload) {
+                    serve_doc(shared, member, doc, send, recv).await;
+                }
                 return;
             }
-            serve_attachment_counted(&shared, member, &open, frame_kind, payload, send).await;
+            serve_attachment_stream(&shared, member, frame_kind, length, send, recv).await;
         });
     }
 }
@@ -1288,27 +1294,41 @@ async fn forwarded_stream(
         // 他开的一篇：Forward 后面接着 Open。按他自己的成员号办
         ForwardStream::Doc => {
             let Some(member) = forwarded_member(shared, via, &forward.id) else { return };
-            let frame = tokio::time::timeout(HANDSHAKE, protocol::read_frame(&mut recv)).await;
+            let frame = tokio::time::timeout(HANDSHAKE, protocol::read_frame_up_to(&mut recv, SMALL_FRAME)).await;
             if let Ok(Ok(Some((frame_kind, payload)))) = frame {
                 if let Some(doc) = open_doc_id(frame_kind, &payload) {
                     serve_doc(shared.clone(), member, doc, send, recv).await;
                 }
             }
         }
-        // 他要附件：按他自己的成员号、他自己的权限办（不是转发那位的）
+        // 他要附件：按他自己的成员号、他自己的权限办（不是转发那位的），同时几个也记在他自己名下
         ForwardStream::Attach => {
             let Some(member) = forwarded_member(shared, via, &forward.id) else { return };
-            let frame = tokio::time::timeout(
+            let head = tokio::time::timeout(
                 HANDSHAKE,
-                protocol::read_frame_up_to(&mut recv, protocol::MAX_ATTACH_FRAME),
+                protocol::read_frame_head(&mut recv, protocol::MAX_ATTACH_FRAME),
             )
             .await;
-            if let Ok(Ok(Some((frame_kind, payload)))) = frame {
-                let open = std::sync::atomic::AtomicU32::new(0);
-                serve_attachment_counted(shared, member, &open, frame_kind, payload, send).await;
+            if let Ok(Ok(Some((frame_kind, length)))) = head {
+                serve_attachment_stream(shared, member, frame_kind, length, send, recv).await;
             }
         }
     }
+}
+
+/// 一条流的第一帧是 Open（文档 id，最多 255 字节）或 Forward（带一份 Hello，名字最多 40 个字）时最多多大。
+/// 都很小，给足余量；以前按附件帧的 50 MB 收，一位访客开几十条流就能让主持人先收下几 GB（审查 §5.6）
+const SMALL_FRAME: usize = 64 << 10;
+
+/// 读完一个小帧的正文（帧头已经读了）：超过 SMALL_FRAME 的不读
+async fn small_body(recv: &mut RecvStream, length: usize) -> Option<Vec<u8>> {
+    if length >= SMALL_FRAME {
+        return None;
+    }
+    tokio::time::timeout(HANDSHAKE, protocol::read_frame_body(recv, length))
+        .await
+        .ok()?
+        .ok()
 }
 
 /// 经 via 转发的那一位（公钥是 id）现在的成员号
@@ -1323,24 +1343,79 @@ fn forwarded_member(shared: &Shared, via: u16, id: &[u8; 32]) -> Option<u16> {
         .map(|(member, _)| *member)
 }
 
-/// 一个附件请求（第一帧已经读出来了）。一位访客同时最多 ATTACH_STREAMS 个
-async fn serve_attachment_counted(
-    shared: &Shared,
+/// 一条附件流（帧头已经读了，正文还在流里）。一位访客同时最多 ATTACH_STREAMS 个，按成员号数：
+/// 直连的、经人转来的都记在他自己名下（以前转来的每条流一个新计数器，等于不限，审查 §5.6）。
+/// 占不上位子、只读的人要存附件，正文都不读 —— 一帧最多 50 MB，读了再拒就已经收下了
+async fn serve_attachment_stream(
+    shared: &Arc<Shared>,
     member: u16,
-    open: &std::sync::atomic::AtomicU32,
     frame_kind: u8,
-    payload: Vec<u8>,
+    length: usize,
     mut send: SendStream,
+    mut recv: RecvStream,
 ) {
-    if open.fetch_add(1, Ordering::SeqCst) >= ATTACH_STREAMS {
-        open.fetch_sub(1, Ordering::SeqCst);
-        let _ = protocol::write_frame(&mut send, kind::ATTACH_ERR, "同时要的文件太多了".as_bytes())
-            .await;
-        let _ = send.finish();
+    if frame_kind != kind::ATTACH_GET && frame_kind != kind::ATTACH_PUT {
         return;
     }
+    let refusal = if frame_kind == kind::ATTACH_PUT && !editable(shared, member) {
+        Some("你现在是只读的，不能加附件")
+    } else {
+        None
+    };
+    let slot = match refusal {
+        Some(_) => None,
+        None => AttachSlot::take(shared, member),
+    };
+    let Some(_slot) = slot else {
+        let message = refusal.unwrap_or("同时要的文件太多了");
+        let _ = protocol::write_frame(&mut send, kind::ATTACH_ERR, message.as_bytes()).await;
+        let _ = send.finish();
+        return;
+    };
+    let body = tokio::time::timeout(HANDSHAKE, protocol::read_frame_body(&mut recv, length)).await;
+    let Ok(Ok(payload)) = body else { return };
     serve_attachment(shared, member, frame_kind, payload, send).await;
-    open.fetch_sub(1, Ordering::SeqCst);
+}
+
+/// 这位访客现在能不能改（只读的不能往主持人的仓库里放东西）
+fn editable(shared: &Shared, member: u16) -> bool {
+    shared
+        .state
+        .lock()
+        .unwrap()
+        .members
+        .get(&member)
+        .is_some_and(|slot| slot.permission == Permission::Edit)
+}
+
+/// 一位访客正在办的一个附件请求：拿着就占着他的一个位子，办完（drop）还回去
+struct AttachSlot {
+    shared: Arc<Shared>,
+    member: u16,
+}
+
+impl AttachSlot {
+    fn take(shared: &Arc<Shared>, member: u16) -> Option<Self> {
+        let mut state = shared.state.lock().unwrap();
+        let open = state.attach_open.entry(member).or_default();
+        if *open >= ATTACH_STREAMS {
+            return None;
+        }
+        *open += 1;
+        Some(Self { shared: shared.clone(), member })
+    }
+}
+
+impl Drop for AttachSlot {
+    fn drop(&mut self) {
+        let mut state = self.shared.state.lock().unwrap();
+        if let Some(open) = state.attach_open.get_mut(&self.member) {
+            *open -= 1;
+            if *open == 0 {
+                state.attach_open.remove(&self.member);
+            }
+        }
+    }
 }
 
 async fn serve_attachment(
@@ -1350,13 +1425,8 @@ async fn serve_attachment(
     payload: Vec<u8>,
     mut send: SendStream,
 ) {
-    let editable = shared
-        .state
-        .lock()
-        .unwrap()
-        .members
-        .get(&member)
-        .is_some_and(|slot| slot.permission == Permission::Edit);
+    // 读正文之前看过一次；正文读着的时候可能刚被改成只读，再看一次
+    let editable = editable(shared, member);
     let (request, receiver) = {
         let mut state = shared.state.lock().unwrap();
         let request = state.next_attach;

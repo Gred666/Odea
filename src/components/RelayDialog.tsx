@@ -114,6 +114,8 @@ function RelayBody() {
   const relays = useRelays((s) => s.relays);
   const pending = useRelays((s) => s.pending);
   const error = useRelays((s) => s.error);
+  const removed = useRelays((s) => s.removed);
+  const undoRemove = useRelays((s) => s.undoRemove);
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[13px] leading-[1.7] text-body">
@@ -132,6 +134,12 @@ function RelayBody() {
               <RelayRow key={relay.url} relay={relay} />
             ))}
           </ul>
+        )}
+        {removed && (
+          <p role="status" className="mt-1.5 flex items-center gap-2 text-[12px] text-muted">
+            <span className="min-w-0 flex-1 truncate">已删除「{removed.label}」</span>
+            <BannerButton onClick={() => void undoRemove()}>撤销</BannerButton>
+          </p>
         )}
       </section>
       <AddForm />

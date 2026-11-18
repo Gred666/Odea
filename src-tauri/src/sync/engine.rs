@@ -409,27 +409,46 @@ impl Engine {
         }
         for _ in 0..ATTEMPTS {
             self.online(&mut net, SyncRepo::fetch)?;
-            let copies = {
+            let (copies, absorbed) = {
                 let mut vault = lock(&self.vault, Some(&self.root))?;
                 // 拉取的这会儿用户可能又存过：先提交，不然检出会拒绝覆盖
                 self.repo.commit_all(&author, limits.file, repo::describe)?;
-                let pulled = self.repo.merge_fetched(&author)?;
-                let theirs: Vec<(String, Vec<u8>)> = pulled
-                    .conflicts
-                    .into_iter()
-                    .map(|conflict| (conflict.rel, conflict.theirs))
-                    .collect();
-                if pulled.changed.is_empty() && theirs.is_empty() {
-                    Vec::new()
+                // 对方那一版在合并提交之前另存：存不下来就不合并，这一轮报错、下一轮重来（审查 §5.5）
+                let mut kept = None;
+                let merged = self.repo.merge_fetched(&author, |conflicts| {
+                    let theirs: Vec<(&str, &[u8])> = conflicts
+                        .iter()
+                        .map(|conflict| (conflict.rel.as_str(), conflict.theirs.as_slice()))
+                        .collect();
+                    let copies = vault.keep_theirs(&theirs).map_err(|error| {
+                        SyncError::Local(format!(
+                            "另一台设备也改了同一处，那一版另存不下来（{error}）：先不合并，下一轮再试"
+                        ))
+                    })?;
+                    kept = Some(copies);
+                    Ok(())
+                });
+                let pulled = match merged {
+                    Ok(pulled) => pulled,
+                    Err(error) => {
+                        // 另存了、合并却没做成（检出被拒、提交失败）：收回去，下一轮会再另存一遍
+                        if let Some(kept) = kept {
+                            vault.drop_kept(kept);
+                        }
+                        return Err(error.into());
+                    }
+                };
+                let kept = kept.unwrap_or_default();
+                let copies = kept.names.clone();
+                if pulled.changed.is_empty() && copies.is_empty() {
+                    (copies, Ok(()))
                 } else {
-                    let copies = vault
-                        .absorb_merge(&theirs)
-                        .map_err(|error| SyncError::Local(error.to_string()))?;
+                    let absorbed = vault.absorb_merge(kept);
                     if !copies.is_empty() {
                         self.repo
                             .commit_all(&author, limits.file, |_| "保存冲突副本".into())?;
                     }
-                    copies
+                    (copies, absorbed)
                 }
             };
             if !copies.is_empty() {
@@ -438,6 +457,7 @@ impl Engine {
                     copies.join("」「")
                 ));
             }
+            absorbed.map_err(|error| SyncError::Local(error.to_string()))?;
             if self.online(&mut net, SyncRepo::push)? == Pushed::Done {
                 self.finish(&limits);
                 return Ok(true);
@@ -744,6 +764,50 @@ mod tests {
         let notices = b.notices.lock().unwrap();
         assert_eq!(notices.len(), 1);
         assert!(notices[0].contains(&copy.title), "{}", notices[0]);
+    }
+
+    /// 对方那一版另存不下来（盘满了、没权限）：这一轮不合并、报错，下一轮修好了照常另存。
+    /// 以前先做合并提交再另存，失败以后下一轮已经不冲突了，对方那一版只剩在 git 历史里（审查 §5.5）
+    #[test]
+    fn a_conflict_copy_that_cannot_be_written_holds_back_the_merge() {
+        let cloud = cloud();
+        let mut a = Device::new(&cloud, None);
+        let id = a.vault().note_create("周报", "进度：初稿").unwrap();
+        a.sync();
+        let mut b = Device::new(&cloud, None);
+        a.vault().note_update(&id, "周报", "进度：A 写的").unwrap();
+        b.vault().note_update(&id, "周报", "进度：B 写的").unwrap();
+        a.sync();
+
+        b.vault().fail_conflict_copies(true);
+        assert!(matches!(b.engine.round(Kind::Full), Outcome::Failed(SyncError::Local(_))));
+        let status = b.status();
+        assert_eq!(status.state, SyncState::Error);
+        assert!(status.message.as_deref().unwrap_or_default().contains("另存不下来"), "{status:?}");
+        let git = git2::Repository::open(&b.root).unwrap();
+        assert_eq!(git.head().unwrap().peel_to_commit().unwrap().parent_count(), 1, "合并没提交");
+        let names = |b: &Device| -> Vec<String> {
+            std::fs::read_dir(b.root.join("笔记")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()
+        };
+        assert_eq!(names(&b), ["周报.md"], "没另存成的副本收回去了");
+        assert_eq!(b.vault().note_get(&id).unwrap().content_md, "进度：B 写的");
+
+        b.vault().fail_conflict_copies(false);
+        b.sync();
+        let vault = b.vault();
+        assert_eq!(vault.note_get(&id).unwrap().content_md, "进度：B 写的");
+        let copies: Vec<_> = vault
+            .note_list_full(false)
+            .unwrap()
+            .into_iter()
+            .filter(|note| note.conflict_of.as_deref() == Some(id.as_str()))
+            .collect();
+        assert_eq!(copies.len(), 1, "只有一份副本");
+        assert_eq!(copies[0].content_md, "进度：A 写的");
+        drop(vault);
+        let notices = b.notices.lock().unwrap();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains(&copies[0].title), "{}", notices[0]);
     }
 
     #[test]

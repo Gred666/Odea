@@ -216,6 +216,27 @@ mod tests {
         path
     }
 
+    /// 旧库里一天的日期不合法（理论上不会有）：以前整个搬家失败、仓库打不开、每次启动重来又失败。
+    /// 现在那一天照一篇笔记搬，标题带上原来的日期，别的照常（审查 2026-11-13 §5.3）
+    #[test]
+    fn a_day_with_a_bad_date_comes_over_as_a_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = legacy_db(dir.path());
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "INSERT INTO day_doc (date, title, note_md, created_at, updated_at)
+               VALUES ('2026-02-30', '', '那天写的字', 0, 1788000000000);",
+        )
+        .unwrap();
+        drop(conn);
+        let root = dir.path().join("vault");
+        let report = import(&db, &root, &dir.path().join("scratch")).unwrap();
+        assert_eq!(report.plugins[0], ("days", 3));
+        let text = std::fs::read_to_string(fsio::abs(&root, "笔记/旧库里日期认不出的一天（2026-02-30）.md")).unwrap();
+        assert!(text.contains("那天写的字"), "{text}");
+        assert!(fsio::abs(&root, "日记/2026/2026-08-29.md").exists(), "别的天照常");
+    }
+
     #[test]
     fn moves_everything_into_files_and_keeps_the_old_db() {
         let dir = tempfile::tempdir().unwrap();

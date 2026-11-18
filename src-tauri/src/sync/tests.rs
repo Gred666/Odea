@@ -111,14 +111,19 @@ impl Device {
         for _ in 0..3 {
             self.commit();
             self.repo.fetch(&Net::default()).unwrap();
-            let pulled = self.repo.merge_fetched(&self.author()).unwrap();
+            let pulled = self
+                .repo
+                .merge_fetched(&self.author(), |conflicts| {
+                    for conflict in conflicts {
+                        let copy = copy_name(&conflict.rel);
+                        self.write(&copy, &conflict.theirs);
+                        round.copies.push(copy);
+                    }
+                    Ok(())
+                })
+                .unwrap();
             round.changed.extend(pulled.changed);
             round.merged |= pulled.merged;
-            for conflict in pulled.conflicts {
-                let copy = copy_name(&conflict.rel);
-                self.write(&copy, &conflict.theirs);
-                round.copies.push(copy);
-            }
             self.commit();
             match self.repo.push(&Net::default()).unwrap() {
                 Pushed::Done => return round,

@@ -176,7 +176,6 @@ pub struct Conflict {
 pub struct Pulled {
     /// 工作区里被改到的文件（新增、修改、删除），相对路径、正斜杠
     pub changed: Vec<String>,
-    pub conflicts: Vec<Conflict>,
     /// 做了三方合并（不是快进，也不是本来就是最新的）。同步线程用不上，单测靠它分两种情况
     #[cfg_attr(not(test), allow(dead_code))]
     pub merged: bool,
@@ -538,8 +537,17 @@ impl SyncRepo {
     }
 
     /// 把 fetch 来的合进当前分支，写进工作区。调用前先 commit_all：
-    /// 工作区里有没提交的改动时，safe 模式的检出会拒绝覆盖
-    pub fn merge_fetched(&self, author: &Author) -> SyncResult<Pulled> {
+    /// 工作区里有没提交的改动时，safe 模式的检出会拒绝覆盖。
+    ///
+    /// 两边都改了的文件原处留本机的，对方那一版交给 `keep` 另存 —— 在检出、合并提交之前：
+    /// `keep` 报错就什么都不动（工作区、HEAD 都是原样），下一轮再合、再交给它。
+    /// 反过来先提交的话，下一轮已经不冲突了，另存失败的那几版只剩在 git 历史里
+    /// （`REVIEWS/2026-11-13-全项目审查.md` §5.5）
+    pub fn merge_fetched(
+        &self,
+        author: &Author,
+        keep: impl FnOnce(&[Conflict]) -> SyncResult<()>,
+    ) -> SyncResult<Pulled> {
         let branch = self.branch();
         let Ok(their_ref) = self
             .repo
@@ -567,7 +575,6 @@ impl SyncRepo {
             self.repo.set_head(&refname)?;
             return Ok(Pulled {
                 changed: self.changed_paths(old_tree.as_ref(), &new_tree)?,
-                conflicts: Vec::new(),
                 merged: false,
             });
         }
@@ -583,6 +590,9 @@ impl SyncRepo {
             }
         }
         let tree = self.repo.find_tree(index.write_tree_to(&self.repo)?)?;
+        if !conflicts.is_empty() {
+            keep(&conflicts)?;
+        }
         self.repo
             .checkout_tree(tree.as_object(), Some(CheckoutBuilder::new().safe()))?;
         let signature = Signature::now(author.name, author.email)?;
@@ -596,7 +606,6 @@ impl SyncRepo {
         )?;
         Ok(Pulled {
             changed: self.changed_paths(old_tree.as_ref(), &tree)?,
-            conflicts,
             merged: true,
         })
     }

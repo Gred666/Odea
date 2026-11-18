@@ -46,6 +46,25 @@ export function sameTitle(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
+/**
+ * `[[标题]]` 指向的那一篇：没归档的在前，同名的几篇取最近改过的。`[[` 的提示里同名的只列这一篇
+ * （editor/suggest 的 wikiItems，审查 2026-11-13 §5.11），点开、嵌进来的也得是它
+ */
+export function linkedNote<T extends { title: string; updatedAt: number }>(
+  title: string,
+  notes: readonly T[],
+  archived: readonly T[],
+): T | undefined {
+  const latest = (list: readonly T[]) => {
+    let best: T | undefined;
+    for (const note of list) {
+      if (sameTitle(note.title, title) && (!best || note.updatedAt > best.updatedAt)) best = note;
+    }
+    return best;
+  };
+  return latest(notes) ?? latest(archived);
+}
+
 /** 一篇正文里所有的双链，按出现顺序 */
 export function findWikiLinks(body: string): WikiLinkHit[] {
   return spans(body).map((span) => ({ line: span.line, title: body.slice(span.start, span.end) }));

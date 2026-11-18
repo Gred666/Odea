@@ -156,6 +156,15 @@ function SetupFlow() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const attempt = useLoginAttempt();
+  /**
+   * 「换个托管方」加一。之前那一步（验令牌、看云端、新建仓库）还在路上的，回来以后不再把人拽到下一步、不再说它的错。
+   * 按钮不禁用：网慢的时候还得能回去（审查 2026-11-13 §5.9）。
+   * shown 是这一屏画出来时的代数：这一屏上发出去的事回来时，拿它比现在的代数（各自的闭包各记各的，
+   * 回去以后又进来、又发了一件，旧的那件回来也认得出）
+   */
+  const generation = useRef(0);
+  const [shown, setShown] = useState(0);
+  const current = () => shown === generation.current;
 
   useEffect(() => {
     void backend()
@@ -166,20 +175,21 @@ function SetupFlow() {
 
   /** 跑一件要等的事：期间显示 `label`，出错显示原因 */
   const run = useCallback(async (label: string, task: () => Promise<void>) => {
+    const mine = generation.current;
     setBusy(label);
     setError(null);
     try {
       await task();
     } catch (cause) {
-      setError(messageOf(cause));
+      if (mine === generation.current) setError(messageOf(cause));
     } finally {
-      setBusy(null);
+      if (mine === generation.current) setBusy(null);
     }
   }, []);
 
   const loggedIn = (account: SyncAccount) => {
     setAccounts((list) => [...list.filter((a) => a.provider !== account.provider), account]);
-    setStep({ kind: "repos", account });
+    if (current()) setStep({ kind: "repos", account });
   };
 
   const choose = (provider: SyncProviderKey) => {
@@ -215,6 +225,9 @@ function SetupFlow() {
   };
 
   const back = () => {
+    generation.current += 1;
+    setShown(generation.current);
+    setBusy(null);
     setError(null);
     if (step.kind === "github") {
       attempt.drop();
@@ -229,8 +242,11 @@ function SetupFlow() {
         <button
           type="button"
           onClick={back}
+          // 正在下载、开启同步：那件事停不下来，回去了也照样做完，错还没人说 —— 这一步不让回
+          disabled={step.kind === "confirm" && busy !== null}
           className="-ml-1 mb-3 flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[12px] text-muted
-                     transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
+                     transition-colors duration-[140ms] hover:bg-raised hover:text-ink
+                     disabled:pointer-events-none disabled:opacity-50"
         >
           <ChevronLeft size={14} strokeWidth={2} />
           换个托管方
@@ -251,7 +267,9 @@ function SetupFlow() {
             setAccounts((list) => list.filter((a) => a.provider !== step.account.provider));
             setStep({ kind: "provider" });
           }}
-          onPick={(repo, plan) => setStep({ kind: "confirm", account: step.account, repo, plan })}
+          onPick={(repo, plan) => {
+            if (current()) setStep({ kind: "confirm", account: step.account, repo, plan });
+          }}
         />
       )}
       {step.kind === "confirm" && (
@@ -817,6 +835,8 @@ function ProxyLine() {
   const [proxy, setProxy] = useState<SyncProxy | null>(lastProxy);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  /** 保存没成的原因（写 config.json 失败）：以前是一个没人接的 rejection，框不收、什么都不说（审查 2026-11-13 §5.9） */
+  const [failed, setFailed] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -830,10 +850,15 @@ function ProxyLine() {
   }, []);
 
   const save = async (value: string | null) => {
-    const next = await (await backend()).syncSetProxy(value);
-    lastProxy = next;
-    setProxy(next);
-    setEditing(false);
+    setFailed(null);
+    try {
+      const next = await (await backend()).syncSetProxy(value);
+      lastProxy = next;
+      setProxy(next);
+      setEditing(false);
+    } catch (cause) {
+      setFailed(`没存上：${messageOf(cause)}`);
+    }
   };
 
   if (!proxy) {
@@ -870,7 +895,14 @@ function ProxyLine() {
                        text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
           />
           <SecondaryButton type="submit">保存</SecondaryButton>
-          <SecondaryButton onClick={() => setEditing(false)}>取消</SecondaryButton>
+          <SecondaryButton
+            onClick={() => {
+              setFailed(null);
+              setEditing(false);
+            }}
+          >
+            取消
+          </SecondaryButton>
         </form>
       ) : (
         <p>
@@ -886,6 +918,11 @@ function ProxyLine() {
           >
             改
           </button>
+        </p>
+      )}
+      {editing && failed && (
+        <p role="alert" className="mt-1.5 text-danger">
+          {failed}
         </p>
       )}
     </div>

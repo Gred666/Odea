@@ -1,6 +1,7 @@
+import { useData } from "@/data/store";
 import { snapToDevicePixels } from "@/lib/devicePixels";
 import { wikiFileTarget } from "@/lib/wikiFiles";
-import { EditorView, ViewPlugin } from "@codemirror/view";
+import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { glideTo, scrollParent } from "./glide";
 
 /* ============================================================
@@ -18,7 +19,9 @@ import { glideTo, scrollParent } from "./glide";
    - 没放过的、放完了的不留；暂停藏着的最多 3 个；编辑器拆了（换篇、关这一栏）全部停掉、放掉
    - 正在放的那一个不在眼前时，这一栏底部出一条播放条
 
-   不放东西时只有元素自己身上那几个监听和这个没有 update 的插件：格子、条、IntersectionObserver
+   - 附件被删、改了名（清单里按名字找不到这个地址了）：藏着的停掉，不放到缓冲完卡住
+   - 「回到卡片」时那一行已经没了：说一声、条收起
+   不放东西时只有元素自己身上那几个监听和这个 update 一进来就回去的插件：格子、条、IntersectionObserver
    都是第一次要用时才建，用完拆掉
    ============================================================ */
 
@@ -35,6 +38,8 @@ export interface MediaCard {
   icon: string;
   /** 卡片多高（量过的；没量过是估计的）：「回到卡片」让整张卡片停在正中 */
   height(): number;
+  /** 这个文件还在仓库的附件清单里（按名字找到的还是这个地址）：被删了、改了名就不藏着接着放 */
+  present(): boolean;
 }
 
 interface Entry {
@@ -145,7 +150,8 @@ class MediaKeeper {
     if (!entry || entry.frame !== frame || this.destroyed) return;
     entry.frame = null;
     if (!this.entries.has(entry.media)) return;
-    if (!worthKeeping(entry.media)) {
+    // 文件被删了、改了名（卡片因此换成「找不到」或新的地址）：藏着接着放只会放到缓冲完卡住，停掉
+    if (!worthKeeping(entry.media) || !entry.card.present()) {
       this.forget(entry);
       return;
     }
@@ -175,6 +181,22 @@ class MediaKeeper {
     this.ensureSlot().append(entry.media);
     this.limitParked();
     this.schedule();
+  }
+
+  /**
+   * 附件清单换了（attachmentHost 是经 compartment 换的，事务带 reconfigured）：藏着的那几个，文件被删了、
+   * 改了名的停掉。卡片还在眼前的那种在卡片重画、拆旧卡片时（drop）处理。不放东西时第一句就回去
+   */
+  update(update: ViewUpdate) {
+    if (
+      !this.entries.size ||
+      !update.transactions.some((transaction) => transaction.reconfigured)
+    ) {
+      return;
+    }
+    for (const entry of [...this.entries.values()]) {
+      if (entry.frame === null && !entry.card.present()) this.forget(entry);
+    }
   }
 
   /** 条显示着时，光标停在条上面（打字、方向键滚过去时 CodeMirror 按这个留边） */
@@ -424,7 +446,12 @@ class MediaKeeper {
     const entry = this.shown;
     if (!entry) return;
     const pos = this.locate(entry);
-    if (pos === null) return;
+    if (pos === null) {
+      // 那一行被删了（自己删的、协作的对方删的）：说一声，条收起来（暂停、进度留着，Ctrl+Z 找回那一行还接得上）
+      useData.setState({ notice: "这一篇里已经没有这张卡片了" });
+      this.close();
+      return;
+    }
     const scroller = scrollParent(this.view);
     const win = this.view.dom.ownerDocument.defaultView ?? window;
     // glideTo 量的是卡片后面源码那一处（卡片底边）：可视区整个往下挪半张卡片，停下来整张卡片在正中
@@ -492,8 +519,7 @@ class MediaKeeper {
 }
 
 /**
- * 跟着 attachmentHost 这个 facet 来（有附件卡片的编辑器才有）。没有 update：
- * 不放东西时什么都不做
+ * 跟着 attachmentHost 这个 facet 来（有附件卡片的编辑器才有）。不放东西时 update 第一句就回去
  */
 export const mediaKeeper = ViewPlugin.fromClass(MediaKeeper, {
   provide: (plugin) =>
