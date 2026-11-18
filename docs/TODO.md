@@ -497,7 +497,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - [x] 附件按需传：访客那边相对路径的图片向主持人要、粘贴的交给主持人存；只给正文里引用了的、「附件/」里的（§7.2）；访客那边双链按「不存在」画（设计 §18）
 - [x] 慢的访客合包（§5.4）：积压了丢掉排着的、换成一次补齐（Resync → Sync1 → Sync2），效果和合包一样（设计 §18）
 - [x] 看得到却连不上时把「Windows 防火墙把这个网络标成了公用」列为第一个原因（§10）：P10.2 的访客结论里做了（mDNS 看到了主持人还连不进）；主持人那边的检测还没有
-- 坑：iroh 建端点要 2–3 秒（`netmon::Monitor::new`，Windows 上枚举网卡）——对话框先开、链接出来之前占着同样高度；踢人和「Welcome 发出去、文档流还没接上」有竞态（按公钥拉黑、接上时再查）；postcard 不支持内部打标签的枚举（`#[serde(tag)]`）；`cargo fmt` 会把整个 crate 重排（项目没按 rustfmt 排），只对自己的文件单独跑 `rustfmt`。细节见设计 §16
+- 坑：iroh 建端点要 2–3 秒（`netmon::Monitor::new`，Windows 上枚举网卡）——对话框先开、链接出来之前占着同样高度；踢人和「Welcome 发出去、文档流还没接上」有竞态（按公钥拉黑、接上时再查）；postcard 不支持内部打标签的枚举（`#[serde(tag)]`）；~~`cargo fmt` 会把整个 crate 重排（项目没按 rustfmt 排），只对自己的文件单独跑 `rustfmt`~~（2026-11-18 起整个 crate 排好了，直接 `cargo fmt`）。细节见设计 §16
 
 **P10.2 互联网 + 自配中继**（2026-10-18 接上了，记录在设计 §17）
 - [x] 端口映射（自己驱动 `portmapper`：iroh 1.3 没配中继时不去要）、IPv6、回连链接（`odea://back/`）；分享前自检、连不上时 3 秒内给结论（§8.4、§8.5；`collab/reach.rs`、`diagnose.rs`，前端 `collab/reach.ts`）
@@ -721,7 +721,7 @@ Milkdown 在实机上接入后被整个换掉：AST ↔ Markdown 互转导致输
 - [x] KaTeX 打两份（审查 §5.4，2026-11-12；和提醒、属性面板并行做的）：不是入口文件不同，是两个版本 —— 我们用 0.18.7，Mermaid 12 自己要 `^0.16.47`，pnpm 另装了一份。`pnpm-workspace.yaml` 加 `overrides: "mermaid>katex": "$katex"`，Mermaid 底下的跟着 `package.json` 的版本走，锁文件里只剩 0.18.7。Mermaid 只用 `renderToString` 出 MathML，0.16 和 0.18 出的一样（0.18 的不兼容是内部类名加前缀，只影响 `htmlAndMathml`，我们没开）。生产构建只剩一个 KaTeX 分包（261,690 字节），编辑器和 `mermaid.core` 共用，少了约 261 KB；浏览器预览里画过一张节点里带 `$$分式$$`、`$$根号$$` 的图，公式都在。lint、tsc、1508 个用例过。桌面端没打开带公式的图、导出里的图表没单独看。记录在审查 §5.4.1
 - [x] 入口包拆分（审查 §5.3，2026-11-12）：入口 `main.tsx` 只分流，每种窗口的启动模块在 `src/boot/`（动态加载），入口包 1.39 MB → 26 KB。顺带查出 `DocumentView` 模块顶层的 `import(MarkdownEditor)` 让启动器、速记小窗也拉了编辑器那一串；启动器的「克隆」面板为了 `openExternal` 带上了 CodeMirror（挪到 `lib/openExternal.ts`）。坑：分流写成一串三元表达式的 `import()`，压缩后折成一个调用、预载清单成了所有窗口的并集。量的脚本 `scripts/perf/entry.mjs`（见「常用命令」）：无头 Chrome 4 倍降速，启动器 JS 2190 → 554 KB、`ready` 155 → 89ms，速记小窗 2173 → 306 KB、156 → 79ms，仓库窗口慢了 10ms（多一跳）；桌面端（WebView2，release、单独 identifier）启动器 77–82 → 37–40ms，仓库窗口反而 126 → 108ms（Tauri 给一个大文件是一整块，拆开后并行取）。对话框用到再加载、在 index.html 里按窗口预载都试了 / 量了，不值，没留。桌面端的速记小窗、访客窗口没量，macOS / Linux 没走
 - [x] 审查 §6 工程上的几条（2026-11-13，记录在审查 §6.2）：`commands.rs` 拆成 `commands/`（最大 943 行，`lib.rs` 不用改）、`MarkdownEditor.tsx` 的装饰层挪出去（剩 1515 行）；技术方案 §2.1 / §14.1 / §14.2 / §15 对上了代码；按钮名字的检查脚本 `scripts/a11y-names.mjs`（现在一个都没有缺的）、`useKeyWithClickEvents` 打开；clippy 清到 0 条，CI 加了 clippy、按钮名字、Windows 上比对 `bindings.ts`。发现 `ci.yml` 一直没提交，GitHub 上从没跑过。`cargo fmt`：拷贝上试过，不会写坏（测试全过、还是 LF），只是一次要改 800 多处，等定
-  - [ ] `cargo fmt`：提交手上的改动以后单独一个提交格式化（`max_width = 120` + `use_small_heuristics = "Max"`，改动最少）、记进 `.git-blame-ignore-revs`、CI 加 `cargo fmt --check`
+  - [x] `cargo fmt`（2026-11-18 做了）：`src-tauri/rustfmt.toml`（`max_width = 120` + `use_small_heuristics = "Max"`，改动最少），整个 crate 单独一个提交格式化（79 个文件），记进 `.git-blame-ignore-revs`，CI 的 Rust 任务最前面加了 `cargo fmt --check`；格式化前后测试、三遍 clippy 都过
 - [x] 照新的工作流（`CLAUDE.md`、`ENGINEERING.md`、Verifier）把项目对了一遍（2026-11-13）：
     - 文档：2026-11-10 的审查挪进 `docs/REVIEWS/`（43 个文件里 63 处引用跟着改）；技术方案 §4 的目录树照现在的代码重写（以前缺 `collab/`、`team/`、`launcher/`、`capture/`、`export/`、`render/`、`properties/` 和 Rust 那边一半的模块，还列着早就不在的 `Prototype/`）；附录 A 的命令只留本文件开头这一份，附录 B 不再抄一遍 `vite.config.ts`；阶段划分按编号排，补上没列的 P9、P13、P14
     - 代码：只动了注释和文件名。指着已经拆掉的 `commands.rs` 的 7 处注释、`domain/mod.rs` 开头还写着「中文分词」的那句改了；6 个用了 happy-dom 却没叫 `*.dom.test.ts` 的测试改了名（`ENGINEERING.md`「测试」）

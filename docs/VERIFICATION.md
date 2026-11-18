@@ -19,7 +19,7 @@ pnpm test
 改了 Rust 再跑（`cargo` 不在 PATH 上，先看 `PITFALLS/环境.md`）：
 
 ```bash
-cd src-tauri; cargo test --no-default-features --lib
+cd src-tauri; cargo fmt; cargo test --no-default-features --lib
 ```
 
 推到任何分支，GitHub Actions 的「检查」（`.github/workflows/ci.yml`，`技术方案.md` §15）再跑一遍：Ubuntu 上是这四样、下面的 `a11y-names`，

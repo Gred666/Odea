@@ -1,0 +1,4 @@
+# git blame 跳过的提交（只改排版、不改代码的）。本地要 git config blame.ignoreRevsFile .git-blame-ignore-revs；GitHub 网页自己认
+
+# 2026-11-18 整个 crate 照 src-tauri/rustfmt.toml 格式化
+d459d4aa2943ad5809b63df5318ef2f3b71e39a4

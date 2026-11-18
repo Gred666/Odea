@@ -33,6 +33,7 @@
 ## 后端（Rust）与数据
 
 - 追求极致的用户体验和性能
+- 排版照 `src-tauri/rustfmt.toml`，提交前 `cargo fmt`（CI 查 `cargo fmt --check`）
 
 ## 依赖
 

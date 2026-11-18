@@ -1,7 +1,7 @@
 # 每次推送都跑的检查（docs/REVIEWS/2026-11-10-审查与竞品调研.md §6、§12）。和本地提交前跑的是同一套：
 #
 #   前端：pnpm lint、pnpm exec tsc --noEmit、pnpm test、node scripts/a11y-names.mjs --check
-#   Rust：cd src-tauri; cargo test --no-default-features --lib，clippy 不许有警告
+#   Rust：cd src-tauri; cargo fmt --check、cargo test --no-default-features --lib，clippy 不许有警告
 #   绑定：重新导出 src/lib/bindings.ts，和提交的一样（Windows 上）
 #
 # Rust 只测不带 Tauri 的那部分（vault / sync / collab / team 这些，技术方案 §15）：不用装 WebKitGTK、
@@ -73,7 +73,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
+
+      # 排版照 src-tauri/rustfmt.toml，不一样就算没过（不用编译，放最前面，几秒就出结果）
+      - name: cargo fmt --check
+        run: cargo fmt --check
 
       # 依赖的编译结果只在 master 上存：别的分支拿 master 的来用、不另存一份，不把缓存的配额占满
       - uses: Swatinem/rust-cache@v2
