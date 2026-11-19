@@ -4230,7 +4230,7 @@ dependencies = [
 
 [[package]]
 name = "odea"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.22.1",
