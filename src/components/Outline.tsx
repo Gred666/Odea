@@ -17,6 +17,21 @@ const FOLLOW_EVERY = 100;
 const FOLLOW_IDLE = 120;
 
 /**
+ * 正文里带 `data-outline-id` 的标题，按 id 取（同一个 id 取第一个，和 querySelector 一样）。
+ * 不拿 id 拼选择器：id 里带着标题原文（`lib/markdown.tsx` 的 slug），英文双引号、反斜杠都可能有，
+ * 以前直接拼进 `[data-outline-id="…"]`，标题里一有引号就是非法选择器、整栏出错（2026-11-19 用户碰到）。
+ * 一次扫完也比每个标题各查一遍整页快
+ */
+function headingsById(root: HTMLElement): Map<string, HTMLElement> {
+  const found = new Map<string, HTMLElement>();
+  for (const el of root.querySelectorAll<HTMLElement>("[data-outline-id]")) {
+    const id = el.dataset.outlineId;
+    if (id && !found.has(id)) found.set(id, el);
+  }
+  return found;
+}
+
+/**
  * 右侧目录树。
  * 活动项跟随正文滚动联动（读到哪一节高亮跟到哪一节），指示条用 layoutId 在条目间滑动。
  *
@@ -111,9 +126,8 @@ export function Outline({
     const root = scrollRef.current;
     if (!root || items.length === 0 || editorHandle) return;
 
-    const targets = items
-      .map((it) => root.querySelector<HTMLElement>(`[data-outline-id="${it.id}"]`))
-      .filter((el): el is HTMLElement => !!el);
+    const headings = headingsById(root);
+    const targets = items.map((it) => headings.get(it.id)).filter((el): el is HTMLElement => !!el);
     if (!targets.length) return;
 
     const io = new IntersectionObserver(
@@ -153,7 +167,7 @@ export function Outline({
       return;
     }
     const root = scrollRef.current;
-    const el = root?.querySelector<HTMLElement>(`[data-outline-id="${id}"]`);
+    const el = root && headingsById(root).get(id);
     if (!root || !el) return;
     const top = el.offsetTop - 28;
     root.scrollTo({ top, behavior: "smooth" });

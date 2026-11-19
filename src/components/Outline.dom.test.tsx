@@ -173,6 +173,51 @@ describe("目录树收起", () => {
   });
 });
 
+describe("没有编辑器时按 data-outline-id 找标题", () => {
+  // 编辑器挂上之前、只读的正文，目录靠 querySelector 找标题；id 里带着标题原文，
+  // 以前标题里有英文双引号就拼出非法的选择器，整个这一栏出错（2026-11-19 用户碰到的）
+  const QUOTED = buildOutline(
+    ['## 全表（红笔"三角转换/恒等变形"）', "", "## 路径 C:\\a\\b", "", "## 普通"].join("\n"),
+  );
+
+  it("finds headings whose text has quotes and backslashes", () => {
+    const observed: Element[] = [];
+    const original = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      observe(target: Element) {
+        observed.push(target);
+      }
+      disconnect() {}
+    } as unknown as typeof IntersectionObserver;
+    try {
+      const scroller = document.createElement("div");
+      for (const item of QUOTED) {
+        const heading = document.createElement("h2");
+        heading.setAttribute("data-outline-id", item.id);
+        scroller.append(heading);
+      }
+      container.append(scroller);
+      const scrolled: unknown[] = [];
+      scroller.scrollTo = ((options: ScrollToOptions) =>
+        scrolled.push(options)) as typeof scroller.scrollTo;
+      act(() =>
+        root.render(<Outline items={QUOTED} scrollRef={{ current: scroller }} resetKey="note-q" />),
+      );
+      expect(observed.map((el) => el.getAttribute("data-outline-id"))).toEqual(
+        QUOTED.map((item) => item.id),
+      );
+
+      const quoted = [...rail().querySelectorAll<HTMLButtonElement>("[data-outline-item]")].find(
+        (button) => button.textContent?.includes("红笔"),
+      )!;
+      click(quoted);
+      expect(scrolled).toHaveLength(1);
+    } finally {
+      globalThis.IntersectionObserver = original;
+    }
+  });
+});
+
 describe("跟着滚动（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.2）", () => {
   // 以前有编辑器时只听光标：只滚不点，高亮一直停在原地。几何（光标在不在屏幕上、哪一行在
   // 那条线上）在 editor/readingLine.test.ts 和浏览器里验，这里只管什么时候算、算出来用不用
