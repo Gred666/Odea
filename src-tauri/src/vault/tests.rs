@@ -1,6 +1,8 @@
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 use super::*;
+use crate::domain::model::{ImportPhase, ImportReport};
 use crate::plugins::journal::{self, JournalVault};
 
 struct Fixture {
@@ -2393,51 +2395,228 @@ fn shortcuts_to_notes_without_an_id_follow_them_once_they_get_one() {
     assert_eq!(link.note.as_deref(), Some(id.as_str()));
 }
 
+/* ---------------- 导入（docs/仓库与启动器.md §7.6、§21） ---------------- */
+
+/// 导入的进度，一条一条记下来
+type Steps = Vec<(ImportPhase, u32, u32)>;
+
+/// 导入一个文件夹，不取消
+fn import_into(vault: &Mutex<Vault>, from: &Path, folder: &str) -> Result<ImportReport> {
+    let mut steps = Steps::new();
+    import_watching(vault, from, folder, &mut steps, |_, _| false)
+}
+
+/// 导入一个文件夹，进度记进 steps。每来一条进度问一次 stop（这时候仓库的锁没人拿着，能进去看）；它说停就取消
+fn import_watching(
+    vault: &Mutex<Vault>,
+    from: &Path,
+    folder: &str,
+    steps: &mut Steps,
+    mut stop: impl FnMut(&Mutex<Vault>, (ImportPhase, u32, u32)) -> bool,
+) -> Result<ImportReport> {
+    let cancel = AtomicBool::new(false);
+    let report = Vault::import_folder(vault, from, folder, &cancel, &mut |phase, done, total| {
+        steps.push((phase, done, total));
+        if stop(vault, (phase, done, total)) {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    })?;
+    report.ok_or_else(|| AppError::Invalid("取消了".into()))
+}
+
+/// 要导入的文件夹：三篇笔记（一篇带 id）、一张图、一个以点开头的文件夹
+fn reading_notes(outside: &Path) {
+    fsio::write_atomic(&fsio::abs(outside, "三体.md"), "![](图/封面.png)").unwrap();
+    fsio::write_atomic(&fsio::abs(outside, "小说/活着.md"), "---\nid: alive\n---\n\n正文").unwrap();
+    fsio::write_atomic(&fsio::abs(outside, "小说/长篇/白鹿原.md"), "正文").unwrap();
+    fsio::write_atomic_bytes(&fsio::abs(outside, "图/封面.png"), b"png").unwrap();
+    fsio::write_atomic(&fsio::abs(outside, ".obsidian/app.json"), "{}").unwrap();
+}
+
 #[test]
 fn importing_a_folder_copies_it_and_keeps_its_structure() {
     let dir = tempfile::tempdir().unwrap();
     let outside = dir.path().join("读书笔记");
-    fsio::write_atomic(&fsio::abs(&outside, "三体.md"), "![](图/封面.png)").unwrap();
-    fsio::write_atomic(&fsio::abs(&outside, "小说/活着.md"), "---\nid: alive\n---\n\n正文").unwrap();
-    fsio::write_atomic(&fsio::abs(&outside, "小说/长篇/白鹿原.md"), "正文").unwrap();
-    fsio::write_atomic_bytes(&fsio::abs(&outside, "图/封面.png"), b"png").unwrap();
-    fsio::write_atomic(&fsio::abs(&outside, ".obsidian/app.json"), "{}").unwrap();
+    reading_notes(&outside);
 
     // 逻辑目录：文件平放在仓库根下的「读书笔记」里，树上照原来的结构摆在当前文件夹底下
     let root = dir.path().join("仓库");
     new_logical(&root);
-    let mut vault = Vault::open_in_memory(&root);
-    vault.folder_create("", "书").unwrap();
-    let report = vault.import_folder(&outside, "书").unwrap();
+    let vault = Mutex::new(Vault::open_in_memory(&root));
+    vault.lock().unwrap().folder_create("", "书").unwrap();
+    let report = import_into(&vault, &outside, "书").unwrap();
     assert_eq!(report.folder, "书/读书笔记");
-    assert_eq!((report.notes, report.files), (3, 1));
+    assert_eq!((report.notes, report.files, report.skipped), (3, 1, 0));
     assert!(root.join("读书笔记/图/封面.png").is_file(), "正文里的相对路径照样指着它");
     assert!(!root.join("读书笔记/.obsidian").exists(), "以点开头的不拷");
     assert!(outside.join("三体.md").is_file(), "原来的不动");
-    assert_eq!(
-        vault.folders(),
-        vec!["书", "书/读书笔记", "书/读书笔记/小说", "书/读书笔记/小说/长篇"],
-        "只有图片的文件夹不上树"
-    );
-    let placed = placements(&vault);
-    assert_eq!(placed["alive"], "书/读书笔记/小说");
-    assert_eq!(placed.values().filter(|folder| *folder == "书/读书笔记").count(), 1);
+    assert!(!root.join(layout::IMPORT_DIR).exists(), "暂存的拷完就改名到位了，不留空目录");
+    {
+        let vault = vault.lock().unwrap();
+        assert_eq!(
+            vault.folders(),
+            vec!["书", "书/读书笔记", "书/读书笔记/小说", "书/读书笔记/小说/长篇"],
+            "只有图片的文件夹不上树"
+        );
+        let placed = placements(&vault);
+        assert_eq!(placed["alive"], "书/读书笔记/小说");
+        assert_eq!(placed.values().filter(|folder| *folder == "书/读书笔记").count(), 1);
+    }
     // 不能导入仓库自己、包着仓库的
-    assert!(vault.import_folder(&root.join("读书笔记"), "").is_err());
-    assert!(vault.import_folder(dir.path(), "").is_err());
+    assert!(import_into(&vault, &root.join("读书笔记"), "").is_err());
+    assert!(import_into(&vault, dir.path(), "").is_err());
 
     // 本地目录：拷进树上那个文件夹，树就是真的文件夹
     let local = dir.path().join("本地");
     plain_folder(&local);
-    let mut vault = Vault::open_in_memory(&local);
-    let report = vault.import_folder(&outside, "工作").unwrap();
+    let vault = Mutex::new(Vault::open_in_memory(&local));
+    let report = import_into(&vault, &outside, "工作").unwrap();
     assert_eq!(report.folder, "工作/读书笔记");
     assert!(local.join("工作/读书笔记/小说/活着.md").is_file());
-    assert!(vault.folders().contains(&"工作/读书笔记/小说".to_string()));
-    assert!(vault.note_get("alive").is_ok());
+    assert!(vault.lock().unwrap().folders().contains(&"工作/读书笔记/小说".to_string()));
+    assert!(vault.lock().unwrap().note_get("alive").is_ok());
     // 同名的加序号
-    assert_eq!(vault.import_folder(&outside, "").unwrap().folder, "读书笔记");
-    assert!(vault.import_folder(&outside, "工作").unwrap().folder.starts_with("工作/读书笔记 2"));
+    assert_eq!(import_into(&vault, &outside, "").unwrap().folder, "读书笔记");
+    assert!(import_into(&vault, &outside, "工作").unwrap().folder.starts_with("工作/读书笔记 2"));
+}
+
+#[test]
+fn an_import_reports_both_phases_and_tells_the_frontend_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("读书笔记");
+    reading_notes(&outside);
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let mut opened = Vault::open_in_memory(&root);
+    let announced = Arc::new(Mutex::new(Vec::new()));
+    let sink = announced.clone();
+    opened.set_announcer(Arc::new(move |change| sink.lock().unwrap().push(change)));
+    let vault = Mutex::new(opened);
+
+    let mut steps = Steps::new();
+    import_watching(&vault, &outside, "", &mut steps, |_, _| false).unwrap();
+    let copy: Vec<_> = steps.iter().filter(|step| step.0 == ImportPhase::Copy).collect();
+    let index: Vec<_> = steps.iter().filter(|step| step.0 == ImportPhase::Index).collect();
+    assert_eq!(copy.first(), Some(&&(ImportPhase::Copy, 0, 4)), "先报一共几个文件：{steps:?}");
+    assert_eq!(copy.last(), Some(&&(ImportPhase::Copy, 4, 4)));
+    assert_eq!(index.first(), Some(&&(ImportPhase::Index, 0, 3)), "{steps:?}");
+    assert_eq!(index.last(), Some(&&(ImportPhase::Index, 3, 3)));
+    // 前端导完整个重取一次（列表、文件夹、日历）：只说它那一次取不到的附件清单，新进来的笔记不一篇篇发
+    let announced = announced.lock().unwrap();
+    assert_eq!(announced.len(), 1, "导入完只通知一次：{announced:?}");
+    assert!(announced[0].attachments, "{announced:?}");
+    assert!(announced[0].notes.is_empty() && !announced[0].folders && announced[0].plugins.is_empty(), "{announced:?}");
+}
+
+#[test]
+fn a_folder_still_being_imported_is_left_to_the_import() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("读书笔记");
+    reading_notes(&outside);
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let vault = Mutex::new(Vault::open_in_memory(&root));
+    let before = vault.lock().unwrap().note_list(false).unwrap().len();
+
+    // 改名到位了、还没开始读：文件监听这时候整扫一遍（看到了改名），不该一口气把它读完，树上也先不列它
+    let mut checked = false;
+    let mut steps = Steps::new();
+    import_watching(&vault, &outside, "", &mut steps, |vault, step| {
+        if step == (ImportPhase::Index, 0, 3) {
+            let mut vault = vault.lock().unwrap();
+            vault.rescan().unwrap();
+            vault.rescan_paths_and_announce(&["读书笔记/三体.md".to_string()]).unwrap();
+            assert_eq!(vault.note_list(false).unwrap().len(), before, "导入的还没读进来");
+            assert!(!vault.folders().iter().any(|folder| folder.starts_with("读书笔记")), "{:?}", vault.folders());
+            checked = true;
+        }
+        false
+    })
+    .unwrap();
+    assert!(checked);
+    let vault = vault.lock().unwrap();
+    assert_eq!(vault.note_list(false).unwrap().len(), before + 3, "导入自己读完了");
+    assert!(vault.folders().contains(&"读书笔记/小说".to_string()));
+}
+
+#[test]
+fn cancelling_an_import_leaves_nothing_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("读书笔记");
+    reading_notes(&outside);
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let vault = Mutex::new(Vault::open_in_memory(&root));
+    let before = vault.lock().unwrap().note_list(false).unwrap().len();
+
+    // 拷到一半取消、读到一半取消：仓库里、索引里都不留它
+    for (phase, at) in [(ImportPhase::Copy, 0), (ImportPhase::Index, 0)] {
+        let mut steps = Steps::new();
+        let result = import_watching(&vault, &outside, "", &mut steps, |_, step| step.0 == phase && step.1 == at);
+        assert!(result.is_err(), "{phase:?}：取消了就没有结果");
+        assert!(!root.join("读书笔记").exists(), "{phase:?}：拷进来的收回去了");
+        assert!(!root.join(layout::IMPORT_DIR).exists(), "{phase:?}：暂存的也不留");
+        let mut vault = vault.lock().unwrap();
+        vault.rescan().unwrap();
+        assert_eq!(vault.note_list(false).unwrap().len(), before, "{phase:?}：索引里不留");
+        assert!(!vault.folders().iter().any(|folder| folder.starts_with("读书笔记")));
+    }
+    assert!(outside.join("小说/活着.md").is_file(), "原来的不动");
+}
+
+#[test]
+fn switching_vaults_mid_import_takes_the_copy_back_out_of_the_old_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("读书笔记");
+    reading_notes(&outside);
+    let old = dir.path().join("旧仓库");
+    let new = dir.path().join("新仓库");
+    plain_folder(&old);
+    plain_folder(&new);
+    let vault = Mutex::new(Vault::open_in_memory(&old));
+
+    // 读到一半换了仓库（更换笔记文件夹：锁里整个换成另一个 Vault）：不能往新仓库里接着做
+    let mut steps = Steps::new();
+    let result = import_watching(&vault, &outside, "", &mut steps, |vault, step| {
+        if step == (ImportPhase::Index, 0, 3) {
+            *vault.lock().unwrap() = Vault::open_in_memory(&new);
+        }
+        false
+    });
+    assert!(result.is_err());
+    assert!(!old.join("读书笔记").exists(), "拷进旧仓库的收回去了");
+    assert!(!new.join("读书笔记").exists(), "也没跑到新仓库里");
+    assert!(vault.lock().unwrap().note_get("alive").is_err());
+}
+
+#[test]
+fn a_crashed_import_leaves_no_staging_behind_next_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    fsio::write_atomic(&fsio::abs(&root, &format!("{}/0199/拷了一半.md", layout::IMPORT_DIR)), "半").unwrap();
+    let vault = Vault::open_in_memory(&root);
+    assert!(!root.join(layout::IMPORT_DIR).exists());
+    assert!(vault.note_list(false).unwrap().iter().all(|note| note.title != "拷了一半"));
+}
+
+/// 别的程序独占着的文件拷不了（Windows 上 os error 32）：跳过它、计数，别的照常导入
+#[cfg(windows)]
+#[test]
+fn a_file_held_by_another_program_is_skipped() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("读书笔记");
+    reading_notes(&outside);
+    let _held = std::fs::OpenOptions::new().read(true).share_mode(0).open(outside.join("图/封面.png")).unwrap();
+    let root = dir.path().join("仓库");
+    plain_folder(&root);
+    let vault = Mutex::new(Vault::open_in_memory(&root));
+    let report = import_into(&vault, &outside, "").unwrap();
+    assert_eq!((report.notes, report.files, report.skipped), (3, 0, 1));
+    assert!(root.join("读书笔记/小说/活着.md").is_file());
+    assert!(!root.join("读书笔记/图/封面.png").exists());
 }
 
 #[test]

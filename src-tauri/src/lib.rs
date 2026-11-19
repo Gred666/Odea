@@ -14,7 +14,6 @@ mod keep;
 mod memory;
 mod navigation;
 mod notify;
-mod old_name;
 mod plugins;
 #[cfg(feature = "desktop-runtime")]
 mod popout;
@@ -27,6 +26,7 @@ mod team;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod update;
 mod vault;
+mod webview_guard;
 #[cfg(any(feature = "desktop-runtime", feature = "typegen"))]
 mod workspace;
 
@@ -58,6 +58,8 @@ fn ready(window: WebviewWindow) {
     workspace::show_placed(&window, jumped);
     let _ = window.show();
     let _ = window.set_focus();
+    // 渲染进程没了就重新载入，不留一个白窗口（docs/技术方案.md §8.9）
+    webview_guard::watch(&window);
     if let Some(workspace) = window.try_state::<AppState>().and_then(|state| state.workspace(window.label())) {
         workspace.sync.sync_now();
     }
@@ -280,6 +282,8 @@ fn command_builder() -> Builder<tauri::Wry> {
             print::export_folder_write,
             print::export_folder_done,
             commands::vault_import::<tauri::Wry>,
+            commands::vault_import_cancel,
+            commands::vault_import_progress,
             commands::search_text,
             commands::find_in_vault,
             plugins::journal::commands::task_toggle,
@@ -419,6 +423,7 @@ fn command_builder() -> Builder<tauri::Wry> {
         ])
         .events(collect_events![
             commands::IndexProgress,
+            commands::ImportProgress,
             commands::VaultChanged,
             commands::SyncStatusChanged,
             commands::SyncNotice,
@@ -494,6 +499,8 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
             print::export_folder_write,
             print::export_folder_done,
             commands::vault_import::<tauri::test::MockRuntime>,
+            commands::vault_import_cancel,
+            commands::vault_import_progress,
             commands::search_text,
             commands::find_in_vault,
             plugins::journal::commands::task_toggle,
@@ -633,6 +640,7 @@ pub fn export_typescript_bindings(path: impl AsRef<std::path::Path>) {
         ])
         .events(collect_events![
             commands::IndexProgress,
+            commands::ImportProgress,
             commands::VaultChanged,
             commands::SyncStatusChanged,
             commands::SyncNotice,
@@ -672,9 +680,7 @@ pub fn run() {
     #[cfg(debug_assertions)]
     export_typescript_bindings("../src/lib/bindings.ts");
 
-    // 改名前（OnTheWay）的数据目录挪到新标识下：要赶在插件读窗口位置、Tauri 建窗口之前
     let context = tauri::generate_context!();
-    old_name::move_app_dirs(&context.config().identifier);
 
     let mut builder = tauri::Builder::default();
 
@@ -759,6 +765,7 @@ pub fn run() {
             }
             if let tauri::WindowEvent::Destroyed = event {
                 memory::forget_window(window.label());
+                webview_guard::forget(window.label());
                 popout::on_destroyed(window.app_handle(), window.label());
                 workspace::on_destroyed(window.app_handle(), window.label());
             }

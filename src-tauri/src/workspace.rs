@@ -93,6 +93,7 @@ pub fn open_vault<R: Runtime>(app: &AppHandle<R>, root: &Path, how: Open) -> Res
         watcher: Mutex::new(None),
         sync: Arc::new(SyncHub::default()),
         indexing: Arc::new(Mutex::new(Indexing::default())),
+        import: Mutex::new(None),
     });
     // 先登记再建窗口：前端一起来就要拿着窗口标签找仓库
     lock(&state.workspaces)?.insert(label.clone(), workspace.clone());

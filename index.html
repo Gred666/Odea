@@ -13,8 +13,7 @@
       (function () {
         var t = "";
         try {
-          // 改名前的键是 otw.theme（src/lib/legacyStorage.ts 稍后才把它换成新的）
-          t = localStorage.getItem("odea.theme") || localStorage.getItem("otw.theme") || "";
+          t = localStorage.getItem("odea.theme") || "";
         } catch (e) {}
         if (t !== "light" && t !== "dark") {
           t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -24,6 +23,24 @@
     </script>
   </head>
   <body>
+    <script>
+      // 渲染进程没了、Rust 把页面重新载入（src-tauri/src/webview_guard.rs，地址里带 recovered）：
+      // 窗口一直显示着，新页面画出来之前别是一整片空白（docs/技术方案.md §8.9）。先放一句话，
+      // React 画好第一帧就拿掉（boot/mount.tsx）。正常启动时窗口藏着、等首帧才显示，不放
+      (function () {
+        if (!/[?&]recovered(?:[=&]|$)/.test(location.search)) return;
+        var dark = document.documentElement.getAttribute("data-theme") === "dark";
+        var cover = document.createElement("div");
+        cover.id = "recovering";
+        cover.setAttribute("role", "status");
+        cover.textContent = "页面刚才崩溃了，正在重新载入…";
+        cover.style.cssText =
+          "position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;" +
+          "font:14px/1.6 system-ui,'Microsoft YaHei UI',sans-serif;" +
+          (dark ? "background:#141413;color:#a8a8a0" : "background:#f1f1ed;color:#74746e");
+        document.body.appendChild(cover);
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

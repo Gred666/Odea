@@ -40,8 +40,7 @@ const REPACK_EVERY_MS: i64 = 24 * 3600 * 1000;
 const AUTHOR_EMAIL: &str = "odea@localhost";
 const MB: u64 = 1024 * 1024;
 
-/// 仓库的 .git/config 里 `odea.autosync = true` 才同步（技术方案 §5.9.4）。
-/// 改名前的 `ontheway.*` 打开仓库时换成新的（SyncRepo::open）
+/// 仓库的 .git/config 里 `odea.autosync = true` 才同步（技术方案 §5.9.4）
 pub const AUTOSYNC_KEY: &str = "odea.autosync";
 
 /// 这台设备叫什么：提交署名是「账号 (设备名)」（没登录的是「Odea (设备名)」），历史版本里据此说是哪台设备改的
@@ -55,7 +54,7 @@ pub fn this_device() -> String {
 pub fn author_parts(author: &str) -> (Option<&str>, &str) {
     match author.strip_suffix(')').and_then(|rest| rest.split_once(" (")) {
         Some((who, device)) if !device.is_empty() && !who.is_empty() => {
-            let app = who == APP_NAME || who == crate::old_name::NAME;
+            let app = who == APP_NAME || who == OLD_APP_NAME;
             ((!app).then_some(who), device)
         }
         _ => (None, author),
@@ -64,6 +63,8 @@ pub fn author_parts(author: &str) -> (Option<&str>, &str) {
 
 /// 提交署名里的应用名
 const APP_NAME: &str = "Odea";
+/// 改名（0.3.0）以前的应用名。认改名前的那些旧提交用：提交历史一直在，不随设备升级消失
+const OLD_APP_NAME: &str = "OnTheWay";
 pub const PROVIDER_KEY: &str = "odea.provider";
 /// 这个仓库用哪个账号同步（login，令牌在钥匙串里）
 pub const LOGIN_KEY: &str = "odea.login";
@@ -575,7 +576,7 @@ impl From<Halt> for SyncError {
     }
 }
 
-/// .git 里的记事文件。改名前叫 ontheway.json，打开仓库时换成这个名字（SyncRepo::open）
+/// .git 里的记事文件
 pub const MEMO_FILE: &str = "odea.json";
 
 fn memo_path(root: &Path) -> PathBuf {

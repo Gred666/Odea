@@ -38,6 +38,7 @@ import {
   type FolderDeletion,
   type GuideName,
   type GuideUpdate,
+  type ImportProgress,
   type IndexProgress,
   type LegacyText,
   NOTE,
@@ -249,10 +250,14 @@ interface DataState {
   /** 删一个快捷方式（节点 id）：笔记不动 */
   removeShortcut: (node: string) => Promise<void>;
   /**
-   * 导入（docs/仓库与启动器.md §7.6）：选一个仓库外的文件夹，照原样复制进来、放在 folder 里。
-   * 返回树上新文件夹的路径；取消了、失败了返回 null
+   * 导入（docs/仓库与启动器.md §7.6、§21）：选一个仓库外的文件夹，照原样复制进来、放在 folder 里。
+   * 后端边做边报进度（importing）。返回树上新文件夹的路径；没选、取消了、失败了返回 null
    */
   importFolder: (folder: string) => Promise<string | null>;
+  /** 正在做的导入走到哪了；没在导入是 null。正文区底部的提示条照它画（components/ErrorToast.tsx 的 ImportToast） */
+  importing: ImportProgress | null;
+  /** 取消正在做的导入：拷进来的都收回去，importFolder 返回 null */
+  cancelImport: () => Promise<void>;
   /** 挪文件夹：放进 parent，排在 after（同一层的路径）后面，null 是最前面。返回新路径，失败返回 null */
   moveFolder: (folder: string, parent: string, after: string | null) => Promise<string | null>;
   /** 新建智能文件夹，返回它的路径；失败返回 null */
@@ -359,6 +364,51 @@ function summaryOf({ contentMd: _body, ...summary }: Note): NoteSummary {
 
 /** 正文最多留几篇（正在看的不算，不会被挤掉）。编辑器自己也按篇缓存着 12 个状态 */
 const BODY_CACHE = 24;
+/**
+ * 别处一次改了这么多篇以上（同步拉下来一大批、外面的 git 切了分支）：两个列表整个重取一次，
+ * 不一篇篇取（docs/仓库与启动器.md §21：一篇篇取要几分钟）
+ */
+const BULK_NOTE_CHANGE = 20;
+/** 正在导入（从点了「导入文件夹…」、对话框开着的时候算起）：一个窗口同时只导入一个 */
+let importInFlight = false;
+/** 页面中途重新载入了、接着跟的那次导入：隔多久问一次做完没有 */
+const IMPORT_POLL_MS = 500;
+
+/**
+ * 页面重新载入的时候导入还在做（docs/仓库与启动器.md §21：渲染进程崩了自动重载、按了刷新）：
+ * 后端还在拷、在读，这张新页面不知道。接着显示进度（能取消）；结果在原来那张页面等的 vaultImport 里、
+ * 这里拿不到，所以隔一会儿问一次做完没有，做完整个重取一次列表。先订阅再问，问到之前来的进度不会漏
+ */
+async function followRunningImport(api: Backend): Promise<void> {
+  if (importInFlight) return;
+  const stop = await Promise.resolve()
+    .then(() =>
+      api.onImportProgress((progress) => {
+        if (importInFlight) useData.setState({ importing: progress });
+      }),
+    )
+    .catch(() => null);
+  const ask = () =>
+    Promise.resolve()
+      .then(() => api.importProgress())
+      .catch(() => null);
+  let running = await ask();
+  if (!running || importInFlight) {
+    stop?.();
+    return;
+  }
+  importInFlight = true;
+  const name = running.name;
+  useData.setState({ importing: running });
+  while (running) {
+    await new Promise((resolve) => setTimeout(resolve, IMPORT_POLL_MS));
+    running = await ask();
+  }
+  stop?.();
+  await useData.getState().reloadIndexed();
+  importInFlight = false;
+  useData.setState({ importing: null, notice: `导入「${name}」结束了` });
+}
 /** bodies 里谁最近用过：越靠后越近 */
 let bodyOrder: string[] = [];
 /** 正在取的正文：同一篇同时要好几次（点一下、再点一下）只取一次 */
@@ -802,7 +852,19 @@ export const useData = create<DataState>((set, get) => ({
       });
     }
 
-    for (const id of change.notes) {
+    // 改了很多篇：两个列表整个换掉，正文只重取缓存里有的（正在看的那篇总在里面），外部改动的计数照旧
+    const bulk = change.notes.length > BULK_NOTE_CHANGE;
+    if (bulk) {
+      try {
+        const [notes, archived] = await Promise.all([api.noteList(false), api.noteList(true)]);
+        set({ notes: notes.sort(noteOrder), archived });
+      } catch (error) {
+        set({ error: messageOf(error) });
+      }
+    }
+    const cached = get().bodies;
+    const refetch = bulk ? change.notes.filter((id) => cached[id] !== undefined) : change.notes;
+    for (const id of refetch) {
       try {
         const fresh = await api.noteGet(id);
         const summary = summaryOf(fresh);
@@ -1035,6 +1097,8 @@ export const useData = create<DataState>((set, get) => ({
             });
         // `![[图.png]]`、`![[说明书.pdf]]` 要的附件清单：同样不耽误启动
         void get().refreshAttachments();
+        // 页面重新载入的时候导入还在做（崩溃后自动重载、按了刷新）：接着显示进度
+        void followRunningImport(api);
       } catch (error) {
         set({ error: messageOf(error), loading: false });
       } finally {
@@ -1797,18 +1861,54 @@ export const useData = create<DataState>((set, get) => ({
     }
   },
 
+  importing: null,
   importFolder: async (folder) => {
+    const running = get().importing;
+    if (importInFlight) {
+      set({
+        error: running
+          ? `正在导入「${running.name}」：等它导完，或者先取消`
+          : "已经开着选文件夹的对话框了",
+      });
+      return null;
+    }
+    importInFlight = true;
+    let stopListening: (() => void) | null = null;
     try {
-      const report = await (await backend()).vaultImport(folder);
-      if (!report) return null;
-      // 新的笔记、文件夹都进来了：列表和树整个重新取一遍
+      const api = await backend();
+      // 选好文件夹以后后端马上报第一条（done = 0），提示条就出来了；订阅不上也照常导入，只是看不到进度
+      stopListening = await api
+        .onImportProgress((progress) => set({ importing: progress }))
+        .catch(() => null);
+      const report = await api.vaultImport(folder);
+      if (!report) {
+        // 对话框里点了取消：什么都没开始。做到一半取消的：说一声收回去了
+        if (get().importing) set({ notice: "导入取消了，拷进来的都收回去了" });
+        return null;
+      }
+      // 新的笔记、文件夹都进来了：列表和树整个重新取一遍（后端不再一篇篇通知）。取完之前提示条还在
       await get().reloadIndexed();
       const files = report.files ? `、${report.files} 个别的文件` : "";
-      set({ notice: `导入了 ${report.notes} 篇笔记${files}，在「${folderLabel(report.folder)}」` });
+      const skipped = report.skipped ? `；有 ${report.skipped} 个文件读不了，没拷` : "";
+      set({
+        notice: `导入了 ${report.notes} 篇笔记${files}，在「${folderLabel(report.folder)}」${skipped}`,
+      });
       return report.folder;
     } catch (error) {
       set({ error: messageOf(error) });
       return null;
+    } finally {
+      // 先退订再收起提示条：晚到的进度不会把它又画出来
+      stopListening?.();
+      importInFlight = false;
+      set({ importing: null });
+    }
+  },
+  cancelImport: async () => {
+    try {
+      await (await backend()).vaultImportCancel();
+    } catch (error) {
+      set({ error: messageOf(error) });
     }
   },
 

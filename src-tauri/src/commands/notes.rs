@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::*;
 
 /* ---------------- 笔记 ---------------- */
@@ -333,12 +335,38 @@ pub async fn tree_export<R: Runtime>(app: AppHandle<R>, ws: Ws) -> Result<Option
     Ok(Some(dest.to_string_lossy().into_owned()))
 }
 
-/// 导入（docs/仓库与启动器.md §7.6）：弹选文件夹的对话框，把仓库外的一个文件夹照原样复制进来，
-/// 放在树上的 folder 里（逻辑目录在树上照原来的结构摆好）。原来的不动。取消了返回 null
+/// 导入的进度（docs/仓库与启动器.md §21）：复制、读进索引两段，最多 100ms 一条，只发给这个窗口
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportProgress {
+    /// 导入的那个文件夹的名字
+    pub name: String,
+    pub phase: ImportPhase,
+    pub done: u32,
+    pub total: u32,
+}
+
+/// 正在做的一次导入（Workspace::import）：置上 cancel 就停下、拷进来的收回去；progress 是最近报的那一条，
+/// 页面中途重新载入了（崩溃后自动重载、按了刷新）靠它接着显示进度（vault_import_progress）
+#[derive(Default)]
+pub struct ImportRun {
+    pub cancel: AtomicBool,
+    progress: Mutex<Option<ImportProgress>>,
+}
+
+/// 导入（docs/仓库与启动器.md §7.6、§21）：弹选文件夹的对话框，把仓库外的一个文件夹照原样复制进来，
+/// 放在树上的 folder 里（逻辑目录在树上照原来的结构摆好）。原来的不动。
+/// 拷文件时不拿仓库的锁、读进索引时一小批一小批地拿，边做边发 ImportProgress。
+/// 没选文件夹、中途取消了（vault_import_cancel、关了窗口、换了仓库）返回 null。一个窗口同时只导入一个
 #[tauri::command]
 #[specta::specta]
 pub async fn vault_import<R: Runtime>(app: AppHandle<R>, ws: Ws, folder: String) -> Result<Option<ImportReport>> {
-    let root = with_vault(&ws, |v| Ok(v.root().to_path_buf())).await?;
+    const BUSY: &str = "正在导入另一个文件夹：等它导完，或者先取消";
+    let import_slot = || ws.import.lock().map_err(|_| AppError::Internal("导入的状态锁坏了".into()));
+    if import_slot()?.is_some() {
+        return Err(AppError::Invalid(BUSY.into()));
+    }
+    let root = ws.root();
     let picker = app.clone();
     let start = root.parent().map(PathBuf::from).unwrap_or_else(|| root.clone());
     let picked = blocking(move || {
@@ -353,7 +381,51 @@ pub async fn vault_import<R: Runtime>(app: AppHandle<R>, ws: Ws, folder: String)
     let Some(source) = picked.and_then(|picked| picked.into_path().ok()) else {
         return Ok(None);
     };
-    with_vault(&ws, move |v| v.import_folder(&source, &folder)).await.map(Some)
+    // 对话框开着的时候窗口照样能点（它不是模态的）：可能又开了一个导入
+    let run = Arc::new(ImportRun::default());
+    {
+        let mut slot = import_slot()?;
+        if slot.is_some() {
+            return Err(AppError::Invalid(BUSY.into()));
+        }
+        *slot = Some(run.clone());
+    }
+    let name = source.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let (vault, label) = (ws.vault.clone(), ws.label.clone());
+    let result = blocking(move || {
+        let mut progress = |phase, done, total| {
+            let event = ImportProgress { name: name.clone(), phase, done, total };
+            if let Ok(mut last) = run.progress.lock() {
+                *last = Some(event.clone());
+            }
+            if let Err(error) = event.emit_to(&app, label.as_str()) {
+                eprintln!("通知前端导入进度失败: {error}");
+            }
+        };
+        Vault::import_folder(&vault, &source, &folder, &run.cancel, &mut progress)
+    })
+    .await;
+    *import_slot()? = None;
+    result
+}
+
+/// 取消正在做的导入：拷进来的都收回去，vault_import 返回 null。没在导入就什么都不做
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_import_cancel(ws: Ws) -> Result<()> {
+    if let Some(run) = ws.import.lock().map_err(|_| AppError::Internal("导入的状态锁坏了".into()))?.as_ref() {
+        run.cancel.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+/// 正在导入的话走到哪了（最近报的那一条），没在导入是 null。页面中途重新载入了用它接着显示进度、
+/// 看导完没有（先订阅 ImportProgress 再问）
+#[tauri::command]
+#[specta::specta]
+pub async fn vault_import_progress(ws: Ws) -> Result<Option<ImportProgress>> {
+    let slot = ws.import.lock().map_err(|_| AppError::Internal("导入的状态锁坏了".into()))?;
+    Ok(slot.as_ref().and_then(|run| run.progress.lock().ok().and_then(|last| last.clone())))
 }
 
 /// 反向链接：正文里写了 `[[这篇的标题]]` 的文档
@@ -459,7 +531,6 @@ pub async fn search_text(
     limit: u32,
     archived_only: bool,
 ) -> Result<TextSearch> {
-    use std::sync::atomic::Ordering;
     let counter = &TEXT_SEARCH_GEN[archived_only as usize];
     let generation = counter.fetch_add(1, Ordering::SeqCst) + 1;
     let limit = limit.clamp(1, 1000) as usize;
@@ -485,7 +556,6 @@ pub async fn find_in_vault(
     query: String,
     options: FindOptions,
 ) -> Result<FindResult> {
-    use std::sync::atomic::Ordering;
     let generation = FIND_GEN.fetch_add(1, Ordering::SeqCst) + 1;
     let (root, types) = with_vault(&ws, |v| Ok((v.root().to_path_buf(), v.layout().types.clone()))).await?;
     let path = boot::index_path(&state.data_dir, &root);

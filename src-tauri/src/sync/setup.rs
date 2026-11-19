@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 use super::engine::{AUTOSYNC_KEY, LOGIN_KEY, PROVIDER_KEY};
 use super::provider::Provider;
 use super::repo::{SyncError, SyncRepo, SyncResult};
-use crate::old_name;
 use crate::vault::layout;
 
 /// 这个文件夹在哪家网盘的同步目录里；不在返回 None
@@ -107,11 +106,11 @@ pub fn same_remote(a: &str, b: &str) -> bool {
 }
 
 /// 把原来仓库里的东西拷进 clone 下来的新仓库（用户选了「也合并进来」）。
-/// 根上的 .git、.odea（仓库标记、回收站、行为日志；改名前叫 .ontheway）、.gitignore / .gitattributes 不拷 ——
+/// 根上的 .git、.odea（仓库标记、回收站、行为日志）、.gitignore / .gitattributes 不拷 ——
 /// 新仓库有自己的；写到一半的临时文件不拷。同一个位置已经有了：内容一样就跳过，
 /// 不一样就起个新名字「名字 (本机).扩展名」。返回拷了几个文件
 pub fn bring_local(from: &Path, to: &Path) -> std::io::Result<usize> {
-    const ROOT_SKIP: [&str; 5] = [".git", layout::APP_DIR, old_name::VAULT_DIR, ".gitignore", ".gitattributes"];
+    const ROOT_SKIP: [&str; 4] = [".git", layout::APP_DIR, ".gitignore", ".gitattributes"];
     let mut copied = 0;
     let mut stack = vec![PathBuf::new()];
     while let Some(rel) = stack.pop() {
@@ -229,7 +228,6 @@ mod tests {
         write(&from, ".git/config", "[core]");
         write(&from, ".odea/trash/x.md", "回收站");
         write(&from, ".odea/vault.json", "{\"本机\":1}");
-        write(&from, ".ontheway/activity/2026-10.jsonl", "改名前的");
         write(&from, ".gitignore", "本机的");
         write(&from, "笔记/.写到一半.md.1-0.tmp", "临时");
         write(&to, ".odea/vault.json", "{\"云端\":1}");
@@ -245,7 +243,6 @@ mod tests {
         assert!(read(".odea/trash/x.md").is_none());
         assert_eq!(read(".odea/vault.json").as_deref(), Some("{\"云端\":1}"));
         assert!(!to.join(".odea").read_dir().unwrap().any(|e| e.unwrap().file_name() != "vault.json"));
-        assert!(!to.join(".ontheway").exists());
         assert!(read(".gitignore").is_none());
         assert!(read("笔记/.写到一半.md.1-0.tmp").is_none());
     }

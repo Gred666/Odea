@@ -440,6 +440,20 @@ export interface ImportReport {
   notes: number;
   /** 别的文件（图片、PDF …） */
   files: number;
+  /** 读不了、没拷的文件（别的程序独占着、没权限） */
+  skipped: number;
+}
+
+/**
+ * 导入走到哪了（docs/仓库与启动器.md §21）：先拷文件（done / total 是文件数），再读进索引（笔记数）。
+ * 最多 100ms 一条，每一段的开头、结尾都有
+ */
+export interface ImportProgress {
+  /** 导入的那个文件夹的名字 */
+  name: string;
+  phase: "copy" | "index";
+  done: number;
+  total: number;
 }
 
 /* ---------------- 反向链接 ---------------- */

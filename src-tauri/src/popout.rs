@@ -132,11 +132,19 @@ pub fn on_close_requested<R: Runtime>(window: &tauri::Window<R>, api: &tauri::Cl
 
 /// lib.rs 的 Destroyed：弹出窗口没了就忘掉；仓库窗口没了，它的弹出窗口跟着关（里面的东西是它的页面画的）
 pub fn on_destroyed<R: Runtime>(app: &AppHandle<R>, label: &str) {
+    if let Ok(mut owners) = OWNERS.lock() {
+        owners.remove(label);
+    }
+    close_owned_by(app, label);
+}
+
+/// owner 开的弹出窗口都关掉：它没了，或者它的页面重新载入了（渲染进程没了，webview_guard.rs）——
+/// 弹出窗口里的东西是那张页面画的，跟着一起没了
+pub fn close_owned_by<R: Runtime>(app: &AppHandle<R>, owner: &str) {
     let orphans: Vec<String> = match OWNERS.lock() {
         Ok(mut owners) => {
-            owners.remove(label);
-            let orphans = owners.iter().filter(|(_, owner)| *owner == label).map(|(pop, _)| pop.clone()).collect();
-            owners.retain(|_, owner| owner != label);
+            let orphans = owners.iter().filter(|(_, of)| *of == owner).map(|(pop, _)| pop.clone()).collect();
+            owners.retain(|_, of| of != owner);
             orphans
         }
         Err(_) => return,

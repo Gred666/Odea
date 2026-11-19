@@ -6,8 +6,7 @@
 
 - id 以 `guide-<名字>-` 开头：启动时只读这几篇的文件，不用把每篇笔记都读一遍
 - 属性块里一行 `odea-guide: <名字> <应用版本> <指纹>`：上一次给这一篇的是哪个版本的
-  应用带的指南、那一版正文的指纹（勾选框一律按没勾算 —— 勾掉清单上的事不算改过指南）。
-  改名前写的是 `ontheway-guide:`（old_name.rs），一样认，下次写的时候换成新的
+  应用带的指南、那一版正文的指纹（勾选框一律按没勾算 —— 勾掉清单上的事不算改过指南）
 
 应用升级以后（refresh，启动时跑一次）：
 - 正文的指纹和记下的一样（没改过）→ 换成这一版带的，勾过的框照勾
@@ -31,8 +30,6 @@ use super::{fsio, layout, Vault, VaultChange};
 pub struct Guide {
     pub name: &'static str,
     pub title: &'static str,
-    /// 改名前（old_name.rs）的标题：用户没改过标题的话，换新版时跟着换成 title
-    pub old_title: Option<&'static str>,
     /// 新放进去的时候置不置顶（欢迎那篇置顶，排在列表最上面）
     pub pinned: bool,
     pub body: &'static str,
@@ -42,21 +39,18 @@ pub const GUIDES: [Guide; 2] = [
     Guide {
         name: "welcome",
         title: "欢迎使用 Odea",
-        old_title: Some("欢迎使用 OnTheWay"),
         pinned: true,
         body: include_str!("../../../src/content/guide/welcome.md"),
     },
     Guide {
         name: "syntax",
         title: "语法全览",
-        old_title: None,
         pinned: false,
         body: include_str!("../../../src/content/guide/syntax.md"),
     },
 ];
 
 const MARK_KEY: &str = "odea-guide:";
-const MARK_KEYS: [&str; 2] = [MARK_KEY, crate::old_name::GUIDE_MARK];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn id_prefix(name: &str) -> String {
@@ -145,9 +139,9 @@ pub(crate) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     Some((parts.next()??, parts.next()??, parts.next()??))
 }
 
-/// 属性块里的这一行记号后面那段（新旧两种写法都认）
+/// 属性块里的这一行记号后面那段
 fn mark_text(line: &str) -> Option<&str> {
-    MARK_KEYS.iter().find_map(|key| line.strip_prefix(key))
+    line.strip_prefix(MARK_KEY)
 }
 
 fn parse_mark(meta: &FrontMatter) -> Option<Mark> {
@@ -230,23 +224,6 @@ impl Vault {
         Ok(out)
     }
 
-    /// 标题还是改名前的（用户没改过）：文件跟着改成新标题（同一个文件夹里，和 note_update 一样）。
-    /// 返回换完以后的路径。两台设备各自升级时改出来的名字一样，同步时不会撞车
-    fn retitle_guide(&mut self, row: &DocRow, guide: &Guide, meta: &mut FrontMatter) -> Result<String> {
-        if guide.old_title != Some(row.title.as_str()) {
-            return Ok(row.rel_path.clone());
-        }
-        let stem = layout::file_stem_for_title(guide.title);
-        let rel = fsio::unique_rel(&self.root, layout::dir_of(&row.rel_path), &stem, Some(&row.rel_path));
-        if rel != row.rel_path {
-            fsio::move_file(&self.root, &row.rel_path, &rel)?;
-            index::rename(&self.db, &row.id, &rel)?;
-            self.tree_follow(&row.rel_path, &row.id);
-        }
-        meta.title = super::title_meta(&rel, guide.title);
-        Ok(rel)
-    }
-
     /// 启动时：用户没改过的指南换成这个版本的应用带的。返回换了几篇
     pub fn guide_refresh(&mut self) -> Result<usize> {
         let mut updated = 0;
@@ -258,9 +235,8 @@ impl Vault {
             let mut meta = note.meta;
             set_mark(&mut meta, note.guide.name, &shipped);
             let body = carry_checks(&note.body, note.guide.body);
-            let rel = self.retitle_guide(&note.row, note.guide, &mut meta)?;
             let mut change = VaultChange::default();
-            let saved = self.write_and_index(&rel, &frontmatter::render(&meta, &body), &mut change)?;
+            let saved = self.write_and_index(&note.row.rel_path, &frontmatter::render(&meta, &body), &mut change)?;
             self.log.record("note", &saved.id, "updated");
             self.announce(change);
             updated += 1;
@@ -380,31 +356,6 @@ mod tests {
         assert_eq!(mark_of(&vault, &id).hash, fingerprint(GUIDES[0].body));
         assert!(vault.note_get(&id).unwrap().is_pinned, "置顶这些属性留着");
         // 再启动一次：已经是新版了
-        assert_eq!(vault.guide_refresh().unwrap(), 0);
-    }
-
-    #[test]
-    fn a_welcome_note_from_before_the_rename_gets_the_new_name_and_mark() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut vault = open(dir.path());
-        let id = age(&mut vault, "welcome", "旧版的说明\n", "0.2.0");
-        // 改名前的样子：标题、记号都是旧名
-        let note = vault.note_get(&id).unwrap();
-        vault.note_update(&id, "欢迎使用 OnTheWay", &note.content_md).unwrap();
-        let row = vault.note_row(&id).unwrap();
-        assert!(row.rel_path.ends_with("欢迎使用 OnTheWay.md"));
-        let text = vault.read(&row.rel_path).unwrap().unwrap().replace(MARK_KEY, crate::old_name::GUIDE_MARK);
-        let mut change = VaultChange::default();
-        vault.write_and_index(&row.rel_path, &text, &mut change).unwrap();
-
-        assert_eq!(vault.guide_refresh().unwrap(), 1);
-        let row = vault.note_row(&id).unwrap();
-        assert_eq!(row.title, "欢迎使用 Odea");
-        assert!(row.rel_path.ends_with("欢迎使用 Odea.md"));
-        let text = vault.read(&row.rel_path).unwrap().unwrap();
-        assert!(text.contains(MARK_KEY));
-        assert!(!text.contains(crate::old_name::GUIDE_MARK));
-        assert!(!dir.path().join(layout::NOTES_DIR).join("欢迎使用 OnTheWay.md").exists());
         assert_eq!(vault.guide_refresh().unwrap(), 0);
     }
 

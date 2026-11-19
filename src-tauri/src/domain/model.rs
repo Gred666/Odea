@@ -272,6 +272,18 @@ pub struct ImportReport {
     pub notes: u32,
     /// 别的文件（图片、PDF …）
     pub files: u32,
+    /// 读不了、没拷的文件（别的程序独占着、没权限）
+    pub skipped: u32,
+}
+
+/// 导入走到哪一段了（docs/仓库与启动器.md §21）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ImportPhase {
+    /// 拷进仓库里的暂存目录（done / total 是文件数）
+    Copy,
+    /// 读进索引（done / total 是笔记数）
+    Index,
 }
 
 /// 删掉一个文件夹的结果，原样交回 folder_undelete 就能撤销

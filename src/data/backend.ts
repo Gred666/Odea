@@ -22,6 +22,7 @@ import type {
   FolderDeletion,
   GuideName,
   GuideUpdate,
+  ImportProgress,
   ImportReport,
   IndexProgress,
   LegacyText,
@@ -144,8 +145,17 @@ export interface Backend {
   treeAddShortcut(id: string, folder: string): Promise<string>;
   /** 删一个快捷方式（节点 id）：笔记不动 */
   treeRemoveShortcut(node: string): Promise<void>;
-  /** 导入：弹选文件夹的对话框，把仓库外的一个文件夹复制进来放在 folder 里。取消了返回 null */
+  /**
+   * 导入：弹选文件夹的对话框，把仓库外的一个文件夹复制进来放在 folder 里，边做边发 onImportProgress。
+   * 没选、中途取消了返回 null
+   */
   vaultImport(folder: string): Promise<ImportReport | null>;
+  /** 取消正在做的导入：拷进来的都收回去，vaultImport 返回 null */
+  vaultImportCancel(): Promise<void>;
+  /** 订阅导入的进度，返回取消订阅的函数 */
+  onImportProgress(listener: (progress: ImportProgress) => void): Promise<() => void>;
+  /** 正在导入的话走到哪了（最近一条进度），没在导入是 null（先订阅 onImportProgress 再问） */
+  importProgress(): Promise<ImportProgress | null>;
   /** 挪文件夹：放进 parent，排在 after（同一层的路径）后面，null 是最前面。返回新路径 */
   treeMoveFolder(folder: string, parent: string, after: string | null): Promise<string>;
   /** 新建智能文件夹，返回它的路径 */
@@ -368,6 +378,12 @@ const tauriBackend: Backend = {
     await unwrap(commands.treeRemoveShortcut(node));
   },
   vaultImport: (folder) => unwrap(commands.vaultImport(folder)),
+  vaultImportCancel: async () => {
+    await unwrap(commands.vaultImportCancel());
+  },
+  onImportProgress: (listener) =>
+    events.importProgress(thisWindow()).listen((event) => listener(event.payload)),
+  importProgress: () => unwrap(commands.vaultImportProgress()),
   treePlace: async (id, folder, after) => {
     await unwrap(commands.treePlace(id, folder, after));
   },

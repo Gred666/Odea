@@ -10,7 +10,7 @@ Rust 这边只管两样：
 
 use serde::{Deserialize, Serialize};
 
-use super::{folders, fsio, layout, links, Vault};
+use super::{fsio, layout, links, Vault};
 use crate::domain::model::{DocRef, NOTE};
 use crate::error::{AppError, Result};
 
@@ -186,7 +186,7 @@ impl Vault {
         }
         fsio::write_atomic(&fsio::abs(&self.root, &rel), text)?;
         // 树上的文件（列表栏）这次就带上它，不等文件监听
-        let (folders, files) = folders::scan(&self.root, &self.layout, true);
+        let (folders, files) = self.scan_tree();
         self.folders = folders;
         self.files = files;
         Ok(rel)

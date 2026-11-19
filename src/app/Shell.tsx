@@ -6,7 +6,8 @@ import { CaptureSettingsDialog } from "@/components/CaptureSettingsDialog";
 import { CollabDialog, CollabRequests, CollabResume } from "@/components/CollabDialog";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DocumentPanes, activeNoteOf } from "@/components/DocumentPanes";
-import { ErrorToast, LayoutChangeToast, NoticeToast } from "@/components/ErrorToast";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ErrorToast, ImportToast, LayoutChangeToast, NoticeToast } from "@/components/ErrorToast";
 import { ExportDialog } from "@/components/ExportDialog";
 import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
@@ -36,7 +37,7 @@ import { ArchiveList } from "@/views/ArchiveView";
 import { ExtensionsView } from "@/views/ExtensionsView";
 import { NotesList } from "@/views/NotesView";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
-import { useEffect } from "react";
+import { type ReactNode, useEffect } from "react";
 
 /**
  * 专注模式的进出。
@@ -48,6 +49,21 @@ const zenTransition = ZEN_TRANSITION;
 
 /** 版面换了时旧的一屏盖在新的上面退掉（和 SwapFade 同一个节奏） */
 const FRAME_DISSOLVE = { duration: 0.18, ease: [0.22, 1, 0.36, 1] } as const;
+
+/**
+ * 某一块渲染出错了（docs/技术方案.md §8.9）：弹错误提示条。那一块自己换成「出错了」（列表栏、正文），
+ * 或者不画（浮在上面的那些）；别的块照常能用、能存
+ */
+const showRenderError = (message: string) => useData.setState({ error: message });
+
+/** 浮在上面的（对话框、提示条、弹出窗口、插件的副作用）：出错了只弹提示条，不画东西 */
+function Guard({ area, children }: { area: string; children: ReactNode }) {
+  return (
+    <ErrorBoundary area={area} fallback="none" onError={showRenderError}>
+      {children}
+    </ErrorBoundary>
+  );
+}
 
 export function Shell() {
   const workspace = useApp((s) => s.workspace);
@@ -129,7 +145,9 @@ export function Shell() {
   return (
     <MotionConfig reducedMotion={reduceMotion ? "always" : "user"}>
       <div className="relative flex h-full w-full overflow-hidden bg-rail">
-        <TitleBar />
+        <Guard area="标题栏">
+          <TitleBar />
+        </Guard>
 
         {/* ---------- 左侧 chrome（导航 + 列表栏） ----------
             专注模式的动画全在这一层做，而且刻意**不用**布局属性：
@@ -156,7 +174,9 @@ export function Shell() {
           animate={{ x: zenShift }}
           transition={zenTransition}
         >
-          <Sidebar />
+          <ErrorBoundary area="侧栏" fallback="compact" onError={showRenderError}>
+            <Sidebar />
+          </ErrorBoundary>
 
           {/* ---------- 中列表栏 ----------
             两栏 ↔ 三栏切换**只动 transform**，布局只变一次：
@@ -198,17 +218,26 @@ export function Shell() {
                         transition={tween.base}
                         className="h-full"
                       >
-                        {workspace === "notes" && <NotesList notes={notes} />}
-                        {PluginList && <PluginList />}
-                        {workspace === "archive" && (
-                          <ArchiveList items={archived} onRestore={restoreNote} />
-                        )}
+                        <ErrorBoundary
+                          area="列表栏"
+                          fallback="block"
+                          resetKey={workspace}
+                          onError={showRenderError}
+                        >
+                          {workspace === "notes" && <NotesList notes={notes} />}
+                          {PluginList && <PluginList />}
+                          {workspace === "archive" && (
+                            <ArchiveList items={archived} onRestore={restoreNote} />
+                          )}
+                        </ErrorBoundary>
                       </motion.div>
                     </AnimatePresence>
                   </div>
                   {/* 仓库名 ⌄：换仓库、开关插件（日程，Obsidian 也放在这里）。在换内容的那一层外面，
                       切工作区时它不跟着淡出淡入 */}
-                  <VaultSwitcher />
+                  <Guard area="仓库菜单">
+                    <VaultSwitcher />
+                  </Guard>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -252,12 +281,21 @@ export function Shell() {
               transition={FRAME_DISSOLVE}
               className="odea-frame h-full"
             >
-              {workspace === "extensions" ? (
-                <ExtensionsView />
-              ) : (
-                // 一排窗格（笔记分屏时几栏，别的区一栏）；每栏的标签栏、删除都在里面
-                <DocumentPanes doc={doc} onSaveDocument={saveDocument} onSaveTitle={saveTitle} />
-              )}
+              {/* 每个窗格里还有一个（DocumentPanes 的 Pane）：分屏时一栏出错另一栏照常 */}
+              <ErrorBoundary
+                area={workspace === "extensions" ? "扩展页" : "正文"}
+                fallback="block"
+                className="bg-canvas"
+                resetKey={`${workspace}:${doc.key}`}
+                onError={showRenderError}
+              >
+                {workspace === "extensions" ? (
+                  <ExtensionsView />
+                ) : (
+                  // 一排窗格（笔记分屏时几栏，别的区一栏）；每栏的标签栏、删除都在里面
+                  <DocumentPanes doc={doc} onSaveDocument={saveDocument} onSaveTitle={saveTitle} />
+                )}
+              </ErrorBoundary>
             </motion.main>
           </AnimatePresence>
 
@@ -265,40 +303,81 @@ export function Shell() {
               在正文区里居中（以前按整个窗口居中，跨在列表栏和正文的分界线上）。
               离底 72px：底下贴着正文的状态栏（32px 高），「保存失败」就显示在那一行，别压上去 */}
           <div className="pointer-events-none absolute inset-x-0 bottom-[72px] z-40 flex flex-col items-center gap-2 px-6">
-            <ErrorToast />
-            <NoticeToast />
-            <LayoutChangeToast />
-            <TeamRelayToast />
-            <CollabRequests />
-            <CollabResume />
-            <UndoToast />
+            {/* 错误提示条自己出错了就只记在控制台：再弹提示条也是它 */}
+            <ErrorBoundary area="错误提示条" fallback="none">
+              <ErrorToast />
+            </ErrorBoundary>
+            <Guard area="提示条">
+              <ImportToast />
+              <NoticeToast />
+              <LayoutChangeToast />
+              <TeamRelayToast />
+              <CollabRequests />
+              <CollabResume />
+              <UndoToast />
+            </Guard>
           </div>
         </div>
         {/* 在按快捷键的那个窗口里开（弹出窗口里按就开在那边，docs/标签页与分屏.md §20.2） */}
         <InActiveWindow open={paletteOpen}>
-          <CommandPalette docTarget={popoutTarget ?? docTarget} />
+          <Guard area="命令面板">
+            <CommandPalette docTarget={popoutTarget ?? docTarget} />
+          </Guard>
         </InActiveWindow>
         <InActiveWindow open={findOpen}>
-          <FindDialog />
+          <Guard area="全局搜索">
+            <FindDialog />
+          </Guard>
         </InActiveWindow>
-        <SyncDialog />
-        <CollabDialog />
+        <Guard area="同步对话框">
+          <SyncDialog />
+        </Guard>
+        <Guard area="协作对话框">
+          <CollabDialog />
+        </Guard>
         {/* 在协作对话框之上：连不上时从协作对话框里「配中继…」打开 */}
-        <RelayDialog />
-        <TeamDialog />
-        <HistoryDialog />
-        <TrashDialog />
-        <ExportDialog />
-        <CaptureSettingsDialog />
-        <UpdateDialog />
+        <Guard area="中继对话框">
+          <RelayDialog />
+        </Guard>
+        <Guard area="团队对话框">
+          <TeamDialog />
+        </Guard>
+        <Guard area="历史版本">
+          <HistoryDialog />
+        </Guard>
+        <Guard area="回收站">
+          <TrashDialog />
+        </Guard>
+        <Guard area="导出对话框">
+          <ExportDialog />
+        </Guard>
+        <Guard area="速记设置">
+          <CaptureSettingsDialog />
+        </Guard>
+        <Guard area="新版本卡片">
+          <UpdateDialog />
+        </Guard>
         {/* 带脚本的插件（L1）要的权限：扩展页装之前、授权时弹（plugins/scripted.ts 的 askConsent） */}
-        <PluginConsent />
+        <Guard area="插件授权">
+          <PluginConsent />
+        </Guard>
         {/* 弹出窗口（docs/标签页与分屏.md §16）：每个 portal 进它自己的窗口，这里不占地方 */}
-        <Popouts onSaveDocument={saveDocument} onSaveTitle={saveTitle} />
+        <Guard area="弹出窗口">
+          <Popouts onSaveDocument={saveDocument} onSaveTitle={saveTitle} />
+        </Guard>
         {/* 开着的插件跟着主窗口挂着的副作用（plugins/registry.ts 的 Effects） */}
-        {plugins.map((plugin) => plugin.Effects && <plugin.Effects key={plugin.id} />)}
+        {plugins.map(
+          (plugin) =>
+            plugin.Effects && (
+              <Guard key={plugin.id} area={`插件「${plugin.name}」`}>
+                <plugin.Effects />
+              </Guard>
+            ),
+        )}
         {/* 开场：冷启动时盖在最上面，写一个「O」再把它送回侧栏（components/Intro.tsx） */}
-        <Intro />
+        <Guard area="开场动画">
+          <Intro />
+        </Guard>
       </div>
     </MotionConfig>
   );

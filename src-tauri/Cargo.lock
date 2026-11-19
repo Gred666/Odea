@@ -4237,7 +4237,6 @@ dependencies = [
  "bytes",
  "chrono",
  "data-encoding",
- "dirs",
  "encoding_rs",
  "filetime",
  "git2",

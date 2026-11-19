@@ -586,12 +586,37 @@ async exportFolderDone(root: string) : Promise<Result<null, AppError>> {
 }
 },
 /**
- * 导入（docs/仓库与启动器.md §7.6）：弹选文件夹的对话框，把仓库外的一个文件夹照原样复制进来，
- * 放在树上的 folder 里（逻辑目录在树上照原来的结构摆好）。原来的不动。取消了返回 null
+ * 导入（docs/仓库与启动器.md §7.6、§21）：弹选文件夹的对话框，把仓库外的一个文件夹照原样复制进来，
+ * 放在树上的 folder 里（逻辑目录在树上照原来的结构摆好）。原来的不动。
+ * 拷文件时不拿仓库的锁、读进索引时一小批一小批地拿，边做边发 ImportProgress。
+ * 没选文件夹、中途取消了（vault_import_cancel、关了窗口、换了仓库）返回 null。一个窗口同时只导入一个
  */
 async vaultImport(folder: string) : Promise<Result<ImportReport | null, AppError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("vault_import", { folder }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 取消正在做的导入：拷进来的都收回去，vault_import 返回 null。没在导入就什么都不做
+ */
+async vaultImportCancel() : Promise<Result<null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_import_cancel") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 正在导入的话走到哪了（最近报的那一条），没在导入是 null。页面中途重新载入了用它接着显示进度、
+ * 看导完没有（先订阅 ImportProgress 再问）
+ */
+async vaultImportProgress() : Promise<Result<ImportProgress | null, AppError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_import_progress") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2088,6 +2113,7 @@ captureShown: CaptureShown,
 collabCopyReady: CollabCopyReady,
 collabEvent: CollabEvent,
 collabLink: CollabLink,
+importProgress: ImportProgress,
 indexProgress: IndexProgress,
 launcherLink: LauncherLink,
 reminderAction: ReminderAction,
@@ -2103,6 +2129,7 @@ captureShown: "capture-shown",
 collabCopyReady: "collab-copy-ready",
 collabEvent: "collab-event",
 collabLink: "collab-link",
+importProgress: "import-progress",
 indexProgress: "index-progress",
 launcherLink: "launcher-link",
 reminderAction: "reminder-action",
@@ -2710,6 +2737,26 @@ guests: number;
  */
 savedAt: number }
 /**
+ * 导入走到哪一段了（docs/仓库与启动器.md §21）
+ */
+export type ImportPhase = 
+/**
+ * 拷进仓库里的暂存目录（done / total 是文件数）
+ */
+"copy" | 
+/**
+ * 读进索引（done / total 是笔记数）
+ */
+"index"
+/**
+ * 导入的进度（docs/仓库与启动器.md §21）：复制、读进索引两段，最多 100ms 一条，只发给这个窗口
+ */
+export type ImportProgress = { 
+/**
+ * 导入的那个文件夹的名字
+ */
+name: string; phase: ImportPhase; done: number; total: number }
+/**
  * 导入一个文件夹的结果（Vault::import_folder）
  */
 export type ImportReport = { 
@@ -2720,7 +2767,11 @@ folder: string; notes: number;
 /**
  * 别的文件（图片、PDF …）
  */
-files: number }
+files: number; 
+/**
+ * 读不了、没拷的文件（别的程序独占着、没权限）
+ */
+skipped: number }
 /**
  * 后台把文件读进索引的进度。读完的那一次 done == total，前端据此整个重新取一遍列表
  */

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Backend } from "./backend";
 import { UNSORTED, folderOf, setTreeShape } from "./folders";
 import {
+  type ImportProgress,
+  type ImportReport,
   type IndexProgress,
   type Note,
   type NoteSummary,
@@ -50,6 +52,10 @@ const api = {
   treeQueries: vi.fn(),
   treeFiles: vi.fn(),
   vaultRelayout: vi.fn(),
+  vaultImport: vi.fn(),
+  vaultImportCancel: vi.fn(),
+  onImportProgress: vi.fn(),
+  importProgress: vi.fn(),
 };
 
 vi.mock("./backend", () => ({
@@ -600,6 +606,27 @@ describe("applyVaultChange（别的程序改了仓库里的文件）", () => {
     expect(state.error).toBeNull();
   });
 
+  it("a big batch reloads both lists once and only refetches the bodies it holds", async () => {
+    // 同步拉下来一大批、外面的 git 切了分支：一篇篇取要几分钟（docs/仓库与启动器.md §21）
+    put({ notes: [note("旧的")] });
+    const others = Array.from({ length: 50 }, (_, i) => ({ ...note("别的"), id: `n-${i + 2}` }));
+    api.noteList.mockImplementation(async (archived: boolean) =>
+      archived ? [] : [note("别处改的"), ...others].map(summary),
+    );
+    api.noteGet.mockResolvedValue(note("别处改的"));
+
+    await useData
+      .getState()
+      .applyVaultChange(change({ notes: ["n-1", ...others.map((other) => other.id)] }));
+    expect(api.noteList).toHaveBeenCalledTimes(2);
+    expect(api.noteGet).toHaveBeenCalledTimes(1);
+    expect(api.noteGet).toHaveBeenCalledWith("n-1");
+    const state = useData.getState();
+    expect(state.notes).toHaveLength(51);
+    expect(state.bodies["n-1"]).toBe("别处改的");
+    expect(state.externalRevisions["note:n-1"]).toBe(1);
+  });
+
   it("tells the user where a conflicting external edit went", async () => {
     api.noteGet.mockResolvedValue({ ...note("磁盘上的"), id: "n-copy" });
     await useData
@@ -1093,5 +1120,115 @@ describe("逻辑目录", () => {
     await useData.getState().deleteFolder("复盘");
     expect(useData.getState().notes.map((item) => item.id)).toEqual(["n-1"]);
     expect(useData.getState().folders).toEqual(["交易"]);
+  });
+});
+
+describe("导入文件夹（docs/仓库与启动器.md §21）", () => {
+  /** store 订阅的导入进度（每次导入订阅一次，导完退订） */
+  let report: ((progress: ImportProgress) => void) | null = null;
+  /** 让 vaultImport 停在半路，测试里再放它回来 */
+  let finish: (result: ImportReport | null) => void = () => {};
+  /** 导完整个重取一次（它本身的测试在「后台读文件进索引」那里） */
+  const reloadIndexed = vi.fn(async () => {});
+
+  beforeEach(() => {
+    report = null;
+    reloadIndexed.mockClear();
+    useData.setState({ reloadIndexed });
+    api.onImportProgress.mockImplementation(
+      async (listener: (progress: ImportProgress) => void) => {
+        report = listener;
+        return () => {
+          report = null;
+        };
+      },
+    );
+    api.vaultImport.mockImplementation(
+      () =>
+        new Promise<ImportReport | null>((resolve) => {
+          finish = resolve;
+        }),
+    );
+  });
+
+  /** 点了导入、对话框选好了：后端正在做。包一层返回，不然 await 它就等到导完了 */
+  const started = async () => {
+    const running = useData.getState().importFolder("");
+    await vi.waitFor(() => expect(api.vaultImport).toHaveBeenCalled());
+    return { running };
+  };
+
+  it("shows how far it got while it runs, then says what came in", async () => {
+    const { running } = await started();
+    report?.({ name: "读书笔记", phase: "copy", done: 3, total: 10 });
+    expect(useData.getState().importing).toEqual({
+      name: "读书笔记",
+      phase: "copy",
+      done: 3,
+      total: 10,
+    });
+
+    finish({ folder: "读书笔记", notes: 3, files: 7, skipped: 2 });
+    expect(await running).toBe("读书笔记");
+    const state = useData.getState();
+    expect(state.importing).toBeNull();
+    expect(state.notice).toContain("导入了 3 篇笔记、7 个别的文件");
+    expect(state.notice).toContain("有 2 个文件读不了");
+    expect(report).toBeNull();
+    // 列表整个重取了一次（后端不再一篇篇通知）
+    expect(reloadIndexed).toHaveBeenCalledTimes(1);
+  });
+
+  it("says so when it was cancelled half way, and nothing when the dialog was just closed", async () => {
+    let { running } = await started();
+    report?.({ name: "读书笔记", phase: "index", done: 1, total: 3 });
+    finish(null);
+    expect(await running).toBeNull();
+    expect(useData.getState().notice).toContain("导入取消了");
+    expect(useData.getState().importing).toBeNull();
+
+    useData.setState({ notice: null });
+    api.vaultImport.mockClear();
+    ({ running } = await started());
+    finish(null);
+    expect(await running).toBeNull();
+    expect(useData.getState().notice).toBeNull();
+  });
+
+  it("does not start a second one while the first is still running", async () => {
+    const { running } = await started();
+    report?.({ name: "读书笔记", phase: "copy", done: 0, total: 10 });
+    expect(await useData.getState().importFolder("")).toBeNull();
+    expect(api.vaultImport).toHaveBeenCalledTimes(1);
+    expect(useData.getState().error).toContain("正在导入「读书笔记」");
+    // 第一个照常做完，提示条也还是它的
+    expect(useData.getState().importing?.name).toBe("读书笔记");
+    finish({ folder: "读书笔记", notes: 1, files: 0, skipped: 0 });
+    expect(await running).toBe("读书笔记");
+  });
+
+  it("picks an import that is still running back up after the page reloaded", async () => {
+    // 新的一张页面启动：后端说还在导入，过一会儿再问就没了
+    api.noteList.mockResolvedValue([]);
+    api.importProgress
+      .mockResolvedValueOnce({ name: "读书笔记", phase: "index", done: 5, total: 10 })
+      .mockResolvedValue(null);
+    await useData.getState().initialize();
+    await vi.waitFor(() => expect(useData.getState().importing?.done).toBe(5));
+    report?.({ name: "读书笔记", phase: "index", done: 8, total: 10 });
+    expect(useData.getState().importing?.done).toBe(8);
+    await vi.waitFor(() => expect(useData.getState().notice).toBe("导入「读书笔记」结束了"), {
+      timeout: 3000,
+    });
+    expect(useData.getState().importing).toBeNull();
+    expect(reloadIndexed).toHaveBeenCalledTimes(1);
+    expect(report).toBeNull();
+  });
+
+  it("reports a failure and takes the progress down", async () => {
+    api.vaultImport.mockRejectedValue({ kind: "Io", message: "磁盘满了" });
+    expect(await useData.getState().importFolder("")).toBeNull();
+    expect(useData.getState().error).toBe("磁盘满了");
+    expect(useData.getState().importing).toBeNull();
   });
 });

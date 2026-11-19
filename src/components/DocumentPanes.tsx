@@ -17,6 +17,7 @@ import {
   useState,
 } from "react";
 import { DocumentView } from "./DocumentView";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { NoteTabs } from "./NoteTabs";
 import { SwapFade } from "./SwapFade";
 
@@ -139,13 +140,22 @@ function Pane({ pane, ...props }: PaneProps & { pane: NotePane }) {
       onPointerDownCapture={focus}
       onFocusCapture={focus}
     >
-      <PaneBody
-        paneId={pane.id}
-        tabs={pane.tabs}
-        activeTab={pane.activeTab}
-        hostRef={ref}
-        {...props}
-      />
+      {/* 这一栏渲染出错只换掉这一栏（docs/技术方案.md §8.9），分屏的另一栏照常；换一篇就再试一次 */}
+      <ErrorBoundary
+        area="这一栏"
+        fallback="block"
+        className="bg-canvas"
+        resetKey={`${pane.activeTab}:${props.shellDoc.key}`}
+        onError={(message) => useData.setState({ error: message })}
+      >
+        <PaneBody
+          paneId={pane.id}
+          tabs={pane.tabs}
+          activeTab={pane.activeTab}
+          hostRef={ref}
+          {...props}
+        />
+      </ErrorBoundary>
     </div>
   );
 }

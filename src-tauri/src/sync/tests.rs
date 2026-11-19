@@ -167,7 +167,7 @@ fn prepare_writes_its_own_block_and_keeps_the_users_lines() {
     let repo = SyncRepo::init(&root).unwrap();
     let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
     assert!(ignore.starts_with("# >>> Odea"));
-    assert!(ignore.contains(".odea/trash/\n.ontheway/trash/\n.*.tmp\n"));
+    assert!(ignore.contains(".odea/trash/\n.*.tmp\n"));
     assert!(ignore.ends_with("# <<< Odea\n\nnode_modules/\n*.log\n"));
     let attributes = fs::read_to_string(root.join(".gitattributes")).unwrap();
     assert!(attributes.contains("* -text\n*.md text eol=lf\n"));
@@ -181,60 +181,6 @@ fn prepare_writes_its_own_block_and_keeps_the_users_lines() {
     let again = fs::read_to_string(root.join(".gitignore")).unwrap();
     assert!(again.contains(".*.tmp\n"));
     assert!(again.ends_with("*.log\ndist/\n"));
-}
-
-#[test]
-fn the_block_written_before_the_rename_is_replaced_in_place() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("仓库");
-    fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join(".gitignore"),
-        "dist/\n# >>> OnTheWay（这一段由应用维护）\n.ontheway/trash/\n.*.tmp\n# <<< OnTheWay\nnode_modules/\n",
-    )
-    .unwrap();
-
-    SyncRepo::init(&root).unwrap();
-    let ignore = fs::read_to_string(root.join(".gitignore")).unwrap();
-    assert!(!ignore.contains("OnTheWay"), "旧的那一段换掉了：{ignore}");
-    assert!(ignore.starts_with("dist/\n# >>> Odea"), "放在旧的那一段原来的位置：{ignore}");
-    assert!(ignore.ends_with("# <<< Odea\nnode_modules/\n"));
-
-    // 还没升级的设备又在最前面写回来一段：拿掉，新的那一段不动
-    let repo = SyncRepo::open(&root).unwrap().unwrap();
-    fs::write(
-        root.join(".gitignore"),
-        format!("# >>> OnTheWay（这一段由应用维护）\n.ontheway/trash/\n# <<< OnTheWay\n\n{ignore}"),
-    )
-    .unwrap();
-    assert!(repo.prepare().unwrap());
-    let again = fs::read_to_string(root.join(".gitignore")).unwrap();
-    assert!(!again.contains("OnTheWay"));
-    assert_eq!(again.trim_start(), ignore);
-}
-
-#[test]
-fn settings_from_before_the_rename_move_to_the_new_keys() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("仓库");
-    fs::create_dir_all(&root).unwrap();
-    let repo = git2::Repository::init(&root).unwrap();
-    let mut config = repo.config().unwrap();
-    config.set_str("ontheway.autosync", "true").unwrap();
-    config.set_str("ontheway.provider", "github").unwrap();
-    config.set_str("ontheway.login", "旧账号").unwrap();
-    // 新版已经写过的以新的为准
-    config.set_str("odea.login", "新账号").unwrap();
-    fs::write(root.join(".git/ontheway.json"), "{\"lastRepack\":1}").unwrap();
-
-    let repo = SyncRepo::open(&root).unwrap().unwrap();
-    assert_eq!(repo.config_get("odea.autosync").as_deref(), Some("true"));
-    assert_eq!(repo.config_get("odea.provider").as_deref(), Some("github"));
-    assert_eq!(repo.config_get("odea.login").as_deref(), Some("新账号"));
-    assert_eq!(repo.config_get("ontheway.autosync"), None);
-    assert_eq!(repo.config_get("ontheway.login"), None);
-    assert!(root.join(".git/odea.json").exists());
-    assert!(!root.join(".git/ontheway.json").exists());
 }
 
 #[test]

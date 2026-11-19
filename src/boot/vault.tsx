@@ -7,7 +7,7 @@ import { initPreferences, restoreVaultSession, takePendingPopouts } from "@/app/
 import { initCollab } from "@/collab/store";
 import { preloadEditor } from "@/components/DocumentView";
 import { backend } from "@/data/backend";
-import { useData } from "@/data/store";
+import { messageOf, useData } from "@/data/store";
 import { installCloseGuard } from "@/editor/saveBus";
 import { isTauri, thisWindow } from "@/lib/tauri";
 import { initDeclaredPlugins } from "@/plugins/declared";
@@ -17,6 +17,8 @@ import { mount } from "./mount";
 /** 仓库窗口的启动序列（docs/技术方案.md §3.3） */
 export async function boot() {
   initPreferences();
+  // 没被接住的异常、没人管的被拒绝的 Promise 进错误提示条（docs/技术方案.md §8.9）。最先装：启动时出的也算
+  reportUncaught();
   // 「上次停在哪」按仓库分开记：先问这个窗口开的是哪个仓库，再把那个仓库的记录放进界面状态，
   // 下面取列表、取正文时才知道上次看的是哪篇（一个窗口一个仓库，localStorage 是所有窗口共用的）
   if (isTauri) {
@@ -55,7 +57,39 @@ export async function boot() {
   // 窗口出来了，开场才开始落笔
   await mount(<Shell />);
   markShown();
+  noticeRecovered();
   // 上次开着的弹出窗口重开在原来的地方（docs/标签页与分屏.md §20.3）：主窗口先出来，它们跟着
   const { reopenPopouts } = await import("@/app/popout");
   void reopenPopouts(takePendingPopouts());
+}
+
+/**
+ * 没被接住的异常、被拒绝了没人管的 Promise（docs/技术方案.md §8.9）：以前只躺在控制台里，用户只看到
+ * 「点了没反应」。进错误提示条，说出是什么错
+ */
+function reportUncaught(): void {
+  const report = (error: unknown) => {
+    // 取消的请求不是错；ResizeObserver 一帧里没送完的通知是浏览器自己的提示
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    const message = messageOf(error ?? "未知的错误");
+    if (message.includes("ResizeObserver loop")) return;
+    console.error("没被接住的错误", error);
+    useData.setState({ error: message });
+  };
+  window.addEventListener("error", (event) => report(event.error ?? event.message));
+  window.addEventListener("unhandledrejection", (event) => report(event.reason));
+}
+
+/**
+ * 渲染进程刚才没了、Rust 把页面重新载入了（src-tauri/src/webview_guard.rs，地址里带 recovered）：
+ * 说一声发生了什么，再把记号从地址里去掉（之后自己刷新不再说）
+ */
+function noticeRecovered(): void {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("recovered")) return;
+  url.searchParams.delete("recovered");
+  window.history.replaceState(window.history.state, "", url);
+  useData.setState({
+    notice: "页面刚才崩溃了，已经自动重新载入；正在写的那一篇，最后几秒还没存上的字可能没了",
+  });
 }

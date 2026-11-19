@@ -1227,6 +1227,16 @@ export const mockBackend: Backend = {
     desktopOnly();
   },
 
+  async vaultImportCancel() {},
+
+  async onImportProgress() {
+    return () => {};
+  },
+
+  async importProgress() {
+    return null;
+  },
+
   async treeMoveFolder(folder, parent, after) {
     await tick();
     const moved = state.tree ? moveBranch(state.tree, folder, parent, after) : null;

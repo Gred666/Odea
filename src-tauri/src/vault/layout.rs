@@ -30,9 +30,11 @@ pub const NOTES_DIR: &str = "笔记";
 pub const ARCHIVE_DIR: &str = "归档";
 /// 粘贴 / 拖进来的图片，正文里用相对路径引用（见 Vault::attach）
 pub const ATTACHMENTS_DIR: &str = "附件";
-/// 应用自己的文件夹。改名前叫 .ontheway，打开仓库时搬过来（old_name::move_vault_dir）
+/// 应用自己的文件夹
 pub const APP_DIR: &str = ".odea";
 pub const TRASH_DIR: &str = ".odea/trash";
+/// 导入时先拷到这里（以点开头：文件监听、扫描都不看它），拷完改名到位（vault/import.rs）
+pub const IMPORT_DIR: &str = ".odea/import";
 pub const ACTIVITY_DIR: &str = ".odea/activity";
 pub const VAULT_MARKER: &str = ".odea/vault.json";
 

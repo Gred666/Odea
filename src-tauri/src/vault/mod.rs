@@ -117,6 +117,9 @@ pub struct Vault {
     /// 扫描时读不了、跳过的 .md（别的程序正独占着它）。文件监听隔一会儿拿去再读（take_unread，watch.rs）：
     /// 有的程序占着不改、放开时没有文件事件，不再读的话外部改动一直进不了索引（审查 §5.4）
     unread: Vec<String>,
+    /// 刚导入进来、还在分批读进索引的文件夹（相对仓库，import.rs）。扫描先不管它：文件监听看到它改名进来
+    /// 会整扫一遍，不跳过的话又在锁里一口气读完；本地目录的树上也等它读完了一起出来
+    importing: Option<String>,
 }
 
 /// keep_theirs 另存下的冲突副本：合并做成了交给 absorb_merge 通知前端，没做成交给 drop_kept 收回
@@ -273,7 +276,10 @@ impl Vault {
             tree_build: false,
             indexed_all: false,
             unread: Vec::new(),
+            importing: None,
         };
+        // 上次导入到一半应用没了（崩溃、断电）：暂存的那一份没人要了
+        import::purge_staging(root);
         vault.load_tree();
         Ok(vault)
     }
@@ -462,7 +468,8 @@ impl Vault {
     fn plan_rescan(&mut self) -> Result<(VaultChange, Vec<fsio::FileEntry>)> {
         self.check_root()?;
         let mut change = VaultChange { layout: self.check_layout(), ..VaultChange::default() };
-        let (mut files, attachments) = fsio::walk(&self.root, is_attachment_name);
+        let (mut files, mut attachments) = fsio::walk(&self.root, is_attachment_name);
+        attachments.retain(|rel| !self.is_importing(rel));
         if attachments != self.attachments {
             self.attachments = attachments;
             change.attachments = true;
@@ -484,15 +491,18 @@ impl Vault {
                 }
             }
         }
+        // 正在导入的那个文件夹由导入自己分批读（import.rs）；已经读进去的那些上面照样算「在」，不会被当成删了
         let stale = files
             .into_iter()
-            .filter(|file| known_state.get(file.rel.as_str()) != Some(&(file.mtime, file.size)))
+            .filter(|file| {
+                !self.is_importing(&file.rel) && known_state.get(file.rel.as_str()) != Some(&(file.mtime, file.size))
+            })
             .collect();
         if self.tree.is_some() {
             // 逻辑目录的文件夹在清单里：硬盘上建了、删了文件夹和树无关，清单被别处改了才算
             change.folders |= self.reload_tree();
         } else {
-            let (folders, files) = folders::scan(&self.root, &self.layout, true);
+            let (folders, files) = self.scan_tree();
             if folders != self.folders || files != self.files {
                 self.folders = folders;
                 self.files = files;
@@ -502,12 +512,38 @@ impl Vault {
         Ok((change, stale))
     }
 
+    /// 正在导入、还没读完的那个文件夹里的（import.rs）：扫描、树上都先不管
+    fn is_importing(&self, rel: &str) -> bool {
+        self.importing.as_deref().is_some_and(|dest| layout::within(rel, dest))
+    }
+
+    /// 本地目录树上的文件夹和文件（folders::scan），正在导入的那个文件夹读完以前不算
+    fn scan_tree(&self) -> (Vec<String>, Vec<TreeFile>) {
+        let (mut folders, mut files) = folders::scan(&self.root, &self.layout, true);
+        if let Some(dest) = self.importing.as_deref() {
+            if let Some(folder) = self.layout.folder_of_dir(dest) {
+                folders.retain(|path| !layout::within(path, folder));
+            }
+            files.retain(|file| !layout::within(&file.rel_path, dest));
+        }
+        (folders, files)
+    }
+
+    /// 本地目录树上的文件夹（同 scan_tree，不要文件）
+    fn list_folders(&self) -> Vec<String> {
+        let mut folders = folders::list(&self.root, &self.layout);
+        if let Some(folder) = self.importing.as_deref().and_then(|dest| self.layout.folder_of_dir(dest)) {
+            folders.retain(|path| !layout::within(path, folder));
+        }
+        folders
+    }
+
     /// 文件树上列的图片、PDF（本地目录；逻辑目录的树上只有笔记，是空的）
     pub fn tree_files(&mut self) -> Vec<TreeFile> {
         if self.tree.is_some() {
             return Vec::new();
         }
-        let (folders, files) = folders::scan(&self.root, &self.layout, true);
+        let (folders, files) = self.scan_tree();
         self.folders = folders;
         self.files = files.clone();
         files
@@ -609,15 +645,17 @@ impl Vault {
         // 逻辑目录的清单、仓库标记（文件监听单独放行了 .odea/tree、.odea/vault.json，见 watch.rs）
         change.folders |= self.reload_tree();
         change.layout |= self.check_layout();
+        // 正在导入的那个文件夹由导入自己分批读（import.rs）
+        let rels: Vec<&String> = rels.iter().filter(|rel| !self.is_importing(rel)).collect();
         let read: Result<()> = self.batched(|vault| {
-            for rel in rels {
+            for rel in &rels {
                 if !fsio::abs(&vault.root, rel).is_file() {
                     if let Some(row) = index::by_path(&vault.db, rel)? {
                         vault.forget(&row, &mut change)?;
                     }
                 }
             }
-            for rel in rels {
+            for rel in &rels {
                 let Some((mtime, size)) = fsio::stat(&fsio::abs(&vault.root, rel)) else {
                     continue;
                 };
@@ -1144,7 +1182,7 @@ impl Vault {
             meta.archived = None;
             meta.archived_from = None;
         })?;
-        self.folders = folders::list(&self.root, &self.layout);
+        self.folders = self.list_folders();
         self.log.record("note", &saved.id, "restored");
         self.announce(change);
         Ok(())
@@ -1219,7 +1257,7 @@ impl Vault {
         let row = self.write_and_index(&rel, &frontmatter::render(&meta, &body), &mut change)?;
         std::fs::remove_file(fsio::abs(&self.root, &trash))?;
         // 原来的文件夹可能连同它一起删掉了，放回去时重新建上
-        self.folders = folders::list(&self.root, &self.layout);
+        self.folders = self.list_folders();
         self.log.record("note", &row.id, "undeleted");
         self.announce(change.without(&row));
         Ok(())
@@ -1254,7 +1292,7 @@ impl Vault {
     pub fn folders(&self) -> Vec<String> {
         match &self.tree {
             Some(tree) => tree.folder_paths(),
-            None => folders::list(&self.root, &self.layout),
+            None => self.list_folders(),
         }
     }
 
@@ -1276,7 +1314,7 @@ impl Vault {
         let name = layout::folder_name(name).ok_or_else(|| AppError::Invalid("文件夹名不能是空的".into()))?;
         let dir = folders::unique_dir(&self.root, &parent_dir, &name, None);
         std::fs::create_dir_all(fsio::abs(&self.root, &dir))?;
-        self.folders = folders::list(&self.root, &self.layout);
+        self.folders = self.list_folders();
         self.log.record("folder", &dir, "created");
         Ok(self.layout.folder_of_dir(&dir).unwrap_or_default().to_string())
     }
@@ -1298,7 +1336,7 @@ impl Vault {
         }
         std::fs::rename(fsio::abs(&self.root, &old_dir), fsio::abs(&self.root, &new_dir))?;
         index::rename_dir(&self.db, &old_dir, &new_dir)?;
-        self.folders = folders::list(&self.root, &self.layout);
+        self.folders = self.list_folders();
         self.log.record_with("folder", &old_dir, "renamed", Some(&new_dir));
 
         // 底下每篇的路径都变了：让前端刷新它们（正文里的图片以文件夹为基准）
@@ -1333,7 +1371,7 @@ impl Vault {
         let mut change = VaultChange::default();
         let notes = self.trash_all(&rows, &mut change)?;
         let kept = !folders::remove_empty_tree(&fsio::abs(&self.root, &dir));
-        self.folders = folders::list(&self.root, &self.layout);
+        self.folders = self.list_folders();
         self.log.record("folder", &dir, "deleted");
         // 删掉的笔记前端自己会拿掉；只把连带的变化（日历上的任务）告诉它
         change.notes.clear();
@@ -1352,7 +1390,7 @@ impl Vault {
         for id in &deletion.notes {
             self.note_undelete(id)?;
         }
-        self.folders = folders::list(&self.root, &self.layout);
+        self.folders = self.list_folders();
         self.log.record("folder", &deletion.folder, "undeleted");
         Ok(())
     }

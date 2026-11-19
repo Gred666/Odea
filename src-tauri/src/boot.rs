@@ -12,8 +12,6 @@
 两个环境变量用来开发和测试，不碰真实数据：
     ODEA_DATA_DIR  换一个应用数据目录
     ODEA_VAULT     换一个仓库文件夹
-
-改名前（OnTheWay）留下的数据目录、仓库里的 .ontheway/ 怎么搬过来，见 old_name.rs
 ============================================================ */
 
 use std::path::{Path, PathBuf};
@@ -366,10 +364,6 @@ pub enum Prepared {
 /// 时不搬也不放示例 —— 那是用户自己挑的文件夹。`logical`（启动器「新建」）：空文件夹建成逻辑目录
 /// （docs/仓库与启动器.md §7），指南平放在仓库根上
 pub fn prepare(root: &Path, data_dir: &Path, config: &mut Config, first_run: bool, logical: bool) -> Result<Prepared> {
-    // 改名前的 .ontheway/ 先并进来：仓库标记也在里面
-    if let Err(error) = crate::old_name::move_vault_dir(root, layout::APP_DIR) {
-        eprintln!("搬仓库里的 {} 失败: {error}", crate::old_name::VAULT_DIR);
-    }
     let marker = fsio::abs(root, layout::VAULT_MARKER);
     if marker.exists() {
         return Ok(Prepared::Existing);
@@ -578,19 +572,6 @@ mod tests {
         let mut config = Config::default();
         assert_eq!(prepare(&root, &dir.path().join("data"), &mut config, true, false).unwrap(), Prepared::Empty);
         assert_eq!(fsio::walk_markdown(&root).len(), 1, "不往别人的文件夹里塞示例");
-    }
-
-    #[test]
-    fn an_old_vault_from_before_the_rename_is_recognized_and_moved_over() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("文档/OnTheWay");
-        fsio::write_atomic(&fsio::abs(&root, "笔记/周报.md"), "周报").unwrap();
-        fsio::write_atomic(&fsio::abs(&root, ".ontheway/vault.json"), "{\"app\":\"OnTheWay\"}").unwrap();
-        fsio::write_atomic(&fsio::abs(&root, ".ontheway/trash/a.md"), "回收站").unwrap();
-        let mut config = Config::default();
-        assert_eq!(prepare(&root, &dir.path().join("data"), &mut config, true, false).unwrap(), Prepared::Existing);
-        assert!(root.join(layout::TRASH_DIR).join("a.md").exists());
-        assert!(!root.join(".ontheway").exists());
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use tauri::ipc::{CommandArg, CommandItem, InvokeError};
 use tauri::Runtime;
 
-use crate::commands::{CollabHub, Indexing, TeamHub};
+use crate::commands::{CollabHub, ImportRun, Indexing, TeamHub};
 use crate::error::AppError;
 use crate::sync::account::LoginSlot;
 use crate::sync::engine::SyncHub;
@@ -28,6 +28,8 @@ pub struct Workspace {
     pub sync: Arc<SyncHub>,
     /// 后台读文件进索引读到哪了（第一次打开大文件夹、索引升级重建时，见 Vault::open_quick）
     pub indexing: Arc<Mutex<Indexing>>,
+    /// 正在做的导入（docs/仓库与启动器.md §21）。一个窗口同时只导入一个
+    pub import: Mutex<Option<Arc<ImportRun>>>,
 }
 
 impl Workspace {

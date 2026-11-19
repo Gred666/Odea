@@ -334,10 +334,7 @@ pub async fn vault_change_root<R: Runtime>(
     }
 
     // 新文件夹里已经有笔记（别的仓库、Obsidian 的文件夹）：直接用它，现在的不动
-    // 改名前的仓库标记在 .ontheway/ 里，打开时才搬过来（boot::prepare）
-    let target_is_vault = fsio::has_markdown(&new_root)
-        || fsio::abs(&new_root, layout::VAULT_MARKER).exists()
-        || new_root.join(crate::old_name::VAULT_DIR).join("vault.json").exists();
+    let target_is_vault = fsio::has_markdown(&new_root) || fsio::abs(&new_root, layout::VAULT_MARKER).exists();
     if target_is_vault {
         return switch_vault(&app, &state, &ws.0, new_root).await.map(Some);
     }
@@ -457,6 +454,10 @@ async fn move_vault_to<R: Runtime>(
 pub fn stop_services(ws: &Workspace) -> Result<()> {
     *ws.watcher.lock().map_err(|_| AppError::Internal("监听锁坏了".into()))? = None;
     ws.sync.stop();
+    // 关窗口、换仓库：正在做的导入也停下，拷进来的收回去（vault::import）
+    if let Some(run) = ws.import.lock().map_err(|_| AppError::Internal("导入的状态锁坏了".into()))?.as_ref() {
+        run.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     Ok(())
 }
 

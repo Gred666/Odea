@@ -39,7 +39,7 @@
 
 - 加依赖之前看：现有的代码和依赖能不能解决；多多少体积（前端分包、安装包）、多少传递依赖。重的依赖用到时再加载
 - 锁住的版本不动：tauri-specta 的三个 crate（`技术方案.md` §7.1）、`tauri-plugin-global-shortcut`（`TODO.md` P15「全局快捷键速记」）、
-  Mermaid 底下的 KaTeX（`REVIEWS/2026-11-10-审查与竞品调研.md` §5.4.1）
+  Mermaid 底下的 KaTeX（`REVIEWS/2026-11-10-审查与竞品调研.md` §5.4.1）、`loro-crdt`（协作的合并算法，`技术方案.md` §2、`协同编辑.md` §20.2）
 - 升级依赖单独做、单独验
 
 ## 测试

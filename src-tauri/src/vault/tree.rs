@@ -290,6 +290,29 @@ fn spaced_keys(count: usize) -> Vec<String> {
     keys
 }
 
+/// count 个排序键，在 (0, 1) 里均匀摊开、一样长（结尾的 0 去掉）：往一个空文件夹里一次放进一大批用（导入）。
+/// 一个个接在上一个后面（spaced_keys、key_between(上一个, None)）的话每五六个就长一位，一个文件夹放三千篇，
+/// 键就有几百个字符，清单文件跟着变大；摊开的话一万篇也只要三位
+fn spread_keys(count: usize) -> Vec<String> {
+    let base = DIGITS.len() as u128;
+    let mut width = 1;
+    while base.pow(width) <= count as u128 {
+        width += 1;
+    }
+    let span = base.pow(width);
+    (1..=count as u128)
+        .map(|i| {
+            let mut n = i * span / (count as u128 + 1);
+            let mut digits = vec![b'0'; width as usize];
+            for digit in digits.iter_mut().rev() {
+                *digit = DIGITS[(n % base) as usize];
+                n /= base;
+            }
+            text(&digits).trim_end_matches('0').to_string()
+        })
+        .collect()
+}
+
 /* ---------------- 理顺 ---------------- */
 
 impl Tree {
@@ -723,6 +746,34 @@ impl Tree {
         Ok(())
     }
 
+    /// 一批放进同一个文件夹 parent（树上的路径），照给的顺序排在这个文件夹里已有的笔记后面；已经在树上别处的挪过来。
+    /// 和一篇篇 place 结果一样，只是文件夹、已有的节点只找一遍：一篇篇找是 O(篇数 × 节点数)，
+    /// 往一棵两万多个节点的树里导一万篇要十几秒，一直拿着仓库的锁（docs/仓库与启动器.md §21）
+    pub fn place_many(&mut self, parent: &str, items: Vec<Item>) -> Result<()> {
+        let parent = self.folder_id(parent)?;
+        let placed: HashMap<String, String> =
+            self.nodes.iter().filter_map(|(id, node)| Some((node.item.ref_key()?, id.clone()))).collect();
+        let last = self.children(&parent, false).last().map(|id| self.nodes[id].key.clone());
+        // 文件夹里还没有笔记（导入时新建的）：键均匀摊开；已经有了就一个个接在后面
+        let keys = match last {
+            None => spread_keys(items.len()),
+            Some(last) => {
+                let mut keys = Vec::with_capacity(items.len());
+                let mut prev = last;
+                for _ in 0..items.len() {
+                    prev = key_between(Some(&prev), None);
+                    keys.push(prev.clone());
+                }
+                keys
+            }
+        };
+        for (item, key) in items.into_iter().zip(keys) {
+            let id = item.ref_key().and_then(|key| placed.get(&key).cloned()).unwrap_or_else(|| self.new_id());
+            self.nodes.insert(id, Node { parent: parent.clone(), key, item });
+        }
+        Ok(())
+    }
+
     /// 在文件夹 parent（路径，空串是根）里放一个快捷方式，指向 target（一篇的引用，Item::link_to 之前的），
     /// 排在这一层笔记的最前面。这个文件夹里已经有指向它的就不再放。返回快捷方式的节点 id
     pub fn add_link(&mut self, parent: &str, target: &Item) -> Result<String> {
@@ -877,6 +928,43 @@ mod tests {
             high = mid;
         }
         assert_eq!(spaced_keys(3), vec!["i", "r", "v"]);
+    }
+
+    #[test]
+    fn a_big_batch_gets_short_evenly_spread_keys() {
+        assert_eq!(spread_keys(1), vec!["i"]);
+        for count in [2, 35, 36, 1295, 10_000] {
+            let keys = spread_keys(count);
+            assert_eq!(keys.len(), count);
+            assert!(keys.windows(2).all(|pair| pair[0] < pair[1]), "{count} 个按顺序");
+            assert!(keys.iter().all(|key| !key.is_empty() && !key.ends_with('0')));
+        }
+        assert!(spread_keys(10_000).iter().all(|key| key.len() <= 3), "一万篇三位就够");
+    }
+
+    #[test]
+    fn placing_a_batch_is_the_same_as_placing_one_by_one() {
+        let mut tree = Tree::default();
+        tree.add_folder("", "书").unwrap();
+        let notes: Vec<Item> = ["a", "b", "c"].iter().map(|id| Item::Note((*id).into())).collect();
+        tree.place_many("书", notes).unwrap();
+        // 再放一批：接在后面；已经在树上的那篇挪过来，不多出一个节点
+        tree.add_folder("", "别处").unwrap();
+        tree.place(None, Item::Note("d".into()), Some("别处"), None).unwrap();
+        tree.place_many("书", vec![Item::Note("d".into()), Item::File("e.md".into())]).unwrap();
+        let folder = tree.find_branch("书").unwrap();
+        let order: Vec<String> = tree
+            .children(&folder, false)
+            .iter()
+            .map(|id| match &tree.nodes[id].item {
+                Item::Note(note) => note.clone(),
+                Item::File(rel) => rel.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(order, ["a", "b", "c", "d", "e.md"]);
+        assert_eq!(tree.nodes.values().filter(|node| node.item == Item::Note("d".into())).count(), 1);
+        assert!(tree.place_many("没有", vec![]).is_err());
     }
 
     #[test]

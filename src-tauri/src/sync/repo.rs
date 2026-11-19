@@ -26,16 +26,12 @@ use std::thread;
 
 use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{
-    Commit, ConfigLevel, Cred, Delta, ErrorClass, ErrorCode, FetchOptions, Index, IndexAddOption, IndexConflict,
-    IndexEntry, ProxyOptions, PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions, Signature, Status,
-    StatusOptions, StatusShow, Tree,
+    Commit, Cred, Delta, ErrorClass, ErrorCode, FetchOptions, Index, IndexAddOption, IndexConflict, IndexEntry,
+    ProxyOptions, PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions, Signature, Status, StatusOptions,
+    StatusShow, Tree,
 };
 
-use crate::old_name;
 use crate::vault::{fsio, tree};
-
-/// `.git/config` 里应用自己的小节（`odea.autosync` 之类）
-const APP_SECTION: &str = "odea";
 
 /// 新建仓库用的分支名。沿用用户自己的仓库时用它当前的分支
 pub const DEFAULT_BRANCH: &str = "main";
@@ -43,31 +39,27 @@ const REMOTE: &str = "origin";
 
 const BLOCK_BEGIN: &str = "# >>> Odea（这一段由应用维护）";
 const BLOCK_END: &str = "# <<< Odea";
-/// 改名前那一段的记号（old_name.rs）：见到了就换成新的
-const LEGACY_BLOCK_BEGIN: &str = "# >>> OnTheWay（这一段由应用维护）";
-const LEGACY_BLOCK_END: &str = "# <<< OnTheWay";
 
 /// .gitignore 里应用维护的那一段（技术方案 §5.9.3）。
 /// `.*.tmp` 是原子写入的临时文件（fsio::write_atomic），提交时正好撞上会被带进去。
-/// `.ontheway/trash/`：还没升级的设备把回收站放在改名前的文件夹里（old_name.rs），别把它推上去
+/// `.odea/import/`：导入时先拷到这里、拷完改名到位（vault/import.rs），拷了一半的别被提交
 const IGNORE: &str = "\
 .odea/trash/
-.ontheway/trash/
 .*.tmp
+.odea/import/
 .DS_Store
 Thumbs.db
 desktop.ini
 ";
 
 /// .gitattributes 里应用维护的那一段：附件一个字节都不改，Markdown 统一 LF，
-/// 只追加的行为日志两台设备的行都留下（还没升级的设备写在改名前的 .ontheway/ 里）；
+/// 只追加的行为日志两台设备的行都留下；
 /// 团队仓库的设备名单每台设备只改自己那一行，两边同时改了相邻的行也都留下（vault/team.rs）；
 /// 团队的中继一行一个，两边各加了一台也都留下
 const ATTRIBUTES: &str = "\
 * -text
 *.md text eol=lf
 .odea/activity/*.jsonl text eol=lf merge=union
-.ontheway/activity/*.jsonl text eol=lf merge=union
 .odea/devices text eol=lf merge=union
 .odea/relays text eol=lf merge=union
 ";
@@ -200,37 +192,7 @@ impl SyncRepo {
         if !root.join(".git").exists() {
             return Ok(None);
         }
-        let this = Self::wrap(Repository::open(root)?, root);
-        if let Err(error) = this.forget_old_name() {
-            eprintln!("换掉同步仓库里改名前的设置失败: {error}");
-        }
-        Ok(Some(this))
-    }
-
-    /// 改名前（old_name.rs）的 `.git/config` 键（`ontheway.autosync` 之类）换成新的小节，
-    /// `.git/ontheway.json` 换成新的文件名。新的已经有了就以新的为准
-    fn forget_old_name(&self) -> SyncResult<()> {
-        let mut config = self.repo.config()?.open_level(ConfigLevel::Local)?;
-        let section = old_name::CONFIG_SECTION;
-        let mut old: Vec<(String, String)> = Vec::new();
-        config.entries(Some(&format!("^{section}\\.")))?.for_each(|entry| {
-            if let (Ok(name), Ok(value)) = (entry.name(), entry.value()) {
-                old.push((name.to_string(), value.to_string()));
-            }
-        })?;
-        for (name, value) in old {
-            let key = format!("{APP_SECTION}{}", &name[section.len()..]);
-            if config.get_string(&key).is_err() {
-                config.set_str(&key, &value)?;
-            }
-            config.remove(&name)?;
-        }
-        let git = self.root.join(".git");
-        let (from, to) = (git.join(format!("{section}.json")), git.join(super::engine::MEMO_FILE));
-        if from.exists() && !to.exists() {
-            fs::rename(from, to)?;
-        }
-        Ok(())
+        Ok(Some(Self::wrap(Repository::open(root)?, root)))
     }
 
     /// 第一台设备：仓库根上建一个新的 git 仓库（技术方案 §5.9.7）
@@ -840,21 +802,12 @@ fn upsert_block(path: &Path, body: &str) -> SyncResult<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error.into()),
     };
-    // 改名前的那一段拿掉（还没升级的设备可能又写回来一段），新的一段放在它原来的位置
-    let mut rest = old.clone();
-    let mut legacy_at = None;
-    while let Some((cut, at)) = cut_block(&rest, LEGACY_BLOCK_BEGIN, LEGACY_BLOCK_END) {
-        legacy_at.get_or_insert(at);
-        rest = cut;
-    }
-    let new = if let Some((cut, at)) = cut_block(&rest, BLOCK_BEGIN, BLOCK_END) {
+    let new = if let Some((cut, at)) = cut_block(&old, BLOCK_BEGIN, BLOCK_END) {
         format!("{}{block}{}", &cut[..at], &cut[at..])
-    } else if let Some(at) = legacy_at {
-        format!("{}{block}{}", &rest[..at], &rest[at..])
-    } else if rest.trim().is_empty() {
+    } else if old.trim().is_empty() {
         block
     } else {
-        format!("{block}\n{rest}")
+        format!("{block}\n{old}")
     };
     if new == old {
         return Ok(false);
