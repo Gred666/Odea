@@ -244,7 +244,8 @@ export function LayoutChangeToast() {
         >
           <RefreshCw size={14} strokeWidth={2} className="shrink-0 text-accent" />
           <span className="min-w-0 truncate">
-            这个仓库的设置在别的设备上改了（开了哪些插件、目录的样子）
+            {/* 不只别的设备：Obsidian 这类程序改了它自己的设置（日记放在哪）也算（2026-11-19） */}
+            这个仓库的设置在别处改了（别的设备，或者 Obsidian 这类程序）
           </span>
           <button
             type="button"

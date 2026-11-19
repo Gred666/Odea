@@ -150,3 +150,34 @@ fn reads_obsidian_settings_from_disk() {
     write("daily-notes.json", r#"{ "folder": "Daily", "format": "YYYY/MM/YYYY-MM-DD" }"#);
     assert_eq!(obsidian_days(root), None, "按年月分了子文件夹的认不了");
 }
+
+/// 2026-11-19 用户碰到的：老仓库（标记里没写 folders.days）一直用着「日记」，用 Obsidian 打开一次，
+/// 它生成 core-plugins.json（日记插件开着、没有 daily-notes.json = 日记在仓库根上）。以前 Odea 跟着改去根上找，
+/// 日记全成了普通笔记、今日TODO 空了
+#[test]
+fn obsidian_opening_an_odea_vault_does_not_move_the_days() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(DAYS_DIR).join("2026")).unwrap();
+    std::fs::write(root.join(DAYS_DIR).join("2026").join("2026-11-11.md"), "今天").unwrap();
+    std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+    let write = |name: &str, text: &str| std::fs::write(root.join(".obsidian").join(name), text).unwrap();
+    write("core-plugins.json", r#"{ "file-explorer": true, "daily-notes": true }"#);
+    assert_eq!(obsidian_days(root).as_deref(), Some(""), "Obsidian 自己说的是仓库根");
+    assert_eq!(days_from_obsidian(root), None, "可仓库里有 Odea 的日记，不跟着它走");
+
+    let marker = json!({ "app": "OnTheWay", "features": { "journal": true }, "folders": { "notes": "笔记" } });
+    let folders = Folders::read(Some(&marker), || days_from_obsidian(root));
+    assert_eq!((folders.days.as_str(), folders.days_by_year), (DAYS_DIR, true));
+    let (day, _) = types_of(marker, days_from_obsidian(root).as_deref());
+    assert_eq!(day.key_of("日记/2026/2026-11-11.md").as_deref(), Some("2026-11-11"));
+    assert_eq!(day.path_of("2026-11-19").unwrap(), "日记/2026/2026-11-19.md", "今天那篇也还在「日记」里建");
+
+    // Obsidian 里自己把日记设成「日记」：照它的，平放
+    write("daily-notes.json", r#"{ "folder": "日记" }"#);
+    assert_eq!(days_from_obsidian(root).as_deref(), Some(DAYS_DIR));
+    // 没有 Odea 的日记文件夹（从 Obsidian 来的库）：照旧用 Obsidian 的
+    std::fs::remove_dir_all(root.join(DAYS_DIR)).unwrap();
+    write("daily-notes.json", "{}");
+    assert_eq!(days_from_obsidian(root).as_deref(), Some(""));
+}

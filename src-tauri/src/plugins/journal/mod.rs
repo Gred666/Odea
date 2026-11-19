@@ -80,7 +80,7 @@ impl Plugin for Journal {
     }
 
     fn doc_types(&self, root: Option<&Path>, marker: Option<&Value>) -> Vec<Arc<dyn DocType>> {
-        let folders = Folders::read(marker, || root.and_then(obsidian_days));
+        let folders = Folders::read(marker, || root.and_then(days_from_obsidian));
         vec![
             Arc::new(DayType { dir: folders.days, by_year: folders.days_by_year }),
             Arc::new(GoalType { dir: folders.goals }),
@@ -139,7 +139,8 @@ pub struct Folders {
 
 impl Folders {
     /// 标记里写了的照写的。没写日记文件夹的：Obsidian 的日记设置是 YYYY-MM-DD 的话用它的文件夹，平放
-    /// （Obsidian 就是这么建的），原来的日记直接进今日TODO 和日历；都没有是「日记」
+    /// （Obsidian 就是这么建的），原来的日记直接进今日TODO 和日历；都没有是「日记」。
+    /// 仓库里已经有「日记」文件夹时不看 Obsidian 的（`days_from_obsidian`）
     pub fn read(marker: Option<&Value>, obsidian: impl FnOnce() -> Option<String>) -> Self {
         let folder = |key: &str| marker.and_then(|marker| layout::marker_folder(marker, key));
         let (days, days_by_year) = match folder("days") {
@@ -374,6 +375,18 @@ pub fn day_path(date: &str) -> Result<String> {
 /// Odea 的老规矩下某个周期的目标放在哪（旧库搬家、测试用）
 pub fn goal_path(horizon: &str, period_start: &str) -> Result<String> {
     GoalType { dir: GOALS_DIR.into() }.path_of(&goal_key(horizon, period_start))
+}
+
+/// 标记里没写日记文件夹时用不用 Obsidian 的：仓库里已经有 Odea 自己的「日记」文件夹、Obsidian 说的又不是它，
+/// 就不用 —— 那是这个仓库一直在用的日记。Obsidian 头一回打开一个仓库就生成 core-plugins.json（日记插件默认开着、
+/// 没有 daily-notes.json 就是「日记在仓库根上」），以前这一下就把老仓库（标记里没写 folders.days）的
+/// 日记全变成了普通笔记、今日TODO 空了（2026-11-19 用户碰到）。Obsidian 自己设的就是「日记」的照用它的（平放）
+fn days_from_obsidian(root: &Path) -> Option<String> {
+    let days = obsidian_days(root)?;
+    if days != DAYS_DIR && root.join(DAYS_DIR).is_dir() {
+        return None;
+    }
+    Some(days)
 }
 
 /// Obsidian 的日记放在哪：开着日记核心插件、日期格式是 YYYY-MM-DD（不写就是这个）时用它的文件夹

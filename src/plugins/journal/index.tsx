@@ -186,14 +186,17 @@ export const journalPlugin: Plugin = {
   // 全局快捷键速记：记一行进今日TODO（capture.ts）
   capture: (text) => captureToToday(text),
   reset: () => useJournal.getState().reset(),
-  // 后台把文件读完了：延续来的「今天」是按读了一半的索引找的「之前最近一天」，当日安排和记号也重取
+  // 后台把文件读完了，或者摆法换了、日程一直开着（data/store 的 switchLayout）：取过的每一天、每个目标都重取，
+  // 当日安排和记号也重取。以前只重取延续来的「今天」：日记文件夹换了（Obsidian 生成的默认设置把日记挪到仓库根上、
+  // 又换回「日记」）以后，当时取到的空的今天没延续到东西、不在其列，今日TODO 一直空着到重启（2026-11-19 用户碰到）
   reindexed: () => {
     const journal = useJournal.getState();
     return journal.applyChange({
       notes: [],
-      docs: journal.dayDocs
-        .filter((day) => day.carriedFrom)
-        .map((day) => ({ type: DAY, key: day.date })),
+      docs: [
+        ...journal.dayDocs.map((day) => ({ type: DAY, key: day.date })),
+        ...Object.keys(journal.goals).map((key) => ({ type: GOAL, key })),
+      ],
       plugins: [JOURNAL],
       conflicts: [],
       foundCopies: [],

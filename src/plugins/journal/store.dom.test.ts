@@ -362,6 +362,46 @@ describe("别处改了（applyVaultChange 交给日程）", () => {
   });
 });
 
+describe("摆法换了、日程一直开着（switchLayout 调 reindexed）", () => {
+  // 2026-11-19 用户碰到的：Obsidian 生成的默认设置把日记挪到了仓库根上，那时取到的今天是空的（没延续到东西）；
+  // 换回「日记」以后只重取延续来的，这一篇不在其列，今日TODO 一直空着到重启
+  it("refetches every cached day and goal, not just the carried-over ones", async () => {
+    const { journalPlugin } = await import("./index");
+    const emptyWeek = {
+      id: "",
+      horizon: "week" as const,
+      title: "",
+      periodStart: "2026-08-24",
+      contentMd: "",
+      createdAt: 0,
+      updatedAt: 0,
+      relPath: "2026-W35.md",
+      notUtf8: false,
+    };
+    useJournal.setState({
+      dayDocs: [day("", { relPath: "2026-08-29.md" })],
+      goals: { [week.key]: emptyWeek },
+    });
+    journal.calendarDay.mockResolvedValue(
+      day("集中 自信 努力", { carriedFrom: "2026-08-21", relPath: "日记/2026/2026-08-29.md" }),
+    );
+    journal.goalGet.mockResolvedValue({
+      ...emptyWeek,
+      contentMd: "本周",
+      relPath: "目标/2026/2026-W35.md",
+    });
+    journal.calendarMarks.mockResolvedValue({ written: new Set(), open: new Set() });
+
+    await journalPlugin.reindexed?.();
+
+    expect(journal.calendarDay).toHaveBeenCalledWith("2026-08-29", expect.any(Boolean));
+    expect(useJournal.getState().dayDocs[0]?.noteMd).toBe("集中 自信 努力");
+    expect(useJournal.getState().goals[week.key]?.contentMd).toBe("本周");
+    // 编辑器那边当外部改动换上新正文
+    expect(useData.getState().externalRevisions["day:2026-08-29"]).toBe(1);
+  });
+});
+
 describe("resolveConflict（冲突副本的原文是某一天 / 目标）", () => {
   // 两台设备都改了今日TODO：副本「2026-08-29 (冲突 …)」落在「日记」里当一篇笔记
   const copyOf = (conflictOf: string, contentMd: string): Note => ({
