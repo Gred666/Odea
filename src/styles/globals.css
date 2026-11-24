@@ -853,13 +853,10 @@ body {
 
 /* 最左边那一栏顶上的「路径 / 标题」（DocumentView 的 TitleStrip）：侧栏不在时让开刘海。
    --odea-notch-clear 是字至少从哪开始（刘海宽 + 凹弯 + 12），正文那一列本来就在它右边时不挪。
-   100cqw 是那一条的宽（它是尺寸容器），列宽和两边的内边距照 .odea-measure、CenteredColumn 算 */
+   100cqw 是那一条的宽（它是尺寸容器），列宽、往右推多少照 .odea-column 算（这里是它的子孙，那两个变量传下来，cqw 量的是同一个容器） */
 .odea-notch-clear {
-  /* 正文那一列的左缘离这一条的左缘多远（列居中、最宽按每行字数算） */
-  --odea-column-left: calc(
-    (100cqw - min(100cqw, calc(var(--odea-measure) * var(--odea-body-size) + 112px))) /
-    2
-  );
+  /* 正文那一列的左缘离这一条的左缘多远（和 .odea-column 的 margin-left 同一个式子） */
+  --odea-column-left: calc((100cqw - var(--odea-column-width) + var(--odea-column-push)) / 2);
   margin-left: max(0px, calc(var(--odea-notch-clear, 0px) - var(--odea-column-left) - 32px));
 }
 @container (min-width: 560px) {
@@ -1062,6 +1059,29 @@ body.odea-dragging .odea-row-actions {
    标准 44 字 × 17px + 112px = 860px，和以前写死的一样 */
 .odea-measure {
   max-width: calc(var(--odea-measure) * var(--odea-body-size) + 112px);
+}
+
+/* 正文那一列（CenteredColumn）横着摆在哪（docs/边栏.md §11）：在正文区里居中；右边留着目录的占位时
+   （--odea-outline-room，见 .odea-outline-room），把列往右推回正文区加上占位的正中 ——
+   目录放得下就和没有目录、和专注模式同一个位置，放不下才往左让，让到刚好不压。
+   100cqw 是外面那个尺寸容器（正文的滚动区、顶上那一条）的宽，就是占位左边那一块；
+   推多少 = clamp(0, 那一块 − 列宽, 占位)：推满了列的中心正好在「那一块 + 占位」的正中，
+   推到「那一块 − 列宽」时列的右缘正好贴着占位。不看这一篇有没有标题（占位在就算），换篇时正文不横移 */
+.odea-column {
+  --odea-column-width: min(100cqw, calc(var(--odea-measure) * var(--odea-body-size) + 112px));
+  --odea-column-push: clamp(
+    0px,
+    calc(100cqw - var(--odea-measure) * var(--odea-body-size) - 112px),
+    var(--odea-outline-room, 0px)
+  );
+  margin-left: calc((100cqw - var(--odea-column-width) + var(--odea-column-push)) / 2);
+  margin-right: auto;
+}
+/* 目录的占位（Outline.tsx，xl 以上、不在专注模式时 180 宽）在这一栏里：DocumentView 照占位的显隐规则挂这个类 */
+@media (min-width: 1280px) {
+  .odea-outline-room {
+    --odea-outline-room: 180px;
+  }
 }
 
 .odea-editor {

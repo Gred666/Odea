@@ -370,8 +370,14 @@ export function DocumentView({
   }, [Editor]);
 
   return (
-    // 上面一行是正文（+ 右侧目录树），底下贴着状态栏（StatusBar）
-    <div className="relative flex h-full min-w-0 flex-1 flex-col bg-canvas">
+    // 上面一行是正文（+ 右侧目录树），底下贴着状态栏（StatusBar）。
+    // odea-outline-room：右边有目录的占位（和 Outline 里占位的显隐同一个条件，xl 以上才算），正文那一列照它摆（globals.css 的 .odea-column）
+    <div
+      className={cn(
+        "relative flex h-full min-w-0 flex-1 flex-col bg-canvas",
+        outlineShown && !zen && "odea-outline-room",
+      )}
+    >
       <div className="relative flex min-h-0 flex-1">
         {/* 定位基准必须是滚动容器自己这一层。挂到外面那行上的话，
           absolute right-0 贴的是「正文 + 大纲栏」的右边 ——
@@ -840,7 +846,8 @@ function TitleStrip({
 
 /**
  * 正文那一列（和窗口最上面那条里「路径 / 标题」那一列）：居中、最宽按「每行多少字」的偏好算
- * （.odea-measure，默认 860）。进出专注模式、列表栏收起 / 展开时，它「滑」到新的居中位置，
+ * （.odea-measure，默认 860）。右边的目录占位不算进去，放不下目录才往左让（.odea-column，docs/边栏.md §11）。
+ * 进出专注模式、列表栏收起 / 展开时，它「滑」到新的居中位置，
  * 而不是瞬间跳过去（layout="position"，只动位置不动尺寸 —— 尺寸动画是 scale，会把文字拉变形）。
  * layoutDependency 把重新测量限定在这两样变化的那一次，换笔记、正文变长都不会触发多余的位移动画。
  * 列表栏收起 / 展开时和它的进出场同一个节奏（Shell 里的 tween.base）。
@@ -864,7 +871,7 @@ function CenteredColumn({ className, children }: { className: string; children: 
       layout="position"
       layoutDependency={`${zen}|${panelCollapsed}`}
       transition={last.current.by === "panel" ? tween.base : ZEN_TRANSITION}
-      className={cn("odea-measure mx-auto flex w-full px-8 @min-[560px]:px-14", className)}
+      className={cn("odea-measure odea-column flex w-full px-8 @min-[560px]:px-14", className)}
     >
       {children}
     </motion.div>
