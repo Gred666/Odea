@@ -3,10 +3,10 @@ import { quietWindow } from "@/lib/tauri";
 import { create } from "zustand";
 
 /* ============================================================
-   开场动画的状态（components/Intro.tsx 播，components/Logo.tsx 接）。
+   开场动画的状态（components/Intro.tsx 播，刘海里的「O」components/StatusOrb.tsx 接）。
 
-   cover  ：开场那层纸盖着；侧栏 Logo 先空着、字标停在没写的那一刻
-   landed ：开场那个「O」落到了侧栏 Logo 的位置，交给 Logo 接着写
+   cover  ：开场那层纸盖着；刘海里的「O」先空着
+   landed ：开场那个「O」落到了刘海里「O」的位置，交给它
    off    ：这一次不播（减少动效、刷新页面）
 
    只在冷启动播：sessionStorage 跟着这个窗口进程走，刷新（开发时的整页重载）还在，
@@ -46,7 +46,7 @@ export function markShown() {
   useIntro.setState({ shown: true });
 }
 
-/** 开场的「O」落地，交给侧栏 Logo */
+/** 开场的「O」落地，交给刘海里的「O」 */
 export function landIntro() {
   if (useIntro.getState().phase === "cover") useIntro.setState({ phase: "landed" });
 }

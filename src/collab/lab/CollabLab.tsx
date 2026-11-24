@@ -174,7 +174,7 @@ export function CollabLab() {
         <label className="flex items-center gap-2">
           单程延迟
           <select
-            className="rounded border border-line bg-panel px-1.5 py-0.5"
+            className="rounded-xs border border-line bg-panel px-1.5 py-0.5"
             value={latency}
             onChange={(event) => setLatency(Number(event.target.value))}
           >
@@ -188,7 +188,7 @@ export function CollabLab() {
         <label className="flex items-center gap-2">
           访客
           <select
-            className="rounded border border-line bg-panel px-1.5 py-0.5"
+            className="rounded-xs border border-line bg-panel px-1.5 py-0.5"
             value={guests}
             onChange={(event) => changeGuests(Number(event.target.value))}
           >

@@ -472,7 +472,7 @@ function StepButton({
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="grid h-7 w-7 place-items-center rounded-md text-muted
+      className="grid h-7 w-7 place-items-center rounded-sm text-muted
                  transition-colors duration-[140ms] hover:bg-raised hover:text-ink
                  active:bg-raised/70"
     >

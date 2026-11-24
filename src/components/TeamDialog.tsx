@@ -88,7 +88,7 @@ export function TeamDialog() {
                   type="button"
                   aria-label="关闭"
                   onClick={close}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted
                              transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />
@@ -243,7 +243,7 @@ function Invited() {
         把这个链接发给他，他用 Odea 打开就能拉一份下来：
       </p>
       <div className="mt-1.5 flex items-center gap-2">
-        <p className="min-w-0 flex-1 truncate font-mono text-[12px] text-body" title={invited.link}>
+        <p className="min-w-0 flex-1 truncate font-mono text-[12px] text-body" data-tip-overflow>
           {invited.link}
         </p>
         <BannerButton onClick={() => void copy()}>
@@ -308,7 +308,7 @@ function PersonRow({ person }: { person: TeamPerson }) {
             </BannerButton>
           ))}
       </div>
-      <p className="mt-0.5 truncate text-[12px] text-muted" title={devices || undefined}>
+      <p className="mt-0.5 truncate text-[12px] text-muted" data-tip-overflow>
         {confirming
           ? "GitHub 上去掉他的权限，名单里他的设备也去掉。他已经拉下来的那一份收不回来"
           : devices ||

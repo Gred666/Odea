@@ -54,6 +54,16 @@ import {
 import { hoverCard } from "./hoverCard";
 import { type ImageBase, type WikiImageResolver, imageBaseDir, wikiImages } from "./html";
 import { linkTargetAt, modKeyCursor, openExternal, splitWikiTarget, wikiTargetAt } from "./links";
+import {
+  type LiveTwin,
+  confirmSent,
+  editorTwin,
+  forwardChanges,
+  joinTwins,
+  mirrorSync,
+  noteSent,
+  twinsOf,
+} from "./liveTwins";
 import { closeFenceOnInput } from "./markdownCommands";
 import { markdownKeymap } from "./markdownKeymap";
 import { markdownSupport } from "./markdownParser";
@@ -104,51 +114,11 @@ import { typoraDecorations } from "./typoraDecorations";
 
 /** 外部内容回填产生的事务，不该被当成用户输入去触发保存。 */
 const externalSync = Annotation.define<boolean>();
+/** 空卡片（白板）里的提示：一行放得下（最窄的卡片 120 也是） */
+const CARD_PLACEHOLDER = "写点什么…";
 
-/* ---------------- 同一篇开在两个窗格（docs/标签页与分屏.md §14）----------------
-   分屏时同一篇可以开在两个窗格里，各是一个编辑器（各自的光标、滚动、撤销历史）。
-   在一边打的字原样转给另一边（CodeMirror 的 split 例子那样转事务），另一边当成「别人改的」：
-   不进它的撤销历史、不由它存盘（打字的那一边存），也不算它和磁盘对上了 —— 对上没对上
-   还是看存盘回来的那一版（syncedMarkdownRef），不然存盘回来一版旧的会把转过来的新字盖掉。
-   后挂上的那个用先挂着的那个现在的正文建，不用 store 里的（那一版可能还差着没存的几个字）。
-   协作中的不转：协作的绑定一个编辑器一份，正文以会话为准（窗格那边也只让一个窗格编辑它） */
-const mirrorSync = Annotation.define<boolean>();
-const liveEditors = new Map<string, Set<EditorView>>();
-
-/* ---------------- 自己存盘的回音 ----------------
-   交给 onSave 的每一版记下来，等 store 换成它（存盘回来了）。store 换成其中一版是自己的回音：
-   编辑器里的总比它交出去的新，只记一下「和 store 对上了」，正文不动。光比「现在的正文和上次对上的
-   那一版一不一样」分不出来：存盘还在路上时把刚打的字删了（或者撤销了），正文正好又等于上次对上的
-   那一版，回音一到就被当成别处来的新正文整篇换上 —— 删掉的字回来了，光标跳走（审查 2026-11-13 §4.32）。
-   一个编辑器一份：同一篇开在两个窗格里时，一边交出去的也记进另一边的（回音两边都会收到），
-   后挂上的那个抄一份先挂着的。编辑器拆了就跟着没了：重新挂上的是照 store 那一版建的，那时再到的回音就该换上 */
-const unconfirmedSaves = new WeakMap<EditorView, string[]>();
-const UNCONFIRMED_LIMIT = 16;
-
-function noteSent(views: Iterable<EditorView>, markdown: string) {
-  for (const view of views) {
-    let list = unconfirmedSaves.get(view);
-    if (!list) {
-      list = [];
-      unconfirmedSaves.set(view, list);
-    }
-    list.push(markdown);
-    if (list.length > UNCONFIRMED_LIMIT) list.shift();
-  }
-}
-
-/** markdown 是不是这个编辑器交出去还没回来的某一版；是的话它和它之前的都算回来了（同一篇的保存排着队，回音按先后到） */
-function confirmSent(view: EditorView, markdown: string): boolean {
-  const list = unconfirmedSaves.get(view);
-  const at = list ? list.indexOf(markdown) : -1;
-  if (!list || at < 0) return false;
-  list.splice(0, at + 1);
-  return true;
-}
-
-function twinsOf(key: string, view: EditorView): EditorView[] {
-  return [...(liveEditors.get(key) ?? [])].filter((other) => other !== view);
-}
+/* 同一篇开在两个窗格、白板视图也开着它（docs/标签页与分屏.md §14、docs/白板.md §13.6）：
+   一处改的字原样转给别的几处，那边不进撤销历史、不存盘；自己存盘的回音认得出来。都在 editor/liveTwins.ts */
 
 /* ---------------- 按文档缓存编辑器状态 ----------------
    建一个编辑器最贵的是 EditorState.create：同步解析全文的语法树（ensureSyntaxTree）
@@ -197,6 +167,10 @@ const readOnlyGuard = EditorState.transactionFilter.of((tr) =>
  * 两边各撤各的（§14）
  */
 const historySlot = new Compartment();
+/** 开着的插件给编辑器的扩展（贡献点 editor，plugins/registry.ts）：开关了插件时整个换掉 */
+const pluginSlot = new Compartment();
+/** 没给 pluginExtensions 时用它：每次渲染同一个数组，不白白换一遍 */
+const NO_PLUGIN_EXTENSIONS: readonly Extension[] = [];
 
 /** 同一个状态，撤销历史换成空的（先拿掉再装回来：同一次里换，历史的字段会原样留着） */
 function withFreshHistory(state: EditorState): EditorState {
@@ -289,6 +263,10 @@ export function MarkdownEditor({
   onExitTop,
   collab = null,
   readOnly = false,
+  pluginExtensions = NO_PLUGIN_EXTENSIONS,
+  card = false,
+  extensions: hostExtensions = NO_PLUGIN_EXTENSIONS,
+  onView,
 }: {
   initialMarkdown: string;
   onSave: (markdown: string) => Promise<void>;
@@ -363,10 +341,26 @@ export function MarkdownEditor({
   collab?: CollabSession | null;
   /** 只读：能选、能复制，不能改（协作时被给了「只读」） */
   readOnly?: boolean;
+  /** 开着的插件给编辑器的扩展（白板：藏起标记、防误删）。换了（开关了插件）就整个换掉 */
+  pluginExtensions?: readonly Extension[];
+  /**
+   * 编辑器在一张卡片里（白板的卡片，docs/白板.md §13.7）：没有上边距、不撑高、底下不留空白，
+   * 标题左边留白里的层级提示和收起箭头不画（卡片边上没有那块留白）
+   */
+  card?: boolean;
+  /**
+   * 用这个编辑器的那一处自己的扩展（白板的卡片：改动写回整篇、Esc 结束编辑、滚动交给白板的镜头）。
+   * 只在挂上时读一次；和这个实例的保存器一样放在 session 那一截里，复用缓存的状态时换成新的
+   */
+  extensions?: readonly Extension[];
+  /** 编辑器建好、挂上了（还没画出来之前）；拆掉时是 null。白板的卡片拿它放光标、把转过来的改动打进来 */
+  onView?: (view: EditorView | null) => void;
 }) {
   const paneDoc = usePaneWindow().doc;
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  /** 这个编辑器在 editor/liveTwins.ts 里的那一份（认自己存盘的回音） */
+  const twinRef = useRef<LiveTwin | null>(null);
   const saverRef = useRef<DebouncedSaver | null>(null);
   const onSaveRef = useRef(onSave);
   const onDocumentChangeRef = useRef(onDocumentChange);
@@ -388,6 +382,10 @@ export function MarkdownEditor({
   const attachmentsRef = useRef(attachments);
   const collabRef = useRef(collab);
   const readOnlyRef = useRef(readOnly);
+  const pluginExtensionsRef = useRef(pluginExtensions);
+  const hostExtensionsRef = useRef(hostExtensions);
+  const onViewRef = useRef(onView);
+  onViewRef.current = onView;
   /** 现取的附件回调：编辑器复用缓存的状态时，换的只是这一截闭包 */
   const attachRef = useRef<AttachHooks | null>(null);
   attachRef.current = onAttachFiles ? { files: onAttachFiles, paths: onAttachPaths } : null;
@@ -481,8 +479,7 @@ export function MarkdownEditor({
     const key = cacheKeyRef.current;
     const saver = createDebouncedSaver(
       (markdown) => {
-        const view = live.view;
-        if (view) noteSent(key ? (liveEditors.get(key) ?? [view]) : [view], markdown);
+        if (live.twin) noteSent(key ?? null, live.twin, markdown);
         return onSaveRef.current(markdown);
       },
       400,
@@ -507,9 +504,15 @@ export function MarkdownEditor({
      * 这个 effect 里的闭包要用编辑器都从这里取，卸载时清空。不能直接闭包住下面的 view：
      * V8 里同一个作用域的闭包共用一份上下文，session 那一截的闭包会跟着状态一直留着
      * （缓存的状态、语法解析握着的旧状态），只要有一个闭包捕获了 view，旧编辑器连同整棵
-     * DOM 就都放不掉。目录句柄也只经过它（见 createOutlineHandle）
+     * DOM 就都放不掉。目录句柄也只经过它（见 createOutlineHandle）。
+     * 双开的登记（editor/liveTwins.ts）也一样：joinTwins 交回的「拆掉」握着 twin → view，放在这里、卸载时清空；
+     * 写成这个作用域里的一个 const 的话，缓存的状态就一直握着旧编辑器（2026-11-20，切十几篇留着十几个，TODO 白板那一项）
      */
-    const live: { view: EditorView | null } = { view: null };
+    const live: {
+      view: EditorView | null;
+      twin: LiveTwin | null;
+      leave: (() => void) | null;
+    } = { view: null, twin: null, leave: null };
     const listeners = new Set<(id: string) => void>();
     const { handle, notifyActive } = createOutlineHandle(live, outlineItemsRef, listeners);
     // 命令面板的「收起所有标题」「展开所有标题」交给最近获得焦点的这个编辑器
@@ -775,14 +778,19 @@ export function MarkdownEditor({
     // 这个编辑器实例自己的那一截：闭包里握着这次的保存器和 React 状态。
     // 复用缓存的状态时，换掉的就是这一截（见文件开头的说明）。
     const sessionExtensions: Extension[] = [
+      // 用它的那一处自己的（白板的卡片）：排在前面，同一级的按键先给它
+      ...hostExtensionsRef.current,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) return;
         recordRevision(revisions, update.changes);
         if (key) touched(key);
       }),
       ...templateExtensions,
-      // 笔记的空白正文：告诉人 `/` 和 `[[` 能做什么（某一天 / 某个周期的提示在 templateExtensions 里）
-      ...(templateContextRef.current ? [] : [placeholder(NOTE_PLACEHOLDER)]),
+      // 笔记的空白正文：告诉人 `/` 和 `[[` 能做什么（某一天 / 某个周期的提示在 templateExtensions 里）。
+      // 卡片里只写一句短的：长的那句在卡片里折成两行，空卡片（白板上刚新建的）一点进来就长高一行
+      ...(templateContextRef.current
+        ? []
+        : [placeholder(card ? CARD_PLACEHOLDER : NOTE_PLACEHOLDER)]),
       ...suggestExtensions,
       imageBaseSlot.of(imageBaseDir.of(imageBaseRef.current)),
       wikiImageSlot.of(wikiImages.of(wikiImageRef.current)),
@@ -810,15 +818,8 @@ export function MarkdownEditor({
           syncedMarkdownRef.current = markdown;
           return;
         }
-        // 同一篇开在别的窗格里：这边打的字转过去
-        if (key && !collabRef.current) {
-          for (const twin of twinsOf(key, update.view)) {
-            twin.dispatch({
-              changes: update.changes,
-              annotations: [mirrorSync.of(true), Transaction.addToHistory.of(false)],
-            });
-          }
-        }
+        // 同一篇开在别的窗格里、白板视图里：这边打的字转过去
+        if (key && !collabRef.current && live.twin) forwardChanges(key, live.twin, update.changes);
         saver.schedule(markdown);
         if (update.focusChanged && !update.view.hasFocus) saver.flushQuietly();
       }),
@@ -858,16 +859,19 @@ export function MarkdownEditor({
     ];
 
     const shared = collabRef.current;
-    // 同一篇已经在别的窗格里开着：用它现在的正文（两边从同一份开始，转过来的改动才对得上位置）
-    const twin = key && !shared ? [...(liveEditors.get(key) ?? [])][0] : undefined;
+    // 同一篇已经在别的窗格里（编辑器、白板）开着：用它现在的正文（几处从同一份开始，转过来的改动才对得上位置）
+    const others = key && !shared ? twinsOf(key) : [];
+    const twin = others[0];
     const initialDoc = shared
       ? shared.toString()
       : twin
         ? twin.state.doc.toString()
         : initialMarkdownRef.current;
     const cached = key && !shared ? takeState(key, initialDoc) : null;
-    // 没有缓存、另一个窗格里开着这一篇：从它现在的状态接着用（历史清空）
-    const reused = cached ?? (twin ? withFreshHistory(twin.state) : null);
+    // 没有缓存、另一个窗格里的编辑器开着这一篇：从它现在的状态接着用（历史清空）。
+    // 白板的状态里没有编辑器的扩展，不沿用
+    const twinEditor = others.find((other) => other.view)?.view;
+    const reused = cached ?? (twinEditor ? withFreshHistory(twinEditor.state) : null);
     // 上次在这篇看到哪、光标在哪（切回来、重新打开应用都回到那里）
     const spot = key ? spotOf(key) : undefined;
     const docLength = initialDoc.length;
@@ -875,7 +879,12 @@ export function MarkdownEditor({
     const state = reused
       ? // 解析好的语法树、装饰、撤销历史原样沿用
         reused.update({
-          effects: [session.reconfigure(sessionExtensions), ...revealIdle()],
+          effects: [
+            session.reconfigure(sessionExtensions),
+            // 缓存的、另一个窗格的状态里装的是那时开着的插件的
+            pluginSlot.reconfigure([...pluginExtensionsRef.current]),
+            ...revealIdle(),
+          ],
           selection: EditorSelection.cursor(restoredHead),
         }).state
       : EditorState.create({
@@ -905,6 +914,7 @@ export function MarkdownEditor({
               // 中文正文在 WebView2 里会被拼写检查画满红波浪线，得关掉。
               spellcheck: "false",
             }),
+            pluginSlot.of([...pluginExtensionsRef.current]),
             session.of(sessionExtensions),
           ],
         });
@@ -919,14 +929,9 @@ export function MarkdownEditor({
     if (host.ownerDocument !== document) view.setRoot(host.ownerDocument);
     viewRef.current = view;
     live.view = view;
-    // 先挂着的那一边交出去还没回来的，这边也会收到回音
-    const twinSent = twin && unconfirmedSaves.get(twin);
-    if (twinSent?.length) unconfirmedSaves.set(view, [...twinSent]);
-    if (key) {
-      const views = liveEditors.get(key) ?? new Set<EditorView>();
-      views.add(view);
-      liveEditors.set(key, views);
-    }
+    live.twin = editorTwin(view);
+    twinRef.current = live.twin;
+    live.leave = key ? joinTwins(key, live.twin) : null;
     // 切走时开着查找面板：回来时不该还开着（和以前每次新建编辑器一样）
     if (searchPanelOpen(view.state)) closeSearchPanel(view);
     // 上次收起的标题（缓存的、另一个窗格的状态里本来就带着）。在滚回上次的位置之前：那个位置是按收着的样子记的
@@ -972,6 +977,7 @@ export function MarkdownEditor({
     host.dataset.editorReady = "true";
     // 换篇：拆掉的那个编辑器手里有焦点，这个接着（lib/focusHandoff.ts）。不动选区、不滚
     if (claimEditorFocus(host.ownerDocument)) view.focus();
+    onViewRef.current?.(view);
     // 它返回的闭包握着 view（同上），停掉后就扔掉
     let stopFileDrops: (() => void) | null = watchDesktopFileDrops(view, () => attachRef.current);
 
@@ -1013,26 +1019,30 @@ export function MarkdownEditor({
       setEmojiAnchor(null);
       closeTemplateMenu();
       closeSuggest();
+      onViewRef.current?.(null);
       unregisterFlush();
       commands.dispose();
       if (outlineTimer) clearTimeout(outlineTimer);
       saver.flushQuietly();
       saverRef.current = null;
       viewRef.current = null;
+      twinRef.current = null;
       live.view = null;
       listeners.clear();
       onOutlineHandle(null);
       delete host.dataset.editorReady;
-      const views = key ? liveEditors.get(key) : undefined;
-      views?.delete(view);
-      if (key && views && !views.size) liveEditors.delete(key);
+      live.leave?.();
+      live.leave = null;
+      const self = live.twin;
+      live.twin = null;
       // 协作中的不缓存：切走期间别人还在改，回来时以会话的正文为准。
-      // 别的窗格里还开着同一篇：也不缓存，那边卸载时缓存它的（那份是最新的）
-      if (key && !collabRef.current && !views?.size) rememberState(key, view.state);
+      // 别的窗格里还有编辑器开着同一篇：也不缓存，那边卸载时缓存它的（那份是最新的）。只剩白板开着的照样缓存
+      if (key && !collabRef.current && !twinsOf(key, self ?? undefined).some((other) => other.view))
+        rememberState(key, view.state);
       view.destroy();
       forgetDetachedEmoji();
     };
-  }, [onOutlineHandle, closeTemplateMenu, closeSuggest, openEmojiPicker]);
+  }, [onOutlineHandle, closeTemplateMenu, closeSuggest, openEmojiPicker, card]);
 
   // 拆掉时焦点在这里：交给接着挂上的编辑器（lib/focusHandoff.ts）。得是 layout effect：
   // 它的收尾在 React 摘 DOM 之前跑，这时还看得出焦点在不在；上面那个 effect 收尾时 DOM 已经摘了，焦点早掉到 body 上
@@ -1092,6 +1102,13 @@ export function MarkdownEditor({
     });
   }, [readOnly]);
 
+  // 开关了给编辑器扩展的插件（白板）：换上现在开着的那几个的
+  useEffect(() => {
+    if (pluginExtensionsRef.current === pluginExtensions) return;
+    pluginExtensionsRef.current = pluginExtensions;
+    viewRef.current?.dispatch({ effects: pluginSlot.reconfigure([...pluginExtensions]) });
+  }, [pluginExtensions]);
+
   // 开关了带提示块的插件（L0，plugins/declared.ts）：空跑一笔事务，两层装饰看到版本变了整篇重画
   useEffect(() => onCalloutsChange(() => viewRef.current?.dispatch({})), []);
 
@@ -1127,8 +1144,8 @@ export function MarkdownEditor({
     // 协作中：正文的真相是会话。整篇替换 = 在 CRDT 里删光再插一遍，所有人的光标塌到一处
     if (!view || collabRef.current) return;
     const current = view.state.doc.toString();
-    // 自己存盘的回音：和 store 对上了，正文不动（见 unconfirmedSaves）
-    const echoed = !external && confirmSent(view, initialMarkdown);
+    // 自己存盘的回音：和 store 对上了，正文不动（editor/liveTwins.ts 的 confirmSent）
+    const echoed = !external && !!twinRef.current && confirmSent(twinRef.current, initialMarkdown);
     if (echoed || initialMarkdown === current) {
       syncedMarkdownRef.current = initialMarkdown;
       return;
@@ -1256,7 +1273,13 @@ export function MarkdownEditor({
       <div
         ref={hostRef}
         data-editor-stable-island
-        className={fill ? "odea-editor mt-7 selectable" : "odea-editor is-compact mt-7 selectable"}
+        className={
+          card
+            ? "odea-editor is-card selectable"
+            : fill
+              ? "odea-editor mt-7 selectable"
+              : "odea-editor is-compact mt-7 selectable"
+        }
       />
       {createPortal(
         <>

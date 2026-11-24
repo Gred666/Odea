@@ -7,6 +7,7 @@ import { type StaticOptions, renderStaticHtml } from "@/render/staticHtml";
 import "@/render/static.css";
 import { Facet } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import { adoptTitles } from "./hoverCard";
 import { safeImageSource } from "./html";
 import { OtwWidget, jumpToSource, positionOf } from "./widgets";
 
@@ -227,6 +228,7 @@ export class EmbedWidget extends OtwWidget {
           if (mine !== run) return;
           // 排出来的是静态渲染器自己生成的标记：用户的字都转义过，HTML 按白名单重建过（render/staticHtml.ts）
           body.innerHTML = html;
+          adoptTitles(body);
           remeasure();
         });
       });

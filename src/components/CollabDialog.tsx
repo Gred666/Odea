@@ -29,6 +29,7 @@ import { cn } from "@/lib/cn";
 import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { IS_WINDOWS } from "@/lib/platform";
+import { tip } from "@/lib/tooltip";
 import {
   Check,
   CircleAlert,
@@ -149,7 +150,7 @@ export function CollabDialog() {
                   type="button"
                   aria-label="关闭"
                   onClick={close}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted
                              transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />
@@ -202,9 +203,9 @@ function SessionStrip() {
         aria-selected={focus === null}
         data-collab-tab-join
         onClick={() => setFocus(null)}
-        title="加入别人的协作"
+        {...tip("加入别人的协作", { name: false })}
         className={cn(
-          "flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[13px] transition-colors duration-[140ms]",
+          "flex h-7 shrink-0 items-center gap-1 rounded-sm px-2 text-[13px] transition-colors duration-[140ms]",
           focus === null ? "bg-raised text-ink" : "text-muted hover:bg-raised/60 hover:text-body",
         )}
       >
@@ -241,11 +242,12 @@ function SessionTab({ id, active }: { id: number; active: boolean }) {
       aria-selected={active}
       data-collab-tab={id}
       onClick={() => setFocus(id)}
-      title={
-        session.role === "guest" ? `在 ${hostNameOf(session)} 那里：${name}` : `你在主持：${name}`
-      }
+      {...tip(session.role === "guest" ? `在 ${hostNameOf(session)} 那里` : "你在主持", {
+        detail: name,
+        name: false,
+      })}
       className={cn(
-        "flex h-7 max-w-[200px] shrink-0 items-center gap-1.5 rounded-md px-2 text-[13px]",
+        "flex h-7 max-w-[200px] shrink-0 items-center gap-1.5 rounded-sm px-2 text-[13px]",
         "transition-colors duration-[140ms]",
         active ? "bg-raised text-ink" : "text-muted hover:bg-raised/60 hover:text-body",
         ended && !active && "text-faint",
@@ -456,7 +458,7 @@ function ReachRows({ rows }: { rows: ReachRow[] }) {
               "min-w-0 truncate",
               row.state === "ok" ? "text-body" : row.state === "wait" ? "text-faint" : "text-muted",
             )}
-            title={row.detail}
+            data-tip-overflow={row.detail}
           >
             {row.state === "ok" && <span className="mr-1 text-success">✓</span>}
             {row.detail}
@@ -790,11 +792,12 @@ function MemberList({ session, editable }: { session: CollabSessionState; editab
                     type="button"
                     data-collab-remember
                     aria-pressed={known}
-                    title={
-                      known
-                        ? "记住了：下次进来不用再问。点一下忘掉"
-                        : "记住 TA：下次拿着链接或者在同一个网络里进来，不用再问"
-                    }
+                    {...(known
+                      ? tip("下次进来不用再问", { detail: "点一下忘掉", name: false })
+                      : tip("记住 TA", {
+                          detail: "下次拿着链接或者在同一个网络里进来，不用再问",
+                          name: false,
+                        }))}
                     onClick={() => void (known ? forget(member.id) : remember(member))}
                     className={cn(
                       "flex items-center gap-1 rounded-md px-1.5 py-[3px] text-[12px] transition-colors duration-[140ms]",
@@ -867,7 +870,7 @@ function NameField() {
           setEditing(true);
         }}
         className="truncate rounded-md px-1.5 py-[3px] text-[12px] text-muted hover:bg-raised hover:text-body"
-        title="别人看到的你的名字"
+        {...tip("别人看到的你的名字", { name: false })}
       >
         你叫「{identity.name}」 · 改
       </button>
@@ -1166,7 +1169,7 @@ export function SharedTree({ id, compact }: { id: number; compact?: boolean }) {
           folders.map((folder) => (
             <div key={folder || "/"} className="mb-1">
               {folder && (
-                <p className="truncate px-2 pt-1.5 pb-0.5 text-[12px] text-muted" title={folder}>
+                <p className="truncate px-2 pt-1.5 pb-0.5 text-[12px] text-muted" data-tip-overflow>
                   {folder}
                 </p>
               )}
@@ -1568,7 +1571,7 @@ export function CollabPresence({ docKey }: { docKey: string }) {
   );
   if (!here && !live.length) return null;
 
-  const className = `-my-[5px] ml-auto flex h-[30px] shrink-0 items-center gap-2 rounded-lg px-2
+  const className = `-my-[5px] ml-auto flex h-[30px] shrink-0 items-center gap-2 rounded-md px-2
                  text-[12px] text-muted transition-colors duration-[160ms] hover:bg-raised hover:text-ink`;
 
   if (here) {
@@ -1579,7 +1582,7 @@ export function CollabPresence({ docKey }: { docKey: string }) {
         type="button"
         data-collab-presence
         onClick={() => useCollab.getState().openSession(here.id)}
-        title="协作"
+        {...tip("协作", { name: false })}
         className={className}
       >
         <span className="flex -space-x-1.5">
@@ -1617,7 +1620,7 @@ export function CollabPresence({ docKey }: { docKey: string }) {
       type="button"
       data-collab-presence
       onClick={onClick}
-      title={only ? "回到协作的那篇" : "正在进行的协作"}
+      {...tip(only ? "回到协作的那篇" : "正在进行的协作", { name: false })}
       className={className}
     >
       <Users size={14} strokeWidth={2} />

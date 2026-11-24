@@ -3,6 +3,7 @@ import { folderLabel, nameOf, smartQuery } from "@/data/folders";
 import { cn } from "@/lib/cn";
 import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard } from "@/lib/motion";
+import { tip } from "@/lib/tooltip";
 import { ListFilter } from "lucide-react";
 import { motion, useIsPresent } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -120,7 +121,7 @@ export function SmartFolderEditor({
       animate="shown"
       exit="gone"
       style={{ top }}
-      className="absolute inset-x-4 z-30 flex flex-col overflow-clip rounded-[10px] bg-canvas
+      className="absolute inset-x-4 z-30 flex flex-col overflow-clip rounded-lg bg-canvas
                  shadow-float ring-1 ring-line-strong"
     >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
@@ -169,14 +170,14 @@ export function SmartFolderEditor({
             <li key={example} className="contents">
               <button
                 type="button"
-                title="加到条件里"
+                {...tip("加到条件里", { name: false })}
                 onClick={() => {
                   setQuery((current) =>
                     current.trim() ? `${current.trim()} ${example}` : example,
                   );
                   queryInput.current?.focus();
                 }}
-                className="justify-self-start rounded px-1 font-mono text-[12px] text-muted
+                className="justify-self-start rounded-xs px-1 font-mono text-[12px] text-muted
                            transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
               >
                 {example}
@@ -191,14 +192,14 @@ export function SmartFolderEditor({
         <button
           type="button"
           onClick={onClose}
-          className="h-7 rounded-md px-3 text-[13px] text-muted transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
+          className="h-7 rounded-sm px-3 text-[13px] text-muted transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
         >
           取消
         </button>
         <button
           type="button"
           onClick={submit}
-          className="h-7 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-ink transition-colors duration-[140ms] hover:bg-accent-hover"
+          className="h-7 rounded-sm bg-accent px-3 text-[13px] font-medium text-accent-ink transition-colors duration-[140ms] hover:bg-accent-hover"
         >
           {path ? "保存" : "建好"}
         </button>

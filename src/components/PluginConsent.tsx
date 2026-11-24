@@ -104,7 +104,7 @@ export function PluginConsent() {
                   type="button"
                   aria-label="关闭"
                   onClick={cancel}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted transition-colors
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted transition-colors
                              duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />
@@ -162,7 +162,7 @@ export function PluginConsent() {
                 <button
                   type="button"
                   onClick={cancel}
-                  className="h-8 rounded-lg bg-raised px-3 text-[12px] font-medium text-ink
+                  className="h-8 rounded-md bg-raised px-3 text-[12px] font-medium text-ink
                                transition-colors duration-[140ms] hover:bg-line-strong"
                 >
                   取消
@@ -170,7 +170,7 @@ export function PluginConsent() {
                 <button
                   type="button"
                   onClick={allow}
-                  className="h-8 rounded-lg bg-accent px-3 text-[12px] font-medium text-accent-ink
+                  className="h-8 rounded-md bg-accent px-3 text-[12px] font-medium text-accent-ink
                                transition-colors duration-[140ms] hover:bg-accent-hover"
                 >
                   {install ? "安装" : "好"}

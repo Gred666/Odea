@@ -1,4 +1,5 @@
 import { LIST_ROWS, selectNeighbor } from "@/app/navigate";
+import { creatableViews, createNoteAs, noteViewIcon } from "@/app/noteViews";
 import { type NoteSort, useApp } from "@/app/store";
 import { createBase } from "@/bases/create";
 import { baseTabId, baseTitle, isBaseTab } from "@/bases/ids";
@@ -40,6 +41,8 @@ import { animatedEmojiText } from "@/lib/emojiText";
 import { afterPaint, rememberNeighbors } from "@/lib/focusNeighbor";
 import { spring, tween } from "@/lib/motion";
 import { isTauri } from "@/lib/tauri";
+import { tip } from "@/lib/tooltip";
+import type { NoteView } from "@/plugins/registry";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   ALargeSmall,
@@ -140,7 +143,7 @@ const EXCERPT_ROW_HEIGHT = 52;
 const ROW_PAD = 9;
 /** 树上的一行：图标位、名字、右边一格（数字 / 图钉 / 「…」）。深度只体现在左缩进上 */
 const TREE_ROW = cn(
-  "group relative flex h-[34px] cursor-default items-center gap-1.5 rounded-lg pr-3 outline-none",
+  "group relative flex h-[34px] cursor-default items-center gap-1.5 rounded-md pr-3 outline-none",
   "focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-inset",
 );
 /**
@@ -225,6 +228,8 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
   const importFolder = useData((s) => s.importFolder);
   const editSmartFolder = useData((s) => s.editSmartFolder);
   const logical = useData((s) => s.layout.logical);
+  const enabledPlugins = useData((s) => s.layout.plugins);
+  const creatable = useMemo(() => creatableViews(enabledPlugins), [enabledPlugins]);
   const tree = useData((s) => s.tree);
   const smartResults = useData((s) => s.smartResults);
   // 排序记在本机：以前切到日历再回来就变回「按更新时间」。「手动排序」只有逻辑目录有
@@ -431,15 +436,19 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
     if (up) flashRow(nearestVisible(folder, to, expanded), 140);
   };
 
-  /** 新建一篇：into 是文件夹「…」里点的那个文件夹，没给就是列表栏现在这一层 */
-  const handleCreate = async (into?: string) => {
+  /**
+   * 新建一篇：into 是文件夹「…」里点的那个文件夹，没给就是列表栏现在这一层。
+   * as：用这种摆法新建（「新建白板」），开出来就是它，焦点给它（没有标题框可落）
+   */
+  const handleCreate = async (into?: string, as?: NoteView) => {
     // 后端慢的时候连点两下会白建好几篇空笔记
     if (creating) return;
     setCreating(true);
     try {
       // 智能文件夹里放不了东西：新的一篇放在根上，跟过去
       const here = into === undefined && smartHere !== undefined;
-      const id = await createNote(into ?? (here ? "" : folder));
+      const place = into ?? (here ? "" : folder);
+      const id = as ? await createNoteAs(as, place) : await createNote(place);
       if (!id) return;
       if (here) setNoteFolder("");
       // 从文件夹的「…」建的：展开那个文件夹，新的一篇就在它底下
@@ -450,8 +459,8 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
       // 新笔记是空的，搜索词留着的话它进不了当前筛选结果 ——
       // 用户点了「新建」，界面上却什么都没发生。
       setQuery("");
-      // 光标直接落在标题里：以前焦点还停在「+」上，得先点一下才能起名
-      useApp.getState().setFocusRequest({ docKey: `note-${id}`, at: "title" });
+      // 光标直接落在标题里：以前焦点还停在「+」上，得先点一下才能起名。白板这种没有标题框的：焦点给它
+      useApp.getState().setFocusRequest({ docKey: `note-${id}`, at: as ? "body" : "title" });
       selectNote(id);
     } finally {
       setCreating(false);
@@ -612,7 +621,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
       setFolderExpanded(paths, open);
     },
     select: (id, newTab) => (newTab ? openNoteTab(id) : selectNote(id)),
-    newNote: (path) => void handleCreate(path),
+    newNote: (path, as) => void handleCreate(path, as),
     dropNote,
     dropFolder: (path, target) => void dropFolder(path, target),
     springOpen: (path) => setFolderExpanded([path], true),
@@ -645,7 +654,7 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
       open: (path) => now().open(path),
       toggle: (path, all) => now().toggle(path, all),
       select: (id, newTab) => now().select(id, newTab),
-      newNote: (path) => now().newNote(path),
+      newNote: (path, as) => now().newNote(path, as),
       dropNote: (id, target) => now().dropNote(id, target),
       dropFolder: (path, target) => now().dropFolder(path, target),
       springOpen: (path) => now().springOpen(path),
@@ -679,11 +688,13 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
       flash,
       settle,
       logical,
+      creatable,
       reorder,
       smartNotes,
       shortcutsOf,
     }),
     [
+      creatable,
       shortcutsOf,
       actions,
       folder,
@@ -835,13 +846,13 @@ export function NotesList({ notes }: { notes: NoteSummary[] }) {
                 type="button"
                 data-folder-picker-trigger
                 aria-expanded={picker?.mode === "jump"}
-                title="跳到文件夹"
+                {...tip("跳到文件夹", { name: false })}
                 onClick={() =>
                   picker?.mode === "jump" ? setPicker(null) : openPicker({ mode: "jump" })
                 }
                 // -my-px：悬停底色上下多出的那 1px 不占排版，标题和日历 / 归档的标题同一个高度，
                 // 下面的搜索框、列表也不会比那两栏低 2px（切过去时整栏跳一下）
-                className="group -my-px -ml-[7px] flex min-w-0 items-center gap-[3px] rounded-lg py-px pl-[7px] pr-[5px]
+                className="group -my-px -ml-[7px] flex min-w-0 items-center gap-[3px] rounded-md py-px pl-[7px] pr-[5px]
                          transition-colors duration-[140ms] hover:bg-raised/55 aria-expanded:bg-raised/55"
               >
                 <AnimatePresence mode="wait" initial={false}>
@@ -1133,8 +1144,8 @@ interface TreeActions {
   toggle: (path: string, all: boolean) => void;
   /** 打开这一篇：当前标签里，newTab 时开在新标签里（docs/标签页与分屏.md §4.1） */
   select: (id: string, newTab?: boolean) => void;
-  /** 文件夹「…」里的「新建笔记」：建在那个文件夹里 */
-  newNote: (path: string) => void;
+  /** 文件夹「…」里的「新建笔记」「新建白板」：建在那个文件夹里（as：用这种摆法） */
+  newNote: (path: string, as?: NoteView) => void;
   /** 拖着的笔记 / 文件夹松手了 */
   dropNote: (id: string, target: DropTarget) => void;
   dropFolder: (path: string, target: DropTarget) => void;
@@ -1171,6 +1182,8 @@ interface TreeContextValue extends TreeActions {
   settle: Settle;
   /** 逻辑目录：文件夹能拖、有未整理和智能文件夹 */
   logical: boolean;
+  /** 开着的插件里能新建的摆法（「新建白板」）：文件夹「…」里各一项 */
+  creatable: NoteView[];
   /** 手动排序：笔记能拖着排 */
   reorder: boolean;
   /** 智能文件夹筛出来的笔记 */
@@ -1543,7 +1556,7 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
         className={cn(
           // 描边画在里面（ring-inset）：这一行贴着子树、列表那几层 overflow-clip 的左右边，
           // 画在外面的那 1px 会被裁掉，拖到文件夹上时框只剩上下两条边。描边直接出现，不做过渡
-          "absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors duration-[150ms]",
+          "absolute inset-x-0 inset-y-[2px] rounded-md transition-colors duration-[150ms]",
           dropOn
             ? "bg-accent-wash ring-1 ring-accent-line ring-inset"
             : menuOpen
@@ -1563,6 +1576,8 @@ function FolderRow({ path, depth, hint }: { path: string; depth: number; hint?: 
         {expandable && <Twisty open={open} hidden={dropOn} />}
       </span>
       <span
+        data-tip-overflow={folderName(path)}
+        data-tip-side="right"
         className={cn(
           "relative z-10 min-w-0 flex-1 truncate text-[14px] font-medium",
           dropOn ? "text-accent" : "text-ink/90",
@@ -1647,6 +1662,12 @@ function folderActions(
       icon: FilePlus,
       onSelect: () => tree.newNote(path),
     },
+    ...tree.creatable.map((view) => ({
+      id: `new-${view.id}`,
+      label: view.create!.label,
+      icon: view.icon,
+      onSelect: () => tree.newNote(path, view),
+    })),
     {
       id: "new-sub",
       label: "新建子文件夹",
@@ -1719,7 +1740,7 @@ function DropLine({ edge, indent }: { edge: "above" | "below"; indent: number })
       aria-hidden="true"
       style={{ left: indent }}
       className={cn(
-        "pointer-events-none absolute right-2 z-30 h-[2px] rounded-full bg-accent",
+        "pointer-events-none absolute right-2 z-30 h-[2px] rounded-capsule bg-accent",
         edge === "above" ? "-top-px" : "-bottom-px",
       )}
     />
@@ -1817,6 +1838,9 @@ const TreeNoteRow = memo(function TreeNoteRow({
   const title = useListTitle(note);
   const menu = useNoteMenu(note);
   const [menuOpen, setMenuOpen] = useState(false);
+  // 默认是别的摆法的（白板：有标记的）换成那一种的图标
+  const plugins = useData((s) => s.layout.plugins);
+  const Icon = noteViewIcon(note, plugins) ?? FileText;
   return (
     <div
       role="button"
@@ -1847,7 +1871,7 @@ const TreeNoteRow = memo(function TreeNoteRow({
       {edge && <DropLine edge={edge} indent={ROW_PAD + depth * INDENT} />}
       <span
         className={cn(
-          "absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors duration-[150ms]",
+          "absolute inset-x-0 inset-y-[2px] rounded-md transition-colors duration-[150ms]",
           selected
             ? filtered
               ? "bg-accent-wash/60"
@@ -1858,10 +1882,12 @@ const TreeNoteRow = memo(function TreeNoteRow({
         )}
       />
       <span className="relative z-10 grid h-5 w-5 shrink-0 place-items-center text-faint">
-        <FileText size={16} strokeWidth={1.8} />
+        <Icon size={16} strokeWidth={1.8} />
       </span>
       <span className="relative z-10 min-w-0 flex-1">
         <span
+          data-tip-overflow={title}
+          data-tip-side="right"
           className={cn(
             "block truncate text-[14px]",
             excerpts && "leading-5",
@@ -2028,13 +2054,17 @@ const TreeShortcutRow = memo(function TreeShortcutRow({
           tree.select(note.id);
         }
       }}
-      title={`快捷方式 · 在「${folderLabel(where)}」`}
+      {...tip("快捷方式", {
+        detail: `原文在「${folderLabel(where)}」`,
+        name: false,
+        side: "right",
+      })}
       style={{ paddingLeft: ROW_PAD + depth * INDENT }}
       className={TREE_ROW}
     >
       <span
         className={cn(
-          "absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors duration-[150ms]",
+          "absolute inset-x-0 inset-y-[2px] rounded-md transition-colors duration-[150ms]",
           selected ? "bg-accent-wash/60" : menuOpen ? "bg-raised/40" : "group-hover:bg-raised/40",
         )}
       />
@@ -2133,20 +2163,23 @@ function BaseFileRow({ file, depth, hint }: { file: TreeFile; depth: number; hin
           open();
         }
       }}
-      title={file.relPath}
       style={{ paddingLeft: ROW_PAD + depth * INDENT }}
       className={TREE_ROW}
     >
       <span
         className={cn(
-          "absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors duration-[150ms]",
+          "absolute inset-x-0 inset-y-[2px] rounded-md transition-colors duration-[150ms]",
           selected ? "bg-accent-wash" : menuOpen ? "bg-raised/40" : "group-hover:bg-raised/40",
         )}
       />
       <span className="relative z-10 grid h-5 w-5 shrink-0 place-items-center text-faint">
         <Table2 size={16} strokeWidth={1.8} />
       </span>
-      <span className="relative z-10 min-w-0 flex-1 truncate text-[14px] text-body">
+      <span
+        data-tip-overflow={file.relPath}
+        data-tip-side="right"
+        className="relative z-10 min-w-0 flex-1 truncate text-[14px] text-body"
+      >
         {baseTitle(file.name)}
         {hint && file.folder && (
           <span className="ml-1.5 text-[12px] text-muted">{folderLabel(file.folder)}</span>
@@ -2209,13 +2242,12 @@ const AttachmentRow = memo(function AttachmentRow({
           void open();
         }
       }}
-      title={file.name}
       style={{ paddingLeft: ROW_PAD + depth * INDENT }}
       className={TREE_ROW}
     >
       <span
         className={cn(
-          "absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors duration-[150ms]",
+          "absolute inset-x-0 inset-y-[2px] rounded-md transition-colors duration-[150ms]",
           menuOpen ? "bg-raised/40" : "group-hover:bg-raised/40",
         )}
       />
@@ -2229,13 +2261,17 @@ const AttachmentRow = memo(function AttachmentRow({
             decoding="async"
             draggable={false}
             onError={() => setBroken(true)}
-            className="h-4 w-4 rounded-[3px] object-cover ring-1 ring-line-strong"
+            className="h-4 w-4 rounded-xs object-cover ring-1 ring-line-strong"
           />
         ) : (
           <FileType size={16} strokeWidth={1.8} />
         )}
       </span>
-      <span className="relative z-10 min-w-0 flex-1 truncate text-[14px] text-body">
+      <span
+        data-tip-overflow={file.name}
+        data-tip-side="right"
+        className="relative z-10 min-w-0 flex-1 truncate text-[14px] text-body"
+      >
         {file.name}
         {hint && file.folder && (
           <span className="ml-1.5 text-[12px] text-muted">{folderLabel(file.folder)}</span>
@@ -2322,7 +2358,7 @@ function FolderNameInput({
           // 框往左多出 7px，框里的字和起好名之后那一行的名字对齐（同样的字号、字重、颜色）：
           // 回车之后字原地不动，只是框没了
           className={cn(
-            "-ml-[7px] h-7 min-w-0 flex-1 rounded-md bg-canvas px-[7px] text-[14px] outline-none",
+            "-ml-[7px] h-7 min-w-0 flex-1 rounded-sm bg-canvas px-[7px] text-[14px] outline-none",
             "font-medium text-ink/90 ring-1 ring-accent-line focus:shadow-[0_0_0_3px_var(--color-accent-wash)]",
           )}
         />
@@ -2361,10 +2397,10 @@ function Crumb({
     <button
       type="button"
       data-drop-folder={path}
-      title={folderLabel(path)}
+      {...tip(folderLabel(path), { name: false })}
       onClick={() => onNavigate(path)}
       className={cn(
-        "flex h-6 min-w-0 items-center gap-0.5 rounded-md px-[5px] text-muted",
+        "flex h-6 min-w-0 items-center gap-0.5 rounded-sm px-[5px] text-muted",
         "transition-colors duration-[140ms] hover:bg-raised/60 hover:text-ink",
         first ? "shrink-0" : "max-w-[96px]",
         dropOn && "bg-accent-wash text-accent ring-1 ring-accent-line",
@@ -2385,11 +2421,13 @@ function NoteDragGhost() {
       ? item.kind === "note"
         ? "拖到文件夹上"
         : "拖到文件夹上，或者两个文件夹之间"
-      : target.kind === "into"
-        ? `移到「${folderLabel(target.folder)}」`
-        : target.kind === "note"
-          ? `排在这里${target.folder === folderOf({ relPath: "", id: item.kind === "note" ? item.id : "" }) ? "" : `（移到「${folderLabel(target.folder)}」）`}`
-          : `排在「${folderLabel(parentOf(target.path))}」里这个位置`;
+      : target.kind === "zone"
+        ? target.label
+        : target.kind === "into"
+          ? `移到「${folderLabel(target.folder)}」`
+          : target.kind === "note"
+            ? `排在这里${target.folder === folderOf({ relPath: "", id: item.kind === "note" ? item.id : "" }) ? "" : `（移到「${folderLabel(target.folder)}」）`}`
+            : `排在「${folderLabel(parentOf(target.path))}」里这个位置`;
   return createPortal(
     <div
       // left / top 走主线程：影子里的字不会先糊后清
@@ -2489,7 +2527,7 @@ const NoteCard = memo(function NoteCard({
         <motion.span
           layoutId="note-selection"
           className={cn(
-            "absolute inset-x-0 inset-y-[2px] rounded-lg bg-accent-wash",
+            "absolute inset-x-0 inset-y-[2px] rounded-md bg-accent-wash",
             // 画在里面：画在外面的那 1px 会被列表的 overflow-clip 裁掉左右两边
             boxed && "ring-1 ring-accent-line/70 ring-inset",
           )}
@@ -2502,7 +2540,7 @@ const NoteCard = memo(function NoteCard({
            「…」菜单开着时指针在菜单上、不在行上，这里按住不放。 */
         <span
           className={cn(
-            "absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors duration-[150ms]",
+            "absolute inset-x-0 inset-y-[2px] rounded-md transition-colors duration-[150ms]",
             menuOpen ? "bg-raised/40" : "bg-raised/0 group-hover:bg-raised/40",
           )}
         />
@@ -2513,6 +2551,8 @@ const NoteCard = memo(function NoteCard({
           {/* 列表里标题只占一行，超出的部分用省略号；完整标题在正文区看。
               冲突副本显示原文的标题，副本的身份和时间放在摘要前面的标签里 */}
           <span
+            data-tip-overflow={title}
+            data-tip-side="right"
             className={cn(
               "block truncate text-[14px] font-semibold leading-[1.45]",
               selected ? "text-ink" : "text-ink/90",
@@ -2570,8 +2610,8 @@ const NoteCard = memo(function NoteCard({
 function FolderChip({ path }: { path: string }) {
   return (
     <span
-      title={folderLabel(path)}
-      className="mr-1.5 inline-flex max-w-[60%] shrink-0 items-center gap-[3px] rounded-[4px] bg-raised/70 py-px pr-[5px] pl-1
+      {...tip(folderLabel(path), { name: false })}
+      className="mr-1.5 inline-flex max-w-[60%] shrink-0 items-center gap-[3px] rounded-xs bg-raised/70 py-px pr-[5px] pl-1
                  text-[12px] font-medium text-muted"
     >
       <Folder size={12} strokeWidth={2} className="shrink-0" />
@@ -2599,7 +2639,7 @@ const CONFLICT_TIME_RE = /冲突\s*(\d{4})-(\d{2})-(\d{2})\s*(\d{2})(\d{2})/;
 export function ConflictTag({ title }: { title: string }) {
   const time = CONFLICT_TIME_RE.exec(title);
   return (
-    <span className="mr-1.5 inline-block rounded-[4px] bg-warning/15 px-1 text-[12px] font-medium text-warning">
+    <span className="mr-1.5 inline-block rounded-xs bg-warning/15 px-1 text-[12px] font-medium text-warning">
       冲突副本
       {time && ` · ${Number(time[2])}月${Number(time[3])}日 ${time[4]}:${time[5]}`}
     </span>

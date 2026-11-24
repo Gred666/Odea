@@ -49,7 +49,7 @@ export function PanelHeader({ title, onBack }: { title: string; onBack: () => vo
         onClick={onBack}
         aria-label="返回"
         data-panel-back
-        className="-ml-2 grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
+        className="-ml-2 grid h-7 w-7 place-items-center rounded-sm text-muted hover:bg-raised hover:text-ink"
       >
         <ChevronLeft size={18} strokeWidth={1.8} />
       </button>
@@ -107,7 +107,7 @@ export function ParentField({
   return (
     <>
       <div className={cn("flex gap-2", className)}>
-        <p className={cn(FIELD, "flex items-center truncate text-body")} title={parent}>
+        <p className={cn(FIELD, "flex items-center truncate text-body")} data-tip-overflow>
           {parent}
         </p>
         <Button disabled={busy} onClick={onPick}>

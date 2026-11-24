@@ -4,6 +4,8 @@ import { messageOf, useData } from "@/data/store";
 import type { DocumentRef, VaultChange } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { focusedDocument } from "@/lib/liveDocuments";
+import { MOD_KEY } from "@/lib/platform";
+import { tip } from "@/lib/tooltip";
 import {
   Braces,
   Calendar,
@@ -424,7 +426,7 @@ export function PropertiesPanel({
             </FooterButton>
           )}
           <span className="flex-1" />
-          <FooterButton icon={Code} onClick={() => setSourceOpen(true)} title="直接改 YAML">
+          <FooterButton icon={Code} onClick={() => setSourceOpen(true)} hint="直接改 YAML">
             源码
           </FooterButton>
         </div>
@@ -432,7 +434,7 @@ export function PropertiesPanel({
       {showSource && editable && source && (
         <div className="flex h-8 items-center px-1">
           <span className="flex-1" />
-          <FooterButton icon={Code} onClick={() => setPropertySource(false)} title="一行一条地看">
+          <FooterButton icon={Code} onClick={() => setPropertySource(false)} hint="一行一条地看">
             显示成面板
           </FooterButton>
         </div>
@@ -445,20 +447,21 @@ export function PropertiesPanel({
 function FooterButton({
   icon: Icon,
   onClick,
-  title,
+  hint,
   children,
 }: {
   icon: LucideIcon;
   onClick: () => void;
-  title?: string;
+  /** 悬停提示：按钮上的字之外再说一句 */
+  hint?: string;
   children: ReactNode;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      title={title}
-      className="flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-transparent transition-colors duration-[140ms]
+      {...(hint ? tip(hint, { name: false }) : {})}
+      className="flex h-7 items-center gap-1.5 rounded-sm px-2 text-[12px] text-transparent transition-colors duration-[140ms]
                  group-hover/props:text-faint group-focus-within/props:text-faint
                  hover:bg-raised hover:text-ink! focus-visible:text-ink"
     >
@@ -508,24 +511,20 @@ function PropertyRow({
   const Icon = mismatch ? TriangleAlert : meta.icon;
   const open = editable && !locked;
   // 「类型不符」就标在类型图标上（Obsidian 也是）：它本来就是按钮，键盘走得到，点了正好是换类型。
-  // 值的输入框也带上这一句（title 是它的描述，读屏读完「值」接着读这一句）
+  // 值的输入框也带上这一句（是它的描述，读屏读完「值」接着读这一句）
   const misfit = mismatch ? `类型不符：这个值不是${meta.label}` : "";
   const icon = (
     <button
       type="button"
       disabled={!open || kind === "complex"}
-      title={
-        locked
-          ? `${misfit ? `${misfit}。` : ""}${LOCKED_HINT}`
-          : kind === "complex"
-            ? "多行内容、嵌套的：在源码里改"
-            : misfit
-              ? `${misfit}（点了换类型）`
-              : `${meta.label}（点了换类型）`
-      }
+      {...(locked
+        ? tip(misfit || meta.label, { detail: LOCKED_HINT, name: false })
+        : kind === "complex"
+          ? tip("多行内容、嵌套的", { detail: "在源码里改", name: false })
+          : tip(misfit || meta.label, { detail: "点了换类型", name: false }))}
       aria-label={`${entry.key}：${meta.label}${misfit ? `，${misfit}` : ""}`}
       className={cn(
-        "grid h-[30px] w-6 shrink-0 place-items-center rounded-md transition-colors duration-[140ms] enabled:hover:bg-raised",
+        "grid h-[30px] w-6 shrink-0 place-items-center rounded-sm transition-colors duration-[140ms] enabled:hover:bg-raised",
         mismatch ? "text-warning" : "text-faint enabled:hover:text-ink",
       )}
     >
@@ -573,9 +572,9 @@ function PropertyRow({
         <button
           type="button"
           aria-label={`删掉 ${entry.key}`}
-          title="删掉这一条"
+          {...tip("删掉这一条", { name: false })}
           onClick={onRemove}
-          className="grid h-[30px] w-6 shrink-0 place-items-center rounded-md text-transparent transition-colors duration-[140ms]
+          className="grid h-[30px] w-6 shrink-0 place-items-center rounded-sm text-transparent transition-colors duration-[140ms]
                      group-hover/row:text-faint group-focus-within/row:text-faint hover:bg-raised hover:text-danger!"
         >
           <X size={12} strokeWidth={2} />
@@ -613,7 +612,7 @@ function KeyCell({
             leave(event);
           }
         }}
-        className="mt-[3px] h-[26px] w-[132px] shrink-0 rounded-[5px] border border-accent bg-canvas px-1.5 text-[13px] text-ink outline-none"
+        className="mt-[3px] h-[26px] w-[132px] shrink-0 rounded-sm border border-accent bg-canvas px-1.5 text-[13px] text-ink outline-none"
       />
     );
   }
@@ -621,9 +620,12 @@ function KeyCell({
     <button
       type="button"
       disabled={!editable}
-      title={hint ?? (editable ? `${name}（点了改名）` : name)}
+      // 名字只有 132 宽：不能改的只在截断时出全名；能改的、锁着的再说一句
+      {...(hint || editable
+        ? tip(name, { detail: hint ?? "点了改名", name: false })
+        : { "data-tip-overflow": "" })}
       onClick={() => setDraft(name)}
-      className="mt-[3px] h-[26px] w-[132px] shrink-0 truncate rounded-[5px] px-1.5 text-left text-[13px] text-muted
+      className="mt-[3px] h-[26px] w-[132px] shrink-0 truncate rounded-sm px-1.5 text-left text-[13px] text-muted
                  transition-colors duration-[140ms] enabled:hover:bg-raised enabled:hover:text-ink"
     >
       {name}
@@ -634,7 +636,7 @@ function KeyCell({
 /* ---------------- 值 ---------------- */
 
 const INPUT =
-  "h-[26px] w-full min-w-0 rounded-[5px] border border-transparent bg-transparent px-1.5 text-[14px] text-body outline-none " +
+  "h-[26px] w-full min-w-0 rounded-sm border border-transparent bg-transparent px-1.5 text-[14px] text-body outline-none " +
   "placeholder:text-faint enabled:hover:border-line-strong focus:border-accent focus:bg-canvas";
 
 /** 一条属性的值按类型给编辑器。视图文件的表格格子也用它（docs/视图文件.md §3.6） */
@@ -876,7 +878,7 @@ function SuggestionList({
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => onPick(item)}
           className={cn(
-            "flex h-7 items-center gap-2 truncate rounded-md px-2 text-left text-[13px]",
+            "flex h-7 items-center gap-2 truncate rounded-sm px-2 text-left text-[13px]",
             index === active ? "bg-raised text-ink" : "text-body hover:bg-raised",
           )}
         >
@@ -928,6 +930,7 @@ function TextValue({
     preselect: false,
   });
   const link = !focused ? wikiTarget(value) : null;
+  const misfitId = useId();
 
   const save = (next: string) => {
     const trimmed = next.trim();
@@ -987,10 +990,21 @@ function TextValue({
             leave(event);
           }
         }}
-        // 类型不符的那一句也放这里：指上去看得到，读屏当它的描述
-        title={[misfit, link ? "Ctrl + 点击打开" : ""].filter(Boolean).join("；") || undefined}
+        // 类型不符的那一句也放这里：指上去看得到（悬停提示），读屏当它的描述（aria-describedby）
+        aria-describedby={misfit ? misfitId : undefined}
+        {...(misfit || link
+          ? tip(misfit || `${MOD_KEY} + 点击打开`, {
+              detail: misfit && link ? `${MOD_KEY} + 点击打开` : undefined,
+              name: false,
+            })
+          : {})}
         className={cn(INPUT, numeric && "tabular-nums", link && "text-accent")}
       />
+      {misfit && (
+        <span id={misfitId} className="sr-only">
+          {misfit}
+        </span>
+      )}
       {hints.open && (
         <SuggestionList
           id={hints.listId}
@@ -1058,7 +1072,7 @@ function ListValue({
             // biome-ignore lint/suspicious/noArrayIndexKey: 见上
             key={`${item}\u0000${index}`}
             className={cn(
-              "inline-flex h-[22px] max-w-full items-center gap-0.5 rounded-[5px] pl-2 text-[13px]",
+              "inline-flex h-[22px] max-w-full items-center gap-0.5 rounded-xs pl-2 text-[13px]",
               editable ? "pr-0.5" : "pr-2",
               tags ? "bg-accent-wash text-accent" : "bg-raised text-body",
             )}
@@ -1068,7 +1082,7 @@ function ListValue({
                 type="button"
                 // 和文字值里的双链一个颜色：看得出点得开
                 className="truncate text-accent hover:underline"
-                title={link.title}
+                data-tip-overflow
                 onClick={(event) =>
                   onWikiLink(link.title, link.heading, event.ctrlKey || event.metaKey)
                 }
@@ -1077,7 +1091,7 @@ function ListValue({
               </button>
             ) : (
               // 太长被截断的一项：指上去看得到全的
-              <span className="truncate" title={tags ? `#${item}` : item}>
+              <span className="truncate" data-tip-overflow>
                 {tags ? `#${item}` : item}
               </span>
             )}
@@ -1093,7 +1107,7 @@ function ListValue({
                   if (event.detail === 0) refocusAt.current = index;
                   onCommit(items.filter((_, at) => at !== index));
                 }}
-                className="grid h-[18px] w-[18px] place-items-center rounded-[4px] opacity-60 hover:bg-canvas/60 hover:opacity-100"
+                className="grid h-[18px] w-[18px] place-items-center rounded-xs opacity-60 hover:bg-canvas/60 hover:opacity-100"
               >
                 <X size={12} strokeWidth={2.2} />
               </button>
@@ -1186,7 +1200,7 @@ function CheckboxValue({
         onFocus={onFocused}
         onClick={() => onChange(!checked)}
         className={cn(
-          "grid h-4 w-4 place-items-center rounded-[4px] border transition-colors duration-[120ms]",
+          "grid h-4 w-4 place-items-center rounded-xs border transition-colors duration-[120ms]",
           checked
             ? "border-accent bg-accent text-accent-ink"
             : "border-faint bg-canvas text-transparent",
@@ -1303,7 +1317,7 @@ function DateValue({
       type="button"
       disabled={!editable}
       onClick={() => setEditing(true)}
-      className="flex h-[26px] max-w-full items-center gap-2 rounded-[5px] border border-transparent px-1.5 text-left text-[14px]
+      className="flex h-[26px] max-w-full items-center gap-2 rounded-sm border border-transparent px-1.5 text-left text-[14px]
                  tabular-nums text-body enabled:hover:border-line-strong"
     >
       {value ? <span className="truncate">{label}</span> : <span className="text-faint">空</span>}
@@ -1393,7 +1407,7 @@ function AddRow({
               onCancel();
             }
           }}
-          className="h-[26px] w-[200px] rounded-[5px] border border-accent bg-canvas px-1.5 text-[13px] text-ink outline-none placeholder:text-faint"
+          className="h-[26px] w-[200px] rounded-sm border border-accent bg-canvas px-1.5 text-[13px] text-ink outline-none placeholder:text-faint"
         />
         {hints.open && (
           <SuggestionList
@@ -1476,7 +1490,7 @@ function SourceEditor({
           <button
             type="button"
             onClick={reset}
-            className="-my-1 h-7 shrink-0 rounded-md px-2.5 text-muted hover:bg-raised hover:text-ink"
+            className="-my-1 h-7 shrink-0 rounded-sm px-2.5 text-muted hover:bg-raised hover:text-ink"
           >
             用外面的
           </button>
@@ -1517,7 +1531,7 @@ function SourceEditor({
               reset();
               onCancel();
             }}
-            className="h-7 rounded-md px-2.5 text-muted hover:bg-raised hover:text-ink"
+            className="h-7 rounded-sm px-2.5 text-muted hover:bg-raised hover:text-ink"
           >
             取消
           </button>
@@ -1525,7 +1539,7 @@ function SourceEditor({
             type="button"
             onClick={save}
             disabled={draft === text}
-            className="h-7 rounded-md border border-line-strong bg-canvas px-2.5 text-body hover:bg-panel disabled:opacity-50"
+            className="h-7 rounded-sm border border-line-strong bg-canvas px-2.5 text-body hover:bg-panel disabled:opacity-50"
           >
             存好
           </button>

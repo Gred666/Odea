@@ -2,6 +2,7 @@ import { useApp } from "@/app/store";
 import { useData } from "@/data/store";
 import { cn } from "@/lib/cn";
 import { tween } from "@/lib/motion";
+import { tip } from "@/lib/tooltip";
 import { AlertTriangle, Info, LoaderCircle, RefreshCw, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
@@ -54,7 +55,7 @@ export function ErrorToast() {
                      bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
         >
           <AlertTriangle size={14} strokeWidth={2} className="shrink-0 text-danger" />
-          <span className="min-w-0 truncate" title={error}>
+          <span className="min-w-0 truncate" data-tip-overflow={error} data-tip-side="top">
             {initialized ? "操作失败" : "加载失败"}：{error}
           </span>
           {!initialized && (
@@ -71,7 +72,7 @@ export function ErrorToast() {
             type="button"
             aria-label="关闭提示"
             onClick={clearError}
-            className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-canvas/70
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-sm text-canvas/70
                        transition-colors duration-[140ms] hover:bg-canvas/15 hover:text-canvas"
           >
             <X size={12} strokeWidth={2.2} />
@@ -129,7 +130,11 @@ export function ImportToast() {
                 !reduce && "animate-spin [animation-duration:1.6s]",
               )}
             />
-            <span className="min-w-0 flex-1 truncate" title={importing.name}>
+            <span
+              className="min-w-0 flex-1 truncate"
+              data-tip-overflow={importing.name}
+              data-tip-side="top"
+            >
               正在导入「{importing.name}」
             </span>
             <span className="shrink-0 tabular-nums text-canvas/70">
@@ -149,12 +154,12 @@ export function ImportToast() {
             </button>
           </div>
           {/* 读屏器读上面那行字（role=status），这条只给眼睛看 */}
-          <div aria-hidden className="mr-1.5 h-[3px] overflow-hidden rounded-full bg-canvas/15">
+          <div aria-hidden className="mr-1.5 h-[3px] overflow-hidden rounded-capsule bg-canvas/15">
             {/* 换段时整条换一个（key），新的一段从 0 开始，不会倒着动画回去；只动 transform */}
             <div
               key={importing.phase}
               className={cn(
-                "h-full origin-left rounded-full bg-accent",
+                "h-full origin-left rounded-capsule bg-accent",
                 !reduce && "transition-transform duration-200 ease-out",
               )}
               style={{ transform: `scaleX(${ratio})` }}
@@ -202,14 +207,14 @@ export function NoticeToast() {
                      bg-ink py-2 pl-3.5 pr-2 text-[13px] text-canvas shadow-float"
         >
           <Info size={14} strokeWidth={2} className="shrink-0 text-accent" />
-          <span className="min-w-0 truncate" title={notice}>
+          <span className="min-w-0 truncate" data-tip-overflow data-tip-side="top">
             {notice}
           </span>
           <button
             type="button"
             aria-label="关闭提示"
             onClick={clearNotice}
-            className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-canvas/70
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-sm text-canvas/70
                        transition-colors duration-[140ms] hover:bg-canvas/15 hover:text-canvas"
           >
             <X size={12} strokeWidth={2.2} />
@@ -261,10 +266,9 @@ export function LayoutChangeToast() {
           </button>
           <button
             type="button"
-            aria-label="先不切换"
-            title="先不切换（下次打开这个仓库时会换过去）"
+            {...tip("先不切换", { detail: "下次打开这个仓库时会换过去", side: "top" })}
             onClick={dismiss}
-            className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-canvas/70
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-sm text-canvas/70
                        transition-colors duration-[140ms] hover:bg-canvas/15 hover:text-canvas"
           >
             <X size={12} strokeWidth={2.2} />

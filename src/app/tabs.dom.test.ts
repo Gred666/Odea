@@ -168,6 +168,21 @@ describe("note panes", () => {
     expect(useApp.getState().notePanes.map((pane) => pane.size)).toEqual([0.5, 0.5]);
   });
 
+  it("opens a note beside the pane being written in (a whiteboard's reference card)", () => {
+    // 只有一个窗格：向右拆出一栏，开在那里、它成了正在写的
+    start("board");
+    useApp.getState().openNoteBeside("x");
+    expect(layout()).toEqual(["board*", ">x*"]);
+    expect(selected()).toBe("x");
+    // 右边有窗格：开在右边那个里（成了一个新标签）
+    useApp.getState().focusPane(paneId(0));
+    useApp.getState().openNoteBeside("y");
+    expect(layout()).toEqual(["board*", ">x y*"]);
+    // 最右边的窗格：开在左边那个里；那里已经开着就切过去
+    useApp.getState().openNoteBeside("board");
+    expect(layout()).toEqual([">board*", "x y*"]);
+  });
+
   it("moves a dragged tab into a new pane, and closes the pane it left empty", () => {
     start("a", "b");
     useApp.getState().splitTab(tabOf("b").id, paneId(0), "left", false);

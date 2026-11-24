@@ -17,6 +17,11 @@ export interface NoteTab {
   /** 在这个标签里看过的、往回走能回到的（最近的在最后） */
   back: string[];
   forward: string[];
+  /**
+   * 这个标签里用哪种摆法看这一篇（插件的 noteViews，白板，docs/白板.md §13.4）；没有就是文档。
+   * 每个标签各记各的：同一篇能左边文档、右边白板。换成另一篇时按那一篇上次用的定（viewOfNote）
+   */
+  view?: string;
 }
 
 export interface NotePane {
@@ -38,12 +43,35 @@ export const MAX_PANES = 3;
 const HISTORY_LIMIT = 50;
 
 let seq = 0;
-export const newTab = (noteId: string, back: string[] = [], forward: string[] = []): NoteTab => ({
+
+/**
+ * 一个标签换成另一篇（或新开）时用哪种摆法：这一篇在这台电脑上上次用的，没用过的看插件的默认
+ * （app/noteViews.ts 装上）。没装的时候（单测）一律是文档
+ */
+let viewOfNote: (noteId: string) => string | undefined = () => undefined;
+export function setViewOfNote(resolve: (noteId: string) => string | undefined): void {
+  viewOfNote = resolve;
+}
+
+export const newTab = (
+  noteId: string,
+  back: string[] = [],
+  forward: string[] = [],
+  view: string | undefined = noteId ? viewOfNote(noteId) : undefined,
+): NoteTab => ({
   id: `tab-${++seq}`,
   noteId,
   back,
   forward,
+  ...(view ? { view } : {}),
 });
+
+/** 标签换成另一篇：摆法跟着那一篇走 */
+const withNote = (tab: NoteTab, noteId: string, back: string[], forward: string[]): NoteTab => {
+  const { view: _old, ...rest } = tab;
+  const view = viewOfNote(noteId);
+  return { ...rest, noteId, back, forward, ...(view ? { view } : {}) };
+};
 export const newPane = (tabs: NoteTab[], size = 1, active = tabs[0]!.id): NotePane => ({
   id: `pane-${++seq}`,
   tabs,
@@ -92,7 +120,7 @@ export function navigate(layout: PaneLayout, noteId: string): PaneLayout {
   const back = current.noteId
     ? [...current.back, current.noteId].slice(-HISTORY_LIMIT)
     : current.back;
-  const tab = { ...current, noteId, back, forward: [] };
+  const tab = withNote(current, noteId, back, []);
   return withPane(layout, {
     ...pane,
     tabs: pane.tabs.map((other) => (other === current ? tab : other)),
@@ -111,7 +139,9 @@ export function openTab(
   const current = activeTabOf(pane);
   // 当前标签还是空的（新仓库还没选上哪一篇）：就开在它里面
   if (!current.noteId) {
-    const tabs = pane.tabs.map((tab) => (tab === current ? { ...tab, noteId } : tab));
+    const tabs = pane.tabs.map((tab) =>
+      tab === current ? withNote(tab, noteId, tab.back, tab.forward) : tab,
+    );
     return withPane(layout, { ...pane, tabs });
   }
   const tab = newTab(noteId);
@@ -120,10 +150,52 @@ export function openTab(
   return withPane(layout, { ...pane, tabs, activeTab: tab.id });
 }
 
+/**
+ * 开在旁边的窗格里（白板上双击引用卡片，docs/白板.md §13.9）：右边有窗格就开在右边那个里，没有看左边；
+ * 只有这一个窗格时向右拆出一栏（到了 MAX_PANES 不会走到这里：那时总有旁边的）。开过去的那个窗格成了正在写的
+ */
+export function openBeside(
+  layout: PaneLayout,
+  noteId: string,
+  paneId = layout.activePane,
+): PaneLayout {
+  const index = layout.panes.findIndex((pane) => pane.id === paneId);
+  if (index < 0) return openTab(layout, noteId);
+  const neighbor = layout.panes[index + 1] ?? layout.panes[index - 1];
+  if (neighbor) return openTab(layout, noteId, neighbor.id);
+  const anchor = layout.panes[index]!;
+  const half = anchor.size / 2;
+  const pane = newPane([newTab(noteId)], half);
+  return {
+    panes: layout.panes.flatMap((other) =>
+      other === anchor ? [{ ...other, size: half }, pane] : [other],
+    ),
+    activePane: pane.id,
+  };
+}
+
 export function switchTab(layout: PaneLayout, tabId: string): PaneLayout {
   const pane = paneOfTab(layout, tabId);
   if (!pane || (pane.activeTab === tabId && layout.activePane === pane.id)) return layout;
   return withPane(layout, { ...pane, activeTab: tabId });
+}
+
+/** 换一个标签的摆法（undefined 是文档）。和现在一样就原样返回 */
+export function setTabView(
+  layout: PaneLayout,
+  tabId: string,
+  view: string | undefined,
+): PaneLayout {
+  const pane = paneOfTab(layout, tabId);
+  const tab = pane?.tabs.find((other) => other.id === tabId);
+  if (!pane || !tab || tab.view === view) return layout;
+  const { view: _old, ...rest } = tab;
+  const next: NoteTab = view ? { ...rest, view } : rest;
+  return withPane(
+    layout,
+    { ...pane, tabs: pane.tabs.map((other) => (other === tab ? next : other)) },
+    false,
+  );
 }
 
 export function focusPane(layout: PaneLayout, paneId: string): PaneLayout {
@@ -151,7 +223,7 @@ export function walkHistory(
       continue;
     }
     if (tab.noteId) to.push(tab.noteId);
-    const next = { ...tab, noteId, back, forward };
+    const next = withNote(tab, noteId, back, forward);
     return withPane(layout, {
       ...pane,
       tabs: pane.tabs.map((other) => (other === tab ? next : other)),
@@ -309,7 +381,8 @@ export function split(
   const tab = from.tabs.find((other) => other.id === tabId)!;
   // 把一个窗格里唯一的标签拖到自己边上：拆了等于没拆
   if (!copy && from === target && from.tabs.length < 2) return layout;
-  const moved = copy ? newTab(tab.noteId) : tab;
+  // 「向右拆分」开的是同一篇的一个新标签，摆法照原来那个（拆出来以后再各换各的）
+  const moved = copy ? newTab(tab.noteId, [], [], tab.view) : tab;
   const base = copy ? layout : dropTabs(layout, (other) => other.id === tabId).layout;
   const anchor = base.panes.find((pane) => pane.id === paneId);
   if (!anchor) return layout;
@@ -475,15 +548,19 @@ export function remap(
 
 /* ---------------- 记在本机 ---------------- */
 
-/** 记下来的样子：每个窗格的笔记 id、当前是第几个、占多宽；正在写的是第几个窗格 */
+/**
+ * 记下来的样子：每个窗格的笔记 id、当前是第几个、占多宽；正在写的是第几个窗格。
+ * views 和 tabs 一一对应，是每个标签的摆法（null 是文档）；全是文档的窗格不记（老版本记的也没有）
+ */
 export interface StoredLayout {
-  panes: { tabs: string[]; active: number; size: number }[];
+  panes: { tabs: string[]; active: number; size: number; views?: (string | null)[] }[];
   pane: number;
 }
 
 export function storeLayout(layout: PaneLayout): StoredLayout | null {
-  const single = layout.panes.length === 1 && layout.panes[0]!.tabs.length < 2;
-  return single ? null : entriesOf(layout);
+  const only = layout.panes.length === 1 ? layout.panes[0]!.tabs : null;
+  // 只有一个标签、又是文档：不用记（上次停在哪一篇另外记着）
+  return only && only.length < 2 && !only[0]?.view ? null : entriesOf(layout);
 }
 
 function entriesOf(layout: PaneLayout): StoredLayout {
@@ -492,6 +569,9 @@ function entriesOf(layout: PaneLayout): StoredLayout {
       tabs: pane.tabs.map((tab) => tab.noteId),
       active: pane.tabs.findIndex((tab) => tab.id === pane.activeTab),
       size: Math.round(pane.size * 1000) / 1000,
+      ...(pane.tabs.some((tab) => tab.view)
+        ? { views: pane.tabs.map((tab) => tab.view ?? null) }
+        : {}),
     })),
     pane: layout.panes.findIndex((pane) => pane.id === layout.activePane),
   };
@@ -511,11 +591,19 @@ function parseLayout(raw: unknown): PaneLayout | null {
   if (stored && Array.isArray(stored.panes)) {
     stored.panes.slice(0, MAX_PANES).forEach((entry, index) => {
       if (!entry || !Array.isArray(entry.tabs)) return;
+      // 摆法跟着笔记 id 走（去重、去掉坏的以后下标就对不上了）
+      const views = new Map<string, string>();
+      entry.tabs.forEach((id, index) => {
+        const view = Array.isArray(entry.views) ? entry.views[index] : null;
+        if (typeof id === "string" && typeof view === "string" && view && !views.has(id))
+          views.set(id, view);
+      });
       const ids = [
         ...new Set(entry.tabs.filter((id): id is string => typeof id === "string" && !!id)),
       ];
       if (!ids.length) return;
-      const tabs = ids.map((id) => newTab(id));
+      // 记下的是什么就是什么（文档也是记下来的一种），不再按「上次用的」重新定
+      const tabs = ids.map((id) => newTab(id, [], [], views.get(id) ?? ""));
       const active = tabs[Math.min(Math.max(0, Number(entry.active) || 0), tabs.length - 1)]!;
       const size = Number(entry.size) > 0 ? Number(entry.size) : 1;
       const pane = newPane(tabs, size, active.id);

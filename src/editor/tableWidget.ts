@@ -1,9 +1,11 @@
 import { snapToDevicePixels } from "@/lib/devicePixels";
 import { docOf, winOf } from "@/lib/paneWindow";
 import { MOD_KEY } from "@/lib/platform";
+import { type TipOptions, setTip } from "@/lib/tooltip";
 import { redo, undo } from "@codemirror/commands";
 import type { EditorView, KeyBinding, WidgetType } from "@codemirror/view";
 import { CellEditor, cellFromEditor, cellToEditor } from "./cellEditor";
+import { adoptTitles } from "./hoverCard";
 import { sanitizeHtml } from "./html";
 import { htmlCellAt, htmlCellSource } from "./htmlTable";
 import { renderInline } from "./inlineDom";
@@ -317,7 +319,9 @@ function paintCaption(block: HTMLElement, widget: TableWidget) {
   const html = widget.table.html?.caption ?? "";
   if (!node || node.dataset.source === html) return;
   node.dataset.source = html;
-  node.replaceChildren(sanitizeHtml(html));
+  const caption = sanitizeHtml(html);
+  adoptTitles(caption);
+  node.replaceChildren(caption);
   node.hidden = !html;
   node.closest(".cm-odea-table-frame")?.classList.toggle("has-caption", !!html);
 }
@@ -355,21 +359,32 @@ function syncOverflow(block: HTMLElement) {
 /* ---------------- 浮在表格上的东西：抓手、「+」、合并胶囊、隐藏输入框 ---------------- */
 
 function chrome(doc: Document): HTMLElement[] {
-  const make = (className: string, label: string, icon: Parameters<typeof tableIcon>[1]) => {
+  const make = (
+    className: string,
+    label: string,
+    icon: Parameters<typeof tableIcon>[1],
+    tip: TipOptions,
+  ) => {
     const node = doc.createElement("button");
     node.type = "button";
     node.className = className;
-    node.title = label;
-    node.setAttribute("aria-label", label);
+    // 提示放在表格外面那一侧，不挡格子
+    setTip(node, label, tip);
     node.tabIndex = -1;
     node.append(tableIcon(doc, icon));
     return node;
   };
-  const rowGrip = make("cm-odea-table-grip is-row", "点一下选中这一行，拖动换位置", "grip-row");
-  const colGrip = make("cm-odea-table-grip is-col", "点一下选中这一列，拖动换位置", "grip-col");
-  const addRow = make("cm-odea-table-add is-row", "在最后加一行", "plus");
-  const addCol = make("cm-odea-table-add is-col", "在最后加一列", "plus");
-  const insert = make("cm-odea-table-insert", "在这里插入", "plus");
+  const rowGrip = make("cm-odea-table-grip is-row", "选中这一行", "grip-row", {
+    detail: "按住拖动换位置",
+    side: "left",
+  });
+  const colGrip = make("cm-odea-table-grip is-col", "选中这一列", "grip-col", {
+    detail: "按住拖动换位置",
+    side: "top",
+  });
+  const addRow = make("cm-odea-table-add is-row", "在最后加一行", "plus", { side: "bottom" });
+  const addCol = make("cm-odea-table-add is-col", "在最后加一列", "plus", { side: "right" });
+  const insert = make("cm-odea-table-insert", "在这里插入", "plus", { side: "top" });
   const line = doc.createElement("div");
   line.className = "cm-odea-table-line";
   const pill = doc.createElement("button");
@@ -574,7 +589,9 @@ function paintCell(
 /** 一格显示出来的样子：GFM、CSV 按 Markdown 行内语法画；HTML 表格的格子是 HTML（去掉不安全的） */
 function renderCell(format: TableFormat, value: string): Node[] {
   if (format !== "html") return renderInline(value);
-  return [...sanitizeHtml(value).childNodes];
+  const html = sanitizeHtml(value);
+  adoptTitles(html);
+  return [...html.childNodes];
 }
 
 /**
@@ -1855,8 +1872,7 @@ function hover(block: HTMLElement, x: number, y: number) {
         : g.cols[g.cols.length - 1]!.right;
     insert.dataset.kind = target.kind;
     insert.dataset.index = String(target.index);
-    insert.title = isRow ? "在这里插入一行" : "在这里插入一列";
-    insert.setAttribute("aria-label", insert.title);
+    setTip(insert, isRow ? "在这里插入一行" : "在这里插入一列", { side: isRow ? "left" : "top" });
     const size = 18;
     insert.style.left = `${Math.round((isRow ? g.frame.left - 22 : at) - g.base.left - (isRow ? 0 : size / 2))}px`;
     insert.style.top = `${Math.round((isRow ? at : g.table.top - 22) - g.base.top - (isRow ? size / 2 : 0))}px`;

@@ -5,8 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   DOT,
   DOT_IN,
-  LOGO_VIEWBOX,
-  MARK_SHIFT,
+  MARK_VIEWBOX,
   O_CENTER,
   O_HEIGHT,
   STROKES,
@@ -17,17 +16,16 @@ import {
    开场：起笔一点，然后归位。
 
    双击的是任务栏上那个「O」，开场就从它开始：
-   1. 窗口出来是一张纸（导航栏的底色）。正中先落下一滴蓝 —— 一个想法
-      （和应用图标、收起后的导航栏同一个点）
+   1. 窗口出来是一张纸（刘海的底色）。正中先落下一滴蓝 —— 一个想法
+      （和应用图标、刘海里的「O」同一个点）
    2. 笔从它旁边起笔，逆时针绕一圈写出手写的「O」，停在缺口另一头
       （和字标同一条路径、同一条书写曲线）
-   3. 带着蓝点滑向左上角、一路缩小，落在侧栏字标的「O」上；纸同时淡开，露出早就排好的界面
-   4. 落地那一帧交给侧栏的 Logo（Logo.tsx）：展开着就从 d 接着写；
-      收起着就停成收起时的样子
+   3. 带着蓝点滑向左上角、一路缩小，落在刘海里那颗「O」上（StatusOrb）；纸同时淡开，露出早就排好的界面
+   4. 落地那一帧交给刘海里的「O」：它在同一次提交里显示出来，这边藏起来
 
    界面本身一下都不动：字不缩放、不位移，只是盖在上面的纸在淡（技术方案 §10.1）。
    「O」是矢量，每一帧按当时的大小重画（动的是 svg 的位置和宽高，不是 transform），
-   缩小的一路上都是清楚的，落地时和侧栏那份逐像素重合。
+   缩小的一路上都是清楚的，落地时和刘海里那份逐像素重合。
 
    冷启动才播，减少动效时不播（app/intro.ts）。中途点一下、按任意键：快进到位。
    ============================================================ */
@@ -44,7 +42,7 @@ const QUIET_MAX = 500;
 const DOT_AT = 0.04;
 /** 蓝点快落定了，笔从它旁边起笔 */
 const WRITE_AT = 0.3;
-/** 写那一圈：和字标每一笔同一条曲线（globals.css 的 odea-logo-write） */
+/** 写那一圈：和启动器字标每一笔同一条曲线（globals.css 的 odea-logo-write-once） */
 const WRITE = 0.5;
 const WRITE_EASE = [0.45, 0.05, 0.35, 1] as const;
 /** 写完停一拍，再走 */
@@ -68,12 +66,10 @@ const SKIP = 0.26;
 const startHeight = () => Math.min(96, Math.max(64, window.innerHeight * 0.085));
 const START_Y = 0.46;
 /**
- * 侧栏 Logo 的比例（每个 viewBox 单位多少 px），出发时按实际量到的覆盖。
- * Logo 的 svg 是 68×38 的盒子装 138.68×78 的 viewBox，默认等比适配（meet）：起作用的是
- * 高（38/78），不是宽（68/138.68），横向还居中留了 0.22px。以前按宽算，落点差 0.2px，
- * 交接那一帧笔画边缘闪一下
+ * 刘海里「O」的比例（每个 viewBox 单位多少 px），出发时按实际量到的覆盖：
+ * 28px 的正方形装 MARK_VIEWBOX（logoGeometry.ts）
  */
-const LOGO_SCALE = Math.min(68 / LOGO_VIEWBOX.w, 38 / LOGO_VIEWBOX.h);
+const LOGO_SCALE = 28 / MARK_VIEWBOX.w;
 /**
  * 光学尺寸：大的时候笔画相对细一点、蓝点相对小一点（照字标原样放大，72px 高时笔画 8px，
  * 太笨），一路缩回去一路加粗，落地时正好是字标的 5 个单位 —— 和字体在大字号用细一点的字重一个道理
@@ -86,9 +82,6 @@ export function Intro() {
   const shown = useIntro((s) => s.shown);
   // 落地以后元素再留两帧才卸（这边的「O」在落地那一帧就藏了，见下面的 useLayoutEffect）
   const [gone, setGone] = useState(false);
-
-  // 窄栏上的 Logo 是收起后的样子（整体往左挪了一点），开场全程带着这个偏移，落地才对得上
-  const shiftU = MARK_SHIFT;
 
   const [startScale] = useState(() => startHeight() / O_HEIGHT);
   const tail = useMotionValue(0);
@@ -106,9 +99,9 @@ export function Intro() {
   // 落地时也对不上 Logo 里那 0.22px 的居中偏移
   const placement = useTransform(() => {
     const s = scale.get();
-    const x = cx.get() - (O_CENTER.x + shiftU - LOGO_VIEWBOX.x) * s;
-    const y = cy.get() - (O_CENTER.y - LOGO_VIEWBOX.y) * s;
-    return `translate(${x} ${y}) scale(${s}) translate(${-LOGO_VIEWBOX.x} ${-LOGO_VIEWBOX.y})`;
+    const x = cx.get() - (O_CENTER.x - MARK_VIEWBOX.x) * s;
+    const y = cy.get() - (O_CENTER.y - MARK_VIEWBOX.y) * s;
+    return `translate(${x} ${y}) scale(${s}) translate(${-MARK_VIEWBOX.x} ${-MARK_VIEWBOX.y})`;
   });
   const placed = useRef<SVGGElement>(null);
   useMotionValueEvent(placement, "change", (value) =>
@@ -117,7 +110,7 @@ export function Intro() {
   const dasharray = useTransform(() => `${Math.max(tail.get(), 0)} 2`);
   // 长度为 0 的一段，圆头笔帽会画出一个点：落笔之前整条藏起来
   const inkOpacity = useTransform(() => (tail.get() > 0.002 ? 1 : 0));
-  // 缩回去走了几成：0 = 开场那么大，1 = 侧栏那么大。笔画和蓝点照它从「光学尺寸」过渡回原样
+  // 缩回去走了几成：0 = 开场那么大，1 = 刘海里那么大。笔画和蓝点照它从「光学尺寸」过渡回原样
   const shrunk = useTransform(() =>
     Math.min(1, Math.max(0, (startScale - scale.get()) / (startScale - endScale.get()))),
   );
@@ -138,20 +131,20 @@ export function Intro() {
   useEffect(() => {
     if (phase !== "cover" || !shown) return;
 
-    /** 落点：侧栏 Logo 的 svg（和这里同一个 viewBox） */
+    /** 落点：刘海里那颗「O」的 svg（和这里同一个 viewBox） */
     const target = () => {
       const logo = document.querySelector("[data-odea-logo]");
       const rect = logo?.getBoundingClientRect();
       if (!rect || rect.width === 0) return null;
-      // 和浏览器画 Logo 一样：等比适配（取小的那个比例），多出来的那一边居中
-      const s = Math.min(rect.width / LOGO_VIEWBOX.w, rect.height / LOGO_VIEWBOX.h);
-      const left = rect.left + (rect.width - LOGO_VIEWBOX.w * s) / 2;
-      const top = rect.top + (rect.height - LOGO_VIEWBOX.h * s) / 2;
+      // 和浏览器画它一样：等比适配（取小的那个比例），多出来的那一边居中
+      const s = Math.min(rect.width / MARK_VIEWBOX.w, rect.height / MARK_VIEWBOX.h);
+      const left = rect.left + (rect.width - MARK_VIEWBOX.w * s) / 2;
+      const top = rect.top + (rect.height - MARK_VIEWBOX.h * s) / 2;
       endScale.set(s);
       return {
         s,
-        x: left + (O_CENTER.x + shiftU - LOGO_VIEWBOX.x) * s,
-        y: top + (O_CENTER.y - LOGO_VIEWBOX.y) * s,
+        x: left + (O_CENTER.x - MARK_VIEWBOX.x) * s,
+        y: top + (O_CENTER.y - MARK_VIEWBOX.y) * s,
       };
     };
 
@@ -231,10 +224,10 @@ export function Intro() {
       window.removeEventListener("keydown", skip, true);
       for (const c of running.current) c.stop();
     };
-  }, [phase, shown, shiftU, tail, dot, scale, cx, cy, paper, endScale]);
+  }, [phase, shown, tail, dot, scale, cx, cy, paper, endScale]);
 
-  // 落地这一次提交里，Logo 在它的 useLayoutEffect 里把自己那份摆出来（motion value，下一帧上屏）；
-  // 这边也在同一次提交里用 motion value 藏起来 —— 两边在同一帧换，不重叠、也不空一帧。
+  // 落地这一次提交里，刘海里的「O」显示出来；这边也在同一次提交里用 motion value 藏起来 ——
+  // 两边在同一帧换，不重叠、也不空一帧。
   // 以前这边多留两帧，两份重叠的那两帧笔画边缘被画两遍，亮了一下
   useLayoutEffect(() => {
     if (phase === "landed") markOpacity.set(0);
@@ -265,22 +258,20 @@ export function Intro() {
         style={{ opacity: markOpacity }}
       >
         <g ref={placed} transform={placement.get()}>
-          <g transform={`translate(${shiftU} 0)`}>
-            <motion.path
-              d={STROKES[0]}
-              pathLength="1"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              style={{
-                strokeWidth,
-                strokeDasharray: dasharray,
-                strokeDashoffset: 0,
-                opacity: inkOpacity,
-              }}
-            />
-            <circle ref={dotEl} cx={DOT.cx} cy={DOT.cy} r={0} className="fill-accent" />
-          </g>
+          <motion.path
+            d={STROKES[0]}
+            pathLength="1"
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            style={{
+              strokeWidth,
+              strokeDasharray: dasharray,
+              strokeDashoffset: 0,
+              opacity: inkOpacity,
+            }}
+          />
+          <circle ref={dotEl} cx={DOT.cx} cy={DOT.cy} r={0} className="fill-accent" />
         </g>
       </motion.svg>
     </div>

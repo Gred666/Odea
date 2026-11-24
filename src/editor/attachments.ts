@@ -27,7 +27,7 @@ export interface AttachHooks {
 }
 
 /** 剪贴板 / 拖放里的文件。剪贴板里同时有文字的（从 Excel 复制单元格会附带一张截图）按文字粘贴 */
-function filesOf(data: DataTransfer | null, preferText: boolean): File[] {
+export function filesOf(data: DataTransfer | null, preferText: boolean): File[] {
   if (!data) return [];
   const files = [...data.files];
   if (!files.length) return [];
@@ -186,34 +186,31 @@ export function attachmentHandlers(hooks: () => AttachHooks | null): Extension {
   ];
 }
 
+/** 桌面端从系统拖进窗口的一下：x、y 是这个窗口的 CSS 像素（视口坐标） */
+export type DesktopDrop =
+  | { type: "over"; x: number; y: number }
+  | { type: "drop"; x: number; y: number; paths: string[] }
+  | { type: "leave" };
+
 /**
- * 桌面端：从系统拖进窗口的文件。Tauri 的 drag-drop 事件是整个窗口的，落在这个编辑器
- * 上面才接。返回取消监听的函数。
+ * 桌面端：从系统拖进 host 这个窗口的文件。Tauri 的 drag-drop 事件是整个窗口的（窗口开着 dragDropEnabled，WebView
+ * 收不到 HTML5 的 drop），谁接看落在谁上面：编辑器、白板各自比自己的位置。返回取消监听的函数
  */
-export function watchDesktopFileDrops(
-  view: EditorView,
-  hooks: () => AttachHooks | null,
-): () => void {
+export function watchDesktopDrops(host: Window, handle: (drop: DesktopDrop) => void): () => void {
   if (!isTauri) return () => {};
   let disposed = false;
   let unlisten: (() => void) | null = null;
 
-  // 编辑器所在的那个窗口：弹出窗口（docs/标签页与分屏.md §16）的拖放事件发给的是它自己的 webview，
-  // 坐标按它的像素比算
-  const host = winOf(view.dom) as Window & {
+  // 弹出窗口（docs/标签页与分屏.md §16）的拖放事件发给的是它自己的 webview，坐标按它的像素比算
+  const tauriHost = host as Window & {
     __TAURI_INTERNALS__?: { metadata?: { currentWebview?: { label?: string } } };
   };
   const popoutLabel =
-    host === window ? null : host.__TAURI_INTERNALS__?.metadata?.currentWebview?.label;
-
-  const posAt = (position: { x: number; y: number }) => {
-    // 事件给的是物理像素
+    host === window ? null : tauriHost.__TAURI_INTERNALS__?.metadata?.currentWebview?.label;
+  // 事件给的是物理像素
+  const css = (position: { x: number; y: number }) => {
     const scale = host.devicePixelRatio || 1;
-    const x = position.x / scale;
-    const y = position.y / scale;
-    const box = view.contentDOM.getBoundingClientRect();
-    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
-    return view.posAtCoords({ x, y }) ?? null;
+    return { x: position.x / scale, y: position.y / scale };
   };
 
   void import("@tauri-apps/api/webview").then(async ({ Webview, getCurrentWebview }) => {
@@ -222,21 +219,10 @@ export function watchDesktopFileDrops(
     return webview
       .onDragDropEvent((event) => {
         const payload = event.payload;
-        if (!view.dom.isConnected || !hooks()?.paths) return;
-        if (payload.type === "leave") {
-          showDropAt(view, null);
-          return;
-        }
-        const pos = posAt(payload.position);
-        if (payload.type === "enter" || payload.type === "over") {
-          showDropAt(view, pos);
-          return;
-        }
-        // drop
-        showDropAt(view, null);
-        const attach = hooks();
-        if (pos === null || !attach?.paths || !payload.paths.length) return;
-        void insertWhenSaved(view, pos, attach.paths(payload.paths));
+        if (payload.type === "leave") handle({ type: "leave" });
+        else if (payload.type === "drop") {
+          handle({ type: "drop", ...css(payload.position), paths: payload.paths });
+        } else handle({ type: "over", ...css(payload.position) });
       })
       .then((stop) => {
         if (disposed) stop();
@@ -248,4 +234,33 @@ export function watchDesktopFileDrops(
     disposed = true;
     unlisten?.();
   };
+}
+
+/** 桌面端：从系统拖进窗口、落在这个编辑器上的文件。返回取消监听的函数 */
+export function watchDesktopFileDrops(
+  view: EditorView,
+  hooks: () => AttachHooks | null,
+): () => void {
+  const posAt = (x: number, y: number) => {
+    const box = view.contentDOM.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return null;
+    return view.posAtCoords({ x, y }) ?? null;
+  };
+  // 编辑器所在的那个窗口（弹出窗口里的是它自己的）
+  return watchDesktopDrops(winOf(view.dom), (drop) => {
+    if (!view.dom.isConnected || !hooks()?.paths) return;
+    if (drop.type === "leave") {
+      showDropAt(view, null);
+      return;
+    }
+    const pos = posAt(drop.x, drop.y);
+    if (drop.type === "over") {
+      showDropAt(view, pos);
+      return;
+    }
+    showDropAt(view, null);
+    const attach = hooks();
+    if (pos === null || !attach?.paths || !drop.paths.length) return;
+    void insertWhenSaved(view, pos, attach.paths(drop.paths));
+  });
 }

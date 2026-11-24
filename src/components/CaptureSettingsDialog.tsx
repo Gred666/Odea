@@ -88,7 +88,7 @@ export function CaptureSettingsDialog() {
                   type="button"
                   aria-label="关闭"
                   onClick={close}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted
                              transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />

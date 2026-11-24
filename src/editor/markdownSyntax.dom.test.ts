@@ -157,7 +157,7 @@ describe("方括号家族", () => {
   it("hides the link title together with the destination", () => {
     const { parent, view } = mount('[官网](https://x.dev "标题") 完', 999);
     expect(text(parent)).toBe("官网 完");
-    expect(parent.querySelector(".cm-odea-link")?.getAttribute("title")).toContain("https://x.dev");
+    expect(parent.querySelector(".cm-odea-link")?.getAttribute("data-tip")).toBe("https://x.dev");
     expect(linkTargetAt(view.state, 1)).toBe("https://x.dev");
   });
 });

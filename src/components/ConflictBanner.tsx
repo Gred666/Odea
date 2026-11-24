@@ -5,6 +5,7 @@ import { type DocumentModel, NOTE } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { diffLines, diffStats } from "@/lib/lineDiff";
 import { tween } from "@/lib/motion";
+import { tip } from "@/lib/tooltip";
 import { documentType } from "@/plugins/registry";
 import { ChevronRight, Copy } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -173,7 +174,7 @@ export function BannerButton({
   disabled,
   danger,
   strong,
-  title,
+  hint,
   expanded,
 }: {
   children: React.ReactNode;
@@ -181,8 +182,8 @@ export function BannerButton({
   disabled?: boolean;
   danger?: boolean;
   strong?: boolean;
-  /** 悬停时多说一句 */
-  title?: string;
+  /** 悬停时多说一句：主字，第二行 */
+  hint?: { text: string; detail?: string };
   /** 展开 / 收起下面一块的按钮：读屏据此说「已展开」 */
   expanded?: boolean;
 }) {
@@ -191,7 +192,7 @@ export function BannerButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      title={title}
+      {...(hint ? tip(hint.text, { detail: hint.detail, name: false }) : {})}
       aria-expanded={expanded}
       className={cn(
         "flex items-center gap-1 rounded-md px-2 py-[3px] text-[12px] transition-colors duration-[140ms]",

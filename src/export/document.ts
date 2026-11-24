@@ -80,6 +80,14 @@ const TOKENS = `:root {
   --color-warning: #b8802a;
   --color-callout-important: #7c5cd6;
   --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --corner-scale: 1;
+  --corner-xs: calc(var(--radius-xs) * var(--corner-scale));
+  --corner-sm: calc(var(--radius-sm) * var(--corner-scale));
+  --corner-md: calc(var(--radius-md) * var(--corner-scale));
+  --corner-lg: calc(var(--radius-lg) * var(--corner-scale));
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
   --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI",
@@ -101,6 +109,12 @@ const TOKENS = `:root {
   --code-punct: #8d8d85;
   --code-meta: #8d8d85;
   --code-invalid: #c8483d;
+}
+/* 弧线（技术方案 §9.6）：支持 corner-shape 的引擎按 1.4907R 写、配 superellipse；别的退回普通圆角 R */
+@supports (corner-shape: superellipse(1.58)) {
+  :root {
+    --corner-scale: 1.4907;
+  }
 }`;
 
 /** 一整页的版式。网页按应用里的正文字号、行宽；纸上另算（纸张、页边距在 pageCss） */

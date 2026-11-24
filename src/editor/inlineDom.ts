@@ -1,3 +1,4 @@
+import { setTip } from "@/lib/tooltip";
 import { animatedEmojiFor, inlineAnimatedEmoji } from "./animatedEmoji";
 import { emojiFor } from "./emoji";
 import { decodeEntity } from "./entities";
@@ -70,7 +71,7 @@ export function renderInline(text: string): Node[] {
     } else if (linkText !== undefined) {
       const node = element("span", "cm-odea-link", renderInline(linkText));
       node.dataset.href = linkUrl ?? "";
-      node.title = linkUrl ?? "";
+      if (linkUrl) setTip(node, linkUrl, { name: false, side: "top" });
       out.push(node);
     } else if (escaped !== undefined) {
       out.push(document.createTextNode(escaped));
@@ -105,7 +106,7 @@ function renderHtmlTag(whole: string, tagName: string, attrs: string, inner: str
     const href = safeHref(tag.attrs.href);
     if (href) {
       node.dataset.href = href;
-      node.title = href;
+      setTip(node, href, { name: false, side: "top" });
     }
   }
   if (name === "abbr" && tag.attrs.title) {

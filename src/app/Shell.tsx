@@ -6,17 +6,18 @@ import { CaptureSettingsDialog } from "@/components/CaptureSettingsDialog";
 import { CollabDialog, CollabRequests, CollabResume } from "@/components/CollabDialog";
 import { CommandPalette } from "@/components/CommandPalette";
 import { DocumentPanes, activeNoteOf } from "@/components/DocumentPanes";
+import { EdgeChrome } from "@/components/EdgeChrome";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ErrorToast, ImportToast, LayoutChangeToast, NoticeToast } from "@/components/ErrorToast";
 import { ExportDialog } from "@/components/ExportDialog";
 import { FindDialog } from "@/components/FindDialog";
 import { HistoryDialog } from "@/components/HistoryDialog";
 import { Intro } from "@/components/Intro";
+import { useNotchWidth } from "@/components/NotchNav";
 import { useTabKeys } from "@/components/NoteTabs";
 import { PluginConsent } from "@/components/PluginConsent";
 import { InActiveWindow, Popouts } from "@/components/Popouts";
 import { RelayDialog } from "@/components/RelayDialog";
-import { Sidebar } from "@/components/Sidebar";
 import { SyncDialog } from "@/components/SyncDialog";
 import { TeamDialog } from "@/components/TeamDialog";
 import { TeamRelayToast } from "@/components/TeamRelayToast";
@@ -24,18 +25,13 @@ import { TitleBar } from "@/components/TitleBar";
 import { TrashDialog } from "@/components/TrashDialog";
 import { UndoToast } from "@/components/UndoToast";
 import { UpdateDialog } from "@/components/UpdateDialog";
-import { VaultSwitcher } from "@/components/VaultSwitcher";
 import { useCurrentDocument } from "@/data/adapter";
 import { enabledPlugins, saveKeyOf, useData } from "@/data/store";
 import { noteRef, vaultRef } from "@/data/types";
 import { pinEditorStates } from "@/editor/statePins";
 import { cn } from "@/lib/cn";
-import { tween } from "@/lib/motion";
-import { navItemOf } from "@/plugins/registry";
 import { initTeam } from "@/team/store";
-import { ArchiveList } from "@/views/ArchiveView";
 import { ExtensionsView } from "@/views/ExtensionsView";
-import { NotesList } from "@/views/NotesView";
 import { AnimatePresence, MotionConfig, motion } from "motion/react";
 import { type ReactNode, useEffect } from "react";
 
@@ -73,12 +69,7 @@ export function Shell() {
   // 开着的插件：它们的副作用跟着主窗口挂着（日程：零点翻页、按需取数据、日程切换器）
   const layout = useData((s) => s.layout);
   const plugins = enabledPlugins(layout);
-  // 插件的页带的列表栏（日历的月格子）
-  const PluginList = navItemOf(workspace)?.List;
-
   const notes = useData((s) => s.notes);
-  const archived = useData((s) => s.archived);
-  const restoreNote = useData((s) => s.restoreNote);
   const saveDocument = useData((s) => s.saveDocument);
   const saveTitle = useData((s) => s.saveTitle);
 
@@ -93,10 +84,11 @@ export function Shell() {
   const popoutTarget = popoutNote && !isBaseTab(popoutNote) ? noteRef(popoutNote) : undefined;
   // 命令面板里那些「这一篇」的命令只认仓库里的文档（做客的那一篇不算）
   const docTarget = vaultRef(doc.editor?.target);
-  // 列表栏收起了（像 VS Code 的侧栏）：和今日TODO、目标一样只剩窄栏和正文
+  // 侧栏收起了（像 VS Code 的侧栏）：和今日TODO、目标一样只剩刘海和正文
   const showList = hasListColumn(workspace) && !panelCollapsed;
-  // 专注模式要把整条 chrome 推出去有多远
-  const zenShift = zen ? -chromeWidth(showList) : 0;
+  // 专注模式要把整块 chrome（刘海 + 侧栏）推出去有多远
+  const notch = useNotchWidth();
+  const zenShift = zen ? -chromeWidth(showList, notch) : 0;
   // 主内容的版面（见下面主内容那段注释）：版面一样的两页之间不重挂，只换文档。
   // 笔记分屏不算换版面：拆出一栏、关掉一栏由 DocumentPanes 自己溶解，还在的窗格不重挂
   // （docs/标签页与分屏.md §15.6；以前在这里换一屏，每个编辑器都重建，卡几百毫秒）
@@ -144,104 +136,35 @@ export function Shell() {
 
   return (
     <MotionConfig reducedMotion={reduceMotion ? "always" : "user"}>
-      <div className="relative flex h-full w-full overflow-hidden bg-rail">
+      <div className="relative flex h-full w-full overflow-hidden bg-canvas">
         <Guard area="标题栏">
           <TitleBar />
         </Guard>
 
-        {/* ---------- 左侧 chrome（导航 + 列表栏） ----------
+        {/* ---------- 左侧 chrome（刘海 + 侧栏，docs/边栏.md） ----------
+            在流里只占侧栏那 300（侧栏收起、没有侧栏的页是 0）：开关侧栏时正文那一侧一帧之内拿到新宽度，
+            只重排这一次；形状本身是绝对定位的几块刚体，伸缩只动 transform（EdgeChrome）。
+            正文那一列跟着滑到新的居中位置（DocumentView 的 CenteredColumn）。
+
+            z-[45]：比标题栏的拖拽带（z-40）高，刘海那一块点得到、不拖窗口；比对话框（z-50）低。
+
             专注模式的动画全在这一层做，而且刻意**不用**布局属性：
-
             切进专注模式的瞬间这一层变成 absolute，立刻脱离 flex 流 ——
-            编辑区一帧之内就拿到整页宽度，只重排这一次；随后 540px 的位移
-            纯粹是 transform，走合成器。如果改成动画化 width/marginLeft，
-            540px 行程里每一帧都要重排，开了 lineWrapping 的 CodeMirror
-            会被迫逐帧重新折行，正是上面列表栏那段注释说的那个坑 —— 而且
-            这次行程是它的两倍宽。
+            编辑区一帧之内就拿到整页宽度，只重排这一次；随后的位移纯粹是 transform，走合成器。
+            如果改成动画化 width/marginLeft，行程里每一帧都要重排，开了 lineWrapping 的 CodeMirror
+            会被迫逐帧重新折行。退出时反过来：先回到流内（编辑区一帧内缩回去），再滑回 0。
 
-            退出时反过来：先回到流内（编辑区一帧内缩回去），再从 -540
-            滑回 0。两个方向都只重排一次。
-
-            这一层**常驻** z-30，而且正文的画布往它底下多铺了 540px
-            （DocumentView 里的负外边距）：退出时它滑回来的那 460ms 里，
-            身后是连续的白色画布和正在往右滑的正文，而不是外层容器露出的
-            一块灰底 —— 原来正文区一缩回去，左边立刻空出一块 bg-rail，
-            正文还被自己的滚动容器在 540px 处切掉，看起来就是「先冒出一块
-            空板、侧边栏再压上来」。铺底之后，进出两个方向是镜像的：
-            都是 chrome 在白色画布上滑动、正文在它旁边跟着挪。 */}
+            正文的画布往它底下多铺了 300（DocumentView 里的负外边距）：退出时它滑回来的那 460ms 里，
+            身后是连续的白色画布和正在往右滑的正文，不是外层容器露出的一块底色。 */}
         <motion.div
-          className={cn("relative z-30 flex h-full", zen && "absolute inset-y-0 left-0")}
+          className={cn("relative z-[45] h-full shrink-0", zen && "absolute inset-y-0 left-0")}
+          style={{ width: showList ? LIST_WIDTH : 0 }}
           animate={{ x: zenShift }}
           transition={zenTransition}
         >
           <ErrorBoundary area="侧栏" fallback="compact" onError={showRenderError}>
-            <Sidebar />
+            <EdgeChrome />
           </ErrorBoundary>
-
-          {/* ---------- 中列表栏 ----------
-            两栏 ↔ 三栏切换**只动 transform**，布局只变一次：
-
-            进场：这一栏挂载的瞬间就以完整宽度进入 flex 流（主内容一帧之内收窄，
-            只重排这一次），然后整块从导航栏底下滑出来 —— 导航栏是 z-20，它是
-            z-10，所以看起来像一块板子从侧边抽屉里抽出，而不是凭空浮现。
-            退场：mode="popLayout" 让它先脱离文档流（主内容同样只重排一次），
-            再整块滑回导航栏底下。
-            不带 opacity：它从一块不透明的导航栏底下抽出来，起点本来就看不见；
-            加了淡入反而让露出来的那条边是半透明的，底下的白画布透上来。
-
-            以前是动画化 marginLeft（-300 → 0）：布局属性，动画期间 flex 行
-            每一帧都重排，主内容宽度跟着一路变，开了 lineWrapping 的 CodeMirror
-            被迫逐帧重新折行 —— 220ms 里十几次全文重排，头几帧稳定在 28ms
-            一帧（90Hz 屏上只有三分之一帧率），这就是「拉出来时掉帧」。
-            而主内容那一头用的也是 popLayout（见下），退场的旧正文被冻结在原
-            尺寸上淡出，不会因为这次重排而跳版。 */}
-          <div className="relative z-10 flex h-full shrink-0">
-            <AnimatePresence initial={false} mode="popLayout">
-              {showList && (
-                // key 只跟「有没有列表栏」走，不跟具体工作区走 ——
-                // 否则「笔记 → 日历」会让整条栏先收起再展开，实际只需要换内容。
-                <motion.div
-                  key="list-column"
-                  initial={{ x: -LIST_WIDTH }}
-                  animate={{ x: 0 }}
-                  exit={{ x: -LIST_WIDTH }}
-                  transition={tween.base}
-                  className="z-10 flex h-full shrink-0 flex-col overflow-hidden bg-panel"
-                >
-                  <div className="relative min-h-0 flex-1">
-                    <AnimatePresence mode="wait" initial={false}>
-                      <motion.div
-                        key={workspace}
-                        initial={{ opacity: 0, x: 10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: -8 }}
-                        transition={tween.base}
-                        className="h-full"
-                      >
-                        <ErrorBoundary
-                          area="列表栏"
-                          fallback="block"
-                          resetKey={workspace}
-                          onError={showRenderError}
-                        >
-                          {workspace === "notes" && <NotesList notes={notes} />}
-                          {PluginList && <PluginList />}
-                          {workspace === "archive" && (
-                            <ArchiveList items={archived} onRestore={restoreNote} />
-                          )}
-                        </ErrorBoundary>
-                      </motion.div>
-                    </AnimatePresence>
-                  </div>
-                  {/* 仓库名 ⌄：换仓库、开关插件（日程，Obsidian 也放在这里）。在换内容的那一层外面，
-                      切工作区时它不跟着淡出淡入 */}
-                  <Guard area="仓库菜单">
-                    <VaultSwitcher />
-                  </Guard>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
         </motion.div>
 
         {/* ---------- 主内容 ----------

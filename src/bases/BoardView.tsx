@@ -2,6 +2,7 @@ import { openDocument } from "@/app/navigate";
 import { messageOf } from "@/data/store";
 import { cn } from "@/lib/cn";
 import { usePaneWindow } from "@/lib/paneWindow";
+import { tip } from "@/lib/tooltip";
 import { isListKind } from "@/properties/yaml";
 import { Plus } from "lucide-react";
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
@@ -177,11 +178,13 @@ export function BoardView({
                     {/* 键盘打开在卡片标题上（名称那个按钮）；拖只有鼠标、指针 */}
                     <div
                       onPointerDown={(event) => startPress(event, row, group)}
-                      title={
-                        movable
-                          ? undefined
-                          : "按文件的属性、公式分的列，卡片拖不了：值不是写在笔记里的"
-                      }
+                      {...(movable
+                        ? {}
+                        : tip("卡片拖不了", {
+                            detail: "按文件的属性、公式分的列：值不是写在笔记里的",
+                            name: false,
+                            side: "right",
+                          }))}
                       className={cn(
                         "rounded-lg bg-canvas px-2.5 py-2 shadow-card ring-1 ring-line transition-opacity duration-[120ms]",
                         movable && "cursor-grab",

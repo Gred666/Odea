@@ -156,7 +156,7 @@ export function UpdateDialog() {
                   aria-label="关闭"
                   onClick={close}
                   disabled={installing}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted transition-colors
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted transition-colors
                              duration-[140ms] hover:bg-raised hover:text-ink disabled:opacity-40"
                 >
                   <X size={14} strokeWidth={2} />
@@ -319,8 +319,8 @@ function FooterButton({
       disabled={disabled}
       className={
         primary
-          ? "flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 text-[13px] font-medium text-accent-ink transition-colors duration-[140ms] hover:bg-accent-hover disabled:opacity-60"
-          : "flex h-8 shrink-0 items-center rounded-lg px-3 text-[13px] text-body transition-colors duration-[140ms] hover:bg-raised disabled:opacity-50"
+          ? "flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3.5 text-[13px] font-medium text-accent-ink transition-colors duration-[140ms] hover:bg-accent-hover disabled:opacity-60"
+          : "flex h-8 shrink-0 items-center rounded-md px-3 text-[13px] text-body transition-colors duration-[140ms] hover:bg-raised disabled:opacity-50"
       }
     >
       {children}

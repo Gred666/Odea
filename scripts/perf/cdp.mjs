@@ -8,8 +8,12 @@ const CHROME = process.env.CHROME ?? "C:/Program Files/Google/Chrome/Application
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 起一个用临时配置目录的无头 Chrome，开一个空白页连上去。关的时候连配置目录一起删 */
-export async function launch(port) {
+/**
+ * 起一个用临时配置目录的无头 Chrome，开一个空白页连上去。关的时候连配置目录一起删。
+ * extraArgs：多给 Chrome 的命令行参数，比如真的高 DPI 屏 `--force-device-scale-factor=1.25`
+ * （DevTools 的 setDeviceMetricsOverride 模拟的不是真的，VERIFICATION.md「逐帧对比」）
+ */
+export async function launch(port, extraArgs = []) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "odea-perf-"));
   const chrome = spawn(
     CHROME,
@@ -23,6 +27,7 @@ export async function launch(port) {
       "--disable-background-timer-throttling",
       "--disable-renderer-backgrounding",
       "--disable-backgrounding-occluded-windows",
+      ...extraArgs,
       "about:blank",
     ],
     { stdio: "ignore" },

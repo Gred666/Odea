@@ -36,7 +36,8 @@ describe("链到还没有的笔记的双链", () => {
     expect(links.map((link) => link.textContent)).toEqual(["秋季复盘", "还没写"]);
     expect(links[0]?.classList.contains("is-missing")).toBe(false);
     expect(links[1]?.classList.contains("is-missing")).toBe(true);
-    expect(links[1]?.title).toContain("新建");
+    expect(links[1]?.dataset.tip).toBe("还没有「还没写」这篇笔记");
+    expect(links[1]?.dataset.tipDetail).toContain("新建");
   });
 
   it("matches titles the way backlinks do: trimmed and case-insensitive", () => {

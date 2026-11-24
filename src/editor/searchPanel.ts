@@ -1,6 +1,8 @@
 import type { MatchAnchor } from "@/data/types";
 import { winOf } from "@/lib/paneWindow";
+import { ALT_KEY, MOD_KEY, keyCaps } from "@/lib/platform";
 import { isTauri } from "@/lib/tauri";
+import { setTip } from "@/lib/tooltip";
 import {
   SearchQuery,
   closeSearchPanel,
@@ -256,12 +258,12 @@ function button(
   label: string,
   content: Node | string,
   onClick: () => void,
+  kbd?: string,
 ): HTMLButtonElement {
   const node = document.createElement("button");
   node.type = "button";
   node.className = className;
-  node.title = label;
-  node.setAttribute("aria-label", label);
+  setTip(node, label, { kbd });
   node.append(content);
   // 点按钮不抢输入框的焦点：点完开关、上一个下一个，接着打字、回车都还在输入框里
   node.addEventListener("mousedown", (event) => event.preventDefault());
@@ -370,17 +372,23 @@ class SearchPanel implements Panel {
       key: "caseSensitive" | "wholeWord" | "regexp",
       phrase: string,
       text: string,
+      letter: string,
     ) => {
-      const node = button("odea-search-toggle", `${state.phrase(phrase)}`, text, () => {
-        this.flip(key);
-      });
+      // Alt+C / W / R：keydown 里按 event.code 认的
+      const node = button(
+        "odea-search-toggle",
+        state.phrase(phrase),
+        text,
+        () => this.flip(key),
+        keyCaps(ALT_KEY, letter),
+      );
       node.dataset.option = key;
       return node;
     };
     this.toggles = {
-      caseSensitive: toggle("caseSensitive", "match case", "Aa"),
-      wholeWord: toggle("wholeWord", "by word", "ab"),
-      regexp: toggle("regexp", "regexp", ".*"),
+      caseSensitive: toggle("caseSensitive", "match case", "Aa", "C"),
+      wholeWord: toggle("wholeWord", "by word", "ab", "W"),
+      regexp: toggle("regexp", "regexp", ".*", "R"),
     };
 
     this.searchBox = document.createElement("div");
@@ -410,14 +418,26 @@ class SearchPanel implements Panel {
     findRow.append(
       this.replaceToggle,
       this.searchBox,
-      button("odea-search-icon", `${state.phrase("previous")} (Shift+Enter)`, icon(ICONS.up), () =>
-        this.go(findPrevious),
+      button(
+        "odea-search-icon",
+        state.phrase("previous"),
+        icon(ICONS.up),
+        () => this.go(findPrevious),
+        "Shift Enter",
       ),
-      button("odea-search-icon", `${state.phrase("next")} (Enter)`, icon(ICONS.down), () =>
-        this.go(findNext),
+      button(
+        "odea-search-icon",
+        state.phrase("next"),
+        icon(ICONS.down),
+        () => this.go(findNext),
+        "Enter",
       ),
-      button("odea-search-icon", `${state.phrase("close")} (Esc)`, icon(ICONS.close), () =>
-        closeSearchPanel(view),
+      button(
+        "odea-search-icon",
+        state.phrase("close"),
+        icon(ICONS.close),
+        () => closeSearchPanel(view),
+        "Esc",
       ),
     );
 
@@ -434,12 +454,17 @@ class SearchPanel implements Panel {
       replaceBox,
       button(
         "odea-search-text",
-        `${state.phrase("replace")} (Enter)`,
+        state.phrase("replace"),
         state.phrase("replace"),
         () => this.go(replaceNext),
+        "Enter",
       ),
-      button("odea-search-text", state.phrase("replace all"), state.phrase("replace all"), () =>
-        replaceAll(view),
+      button(
+        "odea-search-text",
+        state.phrase("replace all"),
+        state.phrase("replace all"),
+        () => replaceAll(view),
+        keyCaps(MOD_KEY, "Enter"),
       ),
     );
     // 上次展开过替换（替换框里还有字）就接着展开

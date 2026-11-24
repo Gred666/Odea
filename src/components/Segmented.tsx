@@ -1,5 +1,6 @@
 import { cn } from "@/lib/cn";
 import { spring } from "@/lib/motion";
+import { tip } from "@/lib/tooltip";
 import { motion } from "motion/react";
 import type { ReactNode } from "react";
 
@@ -17,7 +18,7 @@ export function Segmented<T extends string>({
 }: {
   /** layoutId 命名空间，同页面多个分段控件不能重名 */
   group: string;
-  /** label 可以是节点（窄的时候换成短字）；title 是悬停提示 */
+  /** label 可以是节点（窄的时候换成短字）；title 是悬停提示（lib/tooltip.ts） */
   options: { value: T; label: ReactNode; title?: string }[];
   value: T;
   onChange: (v: T) => void;
@@ -27,7 +28,7 @@ export function Segmented<T extends string>({
     <div
       role="tablist"
       className={cn(
-        "relative flex shrink-0 items-center gap-0.5 rounded-lg bg-rail p-[3px]",
+        "relative flex shrink-0 items-center gap-0.5 rounded-md bg-rail p-1",
         size === "sm" ? "h-[30px]" : "h-[34px]",
       )}
     >
@@ -39,10 +40,11 @@ export function Segmented<T extends string>({
             type="button"
             role="tab"
             aria-selected={active}
-            title={opt.title}
+            // 只有图标（窄的时候换成的短字不算）：提示的字也当它的名字
+            {...(opt.title ? tip(opt.title, { name: typeof opt.label !== "string" }) : {})}
             onClick={() => onChange(opt.value)}
             className={cn(
-              "relative h-full rounded-[7px] transition-colors duration-[140ms]",
+              "relative h-full rounded-xs transition-colors duration-[140ms]",
               size === "sm" ? "px-2.5 text-[12px]" : "px-4 text-[13px]",
               active ? "text-ink" : "text-muted hover:text-body",
             )}
@@ -50,11 +52,11 @@ export function Segmented<T extends string>({
             {active && (
               <motion.span
                 layoutId={`segment-thumb-${group}`}
-                className="absolute inset-0 rounded-[7px] bg-canvas shadow-[0_1px_2px_rgb(26_26_24_/_0.06)]"
+                className="absolute inset-0 rounded-xs bg-canvas shadow-[0_1px_2px_rgb(26_26_24_/_0.06)]"
                 transition={spring.smooth}
               />
             )}
-            {/* 字重不过渡：中文每个小数字重都要重新匹配字体，一帧十几毫秒（见 Sidebar） */}
+            {/* 字重不过渡：中文每个小数字重都要重新匹配字体，一帧十几毫秒（技术方案 §13.2「字重不做 CSS 过渡」） */}
             <span
               className={cn(
                 "relative z-10 whitespace-nowrap",

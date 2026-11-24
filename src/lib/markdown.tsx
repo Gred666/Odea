@@ -68,6 +68,15 @@ export function parseBlocks(md: string, ns = "h"): Block[] {
       continue;
     }
 
+    // --- HTML 注释（从行首写起的，可以跨几行）：编辑器里是「注释」小标记、白板的标记整行藏掉（docs/白板.md §13.10），
+    // 这里都不画，不然切篇时先闪一版带着注释原文的正文。`-->` 那一行后面的字也算在注释里（CommonMark 的 HTML 块，
+    // 编辑器也是整行收起）
+    if (/^ {0,3}<!--/.test(line)) {
+      flushPara();
+      while (i < lines.length - 1 && !lines[i]!.includes("-->")) i++;
+      continue;
+    }
+
     // --- 分隔线
     if (/^-{3,}$/.test(trimmed)) {
       flushPara();

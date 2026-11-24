@@ -1,4 +1,5 @@
 import { winOf } from "@/lib/paneWindow";
+import { TIP, placeBeside, setTip } from "@/lib/tooltip";
 import { type EditorView, ViewPlugin } from "@codemirror/view";
 
 /* ============================================================
@@ -15,12 +16,18 @@ import { type EditorView, ViewPlugin } from "@codemirror/view";
 
    卡片挂在 document.body 上、position: fixed，完全在 CodeMirror 的 DOM 之外 ——
    不进高度图、不影响点击坐标。
+
+   界面上的悬停提示（lib/tooltip.ts）是「标签」，这里是「读内容」的卡片：长相、320ms 各管各的；
+   刚看完一个不用再等、离开留多久、怎么放（翻面、夹在窗口里、对齐物理像素）用那边的，两边行为一致。
+   状态机没合：这边是 CodeMirror 的 ViewPlugin，只听正文、目标会被重建（update 里查），
+   合成一套要改它的生命周期，收益小（docs/悬停提示.md §9）
    ============================================================ */
 
+/** 读内容的卡片比标签快一点 */
 const SHOW_DELAY = 320;
 /** 刚从一张卡片移到下一个目标：不用再等 */
-const WARM_WINDOW = 400;
-const HIDE_GRACE = 80;
+const WARM_WINDOW = TIP.warm;
+const HIDE_GRACE = TIP.grace;
 const GAP = 8;
 const EDGE = 12;
 
@@ -134,6 +141,24 @@ export function abbrTip(abbreviation: string, expansion: string): Record<string,
   return { "data-odea-tip-label": abbreviation.trim(), "data-odea-tip": expansion };
 }
 
+/**
+ * 用户写的 HTML（HTML 块、HTML 表格的格子、嵌入卡片里的静态渲染）带着原生 title：挂进正文之前换成应用里的提示 ——
+ * <abbr> 走这张卡片（和正文里的 <abbr> 一样），别的（双链、附件、图片、随便哪个标签的 title）走 lib/tooltip.ts。
+ * 净化器（html.ts）、静态渲染器本身不改：导出的页面、复制出去的 HTML 里没有提示引擎，title 得留着
+ */
+export function adoptTitles(root: ParentNode): void {
+  for (const node of root.querySelectorAll<HTMLElement>("[title]")) {
+    const text = node.getAttribute("title") ?? "";
+    node.removeAttribute("title");
+    if (!text.trim()) continue;
+    if (node.localName === "abbr") {
+      for (const [name, value] of Object.entries(abbrTip(node.textContent ?? "", text))) {
+        node.setAttribute(name, value);
+      }
+    } else setTip(node, text, { name: false, side: "top" });
+  }
+}
+
 function part(className: string, text: string): HTMLElement {
   const node = document.createElement("div");
   node.className = className;
@@ -141,23 +166,22 @@ function part(className: string, text: string): HTMLElement {
   return node;
 }
 
-/** 贴着目标上方居中；上方放不下放下方；左右不出窗口。 */
+/** 贴着目标上方居中；上方放不下放下方；左右不出窗口；对齐到物理像素（落在半个像素上，边框和字发虚） */
 function place(card: HTMLElement, target: HTMLElement) {
   const view = card.ownerDocument.defaultView ?? window;
   // 目标折行时（长缩写落在行尾）取第一段，卡片对着鼠标最可能在的那一截
   const rect = target.getClientRects()[0] ?? target.getBoundingClientRect();
   const { width, height } = card.getBoundingClientRect();
-  const above = rect.top - GAP - height >= EDGE;
-  const top = above ? rect.top - GAP - height : rect.bottom + GAP;
-  const center = rect.left + rect.width / 2;
-  const left = Math.min(
-    Math.max(EDGE, center - width / 2),
-    Math.max(EDGE, view.innerWidth - EDGE - width),
+  const { x, y } = placeBeside(
+    rect,
+    { width, height },
+    "top",
+    { width: view.innerWidth, height: view.innerHeight, dpr: view.devicePixelRatio || 1 },
+    GAP,
+    EDGE,
   );
-  // 对齐到物理像素：落在半个像素上，边框和字会被抗锯齿成两行，发虚
-  const dpr = view.devicePixelRatio || 1;
-  card.style.top = `${Math.round(top * dpr) / dpr}px`;
-  card.style.left = `${Math.round(left * dpr) / dpr}px`;
+  card.style.top = `${y}px`;
+  card.style.left = `${x}px`;
 }
 
 export const hoverCard = ViewPlugin.fromClass(HoverCard);

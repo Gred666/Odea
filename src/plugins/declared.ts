@@ -28,7 +28,7 @@ import {
    - 提示块 → editor/callout.ts（编辑器的装饰层看版本号重画）
    - 模板 → registry 的 setDeclaredTemplates（编辑器的模板菜单订阅 registry 的 onTemplatesChange 重取）
    - 主题 → <head> 里一个 <style>，只改 globals.css 已有的颜色 token；弹出窗口抄 <head> 的样式，跟着变
-   - 导航顺序 → registry 的 setDeclaredNavOrder（窄栏看 useDeclared 的 navOrder 重画）
+   - 导航顺序 → registry 的 setDeclaredNavOrder（刘海导航看 useDeclared 的 navOrder 重画）
 
    停用、卸载：上面四样都撤掉，文档一个字不动。提示块回到中性的样子，模板菜单里少了那几个。
 

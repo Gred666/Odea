@@ -198,13 +198,13 @@ export function SuggestMenu({
                     if (!selected) setActive(index);
                   }}
                   onClick={() => onPick(index)}
-                  className="relative flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2 text-left"
+                  className="relative flex h-[34px] w-full items-center gap-2.5 rounded-md px-2 text-left"
                 >
                   {/* 退场时撤掉：带 layoutId 的元素会让 Motion 把整个面板多留一会儿 */}
                   {selected && present && (
                     <motion.span
                       layoutId={layoutIds.suggestCursor}
-                      className="absolute inset-0 rounded-lg bg-accent-wash"
+                      className="absolute inset-0 rounded-md bg-accent-wash"
                       transition={spring.snappy}
                     />
                   )}

@@ -1,5 +1,6 @@
 import { snapToDevicePixels } from "@/lib/devicePixels";
 import { winOf } from "@/lib/paneWindow";
+import { setTip } from "@/lib/tooltip";
 import { type EditorView, WidgetType } from "@codemirror/view";
 import {
   type AnimatedEmoji,
@@ -12,11 +13,13 @@ import {
 } from "./animatedEmoji";
 import { type CalloutHead, type CalloutKind, calloutIcon } from "./callout";
 import { glideTo } from "./glide";
+import { adoptTitles } from "./hoverCard";
 import { hasRenderableHtml, safeHref, sanitizeHtml } from "./html";
 import { openImageViewer } from "./imageViewer";
 import { inlinePlainText } from "./inlineDom";
 import { openExternal } from "./links";
 import { revealNow } from "./reveal";
+import { COPY_ICON, DONE_ICON, TASK_CHECK_ICON } from "./widgetShapes";
 
 /* ============================================================
    编辑器里所有的 DOM 替身。（表格、公式、图表的替身各有自己的文件：
@@ -178,7 +181,7 @@ export class TaskWidget extends OtwWidget {
     box.setAttribute("aria-checked", String(this.checked));
     // 对勾是一条 SVG 路径：勾上时从左到右描出来（stroke-dashoffset），
     // 比直接冒出一个 ✓ 字符有「动作」感。
-    box.append(svg("0 0 16 16", "M3.5 8.5l3 3 6-6.5", "cm-odea-task-check"));
+    box.append(svg("0 0 16 16", TASK_CHECK_ICON, "cm-odea-task-check"));
     box.addEventListener("mousedown", (event) => {
       event.preventDefault();
       const from = positionOf(view, box) + this.offset;
@@ -244,10 +247,6 @@ export class CodeInfoWidget extends OtwWidget {
   }
 }
 
-const COPY_ICON =
-  "M8 4H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-2M8 4V3a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v1M8 4h6a2 2 0 0 1 2 2v6";
-const DONE_ICON = "M4 9.5l3.5 3.5L15 5";
-
 /** 折叠掉的围栏行本身的替身：代码块的上下封口，开头那条顺带显示语言名和复制按钮。 */
 export class CodeFenceWidget extends OtwWidget {
   constructor(
@@ -292,8 +291,8 @@ export function copyButton(view: EditorView, text: () => string, what: string): 
   const button = document.createElement("button");
   button.type = "button";
   button.className = "cm-odea-code-copy";
-  button.setAttribute("aria-label", what);
-  button.title = what;
+  // 封口那一条在代码上面：提示放上面，不挡代码
+  setTip(button, what, { side: "top" });
   const icon = svg("0 0 20 20", COPY_ICON, "cm-odea-code-copy-icon");
   const label = document.createElement("span");
   label.textContent = "复制";
@@ -496,7 +495,7 @@ export class ImageWidget extends OtwWidget {
 
     const handle = document.createElement("span");
     handle.className = "cm-odea-image-handle";
-    handle.title = "拖动改大小，双击还原";
+    setTip(handle, "拖动改大小", { detail: "双击还原", name: false });
     handle.addEventListener("pointerdown", (event) => startResize(view, frame, image, event));
     handle.addEventListener("dblclick", (event) => {
       event.preventDefault();
@@ -540,7 +539,8 @@ export class ImageWidget extends OtwWidget {
     frame.classList.toggle("is-open", this.open);
     frame.querySelector(".cm-odea-image-tool.is-source")?.classList.toggle("is-active", this.open);
     image.alt = alt;
-    image.title = title;
+    // `![alt](src "说明")` 的说明、找不到的原因；没有就不出
+    setTip(image, title, { name: false, side: "top" });
     image.style.width = width ? `${width}px` : "";
     image.style.height = height ? `${height}px` : "";
     image.classList.toggle("has-size", !!width);
@@ -606,8 +606,7 @@ function imageTool(icon: string, label: string, run: () => void): HTMLButtonElem
   const button = document.createElement("button");
   button.type = "button";
   button.className = "cm-odea-image-tool";
-  button.title = label;
-  button.setAttribute("aria-label", label);
+  setTip(button, label);
   button.append(svg("0 0 24 24", icon, "cm-odea-image-tool-icon"));
   button.addEventListener("mousedown", (event) => {
     event.preventDefault();
@@ -725,7 +724,8 @@ export class GlyphWidget extends OtwWidget {
     const node = document.createElement("span");
     node.className = `cm-odea-glyph is-${this.kind}`;
     node.textContent = this.glyph;
-    node.title = this.source;
+    // 符号本来就看得见，提示的是它的源码（`:smile:`、`&amp;`、`--`）
+    setTip(node, this.source, { name: false, side: "top" });
     node.addEventListener("mousedown", (event) => {
       event.preventDefault();
       // 短码、实体把光标放进 `:` / `&` 后面，源码才会展开；智能标点放在它前面就行
@@ -773,8 +773,10 @@ export class AnimatedEmojiWidget extends OtwWidget {
     const node = document.createElement("span");
     node.className = "odea-ae cm-odea-ae";
     node.setAttribute("role", "img");
-    node.setAttribute("aria-label", this.emoji.name);
-    node.title = `${this.emoji.name}  ${this.emoji.shortcode}\n双击编辑`;
+    setTip(node, this.emoji.name, {
+      detail: `${this.emoji.shortcode} · 双击编辑`,
+      side: "top",
+    });
     node.dataset.emoji = this.emoji.id;
 
     const player = new EmojiPlayer(this.emoji);
@@ -820,7 +822,7 @@ export class HardBreakWidget extends OtwWidget {
     const node = document.createElement("span");
     node.className = "cm-odea-hard-break";
     node.textContent = "↵";
-    node.title = "硬换行";
+    setTip(node, "硬换行", { name: false, side: "top" });
     node.addEventListener("mousedown", (event) => {
       event.preventDefault();
       jumpToSource(view, positionOf(view, node));
@@ -874,7 +876,7 @@ export class CalloutBadgeWidget extends OtwWidget {
     const foldOffset = this.foldOffset;
     if (this.head.fold && foldOffset !== null) {
       badge.classList.add(this.head.fold === "-" ? "is-collapsed" : "is-expanded");
-      badge.title = this.head.fold === "-" ? "展开" : "收起";
+      setTip(badge, this.head.fold === "-" ? "展开" : "收起", { name: false, side: "top" });
       badge.append(svg("0 0 24 24", CHEVRON, "cm-odea-callout-chevron"));
     }
     badge.addEventListener("mousedown", (event) => {
@@ -1047,7 +1049,7 @@ export class TocWidget extends OtwWidget {
     const nav = document.createElement("nav");
     nav.className = "cm-odea-toc";
     nav.setAttribute("aria-label", "目录");
-    nav.title = "点击空白处编辑";
+    setTip(nav, "点击空白处编辑", { name: false, side: "top" });
     nav.addEventListener("mousedown", (event) => {
       event.preventDefault();
       if ((event.target as HTMLElement).closest("button")) return;
@@ -1145,7 +1147,7 @@ export class LineBreakWidget extends OtwWidget {
     const hint = document.createElement("span");
     hint.className = "cm-odea-hard-break";
     hint.textContent = "↵";
-    hint.title = "<br>";
+    setTip(hint, "<br>", { name: false, side: "top" });
     hint.addEventListener("mousedown", (event) => {
       event.preventDefault();
       jumpToSource(view, positionOf(view, node));
@@ -1169,7 +1171,7 @@ export class CommentWidget extends OtwWidget {
     const pill = document.createElement("span");
     pill.className = "cm-odea-comment";
     pill.textContent = "注释";
-    pill.title = "HTML 注释 · 点击查看";
+    setTip(pill, "HTML 注释", { detail: "点击查看", name: false, side: "top" });
     const root = this.block ? document.createElement("div") : pill;
     pill.addEventListener("mousedown", (event) => {
       event.preventDefault();
@@ -1209,9 +1211,12 @@ export class HtmlBlockWidget extends OtwWidget {
     block.className = "cm-odea-html-widget-block";
     const host = document.createElement("div");
     host.className = "cm-odea-html-widget";
-    host.title = "点击空白处编辑 HTML";
-    if (hasRenderableHtml(this.source)) host.append(sanitizeHtml(this.source));
-    else host.textContent = this.source;
+    setTip(host, "点击空白处编辑 HTML", { name: false, side: "top" });
+    if (hasRenderableHtml(this.source)) {
+      const html = sanitizeHtml(this.source);
+      adoptTitles(html);
+      host.append(html);
+    } else host.textContent = this.source;
     host.addEventListener("mousedown", (event) => {
       const target = event.target as HTMLElement;
       // 链接：别把这一块切回源码。开在 click 里（下面）

@@ -1,31 +1,13 @@
 import { ZEN_TRANSITION } from "@/app/navMotion";
-import { openDocument } from "@/app/navigate";
-import { RAIL_WIDTH, hasListColumn, useApp } from "@/app/store";
+import { FLARE_WIDTH, RAIL_WIDTH, hasListColumn, useApp } from "@/app/store";
 import { type GuestCopyState, useGuestCopies } from "@/collab/keep";
 import { useCollab } from "@/collab/store";
-import {
-  attachFiles,
-  attachPaths,
-  documentFolder,
-  localAttachmentHost,
-  wikiImageResolver,
-} from "@/data/attachments";
-import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, saveKeyOf, useData } from "@/data/store";
-import {
-  type DocumentModel,
-  type DocumentRef,
-  NOTE,
-  isShared,
-  noteRef,
-  vaultRef,
-} from "@/data/types";
+import { type DocumentModel, type DocumentRef, isShared, vaultRef } from "@/data/types";
 import type { EditorOutlineHandle } from "@/editor/MarkdownEditor";
 import { registerEditorFlush } from "@/editor/saveBus";
-import type { WikiCandidate } from "@/editor/suggest";
 import { cn } from "@/lib/cn";
 import { snapToDevicePixels } from "@/lib/devicePixels";
-import { FILE_EXTENSIONS } from "@/lib/embeds";
 import { useLingering } from "@/lib/lingering";
 import { liveEditor, registerVisibleDocument } from "@/lib/liveDocuments";
 import { hasLongRun } from "@/lib/longRun";
@@ -34,8 +16,8 @@ import { spring, tween } from "@/lib/motion";
 import { usePaneWindow } from "@/lib/paneWindow";
 import { MOD_KEY } from "@/lib/platform";
 import { win, windowKind } from "@/lib/tauri";
-import { resolveVaultFile } from "@/lib/wikiFiles";
-import { linkedNote } from "@/lib/wikilinks";
+import { tip } from "@/lib/tooltip";
+import { editorExtensionsOf, loadEditorExtensions } from "@/plugins/registry";
 import { PropertiesPanel } from "@/properties/PropertiesPanel";
 import {
   AlertTriangle,
@@ -47,8 +29,6 @@ import {
   History,
   Maximize2,
   Minimize2,
-  PanelLeftClose,
-  PanelLeftOpen,
   Settings2,
   Trash2,
 } from "lucide-react";
@@ -60,7 +40,9 @@ import { ConflictBanner } from "./ConflictBanner";
 import { EmptyState } from "./EmptyArt";
 import { EncodingBanner } from "./EncodingBanner";
 import { GuideUpdateBanner } from "./GuideUpdateBanner";
+import { useNotchWidth } from "./NotchNav";
 import { NotePath } from "./NotePath";
+import type { ViewSwitch } from "./NoteViewHost";
 import { Outline } from "./Outline";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { PluginSlots } from "./PluginSlots";
@@ -69,6 +51,7 @@ import { Segmented } from "./Segmented";
 import { SwapFade } from "./SwapFade";
 import { TeamPresence } from "./TeamPresence";
 import { TeamUnseenBanner } from "./TeamUnseenBanner";
+import { useEditorHost } from "./editorHost";
 
 /** 目录树的指纹：标题文字或行号变了才需要重新渲染文档视图。 */
 const outlineKeyOf = (markdown: string) =>
@@ -91,12 +74,24 @@ const outlineKeyOf = (markdown: string) =>
 type EditorComponent = typeof import("@/editor/MarkdownEditor").MarkdownEditor;
 
 const editorModule = import("@/editor/MarkdownEditor");
+/** 没有能换的摆法时用它：每次渲染同一个数组 */
+const NO_SWITCHES: readonly ViewSwitch[] = [];
+
 /** 预载完成后同步可用；bootstrap 在挂载 React 之前把它填好。 */
 let resolvedEditor: EditorComponent | null = null;
 
+/**
+ * 编辑器的分包，连同插件给编辑器的扩展（plugins/registry.ts 的 editor）：编辑器第一次挂上时就装着，
+ * 白板的标记不先画成「注释」再藏起来。在这里才取、不在模块加载时取：那时插件可能还没装上
+ */
+const loadEditor = async () => {
+  const [module] = await Promise.all([editorModule, loadEditorExtensions()]);
+  return module.MarkdownEditor;
+};
+
 /** 供 bootstrap 在挂载 React 之前 await，确保首帧就能直接渲染编辑器。 */
 export const preloadEditor = async () => {
-  resolvedEditor = (await editorModule).MarkdownEditor;
+  resolvedEditor = await loadEditor();
 };
 
 /* ============================================================
@@ -117,6 +112,7 @@ export function DocumentView({
   first = true,
   last = true,
   outline: outlineShown = true,
+  viewSwitches = NO_SWITCHES,
 }: {
   doc: DocumentModel;
   onDelete?: () => void;
@@ -135,6 +131,8 @@ export function DocumentView({
   first?: boolean;
   last?: boolean;
   outline?: boolean;
+  /** 换成别的摆法看这一篇（白板，docs/白板.md §13.4）：状态栏右边每种一个按钮 */
+  viewSwitches?: readonly ViewSwitch[];
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   /** 正文区上一次滚到的 scrollTop（滚动事件里记，见下面切换文档时拨回顶部） */
@@ -148,16 +146,21 @@ export function DocumentView({
   const setZen = useApp((s) => s.setZen);
   // 只有笔记区给这个入口：其它区要么是两栏、要么本来就没有可铺满的正文。访客窗口没有侧栏可收
   const zenAvailable = workspace === "notes" && windowKind !== "guest" && last && !popout;
-  // 状态栏最左端的侧栏开关：只有有那一栏的几页（文件、日历、归档）才有。专注模式下那一栏推在屏幕外，也不给
+  // 收起 / 展开侧栏不在状态栏上（2026-11-20 拿掉了左端那颗开关）：在形状本身上，
+  // 点当前那一区、刘海底下和侧栏右边缘的两个把手（EdgeChrome，docs/边栏.md §5.3.1）
   const panelCollapsed = useApp((s) => s.panelCollapsed);
-  const setPanelCollapsed = useApp((s) => s.setPanelCollapsed);
-  const panelToggle =
-    hasListColumn(workspace) && windowKind !== "guest" && !zen && first && !popout
-      ? { collapsed: panelCollapsed, onToggle: () => setPanelCollapsed(!panelCollapsed) }
-      : undefined;
+  // 侧栏不在、又是最左那一栏：刘海压在顶上那一条的左头，「路径 / 标题」从它右边开始（docs/边栏.md §6.3）
+  const notch = useNotchWidth();
+  const notchClear =
+    first && !popout && !zen && !(hasListColumn(workspace) && !panelCollapsed)
+      ? notch + FLARE_WIDTH + 12
+      : 0;
   // 编辑器里的实时正文。doc.bodyMd 要等一次保存往返才更新，
   // 只靠它的话目录树会永远慢半拍，点条目还会跳到旧行号。
   const [liveMarkdown, setLiveMarkdown] = useState<string | null>(null);
+  // 开着的插件给编辑器的扩展：开关插件时换。编辑器还没加载完（没走 bootstrap 的单测）时扩展也可能还没取回来，
+  // 加载完了 Editor 一变再算一次
+  const enabledPlugins = useData((s) => s.layout.plugins);
   const outlineKeyRef = useRef<string | null>(null);
 
   // 只有目录真的变了才把正文提上来，避免每敲一个字都重渲染整个文档视图。
@@ -168,56 +171,17 @@ export function DocumentView({
     setLiveMarkdown(markdown);
   }, []);
 
-  // Mod + 点击 [[双链]]：按标题找到那篇笔记就跳过去（归档里的也算），再按着 Shift 开在新标签里。
-  // `[[标题#小节]]` 再记一个待滚动的锚点，等那篇的编辑器挂上后滚过去。
-  // 还没有这篇（编辑器里画成虚线）：就地新建一篇这个标题的，放在当前这篇所在的文件夹，
-  // 打开它、光标在正文开头；底部提示条可以撤销
-  const noteIdRef = useRef<string | null>(null);
-  const handleWikiLink = useCallback((title: string, heading?: string, newTab = false) => {
-    const wanted = title.trim().toLowerCase();
-    if (!wanted) return;
-    const { notes, archived, attachments } = useData.getState();
-    // `[[图.png]]`、`[[说明书.pdf]]` 链的是附件，不是笔记：不新建。在仓库里找得到就用系统的程序打开
-    if (FILE_EXTENSIONS.test(wanted)) {
-      const from = notes.find((note) => note.id === noteIdRef.current)?.relPath ?? null;
-      const rel = resolveVaultFile(title, from, attachments);
-      if (rel) void useData.getState().openAttachment(rel);
-      else useData.setState({ error: `仓库里找不到「${title.trim()}」` });
-      return;
-    }
-    const hit = linkedNote(title, notes, archived);
-    if (hit) {
-      openDocument(noteRef(hit.id), heading ? { heading } : undefined, newTab);
-      return;
-    }
-    const here = notes.find((note) => note.id === noteIdRef.current);
-    void useData
-      .getState()
-      .createLinkedNote(title.trim(), here ? folderOf(here) : "")
-      .then((id) => {
-        if (!id) return;
-        useApp.getState().setFocusRequest({ docKey: `note-${id}`, at: "body" });
-        openDocument(noteRef(id), undefined, newTab);
-      });
-  }, []);
-
-  // `[[` 菜单能链过去的笔记（最近改过的在前），也用来认出链到不存在的笔记的双链。
-  // 只在标题集合变了时重算：自动保存每次都换一份 notes，不能每次都让编辑器重标一遍
-  const linkKey = useData((state) =>
-    [...state.notes, ...state.archived].map((note) => `${note.id}\u0001${note.title}`).join("\n"),
-  );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: linkKey 就是标题集合的指纹
-  const linkTargets = useMemo<WikiCandidate[]>(() => {
-    const { notes, archived } = useData.getState();
-    return [...notes, ...archived]
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .map((note) => ({
-        id: note.id,
-        title: note.title,
-        folder: folderOf(note) ? folderLabel(folderOf(note)) : "",
-        archived: note.isArchived,
-      }));
-  }, [linkKey]);
+  // 双链去哪、`[[` 菜单能链过去的笔记、图片和附件按这一篇所在的文件夹找、粘贴的文件存进附件（白板的卡片也用这一份）
+  const {
+    noteId,
+    onWikiLink: handleWikiLink,
+    linkTargets,
+    imageBase,
+    wikiImage,
+    attachments: attachmentCards,
+    onAttachFiles: handleAttachFiles,
+    onAttachPaths: handleAttachPaths,
+  } = useEditorHost(doc);
 
   const outlineSource = liveMarkdown ?? doc.bodyMd;
   const outline = useMemo(() => buildOutline(outlineSource), [outlineSource]);
@@ -336,27 +300,6 @@ export function DocumentView({
         }
       : undefined;
 
-  // 附件：粘贴 / 拖进来的文件存进仓库的「附件」，正文里的相对路径以这篇所在的文件夹为基准
-  const vaultRoot = useData((s) => s.vaultRoot);
-  const imageBase = documentFolder(vaultRoot, doc.relPath);
-  // Obsidian 的 `![[图.png]]`、`![[说明书.pdf]]`：按名字在整个仓库的附件里找（lib/wikiFiles.ts）
-  const vaultAttachments = useData((s) => s.attachments);
-  const wikiImage = useMemo(
-    () => wikiImageResolver(vaultRoot, doc.relPath, vaultAttachments),
-    [vaultRoot, doc.relPath, vaultAttachments],
-  );
-  const attachmentCards = useMemo(
-    () => localAttachmentHost(vaultRoot, doc.relPath, vaultAttachments),
-    [vaultRoot, doc.relPath, vaultAttachments],
-  );
-  const handleAttachFiles = useCallback(
-    (files: File[]) => (target ? attachFiles(target, files) : Promise.resolve([])),
-    [target],
-  );
-  const handleAttachPaths = useCallback(
-    (paths: string[]) => (target ? attachPaths(target, paths) : Promise.resolve([])),
-    [target],
-  );
   // 做客的那一篇（设计 §7.2）：图片从主持人那里要来（解析器换了编辑器就重画那几张）；
   // 粘贴的文件交给主持人存进他的「附件」，插进正文的是从那篇引用它的路径
   const guestImages = useCollab((s) => s.images);
@@ -381,8 +324,6 @@ export function DocumentView({
     (paths: string[]) => useCollab.getState().attachPaths(paths),
     [],
   );
-  const noteId = target?.type === NOTE ? target.key : null;
-  noteIdRef.current = noteId;
   // 这篇是用户改过的使用指南、这个版本带着新版：标题上方问换不换
   const guideUpdate = useData((s) =>
     noteId ? s.guideUpdates.find((update) => update.id === noteId) : undefined,
@@ -411,12 +352,17 @@ export function DocumentView({
   // 正常路径下 bootstrap 已经预载完，这里首帧就拿到组件。
   // 兜底：万一没走 bootstrap（比如单测直接渲染本组件），照旧异步加载后再补上。
   const [Editor, setEditor] = useState<EditorComponent | null>(() => resolvedEditor);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Editor 变了（加载完了）扩展也取回来了，要再算一次
+  const pluginExtensions = useMemo(
+    () => editorExtensionsOf(enabledPlugins),
+    [enabledPlugins, Editor],
+  );
   useEffect(() => {
     if (Editor) return;
     let alive = true;
-    void editorModule.then((module) => {
-      resolvedEditor = module.MarkdownEditor;
-      if (alive) setEditor(() => module.MarkdownEditor);
+    void loadEditor().then((editor) => {
+      resolvedEditor = editor;
+      if (alive) setEditor(() => editor);
     });
     return () => {
       alive = false;
@@ -655,6 +601,7 @@ export function DocumentView({
                           linksMissing={shared}
                           collab={doc.collab?.session ?? null}
                           readOnly={!!doc.notUtf8 || (doc.collab?.readOnly ?? false)}
+                          pluginExtensions={pluginExtensions}
                           linkSelf={noteId ?? undefined}
                           onExitTop={doc.editor?.titleEditable ? exitToTitle : undefined}
                         />
@@ -679,9 +626,9 @@ export function DocumentView({
           <OverlayScrollbar targetRef={scrollRef} />
           {/* 大标题滚出去以后的「路径 / 标题」：窗口最上面那条里；标签栏显示着时在它底下一行。
               标签栏出来、收起的那一下两处交叠着淡，看着是这一行往下让了一格 */}
-          <TitleStrip doc={doc} scrollRef={scrollRef} enabled={!tabBar} />
+          <TitleStrip doc={doc} scrollRef={scrollRef} enabled={!tabBar} notchClear={notchClear} />
           <TitleStrip doc={doc} scrollRef={scrollRef} enabled={tabBar} underTabs />
-          {/* 正文滚到状态栏跟前淡掉，不是被一刀切齐：状态栏不画分隔线（窄栏右边那一栏底下的
+          {/* 正文滚到状态栏跟前淡掉，不是被一刀切齐：状态栏不画分隔线（侧栏底下的
               「仓库名」有一条，高度对不上，两条线一高一低）。压在换篇的快照（z-5）上面，快照也一样淡 */}
           <div
             aria-hidden="true"
@@ -706,12 +653,12 @@ export function DocumentView({
       <StatusBar
         docKey={doc.key}
         parts={doc.empty ? [] : doc.statusParts}
-        panelToggle={panelToggle}
         extend={first}
         onDelete={doc.deletable ? onDelete : undefined}
         onReveal={handleReveal}
         onHistory={handleHistory}
         onExport={handleExport}
+        viewSwitches={viewSwitches}
         saving={saving}
         guestCopy={guestCopy}
         saveError={saveError}
@@ -746,10 +693,10 @@ const UNDER_TABS = 26;
  * （IntersectionObserver，滚动时不用每帧算），换篇时它一直显示着的话，里面的字跟着正文一起溶解（SwapFade）；
  * 淡出的那一下字留着刚才那一篇的，不会换成新那篇的再淡掉。
  *
- * 两层：底色（铺满这一栏，下沿 16px 渐隐，盖住滚上来的正文）在标题栏（z-40）底下，窗口按钮照样在它上面
- * —— 它比 chrome（z-30）高，所以不能像正文画布那样往左多铺一截，不然盖到窄栏的 Logo 上；字那一层在标题栏上面（z-41），整层不接指针，只有路径的几段和标题接 ——
- * 空着的地方照样拖窗口、双击最大化。标签栏底下那一行不在拖动区里，两层都和标签栏的底色一样是 z-29：
- * 比左边的 chrome（z-30）低，列表栏收起时滑走的那一截不被它盖住。
+ * 两层：底色（铺满这一栏，下沿 16px 渐隐，盖住滚上来的正文）在标题栏（z-40）底下，窗口按钮照样在它上面；
+ * 字那一层在标题栏上面（z-41），整层不接指针，只有路径的几段和标题接 ——
+ * 空着的地方照样拖窗口、双击最大化。两层都比左边的 chrome（刘海 + 侧栏，z-45）低：刘海压在最左那一栏的
+ * 这一条上，字从刘海右边开始（notchClear）。标签栏底下那一行不在拖动区里，两层都和标签栏的底色一样是 z-29。
  * 只淡 opacity（docs/PITFALLS/动效.md 规矩 1），一直待在自己的图层上，开始淡之前对齐整物理像素（规矩 3：
  * 分屏时窗格的左缘常落在小数像素上）。给鼠标用的复本：读屏器、Tab 键走正文里那一行（aria-hidden、tabIndex -1）
  */
@@ -758,6 +705,7 @@ function TitleStrip({
   scrollRef,
   enabled,
   underTabs = false,
+  notchClear = 0,
 }: {
   doc: DocumentModel;
   scrollRef: React.RefObject<HTMLDivElement | null>;
@@ -765,6 +713,8 @@ function TitleStrip({
   enabled: boolean;
   /** 标签栏底下那一行 */
   underTabs?: boolean;
+  /** 字至少从哪开始（窗格左缘起算）：最左那一栏、侧栏不在时让开刘海；0 是不用让 */
+  notchClear?: number;
 }) {
   const top = underTabs ? STRIP_HEIGHT : 0;
   const height = underTabs ? UNDER_TABS : STRIP_HEIGHT;
@@ -840,11 +790,24 @@ function TitleStrip({
           "odea-doc-strip @container pointer-events-none absolute inset-x-0",
           underTabs ? "z-[29]" : "z-[41]",
         )}
-        style={{ top, height }}
+        style={
+          {
+            top,
+            height,
+            ...(notchClear ? { "--odea-notch-clear": `${notchClear}px` } : {}),
+          } as React.CSSProperties
+        }
       >
         <CenteredColumn className="h-full items-center">
-          {/* 右边让出窗口按钮的位置（正文区贴着窗口右边缘的时候；标签栏底下那一行是专注模式的按钮） */}
-          <div className="relative h-full min-w-0 max-w-[calc(100%-80px)]" data-swap-host>
+          {/* 右边让出窗口按钮的位置（正文区贴着窗口右边缘的时候；标签栏底下那一行是专注模式的按钮）；
+              左边让出刘海（odea-notch-clear，globals.css） */}
+          <div
+            className={cn(
+              "relative h-full min-w-0 max-w-[calc(100%-80px)]",
+              notchClear > 0 && "odea-notch-clear",
+            )}
+            data-swap-host
+          >
             <SwapFade
               swapKey={info.key}
               className="flex h-full min-w-0 items-center text-[12px] font-medium leading-[20px] tracking-[0.02em] text-muted"
@@ -860,9 +823,9 @@ function TitleStrip({
               <button
                 type="button"
                 tabIndex={-1}
-                title="回到顶上"
+                {...tip("回到顶上", { name: false })}
                 onClick={() => scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
-                className="pointer-events-auto h-5 min-w-0 shrink-[2] truncate rounded-md px-[5px] text-body
+                className="pointer-events-auto h-5 min-w-0 shrink-[2] truncate rounded-xs px-[5px] text-body
                            transition-colors duration-[140ms] hover:bg-raised/60 hover:text-ink"
               >
                 {info.title}
@@ -923,9 +886,8 @@ function ZenToggle({ zen, onToggle }: { zen: boolean; onToggle: () => void }) {
     <motion.button
       type="button"
       onClick={onToggle}
-      aria-label={label}
+      {...tip(label)}
       aria-pressed={zen}
-      title={label}
       // 进出只淡（docs/PITFALLS/动效.md 规矩 1、3）：一直待在自己的图层上；右上角是整数位置，不用对齐
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -933,7 +895,7 @@ function ZenToggle({ zen, onToggle }: { zen: boolean; onToggle: () => void }) {
       whileTap={{ scale: 0.9 }}
       transition={{ ...spring.snappy, opacity: tween.fast }}
       className={cn(
-        "absolute right-4 top-[44px] z-40 grid h-8 w-8 place-items-center rounded-lg will-change-[opacity]",
+        "absolute right-4 top-[44px] z-40 grid h-8 w-8 place-items-center rounded-md will-change-[opacity]",
         "text-faint transition-colors duration-[160ms] hover:bg-raised hover:text-ink",
       )}
     >
@@ -1196,7 +1158,7 @@ function Dot() {
 
 /** 状态栏右端的小按钮：28×28，图标 14 */
 const BAR_BUTTON =
-  "grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint transition-colors duration-[140ms]";
+  "grid h-7 w-7 shrink-0 place-items-center rounded-sm text-faint transition-colors duration-[140ms]";
 /**
  * 状态栏里的字：12px 的元信息，要读的，用 muted。数字等宽（tabular-nums）—— 字数一直在变，
  * 后面的字不跟着左右挪。以前用 font-mono 做到这一点，一行里中文是雅黑、数字是 Cascadia，两种字混排
@@ -1205,34 +1167,32 @@ const BAR_TEXT = "text-[12px] leading-none tabular-nums";
 
 /**
  * 正文底下的状态栏：贴着窗口底边，不跟着正文滚（像 Typora）。
- * 最左端是侧栏开关（只有有那一栏的几页才有），接着是字数、日期，右端是保存状态和
- * 历史版本、在文件夹中显示、删除。
+ * 左边是字数、日期，右端是保存状态和历史版本、在文件夹中显示、删除。
  *
- * 2026-10-28 以前它跟在正文最后面，得滚到底才看得见，长文档里几乎没人看到过；
- * 侧栏开关在窄栏左下角，今日TODO、目标没有那一栏，在那两页按它什么都不发生。
+ * 2026-10-28 以前它跟在正文最后面，得滚到底才看得见，长文档里几乎没人看到过。
+ * 2026-10-28 到 2026-11-20 最左端还有一颗侧栏开关；边栏改版以后收起 / 展开长在形状本身上
+ * （两个把手，docs/边栏.md §5.3.1），这一颗压在正文那张纸左下角的凹弯旁边，和形状不是一个东西，拿掉了。
  *
  * 不画分隔线，和正文同一个底色：正文滚到跟前是淡掉的（滚动区底下那条渐隐）。
- * 换篇时只有字那一截跟着正文一起溶解（SwapFade）：开关和按钮两边一样，原地不动。
+ * 换篇时只有字那一截跟着正文一起溶解（SwapFade）：按钮两边一样，原地不动。
  * 和正文的画布一样往左 chrome 底下多铺 RAIL_WIDTH（见上面的滚动容器）：退出专注模式时 chrome
  * 滑回来，底下这一截也是连着的白底，不露出外层的灰底。
  */
 function StatusBar({
   docKey,
   parts,
-  panelToggle,
   extend,
   onDelete,
   onReveal,
   onHistory,
   onExport,
+  viewSwitches,
   saving,
   saveError,
   guestCopy,
 }: {
   docKey: string;
   parts: string[];
-  /** 收起 / 展开窄栏右边那一栏；这一页没有那一栏就不给 */
-  panelToggle?: { collapsed: boolean; onToggle: () => void };
   /** 往左 chrome 底下多铺（最左边那一栏） */
   extend: boolean;
   onDelete?: () => void;
@@ -1242,6 +1202,7 @@ function StatusBar({
   onHistory?: () => void;
   /** 导出这一篇（PDF / HTML） */
   onExport?: (format: "html" | "pdf") => void;
+  viewSwitches: readonly ViewSwitch[];
   saving?: boolean;
   saveError?: string | null;
   /** 做客：本机留着一份主持人还没存下的字（kept），还是都存下了（synced） */
@@ -1249,29 +1210,15 @@ function StatusBar({
 }) {
   // 本地保存一般几毫秒就完：每停一下笔就闪一次「保存中…」只是噪音。慢到看得出来才显示
   const slowSave = useLingering(!!saving, 600);
-  const ToggleIcon = panelToggle?.collapsed ? PanelLeftOpen : PanelLeftClose;
-  const toggleLabel = panelToggle?.collapsed ? "展开侧栏" : "收起侧栏";
   return (
     <footer
       // 40 高：和左边列表栏底下的仓库切换器同一条中线（VaultSwitcher）
       className="relative z-10 flex h-10 shrink-0 items-center gap-1 bg-canvas pr-2"
       style={{
         marginLeft: extend ? -RAIL_WIDTH : 0,
-        paddingLeft: (extend ? RAIL_WIDTH : 0) + (panelToggle ? 6 : 16),
+        paddingLeft: (extend ? RAIL_WIDTH : 0) + 16,
       }}
     >
-      {panelToggle && (
-        <button
-          type="button"
-          onClick={panelToggle.onToggle}
-          aria-label={toggleLabel}
-          title={toggleLabel}
-          className={cn(BAR_BUTTON, "mr-1.5 hover:bg-raised hover:text-ink")}
-        >
-          <ToggleIcon size={14} strokeWidth={1.9} />
-        </button>
-      )}
-
       {/* 字数、日期：换篇时跟着正文一起溶解，快照只盖这一截。
           放不下时整段整段地藏（折到看不见的第二行），不把「上次更新」从字中间切开 */}
       <div className="relative h-full min-w-0 flex-1 overflow-hidden" data-swap-host>
@@ -1293,7 +1240,7 @@ function StatusBar({
         <span
           className="flex min-w-0 max-w-[50%] items-center px-1.5"
           role="status"
-          title={saveError}
+          {...tip("保存失败", { detail: saveError, name: false, side: "top" })}
         >
           <AlertTriangle size={12} strokeWidth={2.2} className="mr-1.5 shrink-0 text-danger" />
           <span className={cn(BAR_TEXT, "truncate text-danger")}>保存失败：{saveError}</span>
@@ -1310,23 +1257,35 @@ function StatusBar({
         <span
           className={cn(BAR_TEXT, "shrink-0 px-1.5 text-muted")}
           role="status"
-          title={
-            guestCopy === "kept"
-              ? "主持人还没存下你刚打的字：这台电脑上另留了一份，断线、关掉也在（回收站里找得到）"
-              : "你打的字主持人都存下了"
-          }
+          {...(guestCopy === "kept"
+            ? tip("主持人还没存下你刚打的字", {
+                detail: "这台电脑上另留了一份，断线、关掉也在（回收站里找得到）",
+                name: false,
+                side: "top",
+              })
+            : tip("你打的字主持人都存下了", { name: false, side: "top" }))}
         >
           {guestCopy === "kept" ? "本机已保留" : "已同步给主持人"}
         </span>
       )}
 
+      {viewSwitches.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          onClick={item.select}
+          {...tip(item.label, { kbd: item.kbd, side: "top" })}
+          className={cn(BAR_BUTTON, "hover:bg-raised hover:text-ink")}
+        >
+          <item.icon size={14} strokeWidth={1.9} />
+        </button>
+      ))}
       {onExport && (
         <ActionMenu
           trigger={
             <button
               type="button"
-              aria-label="导出"
-              title="导出"
+              {...tip("导出", { side: "top" })}
               className={cn(BAR_BUTTON, "hover:bg-raised hover:text-ink")}
             >
               <FileOutput size={14} strokeWidth={1.9} />
@@ -1348,8 +1307,7 @@ function StatusBar({
         <button
           type="button"
           onClick={onHistory}
-          aria-label="历史版本"
-          title="历史版本"
+          {...tip("历史版本", { side: "top" })}
           className={cn(BAR_BUTTON, "hover:bg-raised hover:text-ink")}
         >
           <History size={14} strokeWidth={1.9} />
@@ -1360,8 +1318,7 @@ function StatusBar({
         <button
           type="button"
           onClick={onReveal}
-          aria-label="在文件夹中显示"
-          title="在文件夹中显示"
+          {...tip("在文件夹中显示", { side: "top" })}
           className={cn(BAR_BUTTON, "hover:bg-raised hover:text-ink")}
         >
           <FolderOpen size={14} strokeWidth={1.9} />
@@ -1372,8 +1329,7 @@ function StatusBar({
         <button
           type="button"
           onClick={onDelete}
-          aria-label="删除"
-          title="删除（可以撤销）"
+          {...tip("删除", { detail: "可以撤销", side: "top" })}
           className={cn(BAR_BUTTON, "hover:bg-danger/10 hover:text-danger")}
         >
           <Trash2 size={14} strokeWidth={1.9} />

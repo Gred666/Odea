@@ -19,6 +19,8 @@ import { create } from "zustand";
                                    中间那一半是放进去
    - 停在一个收起的、有内容的文件夹上（`data-spring-open`）0.8 秒，它就地展开，
      接着往里拖 —— 不用离开当前列表
+   - 列表栏外面也能放：registerNoteDropZone 登记的那一块（白板：落下是一张引用那一篇的卡片），
+     拖着经过时它自己画出会落在哪，松手交给它
    - Esc 取消；拖完那一下的 click 吞掉，不然松手时还会选中起点那一行
    ============================================================ */
 
@@ -32,7 +34,39 @@ export type DropTarget =
   /** 插在这一篇前面 / 后面（手动排序） */
   | { kind: "note"; folder: string; note: string; edge: "above" | "below" }
   /** 文件夹插在这个文件夹前面 / 后面 */
-  | { kind: "branch"; path: string; edge: "above" | "below" };
+  | { kind: "branch"; path: string; edge: "above" | "below" }
+  /** 列表栏外面接得住一篇笔记的地方（registerNoteDropZone）；label 是影子上写的那一句 */
+  | { kind: "zone"; label: string };
+
+/**
+ * 列表栏外面接得住一篇笔记的地方（白板：落下是一张引用那一篇的卡片，docs/白板.md §13.9）。核心不认识它是什么，
+ * 只在拖着经过、松手时问它。坐标是视口坐标
+ */
+export interface NoteDropZone {
+  /** 指针在这里时接不接这一篇：接的话给出影子上写的那一句（「放到白板上」），不接是 null */
+  accept(note: { id: string; title: string }, x: number, y: number): string | null;
+  /** 接着这一篇、拖着经过（画出会落在哪）；离开、不接了、松手、取消时 leave */
+  over(x: number, y: number): void;
+  leave(): void;
+  drop(note: { id: string; title: string }, x: number, y: number): void;
+}
+
+const zones = new Map<Element, NoteDropZone>();
+
+/** 一块地方接得住拖过来的笔记（element 和它里面的都算）。返回取消的函数 */
+export function registerNoteDropZone(element: Element, zone: NoteDropZone): () => void {
+  zones.set(element, zone);
+  return () => {
+    if (zones.get(element) === zone) zones.delete(element);
+  };
+}
+
+/** 指针下面那一块接得住的地方（拖的是笔记才问） */
+function zoneAt(element: Element | null): NoteDropZone | null {
+  if (!element) return null;
+  for (const [root, zone] of zones) if (root.contains(element)) return zone;
+  return null;
+}
 
 interface DragState {
   /** 正在拖的；没在拖时是 null */
@@ -114,8 +148,22 @@ function hitTest(
   x: number,
   y: number,
   item: DragItem,
-): { target: DropTarget | null; spring: HTMLElement | null } {
+): { target: DropTarget | null; spring: HTMLElement | null; zone: NoteDropZone | null } {
   const element = document.elementFromPoint(x, y);
+  const zone = item.kind === "note" ? zoneAt(element) : null;
+  if (zone && item.kind === "note") {
+    const label = zone.accept(item, x, y);
+    return { target: label === null ? null : { kind: "zone", label }, spring: null, zone };
+  }
+  return { ...listTarget(element, y, item), zone: null };
+}
+
+/** 列表栏里能放的地方（文件夹、手动排序时的两篇之间） */
+function listTarget(
+  element: Element | null,
+  y: number,
+  item: DragItem,
+): { target: DropTarget | null; spring: HTMLElement | null } {
   const noteRow = element?.closest<HTMLElement>("[data-drop-note]");
   if (noteRow) {
     const id = noteRow.dataset.dropNote ?? "";
@@ -174,6 +222,9 @@ function beginDrag(
   const startY = event.clientY;
   let dragging = false;
   let springTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 指针下面那一块列表栏外面接得住的地方、最后一次在哪 */
+  let zone: NoteDropZone | null = null;
+  let last = { x: startX, y: startY };
 
   const move = (e: PointerEvent) => {
     if (!dragging) {
@@ -184,7 +235,12 @@ function beginDrag(
       window.getSelection()?.removeAllRanges();
       useNoteDrag.setState({ item, target: null });
     }
-    const { target, spring } = hitTest(e.clientX, e.clientY, item);
+    const { target, spring, zone: under } = hitTest(e.clientX, e.clientY, item);
+    // 接住这一篇的那块地方跟着画出会落在哪；离开了（或者在里面但不接）它把画着的收掉
+    const taking = target?.kind === "zone" ? under : null;
+    if (zone !== taking) zone?.leave();
+    zone = taking;
+    zone?.over(e.clientX, e.clientY);
     if (!sameTarget(target, useNoteDrag.getState().target)) {
       clearTimeout(springTimer);
       if (target?.kind === "into" && spring) {
@@ -192,6 +248,7 @@ function beginDrag(
       }
     }
     useNoteDrag.setState({ x: e.clientX, y: e.clientY, target });
+    last = { x: e.clientX, y: e.clientY };
   };
 
   const finish = (drop: boolean) => {
@@ -209,7 +266,16 @@ function beginDrag(
     setTimeout(() => {
       swallowClick = false;
     }, 0);
-    if (drop && target !== null) handlers.onDrop(target);
+    const at = zone;
+    zone = null;
+    at?.leave();
+    if (!drop || target === null) return;
+    // 落在列表栏外面接得住的地方（白板）：交给它，不是列表栏的事
+    if (target.kind === "zone") {
+      if (at && item.kind === "note") at.drop(item, last.x, last.y);
+      return;
+    }
+    handlers.onDrop(target);
   };
   const up = () => finish(true);
   const cancel = () => finish(false);

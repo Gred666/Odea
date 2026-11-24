@@ -1,4 +1,5 @@
 import { cn } from "@/lib/cn";
+import { tip } from "@/lib/tooltip";
 import {
   ArrowDownUp,
   ChevronDown,
@@ -41,7 +42,7 @@ import { type Group, propLabel, propRef } from "./query";
    ============================================================ */
 
 const TOOL =
-  "flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors duration-[140ms] " +
+  "flex h-7 items-center gap-1.5 rounded-sm px-2 text-[13px] transition-colors duration-[140ms] " +
   "hover:bg-raised hover:text-ink data-[state=open]:bg-raised data-[state=open]:text-ink";
 
 const ToolButton = forwardRef<
@@ -52,14 +53,15 @@ const ToolButton = forwardRef<
     <button
       ref={ref}
       type="button"
-      title={label}
+      // 宽的时候字在按钮上，提示和它一样就不出（lib/tooltip.ts）；窄的时候只剩图标，靠它
+      {...tip(label)}
       {...rest}
       className={cn(TOOL, active ? "text-ink" : "text-muted")}
     >
       <Icon size={14} strokeWidth={1.9} />
       <span className="hidden @min-[640px]:inline">{label}</span>
       {count !== undefined && count > 0 && (
-        <span className="rounded bg-accent-wash px-1 text-[11px] tabular-nums text-accent">
+        <span className="rounded-xs bg-accent-wash px-1 text-[11px] tabular-nums text-accent">
           {count}
         </span>
       )}
@@ -68,13 +70,13 @@ const ToolButton = forwardRef<
 });
 
 const SELECT =
-  "h-7 min-w-0 rounded-md border border-line-strong bg-canvas px-1.5 text-[13px] text-body outline-none focus:border-accent";
+  "h-7 min-w-0 rounded-sm border border-line-strong bg-canvas px-1.5 text-[13px] text-body outline-none focus:border-accent";
 const INPUT =
-  "h-7 min-w-0 rounded-md border border-line-strong bg-canvas px-2 text-[13px] text-body outline-none placeholder:text-faint focus:border-accent";
+  "h-7 min-w-0 rounded-sm border border-line-strong bg-canvas px-2 text-[13px] text-body outline-none placeholder:text-faint focus:border-accent";
 const SMALL =
-  "grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint transition-colors duration-[140ms] hover:bg-raised hover:text-ink disabled:opacity-40";
+  "grid h-7 w-7 shrink-0 place-items-center rounded-sm text-faint transition-colors duration-[140ms] hover:bg-raised hover:text-ink disabled:opacity-40";
 const ADD =
-  "flex h-7 items-center gap-1.5 self-start rounded-md px-1.5 text-[13px] text-muted transition-colors duration-[140ms] hover:bg-raised hover:text-ink";
+  "flex h-7 items-center gap-1.5 self-start rounded-sm px-1.5 text-[13px] text-muted transition-colors duration-[140ms] hover:bg-raised hover:text-ink";
 
 export interface ToolbarProps {
   config: BaseConfig;
@@ -412,13 +414,7 @@ function SimpleRow({
       ) : (
         <span className="flex-1" />
       )}
-      <button
-        type="button"
-        aria-label="删掉这个条件"
-        title="删掉"
-        onClick={onRemove}
-        className={SMALL}
-      >
+      <button type="button" {...tip("删掉这个条件")} onClick={onRemove} className={SMALL}>
         <X size={14} strokeWidth={2} />
       </button>
     </div>
@@ -455,13 +451,7 @@ function ExprRow({
           }}
           className={cn(INPUT, "flex-1 font-mono text-[12px]", problem && "border-danger")}
         />
-        <button
-          type="button"
-          aria-label="删掉这个条件"
-          title="删掉"
-          onClick={onRemove}
-          className={SMALL}
-        >
+        <button type="button" {...tip("删掉这个条件")} onClick={onRemove} className={SMALL}>
           <X size={14} strokeWidth={2} />
         </button>
       </div>
@@ -475,16 +465,10 @@ function NestedRow({ node, onRemove }: { node: FilterNode; onRemove: () => void 
   const mode = "op" in node ? MODES.find((item) => item.op === node.op)?.label : "";
   return (
     <div className="flex items-center gap-1.5">
-      <span className="flex h-7 flex-1 items-center rounded-md bg-panel px-2 text-[13px] text-muted">
+      <span className="flex h-7 flex-1 items-center rounded-sm bg-panel px-2 text-[13px] text-muted">
         一组条件（{mode}，{count} 条）· 在源码里改
       </span>
-      <button
-        type="button"
-        aria-label="删掉这组条件"
-        title="删掉"
-        onClick={onRemove}
-        className={SMALL}
-      >
+      <button type="button" {...tip("删掉这组条件")} onClick={onRemove} className={SMALL}>
         <X size={14} strokeWidth={2} />
       </button>
     </div>
@@ -531,8 +515,7 @@ function SortPanel({
           </select>
           <button
             type="button"
-            aria-label="删掉这一条排序"
-            title="删掉"
+            {...tip("删掉这一条排序")}
             onClick={() => onChange(sort.filter((_, i) => i !== index))}
             className={SMALL}
           >
@@ -791,7 +774,7 @@ function SourcePanel({
         <button
           type="button"
           onClick={onCancel}
-          className="h-7 rounded-md px-3 text-[13px] text-muted hover:bg-raised hover:text-ink"
+          className="h-7 rounded-sm px-3 text-[13px] text-muted hover:bg-raised hover:text-ink"
         >
           取消
         </button>
@@ -799,7 +782,7 @@ function SourcePanel({
           type="button"
           disabled={draft === text}
           onClick={() => onSave(draft)}
-          className="h-7 rounded-md bg-accent px-3 text-[13px] text-accent-ink hover:bg-accent-hover disabled:opacity-50"
+          className="h-7 rounded-sm bg-accent px-3 text-[13px] text-accent-ink hover:bg-accent-hover disabled:opacity-50"
         >
           保存
         </button>

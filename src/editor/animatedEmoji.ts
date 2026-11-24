@@ -1,4 +1,5 @@
 import { ANIMATED_EMOJI_FALLBACK } from "@/lib/emojiText";
+import { setTip } from "@/lib/tooltip";
 import {
   ANIMATED_EMOJI_DESIGNS,
   type AnimatedEmojiDesign,
@@ -690,8 +691,7 @@ export function inlineAnimatedEmoji(emoji: AnimatedEmoji): HTMLElement {
   const node = document.createElement("span");
   node.className = "odea-ae";
   node.setAttribute("role", "img");
-  node.setAttribute("aria-label", emoji.name);
-  node.title = emoji.name;
+  setTip(node, emoji.name, { side: "top" });
   const player = new EmojiPlayer(emoji);
   const alt = document.createElement("span");
   alt.className = "odea-ae-alt";

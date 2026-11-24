@@ -19,6 +19,7 @@ import {
 import { DocumentView } from "./DocumentView";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { NoteTabs } from "./NoteTabs";
+import { NoteBody, useNoteView, useViewSwitches } from "./NoteViewHost";
 import { SwapFade } from "./SwapFade";
 
 /* ============================================================
@@ -192,6 +193,10 @@ const PaneBody = memo(function PaneBody({
   const tabsShown =
     notes && !zen && initialized && !isShared(doc.editor?.target) && (count > 1 || tabs.length > 1);
   const wide = usePaneWide(hostRef, count > 1);
+  // 这个标签用哪种摆法看这一篇（白板，docs/白板.md §13.4）：只在笔记区
+  const tab = tabs.find((other) => other.id === activeTab);
+  const view = useNoteView(notes ? tab : undefined, doc);
+  const switches = useViewSwitches(notes ? tab : undefined, doc);
 
   const handleDelete = () => {
     // 删的是这个窗格里的这一篇。按下的那一刻这个窗格已经成了正在写的（外壳的 focus）
@@ -208,20 +213,32 @@ const PaneBody = memo(function PaneBody({
         shown={tabsShown}
         focused={focused || count === 1}
         last={index === count - 1}
+        first={index === 0}
+        surface={view ? "--color-panel" : undefined}
       />
       {doc.base ? (
         <BaseHost relPath={doc.base.relPath} />
       ) : (
-        <DocumentView
+        <NoteBody
+          tab={tab ?? { id: activeTab, noteId: "" }}
+          view={view}
           doc={doc}
-          onDelete={handleDelete}
-          onSaveDocument={onSaveDocument}
-          onSaveTitle={onSaveTitle}
-          tabBar={tabsShown}
           focused={focused && !popoutActive}
-          first={index === 0}
-          last={index === count - 1}
-          outline={count === 1 || wide}
+          onSaveDocument={onSaveDocument}
+          document={
+            <DocumentView
+              doc={doc}
+              onDelete={handleDelete}
+              onSaveDocument={onSaveDocument}
+              onSaveTitle={onSaveTitle}
+              tabBar={tabsShown}
+              focused={focused && !popoutActive}
+              first={index === 0}
+              last={index === count - 1}
+              outline={count === 1 || wide}
+              viewSwitches={switches}
+            />
+          }
         />
       )}
     </>

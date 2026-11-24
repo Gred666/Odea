@@ -68,3 +68,14 @@ describe("占位渲染的列表", () => {
     ]);
   });
 });
+
+describe("预览里的 HTML 注释", () => {
+  it("drops comment blocks, single-line or spanning lines, like the editor folds them", () => {
+    const lines = ["前一段", "<!-- @card a1b2c3 40,80 320 -->", "", "<!--", "多行", "-->"];
+    const blocks = parseBlocks([...lines, "后一段 <!-- 行内 -->"].join("\n"));
+    expect(blocks).toEqual([
+      { kind: "p", text: "前一段" },
+      { kind: "p", text: "后一段 <!-- 行内 -->" },
+    ]);
+  });
+});

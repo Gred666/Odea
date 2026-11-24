@@ -1,4 +1,5 @@
 import { docOf, winOf } from "@/lib/paneWindow";
+import { setTip } from "@/lib/tooltip";
 
 /* ============================================================
    表格的菜单：行 / 列抓手点开的、格子上右键的（docs/表格.md §5.2）。
@@ -183,8 +184,7 @@ export function showTableMenu(
         button.classList.toggle("is-on", segment.active);
         button.setAttribute("role", "menuitemradio");
         button.setAttribute("aria-checked", String(segment.active));
-        button.setAttribute("aria-label", segment.label);
-        button.title = segment.label;
+        setTip(button, segment.label);
         button.append(tableIcon(doc, segment.icon));
         button.addEventListener("click", () => choose(segment.run));
         items.push(button);
@@ -211,7 +211,8 @@ export function showTableMenu(
     }
     if (entry.disabled) {
       button.setAttribute("aria-disabled", "true");
-      button.title = entry.disabled;
+      // 为什么不能用：放右边，不挡上下的菜单项
+      setTip(button, entry.disabled, { name: false, side: "right" });
     } else button.addEventListener("click", () => choose(entry.run));
     items.push(button);
     menu.append(button);

@@ -1,6 +1,7 @@
 import { tween } from "@/lib/motion";
 import { usePaneWindow } from "@/lib/paneWindow";
 import { type WindowControls, isTauri, win } from "@/lib/tauri";
+import { tip } from "@/lib/tooltip";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
@@ -106,14 +107,13 @@ export function WinButton({
   return (
     <button
       type="button"
-      aria-label={label}
-      title={label}
+      {...tip(label)}
       onClick={onClick}
       // 按钮本身是整条标题栏高的一格；看得见的圆角块是里面那一层
       className={`group grid place-items-center pl-0.5 ${corner ? "pr-2" : "pr-0"}`}
     >
       <span
-        className={`grid h-7 w-9 place-items-center rounded-md text-muted transition-colors
+        className={`grid h-7 w-9 place-items-center rounded-sm text-muted transition-colors
                     duration-[120ms] ${
                       danger
                         ? "group-hover:bg-danger group-hover:text-white"

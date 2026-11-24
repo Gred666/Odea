@@ -1,6 +1,8 @@
 import { openDocument } from "@/app/navigate";
 import { messageOf } from "@/data/store";
 import { cn } from "@/lib/cn";
+import { MOD_KEY } from "@/lib/platform";
+import { tip } from "@/lib/tooltip";
 import { KIND_META, ValueCell } from "@/properties/PropertiesPanel";
 import { type Entry, fitsKind, isListKind } from "@/properties/yaml";
 import { type KeyboardEvent as ReactKeyboardEvent, useRef } from "react";
@@ -56,7 +58,7 @@ export function NameCell({ row, className }: { row: Row; className?: string }) {
       onMouseDown={(event) => {
         if (event.button === 1) event.preventDefault();
       }}
-      title={`${row.source.path}（Ctrl + 点开在新标签）`}
+      {...tip(row.source.path, { detail: `${MOD_KEY} + 点击开在新标签`, name: false })}
       className={cn(
         "min-w-0 truncate text-left font-medium text-ink decoration-line-strong underline-offset-[3px] hover:underline",
         className,
@@ -142,7 +144,7 @@ export function CellBody({
           event.stopPropagation();
           commit(checked ? "false" : "true");
         }}
-        className="grid h-6 w-6 place-items-center rounded-md hover:bg-raised"
+        className="grid h-6 w-6 place-items-center rounded-sm hover:bg-raised"
       >
         <ValueView value={checked} />
       </button>

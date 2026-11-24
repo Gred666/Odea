@@ -21,6 +21,13 @@ import {
 import { DiagramWidget } from "./diagram";
 import { type FrontMatterRange, frontMatterRange } from "./frontMatter";
 import { FoldedSectionWidget, foldsOnlyMoved, outermostSections } from "./headingFold";
+import {
+  type HiddenRange,
+  claimedLine,
+  hiddenLine,
+  hiddenRanges,
+  mapHiddenRanges,
+} from "./hiddenLines";
 import { parseHtmlTable } from "./htmlTable";
 import { inlinePlainText } from "./inlineDom";
 import { normalizeLabel } from "./links";
@@ -89,6 +96,8 @@ export interface TyporaBlockState {
   toc: boolean;
   /** 构建时插件登记的提示块是哪一版（callout.ts 的 calloutsVersion）：换了就整篇重建 */
   callouts: number;
+  /** 插件认领、整段藏起来的那几行（白板的标记，hiddenLines.ts）：光标、退格、复制都要绕开它们 */
+  hidden: readonly HiddenRange[];
 }
 
 /** 块级构造只可能藏在这些容器里，浅层遍历仅下探它们。 */
@@ -170,7 +179,7 @@ const DEFINITION_HINT_RE = /(?:^|\n)[^\S\n]{0,3}(?:\[\^|\*\[)/;
 
 function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): TyporaBlockState {
   const ranges: DecorationRange[] = [];
-  const fresh = freshness(changes);
+  const fresh = freshness(changes, state);
   const foldedLines = new Set<number>();
   const referenceLabels = new Set<string>();
   const abbreviations = new Map<string, string>();
@@ -186,6 +195,9 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
   let headings: TocEntry[] | null = null;
   let toc = false;
   const probes: number[] = [];
+  // 插件认领的整行注释（白板的标记）：先记下行首，走完整棵树再一起藏（hiddenLines.ts）
+  const claims = state.facet(hiddenLine);
+  const claimed: number[] = [];
   /** selectionTouches，顺便记下问了什么、答了什么（TyporaBlockState.probes） */
   const touches = (from: number, to: number) => {
     const hit = selectionTouches(state, from, to);
@@ -346,6 +358,14 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
       }
 
       if (name === "CommentBlock") {
+        // 独占一行、从行首写起、有插件认领：光标碰不碰到都藏，不画「注释」
+        if (claims.length) {
+          const line = state.doc.lineAt(node.from);
+          if (line.from === node.from && node.to <= line.to && claimedLine(claims, line.text)) {
+            claimed.push(line.from);
+            return false;
+          }
+        }
         if (!touches(node.from, node.to)) {
           foldRange(node.from, node.to, new CommentWidget(true));
         }
@@ -435,6 +455,10 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
     },
   });
 
+  // 认领的行连同后面紧跟的空行，折成没有替身的块级替换（和 Setext 的下划线一样）；收起的一节里的不另折
+  const claimedRanges = hiddenRanges(state.doc, claimed);
+  for (const range of claimedRanges) foldRange(range.from, range.to);
+
   for (const section of hiddenSections) {
     const first = state.doc.lineAt(section.from).number;
     const last = state.doc.lineAt(section.to).number;
@@ -462,6 +486,7 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
     probes,
     toc,
     callouts: calloutsVersion(),
+    hidden: claimedRanges,
   };
 }
 
@@ -580,6 +605,7 @@ function mapBlockState(value: TyporaBlockState, transaction: Transaction): Typor
     foldedLines: mapLines(value.foldedLines),
     abbreviationLines: mapLines(value.abbreviationLines),
     probes,
+    hidden: mapHiddenRanges(value.hidden, changes),
   };
 }
 
@@ -588,10 +614,11 @@ export const typoraBlockDecorations = StateField.define<TyporaBlockState>({
   create: (state) => buildBlockDecorations(state, null),
   update(value, transaction) {
     // 收起 / 展开了标题（不只是跟着改动平移）、插件登记的提示块换了（开关了插件）、
-    // 表格下面正在组字的那一行记上 / 收掉了（tableGap.ts，表格的范围跟着变）：整篇重建
+    // 认领整行的插件换了（开关了白板）、表格下面正在组字的那一行记上 / 收掉了（tableGap.ts，表格的范围跟着变）：整篇重建
     if (
       !foldsOnlyMoved(transaction) ||
       value.callouts !== calloutsVersion() ||
+      transaction.startState.facet(hiddenLine) !== transaction.state.facet(hiddenLine) ||
       gapsChanged(transaction.startState, transaction.state)
     ) {
       return buildBlockDecorations(transaction.state, transaction.changes);

@@ -4,7 +4,14 @@ import { codeHighlightStyle } from "@/editor/codeHighlight";
 import { emojiFor } from "@/editor/emoji";
 import { decodeEntity } from "@/editor/entities";
 import { isFrontMatterKey } from "@/editor/frontMatter";
-import { INLINE_HTML_TAGS, inlineStyleOf, parseTag, safeHref, sanitizeHtml } from "@/editor/html";
+import {
+  INLINE_HTML_TAGS,
+  hasRenderableHtml,
+  inlineStyleOf,
+  parseTag,
+  safeHref,
+  sanitizeHtml,
+} from "@/editor/html";
 import { parseImage } from "@/editor/images";
 import { normalizeLabel, splitWikiTarget } from "@/editor/links";
 import { markdownExtensions } from "@/editor/markdownParser";
@@ -15,8 +22,19 @@ import {
   parseMarkdownTable,
 } from "@/editor/markdownTable";
 import { resolveGrid } from "@/editor/tableGrid";
+import {
+  BULLET_GLYPHS,
+  COPY_ICON,
+  LIST_BULLET_WIDTH,
+  LIST_DIGIT_WIDTH,
+  LIST_ORDERED_WIDTH,
+  LIST_TASK_WIDTH,
+  TASK_CHECK_ICON,
+  listUnits,
+} from "@/editor/widgetShapes";
 import { type EmbedTarget, noteEmbedTarget } from "@/lib/embeds";
 import { ANIMATED_EMOJI_FALLBACK } from "@/lib/emojiText";
+import { MIN_RUN, NOT_CJK } from "@/lib/longRun";
 import { attachmentLabel, wikiFileTarget, wikiImageTarget } from "@/lib/wikiFiles";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { parser as baseParser } from "@lezer/markdown";
@@ -67,6 +85,13 @@ export interface StaticOptions {
   expandFolds?: boolean;
   /** 标题、脚注的 id 前缀：同一页里有好几段（嵌进来的那一篇）不撞 */
   idPrefix?: string;
+  /**
+   * 照编辑器的排法（白板的卡片，docs/白板.md §13.7）：空行就是一行高的空白（编辑器里一个空行就是一行），块之间
+   * 不另加段距；列表符号、勾选框、代码块的封口、分隔线、表格画成编辑器里那几个替身的样子（同样的类名，样子都在
+   * globals.css 的 .odea-editor 里，外面那一层要同时带着 odea-static 和 odea-editor）。点进卡片编辑，字不挪、
+   * 卡片不变高。勾选框带着 data-task（`[` 在这一段里的位置），白板上点它就勾上
+   */
+  layout?: "document" | "editor";
 }
 
 const parser = baseParser.configure(markdownExtensions);
@@ -142,6 +167,10 @@ interface Context {
   /** 异步的部分 */
   slots: Promise<string>[];
   nonce: string;
+  /** 照编辑器的排法（options.layout） */
+  editor: boolean;
+  /** 整篇的源码：位置（勾选框的 data-task）只对它算，callout 里另排的那一段不算 */
+  source: string;
 }
 
 /** 异步的一段先占位：最后换成它的结果（已经转义好的 HTML） */
@@ -170,6 +199,8 @@ export async function renderStaticHtml(markdown: string, options: StaticOptions)
     headingIds: new Map(),
     slots: [],
     nonce: Math.random().toString(36).slice(2, 10),
+    editor: options.layout === "editor",
+    source,
   };
   collect(cx, source, tree);
   if (cx.abbreviations.size) {
@@ -188,6 +219,11 @@ export async function renderStaticHtml(markdown: string, options: StaticOptions)
     new RegExp(`@@odea${cx.nonce}#(\\d+)@@`, "g"),
     (_, index: string) => results[Number(index)] ?? "",
   );
+  if (cx.editor) {
+    html = markLongRuns(html);
+    // 编辑器里空的一篇也有一行（光标那一行）：空卡片点进去不变高
+    if (!html) html = '<div class="odea-blank"></div>';
+  }
   // 地址到最后也没有的图片：画成一个带字的框
   return html
     .replace(
@@ -195,6 +231,109 @@ export async function renderStaticHtml(markdown: string, options: StaticOptions)
       (_, label: string) => `<span class="image-missing">${label}</span>`,
     )
     .replace(/ data-missing="[^"]*">/g, ">");
+}
+
+/* ---------------- 照编辑器排：长串 ---------------- */
+
+/** 断开长串的标签：块、换行（串只连着跨过加粗、代码上色这些行内的标签） */
+const RUN_BREAKS = new Set([
+  "br",
+  "p",
+  "div",
+  "li",
+  "ul",
+  "ol",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "blockquote",
+  "pre",
+  "hr",
+  "img",
+  "table",
+  "tr",
+  "td",
+  "th",
+  "details",
+  "summary",
+  "dl",
+  "dt",
+  "dd",
+  "button",
+]);
+const VOID_TAGS = new Set(["br", "hr", "img", "input", "col", "wbr", "source", "path"]);
+/** 编辑器里不归正文的装饰层管的：公式、表格、嵌入、块级 HTML 是替身，图标是图标 */
+const RUN_SKIP_RE =
+  /^<svg\b|^<[a-z]+[^>]*\bclass="(?:[^"]*\s)?(?:katex|math-display|math-inline|cm-odea-math|cm-odea-math-block|cm-odea-table-block|embed|html-block)[\s"]/;
+const RUN_CHAR_RE = new RegExp(`^${NOT_CJK}$`);
+
+/**
+ * 很长、中间没有断点的西文串（网址、哈希）在串里任意处断行，和编辑器的 .cm-odea-long-run 一样（editor/longRuns.ts，
+ * 那边按源码找，这边按排出来的字找；差别只在串跨过了藏起来的记号时）。一串跨过几段字就包几段
+ */
+function markLongRuns(html: string): string {
+  const tokens = html.split(/(<[^>]*>)/);
+  const wraps = new Map<number, [number, number][]>();
+  let run: [number, number, number][] = [];
+  let length = 0;
+  const flush = () => {
+    if (length >= MIN_RUN) {
+      for (const [index, from, to] of run) {
+        const list = wraps.get(index) ?? [];
+        list.push([from, to]);
+        wraps.set(index, list);
+      }
+    }
+    run = [];
+    length = 0;
+  };
+  let skip = 0;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (index % 2 === 1) {
+      const name = /^<\/?([a-zA-Z0-9-]+)/.exec(token)?.[1]?.toLowerCase() ?? "";
+      const closing = token.startsWith("</");
+      const single = token.endsWith("/>") || VOID_TAGS.has(name);
+      if (skip) {
+        if (!single) skip += closing ? -1 : 1;
+        continue;
+      }
+      if (!closing && !single && RUN_SKIP_RE.test(token)) {
+        flush();
+        skip = 1;
+      } else if (RUN_BREAKS.has(name)) flush();
+      continue;
+    }
+    if (skip || !token) continue;
+    for (const match of token.matchAll(/&[#a-zA-Z0-9]+;|[\s\S]/g)) {
+      const char = match[0].length > 1 ? "&" : match[0];
+      const at = match.index;
+      if (!RUN_CHAR_RE.test(char)) {
+        flush();
+        continue;
+      }
+      const last = run[run.length - 1];
+      if (last && last[0] === index && last[2] === at) last[2] = at + match[0].length;
+      else run.push([index, at, at + match[0].length]);
+      length += 1;
+    }
+  }
+  flush();
+  if (!wraps.size) return html;
+  for (const [index, ranges] of wraps) {
+    const text = tokens[index]!;
+    let out = "";
+    let pos = 0;
+    for (const [from, to] of ranges) {
+      out += `${text.slice(pos, from)}<span class="cm-odea-long-run">${text.slice(from, to)}</span>`;
+      pos = to;
+    }
+    tokens[index] = out + text.slice(pos);
+  }
+  return tokens.join("");
 }
 
 /* ---------------- 先走一遍：定义、标题 ---------------- */
@@ -289,13 +428,27 @@ function plainOf(src: string, node: SyntaxNode): string {
 
 /* ---------------- 块 ---------------- */
 
-/** 一个容器（文档、引用、列表项）里的块，一个接一个。tight：紧凑列表里，段落不包 <p> */
-function blocks(cx: Context, src: string, parent: SyntaxNode, tight = false): string {
+/**
+ * 一个容器（文档、引用、列表项）里的块，一个接一个。tight：紧凑列表里，段落不包 <p>。
+ * leadInline：照编辑器排时列表项的第一段不包 <p>（和符号、勾选框在同一行，后面的段落照常）
+ */
+function blocks(
+  cx: Context,
+  src: string,
+  parent: SyntaxNode,
+  tight = false,
+  leadInline = false,
+): string {
   const out: string[] = [];
   /** 上一块是单独一行的段落：它后面空一行的 `: 释义` 能把它变成定义列表的术语 */
   let lonely: { index: number; text: string } | null = null;
+  let previous: SyntaxNode | null = null;
   for (let node = parent.firstChild; node; node = node.nextSibling) {
     if (/Mark$/.test(node.name)) continue;
+    // 照编辑器排：两块之间空了几行就是几行高的空白
+    if (cx.editor && previous) out.push(blankLines(src, previous.to, node.from));
+    const first = !previous;
+    previous = node;
     if (node.name === "Paragraph") {
       const text = src.slice(node.from, node.to);
       const lines = text.split("\n");
@@ -304,7 +457,7 @@ function blocks(cx: Context, src: string, parent: SyntaxNode, tight = false): st
         lonely = null;
         continue;
       }
-      const html = paragraph(cx, src, node, tight);
+      const html = paragraph(cx, src, node, tight || (leadInline && first));
       lonely =
         lines.length === 1 && (html.startsWith("<p>") || tight)
           ? { index: out.length, text }
@@ -315,7 +468,8 @@ function blocks(cx: Context, src: string, parent: SyntaxNode, tight = false): st
     lonely = null;
     out.push(block(cx, src, node));
   }
-  return out.filter(Boolean).join("\n");
+  // 照编辑器排时字按 break-spaces 排（和编辑器一样折行）：块和块之间不能留换行，不然多出一行
+  return out.filter(Boolean).join(cx.editor ? "" : "\n");
 }
 
 function block(cx: Context, src: string, node: SyntaxNode): string {
@@ -325,7 +479,7 @@ function block(cx: Context, src: string, node: SyntaxNode): string {
     const level = heading[1];
     const id = cx.headingIds.get(node.from);
     const body = inline(cx, src, node)
-      .replace(/(?:<br>\n)+$/, "")
+      .replace(/(?:<br>\n?)+$/, "")
       .trim();
     return `<h${level}${id ? ` id="${escapeHtml(id)}"` : ""}>${body}</h${level}>`;
   }
@@ -362,17 +516,33 @@ function block(cx: Context, src: string, node: SyntaxNode): string {
       );
     case "HTMLBlock":
       return htmlBlock(cx, sourceLines(src, node).join("\n"));
+    case "CommentBlock":
+      // 照编辑器排：编辑器里一块注释收成一个「注释」小标记（widgets.ts 的 CommentWidget）。白板的标记行插件认领了、
+      // 藏着，但它们不会在一张卡片的内容里（标记就是卡片的边）
+      return cx.editor
+        ? '<div class="cm-odea-comment-block is-settled"><span class="cm-odea-comment">注释</span></div>'
+        : "";
     case "Table":
       return table(cx, parseMarkdownTable(src.slice(node.from, node.to)), true);
     case "HorizontalRule":
-      return "<hr>";
-    case "CommentBlock":
-    case "ProcessingInstructionBlock":
+      // 照编辑器排：编辑器里分隔线的替身（1px 线、上下各 0.9em）
+      return cx.editor ? '<div class="cm-odea-hr is-settled"></div>' : "<hr>";
     case "LinkReference":
+      return cx.editor ? editorReference(cx, src.slice(node.from, node.to)) : "";
+    case "ProcessingInstructionBlock":
       return "";
     default:
       return `<p>${escapeHtml(src.slice(node.from, node.to))}</p>`;
   }
+}
+
+/** 照编辑器排：from 到 to 之间空了几行，就是几个一行高的空白（编辑器里一个空行就是一行） */
+function blankLines(src: string, from: number, to: number): string {
+  let lines = -1;
+  for (let at = src.indexOf("\n", from); at >= 0 && at < to; at = src.indexOf("\n", at + 1)) {
+    lines += 1;
+  }
+  return lines > 0 ? '<div class="odea-blank"></div>'.repeat(lines) : "";
 }
 
 /** 一块的源码，续行前面引用、列表的前缀去掉（第一行从节点起点开始，本来就没有） */
@@ -395,13 +565,69 @@ function paragraph(cx: Context, src: string, node: SyntaxNode, tight: boolean): 
   }
   if (DEFINITION_HINT_RE.test(text)) {
     const lines = text.split("\n");
-    const kept = lines.filter((line) => !FOOTNOTE_DEF_RE.test(line) && !ABBREVIATION_RE.test(line));
+    const definition = (line: string) => FOOTNOTE_DEF_RE.test(line) || ABBREVIATION_RE.test(line);
+    // 照编辑器排：定义行留在原地（编辑器里它们就是这一段里的一行），不收到最后
+    if (cx.editor && lines.some(definition)) return editorDefinitions(cx, lines, tight);
+    const kept = lines.filter((line) => !definition(line));
     // 脚注、缩写的定义行拿掉（脚注收到最后），剩下的另起一段重新排
     if (kept.length < lines.length) return kept.length ? fragment(cx, kept.join("\n"), tight) : "";
     if (lines.slice(1).some((line) => DEFINITION_RE.test(line))) return definitionList(cx, lines);
   }
   const body = inline(cx, src, node);
-  return tight ? body : `<p>${body}</p>`;
+  if (tight) return body;
+  // 照编辑器排：只有一张图的那一行，编辑器里这一行的字号是 0（.cm-odea-image-line），只剩图片那一块
+  if (cx.editor && only?.name === "Image" && only.from === node.from && only.to === node.to) {
+    return `<p class="odea-image-line">${body}</p>`;
+  }
+  return `<p>${body}</p>`;
+}
+
+/**
+ * 照编辑器排：一段里夹着脚注、缩写的定义行。编辑器里它们是这一段里的一行（inlineDecorations.ts 的
+ * cm-odea-footnote-def：开头 `[^1]: ` 换成徽章、后面照常排；blockDecorations.ts 的 cm-odea-abbr-def：源码原样，淡一点），
+ * 别的行照常排。行和行之间不留空（段里的软换行就是挨着的下一行）
+ */
+function editorDefinitions(cx: Context, lines: string[], tight: boolean): string {
+  const out: string[] = [];
+  let run: string[] = [];
+  const flush = () => {
+    if (run.length) out.push(fragment(cx, run.join("\n"), tight));
+    run = [];
+  };
+  for (const line of lines) {
+    const footnote = FOOTNOTE_DEF_RE.exec(line);
+    if (footnote) {
+      flush();
+      const badge = `<span class="cm-odea-footnote is-def is-settled">${escapeHtml(footnote[1]!)}</span>`;
+      out.push(
+        `<p class="cm-odea-footnote-def">${badge}${inlineText(cx, line.slice(footnote[0].length))}</p>`,
+      );
+    } else if (ABBREVIATION_RE.test(line)) {
+      flush();
+      out.push(`<p class="cm-odea-abbr-def">${escapeHtml(line)}</p>`);
+    } else run.push(line);
+  }
+  flush();
+  return out.join("");
+}
+
+/**
+ * 照编辑器排：一块引用定义。单独一行的 `[^1]: 脚注` 也被解析成引用定义（`^1` 是个合法的标签），编辑器里照段落那样
+ * 一行一行排（inlineDecorations.ts 的 LinkReference）；真的引用定义（`[a]: https://…`）是淡淡的源码（cm-odea-reference）
+ */
+function editorReference(cx: Context, text: string): string {
+  const lines = text.split("\n");
+  if (lines.some((line) => FOOTNOTE_DEF_RE.test(line) || ABBREVIATION_RE.test(line))) {
+    return editorDefinitions(cx, lines, false);
+  }
+  // 编辑器里 `[a]: https://…` 的冒号藏掉（一个空的替身），地址画成链接的样子
+  const shown = lines.map((line) => {
+    const match = /^(\s{0,3}\[[^\]]+\]):(\s*)(\S+)(.*)$/.exec(line);
+    if (!match) return escapeHtml(line);
+    const [, label, gap, url, rest] = match;
+    return `${escapeHtml(label!)}${gap}<span class="cm-odea-link">${escapeHtml(url!)}</span>${escapeHtml(rest!)}`;
+  });
+  return `<p><span class="cm-odea-reference">${shown.join("<br>")}</span></p>`;
 }
 
 /** 定义列表：`术语` 下面一行或几行 `: 释义` */
@@ -452,11 +678,14 @@ function list(cx: Context, src: string, node: SyntaxNode): string {
     return false;
   });
   let start = "";
+  let first = 1;
   if (ordered) {
     const mark = items[0]?.getChild("ListMark");
-    const first = mark ? Number.parseInt(src.slice(mark.from, mark.to), 10) : 1;
-    if (Number.isFinite(first) && first !== 1) start = ` start="${first}"`;
+    const written = mark ? Number.parseInt(src.slice(mark.from, mark.to), 10) : 1;
+    if (Number.isFinite(written)) first = written;
+    if (first !== 1) start = ` start="${first}"`;
   }
+  if (cx.editor) return editorList(cx, src, node, items, loose, first);
   let tasks = false;
   const body = items
     .map((item) => {
@@ -471,6 +700,61 @@ function list(cx: Context, src: string, node: SyntaxNode): string {
     .join("");
   const tag = ordered ? "ol" : "ul";
   return `<${tag}${start}${tasks ? ' class="tasks"' : ""}>${body}</${tag}>`;
+}
+
+/**
+ * 照编辑器排的列表（inlineDecorations.ts 的 decorateListItem）：每一项的第一行是符号格（圆点、编号、勾选框）
+ * 加正文，折行悬挂到正文那一栏；子项的符号格接在上一级的正文那一栏后面。项和项之间空了几行就是几行空白
+ */
+function editorList(
+  cx: Context,
+  src: string,
+  node: SyntaxNode,
+  items: SyntaxNode[],
+  loose: boolean,
+  first: number,
+): string {
+  const ordered = node.name === "OrderedList";
+  let depth = 0;
+  for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+    if (ancestor.name === "BulletList" || ancestor.name === "OrderedList") depth += 1;
+  }
+  // 同一个列表按最大的那个编号定宽，9 和 10 的点对得齐
+  const width = ordered
+    ? LIST_ORDERED_WIDTH + String(first + items.length - 1).length * LIST_DIGIT_WIDTH
+    : LIST_BULLET_WIDTH;
+  const body = items
+    .map((item, index) => {
+      const mark = item.getChild("ListMark");
+      const task = item.getChild("Task")?.getChild("TaskMarker");
+      const own = task ? LIST_TASK_WIDTH : width;
+      let box: string;
+      if (task) {
+        const done = /x/i.test(src.slice(task.from, task.to));
+        // 白板上点它就勾上：`[` 在这一段里的位置（callout 里另排的那一段对不上，不给）
+        const at = src === cx.source ? ` data-task="${task.from}"` : "";
+        box = `<span class="cm-odea-task${done ? " is-checked" : ""} is-settled" role="checkbox" aria-checked="${done}"${at}>${svgIcon("0 0 16 16", TASK_CHECK_ICON, "cm-odea-task-check")}</span>`;
+      } else {
+        const written = mark ? src.slice(mark.from, mark.to) : "";
+        const text = ordered
+          ? `${first + index}${written.endsWith(")") ? ")" : "."}`
+          : BULLET_GLYPHS[depth % BULLET_GLYPHS.length]!;
+        box = `<span class="cm-odea-list-marker is-settled" style="width: ${listUnits(width)}">${text}</span>`;
+      }
+      const content = blocks(cx, src, item, !loose, true);
+      const next = items[index + 1];
+      const gap = next ? blankLines(src, item.to, next.from) : "";
+      const style = `padding-left: ${listUnits(own)}; text-indent: ${listUnits(-own)}`;
+      return `<li style="${style}">${box}${content}${gap}</li>`;
+    })
+    .join("");
+  const tag = ordered ? "ol" : "ul";
+  return `<${tag} class="odea-list">${body}</${tag}>`;
+}
+
+/** 编辑器里替身用的那种线条图标（widgets.ts 的 svg）：pathLength 1，描出来的动画按它算 */
+function svgIcon(viewBox: string, d: string, className: string): string {
+  return `<svg viewBox="${viewBox}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="${className}"><path d="${d}" pathLength="1"></path></svg>`;
 }
 
 /* ---------------- 引用、callout ---------------- */
@@ -501,7 +785,9 @@ function blockquote(cx: Context, src: string, node: SyntaxNode): string {
     const open = head.fold === "+" ? " open" : "";
     return `<details class="${classes}"${open}><summary class="callout-head">${badge}${title}</summary>${inner}</details>`;
   }
-  return `<div class="${classes}"><div class="callout-head">${badge}${title}</div>${inner}</div>`;
+  // 照编辑器排：徽章后面是源码里 `]` 后面那个空格（编辑器里标签行就是一行字）
+  const gap = cx.editor && title ? " " : "";
+  return `<div class="${classes}"><div class="callout-head">${badge}${gap}${title}</div>${inner}</div>`;
 }
 
 /* ---------------- 代码、图表、公式 ---------------- */
@@ -526,10 +812,24 @@ function fencedCode(cx: Context, src: string, node: SyntaxNode): string {
 }
 
 function codeBlock(cx: Context, code: string, language: string): string {
-  const label = language ? ` data-lang="${escapeHtml(language)}"` : "";
   const body =
     cx.options.highlight && language ? slot(cx, highlight(code, language)) : escapeHtml(code);
+  if (cx.editor) return editorCodeBlock(language, body);
+  const label = language ? ` data-lang="${escapeHtml(language)}"` : "";
   return `<pre class="code"${label}><code>${body}</code></pre>`;
+}
+
+/**
+ * 照编辑器排的代码块（光标不在里面时的样子，widgets.ts 的 CodeFenceWidget）：上下两道封口，开头那道是语言名和
+ * 「复制」；中间和编辑器的代码行一个样子（.cm-odea-code-block）。复制按钮带着 data-copy，白板上点它复制
+ */
+function editorCodeBlock(language: string, body: string): string {
+  const label = language ? `<span class="cm-odea-code-lang">${escapeHtml(language)}</span>` : "";
+  const copy = `<button type="button" class="cm-odea-code-copy" data-copy aria-label="复制代码">${svgIcon("0 0 20 20", COPY_ICON, "cm-odea-code-copy-icon")}<span>复制</span></button>`;
+  const open = `<div class="cm-odea-fence-block is-open is-settled"><div class="cm-odea-code-fence is-open">${label}${copy}</div></div>`;
+  const close =
+    '<div class="cm-odea-fence-block is-close is-settled"><div class="cm-odea-code-fence is-close"></div></div>';
+  return `${open}<div class="cm-odea-code-block odea-code-lines">${body}</div>${close}`;
 }
 
 /** 按语言上色：和编辑器同一套语言包、同一套类名（editor/codeHighlight.ts 的 tok-*） */
@@ -589,15 +889,27 @@ function math(cx: Context, tex: string, display: boolean): string {
     return `<${tag} class="${className} is-source">${escapeHtml(source)}</${tag}>`;
   }
   const work = (async () => {
-    const { loadKatex } = await import("@/editor/math");
+    const { loadKatex, prepareBreaks } = await import("@/editor/math");
     const katex = await loadKatex();
     // KaTeX 的输出是它自己生成的标记，用户原文都转义过（editor/math.ts 的 render 也是这么用的）
-    return katex.renderToString(tex, {
+    const html = katex.renderToString(tex, {
       displayMode: display,
       throwOnError: false,
       strict: "ignore",
     });
+    if (!cx.editor || !display) return html;
+    // 照编辑器排：块级公式按 `\\` 分好行（和编辑器的替身一样的结构）
+    const holder = document.createElement("div");
+    holder.innerHTML = html;
+    prepareBreaks(holder);
+    return holder.innerHTML;
   })();
+  if (cx.editor) {
+    // 照编辑器排：编辑器里公式的替身（editor/math.ts 的 MathWidget），块级的外面一层上下留 0.5em
+    return display
+      ? `<div class="cm-odea-math-block is-settled"><div class="cm-odea-math is-block">${slot(cx, work)}</div></div>`
+      : `<span class="cm-odea-math is-inline is-settled">${slot(cx, work)}</span>`;
+  }
   return `<${tag} class="${className}">${slot(cx, work)}</${tag}>`;
 }
 
@@ -605,9 +917,16 @@ function math(cx: Context, tex: string, display: boolean): string {
 
 function htmlBlock(cx: Context, source: string): string {
   if (HTML_COMMENT_RE.test(source)) return "";
+  // 照编辑器排：编辑器里每一块是一个替身（widgets.ts 的 HtmlBlockWidget），连没有标签可画的那一块（单独一行
+  // `</details>`）也是一个、里面是源码原文
+  const wrap = (html: string) =>
+    cx.editor
+      ? `<div class="cm-odea-html-widget-block is-settled"><div class="cm-odea-html-widget">${html}</div></div>`
+      : `<div class="html-block">${html}</div>`;
+  if (cx.editor && !hasRenderableHtml(source)) return wrap(escapeHtml(source));
   const holder = document.createElement("div");
   holder.append(sanitizeHtml(source));
-  if (!holder.childNodes.length) return "";
+  if (!holder.childNodes.length) return cx.editor ? wrap("") : "";
   // 块级 HTML 里的 <img>：先记下地址换成记号，序列化以后再换成解析好的（导出时嵌成 data:）
   const images = [...holder.querySelectorAll("img")];
   const sources = images.map((image) => rawSourceOf(image.getAttribute("src") ?? ""));
@@ -624,7 +943,7 @@ function htmlBlock(cx: Context, source: string): string {
     new RegExp(`@@img${cx.nonce}#(\\d+)@@`, "g"),
     (_, index: string) => imageSrc(cx, sources[Number(index)] ?? ""),
   );
-  return `<div class="html-block">${html}</div>`;
+  return wrap(html);
 }
 
 /** sanitizeHtml 在桌面端把本机路径转成了 asset 地址：还原成原来写的，交给 options.image 统一解析 */
@@ -675,11 +994,57 @@ function table(cx: Context, model: MarkdownTableModel | null, markdown: boolean)
         return `<${tag}${span}${style}${num}>${content}</${tag}>`;
       })
       .join("");
+  if (cx.editor) return editorTable(cx, model, markdown, grid, numeric);
   const head = `<thead><tr>${row(0)}</tr></thead>`;
   const body = model.rows.length
     ? `<tbody>${model.rows.map((_, index) => `<tr>${row(index + 1)}</tr>`).join("")}</tbody>`
     : "";
   return `<div class="table-wrap"><table>${head}${body}</table></div>`;
+}
+
+/**
+ * 照编辑器排的表格（tableWidget.ts 的 toDOM、paintCell）：外层留白、圆角的框、表格，格子上标着第一列、最后一行、
+ * 数字列（样子都在 globals.css 的 .cm-odea-table-*）。CSV / TSV 顶上那条标签栏没画
+ */
+function editorTable(
+  cx: Context,
+  model: MarkdownTableModel,
+  markdown: boolean,
+  grid: ReturnType<typeof resolveGrid>,
+  numeric: boolean[],
+): string {
+  const cells = [model.header, ...model.rows];
+  const row = (index: number) =>
+    grid
+      .cellsInRow(index)
+      .map((cell) => {
+        const tag = index === 0 ? "th" : "td";
+        const bottom = cell.row + cell.rowSpan === grid.rows;
+        const right = cell.col + cell.colSpan === grid.cols;
+        const flags: [string, boolean][] = [
+          ["is-num", cell.colSpan === 1 && !!numeric[cell.col]],
+          ["is-col0", cell.col === 0],
+          ["at-bottom", bottom],
+          ["at-tl", cell.row === 0 && cell.col === 0],
+          ["at-tr", cell.row === 0 && right],
+          ["at-bl", bottom && cell.col === 0],
+          ["at-br", bottom && right],
+        ];
+        const classes = flags.filter(([, on]) => on).map(([name]) => name);
+        const span =
+          (cell.colSpan > 1 ? ` colspan="${cell.colSpan}"` : "") +
+          (cell.rowSpan > 1 ? ` rowspan="${cell.rowSpan}"` : "");
+        const align = model.alignments[cell.col] ?? (numeric[cell.col] ? "right" : "left");
+        const raw = cells[cell.row]?.[cell.col] ?? "";
+        const content = markdown ? inlineText(cx, raw, false) : escapeHtml(raw);
+        const attrs = `${span}${classes.length ? ` class="${classes.join(" ")}"` : ""}`;
+        return `<${tag}${attrs} style="text-align: ${align}">${content}</${tag}>`;
+      })
+      .join("");
+  const head = `<thead><tr>${row(0)}</tr></thead>`;
+  const body = `<tbody>${model.rows.map((_, index) => `<tr>${row(index + 1)}</tr>`).join("")}</tbody>`;
+  const format = markdown ? "markdown" : "csv";
+  return `<div class="cm-odea-table-block is-settled"><div class="cm-odea-table-frame is-${format}"><div class="cm-odea-table-scroll"><table class="cm-odea-table-widget">${head}${body}</table></div></div></div>`;
 }
 
 /* ---------------- 目录、嵌入、脚注 ---------------- */
@@ -746,6 +1111,9 @@ function footnoteSection(cx: Context): string {
 }
 
 function footnoteRef(cx: Context, id: string): string {
+  // 照编辑器排：编辑器里每一处 `[^id]` 都换成写着 id 的上标徽章（widgets.ts 的 FootnoteWidget），有没有定义都一样；
+  // 定义留在原地（editorDefinitions），最后不另列
+  if (cx.editor) return `<sup class="cm-odea-footnote is-ref is-settled">${escapeHtml(id)}</sup>`;
   if (!cx.footnotes.has(id)) return escapeHtml(`[^${id}]`);
   let index = cx.cited.indexOf(id);
   const first = index < 0;
@@ -893,7 +1261,12 @@ function plainText(cx: Context, text: string, smart: boolean, prefixed = false):
     .map((line, index) =>
       decorateText(cx, index > 0 || prefixed ? line.replace(CONTAINER_PREFIX_RE, "") : line, smart),
     )
-    .join("<br>\n");
+    .join(lineBreak(cx));
+}
+
+/** 段落里的换行。照编辑器排时后面不跟换行符（break-spaces 下它也是一个换行） */
+function lineBreak(cx: Context): string {
+  return cx.editor ? "<br>" : "<br>\n";
 }
 
 /** 智能标点、缩写（在原文上找，找到的部分包 <abbr>，其余转义） */
@@ -956,7 +1329,7 @@ function inlineNode(cx: Context, src: string, node: SyntaxNode, state: InlineSta
       return escapeHtml(decodeEntity(text) ?? text);
     }
     case "HardBreak":
-      return "<br>\n";
+      return lineBreak(cx);
     case "Emoji": {
       const code = src.slice(node.from, node.to);
       // 动态表情：静态的页面里用它的 Unicode 替身
@@ -1053,7 +1426,7 @@ function image(cx: Context, src: string, node: SyntaxNode): string {
             resolved.then((value) => escapeHtml(value ?? "")),
           );
     const missing = `仓库里找不到「${target.name}」`;
-    return imgTag(source, target.alt, "", target.width, target.height, missing);
+    return imgTag(cx, source, target.alt, "", target.width, target.height, missing);
   }
   // 引用式的图片：定义可能不在这一段里（callout 的正文是单独排的），再到整篇的定义里找
   const reference = /^!\[([^\]]*)\]\[([^\]]*)\]$/.exec(raw);
@@ -1062,13 +1435,14 @@ function image(cx: Context, src: string, node: SyntaxNode): string {
     parseImage(src, raw) ??
     (defined ? parseImage(src, `![${reference![1]}](${defined.url})`) : null);
   if (!spec) return escapeHtml(raw);
-  return imgTag(imageSrc(cx, spec.source), spec.alt, spec.title, spec.width, spec.height);
+  return imgTag(cx, imageSrc(cx, spec.source), spec.alt, spec.title, spec.width, spec.height);
 }
 
 /**
  * source 是转义好的地址或者占位记号。空的（或者换上以后是空的）：renderStaticHtml 最后换成一个带字的框
  */
 function imgTag(
+  cx: Context,
   source: string,
   alt: string,
   title: string,
@@ -1079,6 +1453,13 @@ function imgTag(
   const size = (width ? ` width="${width}"` : "") + (height ? ` height="${height}"` : "");
   const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
   const label = escapeHtml(missing || alt || "图片");
+  if (cx.editor) {
+    // 照编辑器排：编辑器里的图片替身（widgets.ts 的 ImageWidget）—— 一块，上下各留 14px，宽写了的按写的
+    const style =
+      (width ? `width: ${width}px;` : "") +
+      (height ? `${width ? " " : ""}height: ${height}px;` : "");
+    return `<span class="cm-odea-image-frame is-settled"><span class="cm-odea-image-box"><img src="${source}" class="cm-odea-image is-loaded${width ? " has-size" : ""}" alt="${escapeHtml(alt)}"${titleAttr}${style ? ` style="${style}"` : ""} data-missing="${label}"></span></span>`;
+  }
   return `<img src="${source}" alt="${escapeHtml(alt)}"${titleAttr}${size} data-missing="${label}">`;
 }
 
@@ -1096,6 +1477,7 @@ function htmlTag(cx: Context, src: string, node: SyntaxNode, state: InlineState)
     const source = tag.attrs.src?.trim();
     if (!source || /^(?:javascript|vbscript):/i.test(source)) return "";
     return imgTag(
+      cx,
       imageSrc(cx, source),
       tag.attrs.alt ?? "",
       tag.attrs.title ?? "",

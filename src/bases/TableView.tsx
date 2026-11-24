@@ -1,5 +1,6 @@
 import { cn } from "@/lib/cn";
 import { usePaneWindow } from "@/lib/paneWindow";
+import { tip } from "@/lib/tooltip";
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -275,7 +276,7 @@ export function TableView({
               <button
                 type="button"
                 onClick={() => sortBy(raw)}
-                title={`按「${propLabel(config, raw)}」排序`}
+                {...tip(`按「${propLabel(config, raw)}」排序`, { name: false })}
                 className="flex h-full min-w-0 flex-1 items-center gap-1 px-2.5 text-left text-[12px] font-medium text-muted
                            transition-colors duration-[140ms] hover:bg-panel hover:text-ink"
               >

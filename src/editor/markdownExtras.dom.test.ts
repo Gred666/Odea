@@ -96,7 +96,7 @@ describe("renderInline", () => {
 
   it("renders links, wikilinks, escapes, entities and emoji", () => {
     expect(html("[官网](https://x.dev)")).toBe(
-      '<span class="cm-odea-link" data-href="https://x.dev" title="https://x.dev">官网</span>',
+      '<span class="cm-odea-link" data-href="https://x.dev" data-tip="https://x.dev" data-tip-side="top">官网</span>',
     );
     expect(html("[[目标|别名]]")).toBe(
       '<span class="cm-odea-wikilink" data-target="目标">别名</span>',

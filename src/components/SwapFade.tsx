@@ -129,6 +129,16 @@ function capture(node: HTMLElement): Snapshot | null {
     const copy = copies[index];
     if (copy) copy.value = field.value;
   });
+  // 画布克隆过去是空的（cloneNode 不带像素）：白板的网格、描边画在画布上，照原样抄一份
+  const canvases = node.querySelectorAll("canvas");
+  const canvasCopies = clone.querySelectorAll("canvas");
+  canvases.forEach((canvas, index) => {
+    const copy = canvasCopies[index];
+    if (!copy || !canvas.width || !canvas.height) return;
+    copy.width = canvas.width;
+    copy.height = canvas.height;
+    copy.getContext("2d")?.drawImage(canvas, 0, 0);
+  });
   // 克隆出来的 id 会和新内容撞车（#doc-top 是目录的锚点）
   clone.removeAttribute("id");
   for (const element of clone.querySelectorAll("[id]")) element.removeAttribute("id");

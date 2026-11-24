@@ -5,6 +5,7 @@ import { backend } from "@/data/backend";
 import { messageOf, useData } from "@/data/store";
 import { noteRef } from "@/data/types";
 import { cn } from "@/lib/cn";
+import { tip } from "@/lib/tooltip";
 import { announceProperties, loadCatalog, useCatalog } from "@/properties/store";
 import { KINDS, type Kind, isListKind, kindOfValue } from "@/properties/yaml";
 import {
@@ -268,7 +269,7 @@ export default function BaseView({ relPath }: { relPath: string }) {
                             if (event.key === "Enter") event.currentTarget.blur();
                             if (event.key === "Escape") setRenaming(null);
                           }}
-                          className="h-7 w-[140px] rounded-md border border-accent bg-canvas px-2 text-[13px] text-ink outline-none"
+                          className="h-7 w-[140px] rounded-sm border border-accent bg-canvas px-2 text-[13px] text-ink outline-none"
                         />
                       ) : (
                         <button
@@ -278,7 +279,7 @@ export default function BaseView({ relPath }: { relPath: string }) {
                           onClick={() => pick(index)}
                           onDoubleClick={() => config?.views.length && setRenaming(index)}
                           className={cn(
-                            "flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] transition-colors duration-[140ms]",
+                            "flex h-7 items-center gap-1.5 rounded-sm px-2 text-[13px] transition-colors duration-[140ms]",
                             active
                               ? "bg-raised text-ink"
                               : "text-muted hover:bg-raised/60 hover:text-ink",
@@ -295,7 +296,7 @@ export default function BaseView({ relPath }: { relPath: string }) {
                             <button
                               type="button"
                               aria-label={`「${item.name}」的更多操作`}
-                              className="grid h-7 w-6 place-items-center rounded-md text-faint hover:bg-raised hover:text-ink data-[state=open]:bg-raised"
+                              className="grid h-7 w-6 place-items-center rounded-sm text-faint hover:bg-raised hover:text-ink data-[state=open]:bg-raised"
                             >
                               <MoreHorizontal size={14} strokeWidth={2} />
                             </button>
@@ -341,9 +342,8 @@ export default function BaseView({ relPath }: { relPath: string }) {
                   trigger={
                     <button
                       type="button"
-                      aria-label="加一个视图"
-                      title="加一个视图"
-                      className="grid h-7 w-7 place-items-center rounded-md text-faint hover:bg-raised hover:text-ink data-[state=open]:bg-raised"
+                      {...tip("加一个视图")}
+                      className="grid h-7 w-7 place-items-center rounded-sm text-faint hover:bg-raised hover:text-ink data-[state=open]:bg-raised"
                     >
                       <Plus size={14} strokeWidth={2} />
                     </button>
@@ -402,7 +402,7 @@ export default function BaseView({ relPath }: { relPath: string }) {
                     base.clearError();
                     setProblem(null);
                   }}
-                  className="grid h-5 w-5 shrink-0 place-items-center rounded hover:bg-danger/10"
+                  className="grid h-5 w-5 shrink-0 place-items-center rounded-xs hover:bg-danger/10"
                 >
                   <X size={12} strokeWidth={2} />
                 </button>

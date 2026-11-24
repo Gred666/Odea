@@ -1,4 +1,5 @@
 import type { DocumentModel } from "@/data/types";
+import { tip } from "@/lib/tooltip";
 import { teamDocId, useTeam } from "@/team/store";
 import { PeerAvatar } from "./CollabDialog";
 
@@ -20,13 +21,12 @@ export function TeamPresence({ doc }: { doc: DocumentModel }) {
   return (
     <span
       data-team-presence
-      title={
-        remote === undefined
-          ? "正在连上他那边…"
-          : remote
-            ? "一起编辑：改动实时同步，他那边存盘"
-            : "一起编辑：改动实时同步，你这边存盘"
-      }
+      {...(remote === undefined
+        ? tip("正在连上他那边…", { name: false })
+        : tip("一起编辑", {
+            detail: remote ? "改动实时同步，他那边存盘" : "改动实时同步，你这边存盘",
+            name: false,
+          }))}
       className="-my-[5px] ml-auto flex h-[30px] shrink-0 items-center gap-2 px-2 text-[12px] text-muted"
     >
       <span className="flex -space-x-1.5">

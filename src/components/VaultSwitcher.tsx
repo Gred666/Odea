@@ -5,6 +5,7 @@ import { useTeam } from "@/data/team";
 import { type VaultEntry, launcherApi } from "@/launcher/api";
 import { cn } from "@/lib/cn";
 import { isTauri } from "@/lib/tauri";
+import { tip } from "@/lib/tooltip";
 import { installedPlugins } from "@/plugins/registry";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
@@ -22,7 +23,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /* ============================================================
-   列表栏底下的「仓库名 ⌄」（docs/仓库与启动器.md §3.2、§6；Obsidian 也放在这里）。
+   侧栏底下的「仓库名 ⌄」（docs/仓库与启动器.md §3.2、§6；Obsidian 也放在这里）。
 
    点开往上弹一个菜单：最近用过的别的仓库（点了在它自己的窗口里开，已经开着就提到前面）、
    打开别的仓库…（启动器）、开 / 关日程、转成逻辑目录 / 导出成真实文件夹（§7）、在文件夹中显示。
@@ -95,7 +96,7 @@ export function VaultSwitcher() {
     // 和右边正文底下的状态栏是同一条底带：分隔线下面正好 40 高、按钮 32 居中，仓库名和字数、
     // 日期落在同一条中线上（DocumentView 的 StatusBar 也是 40 高）。以前这里 53 高、状态栏 32 高，
     // 两边的字差了 10px
-    <div className="w-[300px] shrink-0 border-t border-r border-line-strong/60 px-3 py-1">
+    <div className="w-[300px] shrink-0 border-t border-line-strong/60 px-3 py-1">
       <DropdownMenu.Root
         modal={false}
         onOpenChange={(next) => {
@@ -107,14 +108,14 @@ export function VaultSwitcher() {
             type="button"
             onPointerEnter={refresh}
             onFocus={refresh}
-            title={root ?? undefined}
-            className="group flex h-8 w-full items-center gap-2 rounded-lg pr-2 pl-[6px] text-left outline-none
+            {...(root ? tip(root, { name: false }) : {})}
+            className="group flex h-8 w-full items-center gap-2 rounded-md pr-2 pl-[6px] text-left outline-none
                        transition-colors duration-[140ms] hover:bg-raised/55 focus-visible:ring-2
                        focus-visible:ring-accent/50 data-[state=open]:bg-raised/55"
           >
             <span
               aria-hidden="true"
-              className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-raised text-[12px]
+              className="grid h-5 w-5 shrink-0 place-items-center rounded-xs bg-raised text-[12px]
                          font-semibold text-muted"
             >
               {[...name][0]?.toUpperCase()}
@@ -148,12 +149,12 @@ export function VaultSwitcher() {
                     key={vault.path}
                     disabled={vault.missing}
                     onSelect={() => void launcherApi.open(vault.path).catch(fail)}
-                    title={vault.path}
+                    {...tip(vault.path, { name: false, side: "right" })}
                     className={cn(ITEM, "data-[disabled]:opacity-50")}
                   >
                     <span
                       aria-hidden="true"
-                      className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[5px] bg-raised
+                      className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-xs bg-raised
                                  text-[12px] font-semibold text-muted"
                     >
                       {[...vault.name][0]?.toUpperCase()}
@@ -237,7 +238,7 @@ export function VaultSwitcher() {
 }
 
 const ITEM =
-  "flex min-h-8 cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-body outline-none " +
+  "flex min-h-8 cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] text-body outline-none " +
   "transition-colors duration-[110ms] data-[highlighted]:bg-raised data-[highlighted]:text-ink";
 
 function MenuItem({

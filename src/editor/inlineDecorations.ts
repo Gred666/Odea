@@ -1,5 +1,6 @@
 import { FILE_EXTENSIONS, noteEmbedTarget } from "@/lib/embeds";
 import { MOD_KEY } from "@/lib/platform";
+import { tipAttributes } from "@/lib/tooltip";
 import { wikiFileTarget } from "@/lib/wikiFiles";
 import { syntaxTree } from "@codemirror/language";
 import { ChangeSet } from "@codemirror/state";
@@ -17,23 +18,17 @@ import { typoraBlockDecorations } from "./blockDecorations";
 import { type CalloutHead, calloutsVersion, parseCalloutHead } from "./callout";
 import {
   BLOCK_START_RE,
-  BULLET_GLYPHS,
   CALLOUT_LABEL_RE,
   DEFINITION_RE,
   type DecorationRange,
   FOOTNOTE_DEF_RE,
   FOOTNOTE_RE,
   HEADING_RE,
-  LIST_BULLET_WIDTH,
-  LIST_DIGIT_WIDTH,
-  LIST_ORDERED_WIDTH,
-  LIST_TASK_WIDTH,
   RULE_LINE_RE,
   SMART_GLYPHS,
   SMART_RE,
   freshness,
   knownWikiTitles,
-  listUnits,
   literalNodes,
   markFreshness,
   selectionTouches,
@@ -68,6 +63,14 @@ import { MathWidget } from "./math";
 import { revealRanges } from "./reveal";
 import { gapsChanged, tableCut } from "./tableGap";
 import {
+  BULLET_GLYPHS,
+  LIST_BULLET_WIDTH,
+  LIST_DIGIT_WIDTH,
+  LIST_ORDERED_WIDTH,
+  LIST_TASK_WIDTH,
+  listUnits,
+} from "./widgetShapes";
+import {
   AnimatedEmojiWidget,
   CalloutBadgeWidget,
   CodeInfoWidget,
@@ -92,9 +95,16 @@ export interface TyporaInlineState {
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/**
+ * 正文里的链接、双链：悬停出它指到哪（lib/tooltip.ts）。放在上面（和 hoverCard 一样，不挡接着要读的下一行）；
+ * 链接的字本来就看得见，不改它的无障碍名字
+ */
+const linkTip = (where: string) =>
+  tipAttributes(where, { detail: `${MOD_KEY}+点击打开`, side: "top", name: false });
+
 function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): TyporaInlineState {
   const { state } = view;
-  const fresh = freshness(changes);
+  const fresh = freshness(changes, state);
   const block = state.field(typoraBlockDecorations, false);
   const foldedLines = block?.foldedLines;
   const referenceLabels = block?.referenceLabels;
@@ -472,7 +482,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
       const href = safeHref(tag.attrs.href);
       if (href) {
         attributes["data-href"] = href;
-        attributes.title = `${href}\n${MOD_KEY}+点击打开`;
+        Object.assign(attributes, linkTip(href));
       }
     }
     if (tag.name === "abbr" && tag.attrs.title) {
@@ -850,11 +860,13 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
                 displayFrom,
                 node.to - 1,
                 missing ? "cm-odea-wikilink is-missing" : "cm-odea-wikilink",
-                {
-                  title: missing
-                    ? `还没有「${target.title}」这篇笔记\n${MOD_KEY}+点击新建`
-                    : `${where}\n${MOD_KEY}+点击打开`,
-                },
+                missing
+                  ? tipAttributes(`还没有「${target.title}」这篇笔记`, {
+                      detail: `${MOD_KEY}+点击新建`,
+                      side: "top",
+                      name: false,
+                    })
+                  : linkTip(where),
               );
               return false;
             }
@@ -864,12 +876,7 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
           }
 
           const url = linkTargetAt(state, node.from);
-          addMark(
-            node.from,
-            node.to,
-            "cm-odea-link",
-            url ? { title: `${url}\n${MOD_KEY}+点击打开` } : undefined,
-          );
+          addMark(node.from, node.to, "cm-odea-link", url ? linkTip(url) : undefined);
           return;
         }
 

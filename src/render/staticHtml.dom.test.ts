@@ -234,3 +234,104 @@ describe("静态渲染：块", () => {
     expect(html).toMatch(/^<div class="math-display"><span class="katex-display">/);
   });
 });
+
+describe("静态渲染：照编辑器的排法（白板的卡片）", () => {
+  const editor = (markdown: string, options: Partial<StaticOptions> = {}) =>
+    render(markdown, { layout: "editor", ...options });
+
+  it("turns blank lines into line-high blanks and leaves no newlines between blocks", async () => {
+    const html = await editor("一\n二\n\n\n三\n\n## 标题\n四");
+    expect(html).toBe(
+      '<p>一<br>二</p><div class="odea-blank"></div><div class="odea-blank"></div><p>三</p><div class="odea-blank"></div><h2 id="标题">标题</h2><p>四</p>',
+    );
+  });
+
+  it("draws list markers, numbers and task boxes like the editor's widgets", async () => {
+    const html = await editor("- 甲\n  - 子\n\n8. 八\n9. 九\n10. 十\n\n- [x] 做完\n- [ ] 没做");
+    expect(html).toContain(
+      '<ul class="odea-list"><li style="padding-left: calc(var(--odea-body-size) * 1.55); text-indent: calc(var(--odea-body-size) * -1.55)"><span class="cm-odea-list-marker is-settled"',
+    );
+    // 子项的圆点换一种，编号按最大的位数定宽
+    expect(html).toContain(">◦</span>子");
+    expect(html).toContain('style="width: calc(var(--odea-body-size) * 2.12)">10.</span>');
+    // 勾选框带着 `[` 在这一段里的位置
+    const tick = html.indexOf('data-task="');
+    expect(html.slice(tick, tick + 20)).toMatch(/data-task="\d+"/);
+    expect(html).toContain(
+      'class="cm-odea-task is-checked is-settled" role="checkbox" aria-checked="true"',
+    );
+  });
+
+  it("draws code blocks, rules, tables and images as the editor's widgets", async () => {
+    const html = await editor(
+      "```js\nconst a = 1;\n```\n\n---\n\n| 篇 | 秒 |\n|---|---|\n| 1 | 2 |\n\n![图](a.png)",
+    );
+    expect(html).toContain(
+      '<div class="cm-odea-code-fence is-open"><span class="cm-odea-code-lang">js</span><button type="button" class="cm-odea-code-copy" data-copy',
+    );
+    expect(html).toContain('<div class="cm-odea-code-block odea-code-lines">const a = 1;</div>');
+    expect(html).toContain('<div class="cm-odea-hr is-settled"></div>');
+    expect(html).toContain('<table class="cm-odea-table-widget">');
+    expect(html).toContain(
+      'class="is-num is-col0 at-bottom at-bl" style="text-align: right">1</td>',
+    );
+    expect(html).toContain(
+      '<p class="odea-image-line"><span class="cm-odea-image-frame is-settled">',
+    );
+  });
+
+  it("lets long unbreakable runs break anywhere, across inline marks but not into code widgets' labels", async () => {
+    const run = "a".repeat(30);
+    expect(await editor(`前 ${run} 后`)).toBe(
+      `<p>前 <span class="cm-odea-long-run">${run}</span> 后</p>`,
+    );
+    // 跨过加粗也是一串
+    expect(await editor(`**${"b".repeat(12)}**${"c".repeat(12)}`)).toBe(
+      `<p><strong><span class="cm-odea-long-run">${"b".repeat(12)}</span></strong><span class="cm-odea-long-run">${"c".repeat(12)}</span></p>`,
+    );
+    // 短的不管，换行断开
+    expect(await editor(`${"d".repeat(20)}\n${"d".repeat(20)}`)).not.toContain("long-run");
+  });
+
+  it("keeps footnote and abbreviation definitions in place, with the editor's badges", async () => {
+    const html = await editor(
+      "正文[^1]，没定义的[^x]。\n\n前一行\n[^1]: 脚注**里**的字。\n*[HTML]: Hyper Text\n后一行",
+    );
+    expect(html).toBe(
+      '<p>正文<sup class="cm-odea-footnote is-ref is-settled">1</sup>，没定义的<sup class="cm-odea-footnote is-ref is-settled">x</sup>。</p>' +
+        '<div class="odea-blank"></div><p>前一行</p>' +
+        '<p class="cm-odea-footnote-def"><span class="cm-odea-footnote is-def is-settled">1</span>脚注<strong>里</strong>的字。</p>' +
+        '<p class="cm-odea-abbr-def">*[HTML]: Hyper Text</p><p>后一行</p>',
+    );
+    // 单独一段的 `[^1]: …` 解析出来是引用定义：编辑器里照样是一行徽章；真的引用定义是淡淡的源码
+    expect(await editor("[^1]: 单独的一条\n\n[a]: https://example.com")).toBe(
+      '<p class="cm-odea-footnote-def"><span class="cm-odea-footnote is-def is-settled">1</span>单独的一条</p>' +
+        '<div class="odea-blank"></div><p><span class="cm-odea-reference">[a] <span class="cm-odea-link">https://example.com</span></span></p>',
+    );
+    // 文档的排法照旧：定义收到最后、编号
+    const document = await render("正文[^1]。\n\n[^1]: 脚注。");
+    expect(document).toContain('<section class="footnotes">');
+    expect(document).not.toContain("cm-odea-footnote");
+  });
+
+  it("draws every block of HTML and every block comment as the editor's stand-ins", async () => {
+    const html = await editor(
+      "<details><summary>收起的</summary>\n\n里面\n\n</details>\n\n<!-- 注 -->",
+    );
+    expect(html).toBe(
+      '<div class="cm-odea-html-widget-block is-settled"><div class="cm-odea-html-widget"><details><summary>收起的</summary></details></div></div>' +
+        '<div class="odea-blank"></div><p>里面</p><div class="odea-blank"></div>' +
+        // 单独一行的 `</details>`：没有标签可画，编辑器里那个替身写着源码
+        '<div class="cm-odea-html-widget-block is-settled"><div class="cm-odea-html-widget">&lt;/details&gt;</div></div>' +
+        '<div class="odea-blank"></div><div class="cm-odea-comment-block is-settled"><span class="cm-odea-comment">注释</span></div>',
+    );
+    // 文档的排法照旧
+    expect(await render("<details><summary>收起的</summary>\n\n</details>")).toBe(
+      '<div class="html-block"><details><summary>收起的</summary></details></div>',
+    );
+  });
+
+  it("keeps the document layout when not asked", async () => {
+    expect(await render("一\n\n二")).toBe("<p>一</p>\n<p>二</p>");
+  });
+});

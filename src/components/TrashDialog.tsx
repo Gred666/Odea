@@ -147,7 +147,7 @@ export function TrashDialog() {
                   type="button"
                   aria-label="关闭"
                   onClick={close}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted
                              transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />
@@ -379,8 +379,8 @@ function RowButton({
       onClick={onClick}
       className={
         primary
-          ? "h-7 rounded-md bg-accent px-2.5 text-[13px] font-medium text-accent-ink transition-colors duration-[120ms] hover:bg-accent-hover disabled:opacity-50"
-          : "h-7 rounded-md px-2.5 text-[13px] text-muted ring-1 ring-line-strong transition-colors duration-[120ms] hover:bg-raised hover:text-ink disabled:opacity-50"
+          ? "h-7 rounded-sm bg-accent px-2.5 text-[13px] font-medium text-accent-ink transition-colors duration-[120ms] hover:bg-accent-hover disabled:opacity-50"
+          : "h-7 rounded-sm px-2.5 text-[13px] text-muted ring-1 ring-line-strong transition-colors duration-[120ms] hover:bg-raised hover:text-ink disabled:opacity-50"
       }
     >
       {children}

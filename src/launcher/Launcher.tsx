@@ -267,7 +267,6 @@ function VaultRow({
         type="button"
         disabled={disabled}
         onClick={onOpen}
-        title={vault.missing ? `找不到这个文件夹了：${vault.path}` : vault.path}
         className="min-w-0 flex-1 px-3 py-2.5 text-left disabled:cursor-default"
       >
         <span className="flex items-center gap-2">
@@ -290,7 +289,9 @@ function VaultRow({
           {vault.open && <Tag>已打开</Tag>}
           {vault.missing && <Tag>找不到</Tag>}
         </span>
-        <span className="mt-0.5 block truncate text-[12px] text-muted">{vault.path}</span>
+        <span className="mt-0.5 block truncate text-[12px] text-muted" data-tip-overflow>
+          {vault.path}
+        </span>
       </button>
       <div className="pr-1.5">
         <ActionMenu
@@ -305,7 +306,7 @@ function VaultRow({
               type="button"
               aria-label="更多操作"
               className={cn(
-                "grid h-7 w-7 place-items-center rounded-md transition-colors duration-[120ms]",
+                "grid h-7 w-7 place-items-center rounded-sm transition-colors duration-[120ms]",
                 "hover:bg-canvas hover:text-ink",
                 menuOpen ? "bg-canvas text-ink" : "text-faint",
               )}
@@ -321,7 +322,7 @@ function VaultRow({
 
 function Tag({ children }: { children: ReactNode }) {
   return (
-    <span className="shrink-0 rounded px-1.5 py-px text-[11px] leading-[1.5] text-muted ring-1 ring-line-strong">
+    <span className="shrink-0 rounded-xs px-1.5 py-px text-[11px] leading-[1.5] text-muted ring-1 ring-line-strong">
       {children}
     </span>
   );
@@ -461,7 +462,7 @@ function CreatePanel({
         })}
       </div>
       <div className="mt-5 flex items-center gap-3">
-        <p className="min-w-0 flex-1 truncate text-[12px] text-muted" title={target}>
+        <p className="min-w-0 flex-1 truncate text-[12px] text-muted" data-tip-overflow>
           {target ? `会建在 ${target}` : ""}
         </p>
         <Button type="submit" primary disabled={busy || !target}>

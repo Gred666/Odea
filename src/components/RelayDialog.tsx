@@ -93,7 +93,7 @@ export function RelayDialog() {
                   type="button"
                   aria-label="关闭"
                   onClick={close}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted
                              transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />
@@ -175,7 +175,7 @@ function DeviceId() {
         <p className="text-[12px] text-muted">
           这台设备的公钥（中继只放行固定几台时，填进 access.allowlist）
         </p>
-        <p className="truncate font-mono text-[12px] text-body" title={deviceId}>
+        <p className="truncate font-mono text-[12px] text-body" data-tip-overflow>
           {deviceId}
         </p>
       </div>
@@ -264,10 +264,13 @@ function RelayRow({ relay }: { relay: RelayInfo }) {
         {teamActive && (
           <BannerButton
             onClick={() => void shareTeamRelay(relay.url, !forTeam)}
-            title={
+            hint={
               forTeam
-                ? "团队仓库里写着这台：成员打开时会问用不用。点一下拿出来"
-                : "写进这个团队仓库：成员打开时会问一句用不用（中继码里带着令牌，成员都能用）"
+                ? { text: "团队仓库里写着这台", detail: "成员打开时会问用不用。点一下拿出来" }
+                : {
+                    text: "写进这个团队仓库",
+                    detail: "成员打开时会问一句用不用（中继码里带着令牌，成员都能用）",
+                  }
             }
           >
             {forTeam && <Check size={12} strokeWidth={2.2} />}

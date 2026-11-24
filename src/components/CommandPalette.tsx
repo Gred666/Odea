@@ -1,4 +1,12 @@
 import { openDocument } from "@/app/navigate";
+import {
+  creatableViews,
+  createNoteAs,
+  focusedTabOf,
+  shownView,
+  toggleNoteView,
+  viewShortcut,
+} from "@/app/noteViews";
 import { type PaletteDialog, hasListColumn, useApp } from "@/app/store";
 import { DEFAULT_BODY_SIZE, MEASURES, stepBodySize } from "@/app/typography";
 import { createBase } from "@/bases/create";
@@ -29,9 +37,11 @@ import { type Range, matchKeywords, matchText, snippetAround } from "@/lib/palet
 import { addWindowListener } from "@/lib/paneWindow";
 import { isMac } from "@/lib/platform";
 import {
+  type NoteView,
   type PaletteCommand,
   documentType,
   installedPlugins,
+  noteViewsOf,
   pluginNavItems,
 } from "@/plugins/registry";
 import { runScriptedCommand, scriptedCommands } from "@/plugins/scripted";
@@ -189,6 +199,11 @@ export function CommandPalette({
   // 这个仓库开着哪些插件（docs/仓库与启动器.md §6）：没开日程的话没有今日TODO、目标、日历
   const plugins = useData((s) => s.layout.plugins);
   const setPlugin = useData((s) => s.setPlugin);
+  // 正在写的那个标签用哪种摆法看（白板，docs/白板.md §13.4）：「以白板查看」「以文档查看」看它
+  const tabView = useApp((s) => {
+    const tab = focusedTabOf(s);
+    return tab ? (shownView(tab, plugins)?.id ?? "") : null;
+  });
   const pluginCommands = usePluginCommands(plugins);
   // 带脚本的插件（L1）声明的命令：还没启动的也列，点了才起（plugins/scripted.ts）
   const installedExtensions = useInstalled((s) => s.plugins);
@@ -332,6 +347,19 @@ export function CommandPalette({
         keywords: "new note 创建 添加 新笔记 写",
         run: () => void createNoteNamed(noteFolder),
       },
+      // 新建一篇就用别的摆法（白板，docs/白板.md §13.4）：开着的插件给的
+      ...creatableViews(plugins).map(
+        (view) =>
+          ({
+            id: `new-${view.id}`,
+            group: "操作",
+            icon: view.icon,
+            label: view.create!.label,
+            hint: here,
+            keywords: view.create!.keywords,
+            run: () => void createNoteIn(view, noteFolder),
+          }) satisfies Item,
+      ),
       {
         id: "find-in-vault",
         group: "操作",
@@ -371,6 +399,22 @@ export function CommandPalette({
               keywords: "unfold expand 展开 标题 全部",
               run: () => runEditorCommand("unfold-all"),
             } satisfies Item,
+            // 换摆法（插件的 noteViews）：只有笔记区、弹出窗口里的笔记标签能换
+            ...(docTarget.type === NOTE && tabView !== null
+              ? noteViewsOf(plugins).map((view) => {
+                  const shown = tabView === view.id;
+                  const shortcut = viewShortcut(view);
+                  return {
+                    id: `view-${view.id}`,
+                    group: "操作",
+                    icon: shown ? FileText : view.icon,
+                    label: shown ? "以文档查看" : `以${view.label}查看`,
+                    hint: shortcut,
+                    keywords: `${view.keywords} document 文档 视图 摆法 切换 view`,
+                    run: () => void toggleNoteView(view),
+                  } satisfies Item;
+                })
+              : []),
             {
               id: "history-current",
               group: "操作",
@@ -495,7 +539,7 @@ export function CommandPalette({
             run: () => setMeasure(option.id),
           }) satisfies Item,
       ),
-      // 今日TODO、目标没有那一栏：那两页不给这一条（和正文底下状态栏左端的开关一样）
+      // 今日TODO、目标没有那一栏：那两页不给这一条（和刘海底下、侧栏右边缘的两个把手一样，docs/边栏.md §5.3.1）
       ...(hasListColumn(workspace)
         ? [
             {
@@ -542,7 +586,7 @@ export function CommandPalette({
         icon: archiveOn ? ArchiveX : Archive,
         label: archiveOn ? "关闭归档" : "启用归档",
         hint: archiveOn
-          ? "窄栏上不再有归档，「归档」文件夹里的笔记回到文件树"
+          ? "左上角的导航里不再有归档，「归档」文件夹里的笔记回到文件树"
           : "不用的旧笔记挪进「归档」文件夹，不占文件树；和日程无关",
         keywords: "archive 归档 存档 旧笔记 启用 开启 关闭",
         run: () => void setArchive(!archiveOn),
@@ -916,6 +960,7 @@ export function CommandPalette({
     setPanelCollapsed,
     plugins,
     setPlugin,
+    tabView,
     pluginCommands,
     scriptedItems,
     archiveOn,
@@ -1142,7 +1187,7 @@ export function CommandPalette({
               // overflow-clip 而不是 hidden：hidden 还是滚动容器，展开途中键盘走到还没
               // 露出来的那一项，scrollIntoView 会把整块内容卷上去
               className="pointer-events-auto relative w-[520px] max-w-[calc(100vw-48px)]
-                       overflow-clip rounded-2xl bg-canvas shadow-modal ring-1 ring-line-strong"
+                       overflow-clip rounded-xl bg-canvas shadow-modal ring-1 ring-line-strong"
               onKeyDown={(e) => {
                 // 输入法选字时的回车、上下键是在选字
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -1213,14 +1258,14 @@ export function CommandPalette({
                           onMouseMove={() => setCursor(i)}
                           onClick={() => execute(item)}
                           className={cn(
-                            "relative flex w-full items-center gap-2.5 rounded-lg px-2.5 text-left",
+                            "relative flex w-full items-center gap-2.5 rounded-md px-2.5 text-left",
                             item.snippet ? "py-[7px]" : "py-2",
                           )}
                         >
                           {active && (
                             <motion.span
                               layoutId="palette-cursor"
-                              className="absolute inset-0 rounded-lg bg-accent-wash"
+                              className="absolute inset-0 rounded-md bg-accent-wash"
                               transition={spring.snappy}
                             />
                           )}
@@ -1363,6 +1408,14 @@ async function createNoteNamed(folder: string, title?: string) {
   openDocument(noteRef(id));
 }
 
+/** 用这种摆法新建一篇（「新建白板」），放在列表栏现在所在的文件夹，开出来，焦点给它 */
+async function createNoteIn(view: NoteView, folder: string) {
+  const id = await createNoteAs(view, folder);
+  if (!id) return;
+  useApp.getState().setFocusRequest({ docKey: `note-${id}`, at: "body" });
+  openDocument(noteRef(id));
+}
+
 /** 命中的字标成强调色（不加底色：一排高亮块太吵） */
 function Marked({ text, ranges }: { text: string; ranges?: Range[] }) {
   if (!ranges?.length) return <>{text}</>;
@@ -1389,7 +1442,7 @@ export function KeyHint({ keys, label }: { keys: (string | LucideIcon)[]; label:
         <kbd
           // biome-ignore lint/suspicious/noArrayIndexKey: 固定的一两个键，不会重排
           key={index}
-          className="grid h-[18px] min-w-[18px] place-items-center rounded border border-line-strong px-1
+          className="grid h-[18px] min-w-[18px] place-items-center rounded-xs border border-line-strong px-1
                      font-sans text-[11px] leading-none text-muted"
         >
           {typeof Key === "string" ? Key : <Key size={12} strokeWidth={2.2} aria-hidden="true" />}

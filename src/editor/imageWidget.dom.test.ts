@@ -162,7 +162,9 @@ describe("Obsidian 的 ![[图.png]]", () => {
 
   it("says so when the vault has no such file", () => {
     const { parent } = mountWiki("![[没有.png]]\n\n后");
-    expect(imageOf(parent)?.title).toBe("仓库里找不到「没有.png」");
+    // 悬停提示（lib/tooltip.ts），不是原生 title
+    expect(imageOf(parent)?.dataset.tip).toBe("仓库里找不到「没有.png」");
+    expect(imageOf(parent)?.hasAttribute("title")).toBe(false);
   });
 
   it("writes a new width back in the same syntax", () => {

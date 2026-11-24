@@ -1,4 +1,5 @@
 import { cn } from "@/lib/cn";
+import { tip } from "@/lib/tooltip";
 import { AlertTriangle } from "lucide-react";
 import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from "react";
 import { version } from "../../package.json";
@@ -9,7 +10,8 @@ import { version } from "../../package.json";
 
    - window：每种窗口的根上一个（boot/mount.tsx），整个窗口换成「出错了」
    - block：一块区域（列表栏、正文的每个窗格）：这一块出错了 + 错误 + 重试、复制错误信息
-   - compact：窄栏那么窄的地方：一个能点的提示图标，点了重试
+   - compact：左侧 chrome（刘海 + 侧栏）整块出错时：左上角一个能点的提示图标，点了重试
+     （64 宽的那一条是窄栏时代留下的尺寸；2026-11-20 起窄栏换成了刘海，docs/边栏.md）
    - none：浮在上面的（提示条、对话框、弹出窗口、插件的副作用）：不画东西，交给 onError 弹错误提示条。
      它们开没开着记在好几个 store 里，没法统一给 resetKey：等用户下一次点、按键时再试（最多 NONE_RETRIES 次，
      一直坏着的不会每按一个键就弹一次）
@@ -117,7 +119,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <button
               type="button"
               onClick={this.reset}
-              title={`${area}出错了：${error.message}。点一下重试`}
+              {...tip(`${area}出错了`, { detail: `${error.message}。点一下重试`, name: false })}
               aria-label={`${area}出错了，点一下重试`}
               className="grid h-9 w-9 place-items-center rounded-lg text-danger transition-colors
                          duration-[140ms] hover:bg-raised"
@@ -137,7 +139,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <p className="mt-2.5 text-[14px] font-semibold text-ink">{area}出错了</p>
               <p
                 className="mt-1 line-clamp-3 break-all text-[12px] leading-[1.6] text-muted"
-                title={error.message}
+                data-tip-overflow
               >
                 {error.message}
               </p>

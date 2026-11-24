@@ -2,6 +2,8 @@ import { openDocument } from "@/app/navigate";
 import { useData } from "@/data/store";
 import { noteRef } from "@/data/types";
 import { cn } from "@/lib/cn";
+import { MOD_KEY } from "@/lib/platform";
+import { tip } from "@/lib/tooltip";
 import { describeDate } from "@/properties/PropertiesPanel";
 import { Check } from "lucide-react";
 import { BDate, BDuration, BFile, BLink, BObject, type Value, formatDate, toText } from "./expr";
@@ -31,7 +33,7 @@ function dateLabel(value: BDate): string {
 }
 
 const CHIP =
-  "inline-flex h-[22px] max-w-full shrink-0 items-center truncate rounded-md bg-raised/70 px-1.5 text-[12px] text-body";
+  "inline-flex h-[22px] max-w-full shrink-0 items-center truncate rounded-sm bg-raised/70 px-1.5 text-[12px] text-body";
 
 export function ValueView({
   value,
@@ -44,7 +46,7 @@ export function ValueView({
 }) {
   if (error) {
     return (
-      <span title={error} className={cn("text-faint", className)}>
+      <span {...tip(error, { name: false })} className={cn("text-faint", className)}>
         —
       </span>
     );
@@ -56,7 +58,7 @@ export function ValueView({
         role="img"
         aria-label={value ? "是" : "否"}
         className={cn(
-          "grid h-4 w-4 shrink-0 place-items-center rounded-[4px] border",
+          "grid h-4 w-4 shrink-0 place-items-center rounded-xs border",
           value ? "border-accent bg-accent text-accent-ink" : "border-faint",
           className,
         )}
@@ -70,7 +72,10 @@ export function ValueView({
   }
   if (value instanceof BDate) {
     return (
-      <span className={cn("truncate tabular-nums", className)} title={toText(value)}>
+      <span
+        className={cn("truncate tabular-nums", className)}
+        {...tip(toText(value), { name: false })}
+      >
         {dateLabel(value)}
       </span>
     );
@@ -82,7 +87,7 @@ export function ValueView({
       <button
         type="button"
         tabIndex={-1}
-        title={`${title}（点了打开，Ctrl + 点开在新标签）`}
+        {...tip(title, { detail: `点了打开，${MOD_KEY} + 点开在新标签`, name: false })}
         onClick={(event) => {
           event.stopPropagation();
           openByTitle(title, event.ctrlKey || event.metaKey);
@@ -115,7 +120,7 @@ export function ValueView({
     return <span className={cn("truncate", className)}>{toText(value)}</span>;
   }
   return (
-    <span className={cn("truncate", className)} title={value.length > 24 ? value : undefined}>
+    <span className={cn("truncate", className)} data-tip-overflow>
       {value}
     </span>
   );

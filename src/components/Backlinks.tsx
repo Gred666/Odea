@@ -4,6 +4,7 @@ import { useData } from "@/data/store";
 import { type Backlink, NOTE } from "@/data/types";
 import { cn } from "@/lib/cn";
 import { tween } from "@/lib/motion";
+import { tip } from "@/lib/tooltip";
 import { sameTitle, splitWikiSegments, wikiDisplayText, wikiTargetTitle } from "@/lib/wikilinks";
 import { documentType } from "@/plugins/registry";
 import { FileText, Link2 } from "lucide-react";
@@ -65,7 +66,7 @@ export function Backlinks({ noteId, title }: { noteId: string; title: string }) 
       <div className="mb-2.5 flex items-center gap-2">
         <Link2 size={14} strokeWidth={2} className="text-faint" />
         <h2 className="text-[12px] font-semibold tracking-[0.04em] text-muted">反向链接</h2>
-        <span className="rounded-full bg-raised px-1.5 text-[11px] leading-[17px] text-muted tabular-nums">
+        <span className="rounded-capsule bg-raised px-1.5 text-[11px] leading-[17px] text-muted tabular-nums">
           {links.length}
         </span>
       </div>
@@ -109,7 +110,7 @@ function BacklinkCard({ link, title }: { link: Backlink; title: string }) {
           key={line.line}
           type="button"
           onClick={() => open(line.line + 1)}
-          title="打开并跳到这一行"
+          {...tip("打开并跳到这一行", { name: false })}
           className="block w-full rounded-md px-2 py-1 pl-[29px] text-left text-[13px] leading-[1.6]
                      text-muted transition-colors duration-[140ms] hover:bg-raised/60 hover:text-body"
         >
@@ -135,7 +136,7 @@ function LineText({ text, title }: { text: string; title: string }) {
             // biome-ignore lint/suspicious/noArrayIndexKey: 同上
             key={index}
             className={cn(
-              "rounded-[4px] px-1 py-px",
+              "rounded-xs px-1 py-px",
               sameTitle(wikiTargetTitle(part.inner), title)
                 ? "bg-accent-wash text-accent"
                 : "bg-raised text-body",

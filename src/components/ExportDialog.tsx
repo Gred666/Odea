@@ -118,7 +118,7 @@ export function ExportDialog() {
                   type="button"
                   aria-label="关闭"
                   onClick={close}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted
                              transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />
@@ -405,7 +405,7 @@ function PageSetupFields({
               // 按下不抢输入框的焦点：插在光标那里
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => insert(token)}
-              className="rounded border border-line-strong px-1.5 py-px text-[12px] text-body
+              className="rounded-xs border border-line-strong px-1.5 py-px text-[12px] text-body
                          transition-colors duration-[120ms] hover:bg-raised"
             >
               {token}
@@ -452,12 +452,12 @@ function PaperPreview({ setup, title }: { setup: PageSetup; title: string }) {
           className="absolute flex flex-col gap-[5px] overflow-hidden"
           style={{ top: px(top), right: px(right), bottom: px(bottom), left: px(left) }}
         >
-          <span className="h-[5px] w-2/3 rounded-sm bg-[#d6d6ce]" />
+          <span className="h-[5px] w-2/3 rounded-capsule bg-[#d6d6ce]" />
           {Array.from({ length: 40 }, (_, index) => (
             <span
               // biome-ignore lint/suspicious/noArrayIndexKey: 样张上一排排灰条，没有身份
               key={index}
-              className="h-[3px] shrink-0 rounded-sm bg-[#ececE6]"
+              className="h-[3px] shrink-0 rounded-capsule bg-[#ececE6]"
               style={{ width: index % 6 === 5 ? "55%" : "100%" }}
             />
           ))}

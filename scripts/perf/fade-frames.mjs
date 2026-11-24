@@ -2,6 +2,7 @@
 //
 //   pnpm dev                                          # 先把开发服务器开着
 //   node scripts/perf/fade-frames.mjs [地址] [场景]   # 默认 http://localhost:1420/、image
+//   node scripts/perf/fade-frames.mjs [地址] [场景] --dpr 1.25   # 换成真的 1.25 倍屏（--force-device-scale-factor 起）
 //
 // 1.5 倍屏无头 Chrome，往当前笔记里放一段正文，鼠标移上去让悬停控件淡入，
 // 动画放慢 10 倍，每 ~100ms 截一张控件那一块，和最终帧逐像素比。
@@ -12,7 +13,12 @@
 // 准备（setup）、触发（trigger，页面里跑的 JS），以及截多久（capture）、最终帧再等多久（settle）。
 import { launch, sleep } from "./cdp.mjs";
 
-const URL = process.argv[2] ?? "http://localhost:1420/";
+const ARGS = process.argv.slice(2);
+// 默认是 DevTools 模拟的 1.5 倍屏（排版按 1 倍算、截图重采样；找平台不受影响）。
+// --dpr 给了就用 --force-device-scale-factor 起，排版、对齐整物理像素都是真的（VERIFICATION.md「验证的坑」）
+const DPR_AT = ARGS.indexOf("--dpr");
+const DPR = DPR_AT >= 0 ? Number(ARGS.splice(DPR_AT, 2)[1]) : null;
+const URL = ARGS[0] ?? "http://localhost:1420/";
 const SCENES = {
   /** 图片右上角的悬停按钮 */
   image: {
@@ -249,19 +255,72 @@ SCENES["mediabar-out"] = {
   settle: 600,
 };
 
-const SCENE = SCENES[process.argv[3] ?? "image"];
+/**
+ * 悬停提示（lib/tooltip.ts，docs/悬停提示.md §6 第 3 条）：截的是终点那一层字（setup 先用合成的指针事件
+ * 演一遍量出位置，放一个看不见的 #__fade-clip 当截图框，等它收掉、冷下来）。
+ * from 给了就先让它的提示出来停稳：真鼠标移到 to 的时候是「挨着的按钮之间换目标」，底色滑过去、
+ * 旧字原地淡出、新字原地淡入 —— 字的那一块要一路收敛到最终帧，不能有平台、最后一帧不能跳
+ */
+const tooltipSetup = (from, to) => `(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const ev = (type, el, rel = null) =>
+    el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: 'mouse', relatedTarget: rel }));
+  const pick = (label) => document.querySelector('[data-tip="' + label + '"]');
+  const root = document.querySelector('.odea-tip');
+  const until = async (state) => { while (root.dataset.state !== state) await wait(16); };
+  const to = pick(${JSON.stringify(to)});
+  ev('pointerover', to);
+  await until('shown');
+  await wait(400);
+  const r = root.querySelector('.odea-tip-txt:last-child').getBoundingClientRect();
+  ev('pointerout', to, document.body);
+  await until('hidden');
+  await wait(600);
+  const clip = document.createElement('div');
+  clip.id = '__fade-clip';
+  Object.assign(clip.style, { position: 'fixed', left: r.left + 'px', top: r.top + 'px',
+    width: r.width + 'px', height: r.height + 'px', pointerEvents: 'none' });
+  document.body.append(clip);
+  ${
+    from
+      ? `const from = pick(${JSON.stringify(from)});
+  ev('pointerover', from);
+  await until('shown');
+  await wait(400);`
+      : ""
+  }
+})()`;
+SCENES.tooltip = {
+  setup: tooltipSetup(null, "今日TODO"),
+  target: "#__fade-clip",
+  hover: '[data-tip="今日TODO"]',
+  pad: { top: 2, right: 2, bottom: 2, left: 2 },
+  capture: 2600,
+  settle: 800,
+};
+SCENES["tooltip-glide"] = {
+  setup: tooltipSetup("文件", "今日TODO"),
+  target: "#__fade-clip",
+  hover: '[data-tip="今日TODO"]',
+  pad: { top: 2, right: 2, bottom: 2, left: 2 },
+  capture: 2600,
+  settle: 800,
+};
+
+const SCENE = SCENES[ARGS[1] ?? "image"];
 if (!SCENE) {
-  throw new Error(`没有这个场景：${process.argv[3]}（有 ${Object.keys(SCENES).join(" / ")}）`);
+  throw new Error(`没有这个场景：${ARGS[1]}（有 ${Object.keys(SCENES).join(" / ")}）`);
 }
 
-const page = await launch(9345);
+const page = await launch(9345, DPR ? [`--force-device-scale-factor=${DPR}`] : []);
 const { send, evaluate } = page;
 try {
   await send("Page.enable");
   await send("Emulation.setDeviceMetricsOverride", {
     width: 1280,
     height: 860,
-    deviceScaleFactor: 1.5,
+    // 0：不模拟，用起 Chrome 时给的真倍率
+    deviceScaleFactor: DPR ? 0 : 1.5,
     mobile: false,
   });
   await send("Page.navigate", { url: SCENE.page ? new globalThis.URL(SCENE.page, URL).href : URL });
@@ -344,7 +403,10 @@ try {
     return out;
   })()`);
 
-  console.log(`${SCENE.target}：${clip.width}×${clip.height} CSS px，1.5 倍屏，动画放慢 10 倍`);
+  const ratio = await evaluate("devicePixelRatio");
+  console.log(
+    `${SCENE.target}：${clip.width}×${clip.height} CSS px，${ratio} 倍屏（${DPR ? "真的" : "模拟的"}），动画放慢 10 倍`,
+  );
   console.log("动画时间(ms)  平均差  最大差  差得明显的像素");
   frames.forEach((frame, index) => {
     const { mean, max, changed } = diffs[index];
@@ -354,8 +416,10 @@ try {
   });
   // 平台：连着几帧一模一样、又不等于最终帧 —— 画面停住了，结束那一帧还会再变一下
   const last = diffs.findLastIndex((d) => d.mean > 0);
+  // 动画还没开始的那几帧（悬停提示第一次要停 500ms，这段是真时间、不放慢）一样是正常的，不算平台
+  const moved = diffs.findIndex((d, i) => i > 0 && d.mean !== diffs[i - 1].mean);
   const plateau = diffs
-    .slice(0, last + 1)
+    .slice(Math.max(0, moved - 1), last + 1)
     .some((d, i, all) => i > 0 && d.mean > 0.5 && d.mean === all[i - 1].mean);
   console.log(
     plateau

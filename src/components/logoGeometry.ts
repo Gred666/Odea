@@ -1,15 +1,14 @@
 /* ============================================================
-   手写 Logo 的几何：侧栏的 Logo（Logo.tsx）和开场动画（Intro.tsx）共用。
-   开场那个「O」最后要和侧栏里的逐像素重合，所以两边必须是同一份数据。
+   手写 Logo 的几何：刘海里的「O」（StatusOrb.tsx）、开场动画（Intro.tsx）、启动器的字标共用。
+   开场那个「O」最后要和刘海里的逐像素重合，所以两边必须是同一份数据。
 
    设计：起笔一点（design/logo/）。Odea 是把 idea 的 i 写成了 O —— i 上那一点留着，
    就是 O 右上缺口里的蓝点：先有一个想法，再从它旁边起笔，绕一圈写成字。
-   所以字标里的 O 本来就是开口的、带着蓝点，和应用图标、收起后的导航栏是同一个样子。
+   所以字标里的 O 本来就是开口的、带着蓝点，和应用图标、刘海里的「O」是同一个样子。
    ============================================================ */
 
 /**
- * 字标的 viewBox（Logo 的 svg 就用这个）。高和改名前一样（38px 高的盒子装 78 个单位），
- * 宽留得让 68px 宽的盒子横向也只多出 0.22px：O 落在侧栏里的位置和以前一样（MARK_SHIFT）
+ * 字标的 viewBox（启动器的字标用它）
  */
 export const LOGO_VIEWBOX = { x: 3, y: 5, w: 138.68, h: 78 } as const;
 export const LOGO_VIEWBOX_ATTR = `${LOGO_VIEWBOX.x} ${LOGO_VIEWBOX.y} ${LOGO_VIEWBOX.w} ${LOGO_VIEWBOX.h}`;
@@ -48,10 +47,18 @@ export const O_HEIGHT = 45.2;
 export const DOT = { cx: 38.4, cy: 18.8, r: 3.5 } as const;
 
 /**
- * 收起后整个标记往左挪的量（viewBox 单位，约 2px）：O 在字标里的位置让它的外框中心落在 34px，
- * 64px 窄栏里图标那一列的中线是 32。跟着收起一起挪，展开时挪回来
+ * 刘海里那颗「O」（StatusOrb，docs/边栏.md §4.4）：28px 的圆按钮里只画 O 和蓝点，
+ * 用一个以 O 的外接框中心为中心的正方形 viewBox。边长 76.7 个单位装进 28px：O 高 16.5px、笔画 1.8px，
+ * 外面那一圈状态环（r = 12.2）里还留 2.9px。开场的「O」照它算落点（Intro.tsx）
  */
-export const MARK_SHIFT = -4.1;
+export const MARK_SIDE = 76.7;
+export const MARK_VIEWBOX = {
+  x: O_CENTER.x - MARK_SIDE / 2,
+  y: O_CENTER.y - MARK_SIDE / 2,
+  w: MARK_SIDE,
+  h: MARK_SIDE,
+} as const;
+export const MARK_VIEWBOX_ATTR = `${MARK_VIEWBOX.x} ${MARK_VIEWBOX.y} ${MARK_SIDE} ${MARK_SIDE}`;
 
 /**
  * 蓝点长出来（开场时，最先出来的就是它）：阻尼比 0.68，冲过头约 5% —— 看不出弹，

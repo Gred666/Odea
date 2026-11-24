@@ -15,6 +15,8 @@ import { formatRelativeTime } from "@/lib/date";
 import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { addWindowListener } from "@/lib/paneWindow";
+import { ALT_KEY, keyCaps } from "@/lib/platform";
+import { tip } from "@/lib/tooltip";
 import { documentType } from "@/plugins/registry";
 import { Archive, ArrowDown, ArrowUp, CornerDownLeft, FileText, TextSearch } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -31,10 +33,16 @@ const LIST_MAX = 420;
 type OptionKey = keyof FindOptions;
 
 /** 三个开关：和编辑器里的查找面板（editor/searchPanel.ts）一样的字、一样的快捷键 */
-const TOGGLES: { key: OptionKey; label: string; title: string; code: string }[] = [
-  { key: "caseSensitive", label: "Aa", title: "区分大小写 (Alt+C)", code: "KeyC" },
-  { key: "wholeWord", label: "ab", title: "全词匹配 (Alt+W)", code: "KeyW" },
-  { key: "regex", label: ".*", title: "正则表达式 (Alt+R)", code: "KeyR" },
+const TOGGLES: { key: OptionKey; label: string; title: string; kbd: string; code: string }[] = [
+  {
+    key: "caseSensitive",
+    label: "Aa",
+    title: "区分大小写",
+    kbd: keyCaps(ALT_KEY, "C"),
+    code: "KeyC",
+  },
+  { key: "wholeWord", label: "ab", title: "全词匹配", kbd: keyCaps(ALT_KEY, "W"), code: "KeyW" },
+  { key: "regex", label: ".*", title: "正则表达式", kbd: keyCaps(ALT_KEY, "R"), code: "KeyR" },
 ];
 
 /** 列表里能选中的一行：第几篇里的一处命中 */
@@ -212,7 +220,7 @@ export function FindDialog() {
               animate="shown"
               exit="gone"
               className="pointer-events-auto relative w-[640px] max-w-[calc(100vw-48px)]
-                       overflow-clip rounded-2xl bg-canvas shadow-modal ring-1 ring-line-strong"
+                       overflow-clip rounded-xl bg-canvas shadow-modal ring-1 ring-line-strong"
               onKeyDown={(e) => {
                 // 输入法选字时的回车、上下键是在选字
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -263,13 +271,12 @@ export function FindDialog() {
                       key={entry.key}
                       type="button"
                       aria-pressed={options[entry.key]}
-                      aria-label={entry.title}
-                      title={entry.title}
+                      {...tip(entry.title, { kbd: entry.kbd })}
                       // 焦点留在输入框里
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => toggle(entry.key)}
                       className={cn(
-                        "grid h-5 w-[22px] place-items-center rounded-[5px] font-mono text-[11px] font-semibold",
+                        "grid h-5 w-[22px] place-items-center rounded-xs font-mono text-[11px] font-semibold",
                         "transition-colors duration-[120ms]",
                         options[entry.key]
                           ? "bg-accent-wash text-accent ring-1 ring-inset ring-accent-line"
@@ -306,7 +313,7 @@ export function FindDialog() {
                           tabIndex={-1}
                           data-file-head={fileIndex}
                           onClick={() => openRow(rows[first])}
-                          className="flex w-full items-center gap-2 rounded-lg px-2.5 pb-1 pt-2 text-left"
+                          className="flex w-full items-center gap-2 rounded-md px-2.5 pb-1 pt-2 text-left"
                         >
                           <Icon size={14} strokeWidth={1.9} className="shrink-0 text-muted" />
                           <span className="min-w-0 truncate text-[13px] font-medium text-ink">
@@ -318,7 +325,7 @@ export function FindDialog() {
                             </span>
                           )}
                           <span
-                            className="ml-auto shrink-0 rounded-full bg-raised px-1.5 text-[11px]
+                            className="ml-auto shrink-0 rounded-capsule bg-raised px-1.5 text-[11px]
                                        leading-[16px] tabular-nums text-muted"
                           >
                             {file.count}
@@ -339,7 +346,7 @@ export function FindDialog() {
                               onMouseMove={() => setCursor(i)}
                               onClick={() => openRow(rows[i])}
                               className={cn(
-                                "flex w-full items-baseline gap-2.5 rounded-lg py-[5px] pl-2.5 pr-2.5 text-left",
+                                "flex w-full items-baseline gap-2.5 rounded-md py-[5px] pl-2.5 pr-2.5 text-left",
                                 active && "bg-accent-wash",
                               )}
                             >
@@ -380,7 +387,7 @@ export function FindDialog() {
                     "ml-auto min-w-0 truncate tabular-nums",
                     result?.error && "text-danger",
                   )}
-                  title={result?.error ?? undefined}
+                  {...(result?.error ? tip(result.error, { name: false }) : {})}
                 >
                   {status}
                 </span>

@@ -49,7 +49,7 @@
       "runtimeArgs": [
         "-NoProfile",
         "-Command",
-        "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-dev\\data\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-dev\\vault\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9333'; pnpm tauri dev"
+        "$env:CARGO_HOME='D:\\Dev\\cargo'; $env:RUSTUP_HOME='D:\\Dev\\rustup'; $env:Path='D:\\Dev\\cargo\\bin;' + $env:Path; $env:ODEA_DATA_DIR=\"$env:TEMP\\odea-dev\\data\"; $env:ODEA_VAULT=\"$env:TEMP\\odea-dev\\vault\"; $env:WEBVIEW2_USER_DATA_FOLDER=\"$env:TEMP\\odea-dev\\webview2\"; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9333'; $conf=\"$env:TEMP\\odea-dev\\tauri-temp.json\"; New-Item -ItemType Directory -Force \"$env:TEMP\\odea-dev\" | Out-Null; Set-Content -Encoding ascii $conf '{\"identifier\":\"dev.odea.temp\"}'; pnpm tauri dev --config $conf"
       ],
       "port": 1420
     },

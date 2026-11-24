@@ -3,6 +3,8 @@ import type { OutlineItem } from "@/data/types";
 import type { EditorOutlineHandle } from "@/editor/MarkdownEditor";
 import { cn } from "@/lib/cn";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
+import { ALT_KEY } from "@/lib/platform";
+import { tip } from "@/lib/tooltip";
 import { rememberSpot, spotOf } from "@/lib/viewMemory";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { AnimatePresence, LayoutGroup, type Transition, motion } from "motion/react";
@@ -428,10 +430,9 @@ function RailOutline({
             // 不抢焦点：焦点留在原来的条目上
             onMouseDown={(event) => event.preventDefault()}
             onClick={toggleAll}
-            aria-label={anyCollapsed ? "全部展开" : "全部收起"}
-            title={anyCollapsed ? "全部展开" : "全部收起"}
+            {...tip(anyCollapsed ? "全部展开" : "全部收起")}
             // 和箭头一样淡的是颜色，不是 opacity（见 OutlineRow）
-            className="grid h-5 w-5 place-items-center rounded-[5px] text-transparent
+            className="grid h-5 w-5 place-items-center rounded-xs text-transparent
                        transition-[color,background-color] duration-[140ms]
                        focus-visible:text-muted group-hover/rail:text-muted
                        hover:bg-raised group-hover/rail:hover:text-ink"
@@ -579,12 +580,14 @@ function OutlineRow({
           // 不抢焦点：焦点在要收进去的条目上时，由 toggle 挪回这一条
           onMouseDown={(event) => event.preventDefault()}
           onClick={(event) => actions.toggle(node, event.altKey)}
-          aria-label={open ? "收起" : "展开"}
-          title={open ? "收起（按住 Alt 连下面各层一起）" : "展开（按住 Alt 连下面各层一起）"}
+          {...tip(open ? "收起" : "展开", {
+            detail: `按住 ${ALT_KEY} 连下面各层一起`,
+            side: "left",
+          })}
           style={{ left: indent - 18 }}
           className={cn(
             // 16px、贴着第一行字的中线（上 5px + 行高 20px 的一半 - 8px）
-            "absolute top-[7px] z-10 grid h-4 w-4 place-items-center rounded-[4px]",
+            "absolute top-[7px] z-10 grid h-4 w-4 place-items-center rounded-xs",
             "transition-[color,background-color] duration-[140ms]",
             "hover:bg-raised group-hover/rail:hover:text-ink",
             open ? "text-transparent group-hover/rail:text-muted" : "text-muted",
@@ -648,11 +651,11 @@ function OutlineRow({
         {active && (
           <motion.span
             layoutId="outline-indicator"
-            className="absolute left-0 top-[5px] bottom-[5px] w-[2px] rounded-full bg-ink"
+            className="absolute left-0 top-[5px] bottom-[5px] w-[2px] rounded-capsule bg-ink"
             transition={spring.smooth}
           />
         )}
-        {/* 字重不过渡：中文每个小数字重都要重新匹配字体，一帧十几毫秒（见 Sidebar）。
+        {/* 字重不过渡：中文每个小数字重都要重新匹配字体，一帧十几毫秒（技术方案 §13.2「字重不做 CSS 过渡」）。
             这里尤其要紧 —— 滚动正文时活动标题一直在换。
             长标题完整折行，不截断、不加省略号。 */}
         <span className={cn("block break-words", active ? "font-semibold" : "font-normal")}>
@@ -744,7 +747,7 @@ function ZenOutline({
                 整列像是不存在；faint 的六成仍然很轻，但看得出来 */}
             <span
               className={cn(
-                "h-[2px] rounded-full transition-[background-color,width] duration-[220ms]",
+                "h-[2px] rounded-capsule transition-[background-color,width] duration-[220ms]",
                 TICK_WIDTH[it.level],
                 it.id === activeId ? "!w-6 bg-ink" : "bg-faint/60",
               )}
@@ -775,7 +778,7 @@ function ZenOutline({
               type="button"
               onClick={() => onJump(it.id)}
               className={cn(
-                "flex w-full items-start gap-2 rounded-lg py-[5px] pl-2 pr-2.5 text-left",
+                "flex w-full items-start gap-2 rounded-md py-[5px] pl-2 pr-2.5 text-left",
                 "text-[13px] leading-5 transition-colors duration-[140ms]",
                 ZEN_INDENT[it.level],
                 active ? "text-ink" : "text-muted hover:bg-raised/50 hover:text-ink",
@@ -784,7 +787,7 @@ function ZenOutline({
               {/* 标题会折成多行：横线对齐第一行的中线（行高 20px），不跟着整块居中 */}
               <span
                 className={cn(
-                  "mt-[9px] h-[2px] w-3 shrink-0 rounded-full transition-colors duration-[140ms]",
+                  "mt-[9px] h-[2px] w-3 shrink-0 rounded-capsule transition-colors duration-[140ms]",
                   active ? "bg-ink" : "bg-line-strong",
                 )}
               />

@@ -1,4 +1,5 @@
 import { snapToDevicePixels } from "@/lib/devicePixels";
+import { setTip } from "@/lib/tooltip";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import {
   EditorSelection,
@@ -551,9 +552,7 @@ export class HeadingGutterWidget extends WidgetType {
       button.type = "button";
       button.className = "cm-odea-heading-fold";
       button.tabIndex = -1;
-      const label = this.folded ? "展开这一节" : "收起这一节";
-      button.title = label;
-      button.setAttribute("aria-label", label);
+      setTip(button, this.folded ? "展开这一节" : "收起这一节", { side: "top" });
       button.innerHTML = this.folded ? CHEVRON_RIGHT : CHEVRON_DOWN;
       button.addEventListener("mousedown", (event) => {
         if (event.button !== 0) return;
@@ -581,7 +580,7 @@ export class FoldedSectionWidget extends WidgetType {
     const pill = document.createElement("span");
     pill.className = "cm-odea-heading-folded";
     pill.textContent = `… ${this.lines} 行`;
-    pill.title = "展开这一节";
+    setTip(pill, "展开这一节", { name: false, side: "top" });
     pill.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
       event.preventDefault();

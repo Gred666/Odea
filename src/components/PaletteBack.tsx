@@ -1,4 +1,5 @@
 import { type PaletteDialog, useApp } from "@/app/store";
+import { tip } from "@/lib/tooltip";
 import { ArrowLeft, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -52,11 +53,10 @@ export function DialogLead({
   return (
     <button
       type="button"
-      aria-label="返回命令面板"
-      title="返回命令面板（Esc）"
+      {...tip("返回命令面板", { kbd: "Esc" })}
       onClick={back}
       // 28 宽的按钮左右各收 6px，占的还是图标那 16px：标题不挪
-      className="-mx-1.5 grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted
+      className="-mx-1.5 grid h-7 w-7 shrink-0 place-items-center rounded-sm text-muted
                  transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
     >
       <ArrowLeft size={16} strokeWidth={2} />

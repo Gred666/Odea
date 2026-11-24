@@ -103,7 +103,7 @@
 }
 /* ==高亮==：荧光笔只涂下半截 */
 .odea-static mark {
-  border-radius: 2px;
+  border-radius: var(--corner-xs);
   background: linear-gradient(
     transparent 32%,
     color-mix(in srgb, var(--color-warning) 38%, transparent) 32%,
@@ -123,7 +123,7 @@
   text-autospace: no-autospace;
 }
 .odea-static :not(pre) > :is(code, samp) {
-  border-radius: 4px;
+  border-radius: var(--corner-xs);
   background: var(--color-rail);
   padding: 0.1em 0.3em;
   color: var(--color-ink);
@@ -133,7 +133,7 @@
   display: inline-block;
   border: 1px solid var(--color-line-strong);
   border-bottom-width: 2px;
-  border-radius: 4px;
+  border-radius: var(--corner-xs);
   background: var(--color-panel);
   padding: 0 0.38em;
   color: var(--color-body);
@@ -163,7 +163,7 @@
 }
 .odea-static .wikilink {
   border-bottom: 1px solid var(--color-accent-line);
-  border-radius: var(--radius-xs, 4px);
+  border-radius: var(--corner-xs);
   background: var(--color-accent-wash);
   padding: 0 0.32em;
   color: var(--color-ink);
@@ -217,7 +217,7 @@
   height: 0.9em;
   margin: 0;
   border: 1.5px solid var(--color-faint);
-  border-radius: 4px;
+  border-radius: var(--corner-xs);
   background: transparent;
   appearance: none;
   translate: 0 0.12em;
@@ -256,7 +256,7 @@
   --callout: var(--color-accent);
   --callout-fill: transparent;
   border-left: 3px solid var(--callout);
-  border-radius: 0 8px 8px 0;
+  border-radius: 0 var(--corner-md) var(--corner-md) 0;
   background: var(--callout-fill);
   padding: 0.45em 0.8em 0.4em 1em;
   color: var(--color-ink);
@@ -335,7 +335,8 @@
   position: relative;
   overflow-x: auto;
   border: 1px solid var(--color-line-strong);
-  border-radius: 10px;
+  /* 和编辑器里的代码块（围栏封口 md）一样；嵌入卡片（.embed）也是 md，里面的代码块不比外框还圆 */
+  border-radius: var(--corner-md);
   background: var(--color-panel);
   padding: 12px 14px;
   color: var(--color-body);
@@ -436,13 +437,13 @@
   display: inline;
   max-width: 100%;
   height: auto;
-  border-radius: 4px;
+  border-radius: var(--corner-xs);
   vertical-align: middle;
 }
 .odea-static .image-missing {
   display: inline-block;
   border: 1px dashed var(--color-line-strong);
-  border-radius: 6px;
+  border-radius: var(--corner-sm);
   padding: 2px 10px;
   color: var(--color-muted);
   font-size: 0.85em;
@@ -493,7 +494,7 @@
 
 .odea-static .toc {
   border: 1px solid var(--color-line-strong);
-  border-radius: 10px;
+  border-radius: var(--corner-lg);
   padding: 10px 16px 12px;
 }
 .odea-static .toc-title {
@@ -522,7 +523,7 @@
 }
 .odea-static .embed {
   border: 1px solid var(--color-line-strong);
-  border-radius: 8px;
+  border-radius: var(--corner-md);
   padding: 10px 18px 12px;
 }
 .odea-static .embed-head {
@@ -538,7 +539,7 @@
 /* `![[说明书.pdf]]` 这类附件：导出的页面里打不开它，只写名字和类型（编辑器里是能打开的卡片） */
 .odea-static .attachment {
   border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-xs, 4px);
+  border-radius: var(--corner-xs);
   padding: 0 0.4em;
   color: var(--color-ink);
   white-space: nowrap;
@@ -608,4 +609,28 @@
   .odea-static .footnote-back {
     display: none;
   }
+}
+
+/* 曲率连续的角（技术方案 §9.6）：上面那几条写了档位圆角（var(--corner-*)、999px 的胶囊）的，角都配这一种。
+   集中写在一处：Biome 1.9 还不认识 corner-shape，一处压住警告就够了。这个文件不经过 Tailwind
+   （导出时按原文 ?raw 拼进页面），用不了 globals.css 里的 @apply corner-continuous */
+.odea-static
+  :is(
+    mark,
+    :not(pre) > :is(code, samp),
+    kbd,
+    .wikilink,
+    li.task > input,
+    .callout,
+    pre.code,
+    img,
+    .image-missing,
+    .toc,
+    .embed,
+    .attachment,
+    .footnote-ref a
+  ) {
+  /* biome-ignore lint/correctness/noUnknownProperty: corner-shape 是 Chromium 139 起的新属性 */
+  /* biome-ignore lint/correctness/noUnknownFunction: 同上，superellipse() 是它的值 */
+  corner-shape: superellipse(1.58);
 }

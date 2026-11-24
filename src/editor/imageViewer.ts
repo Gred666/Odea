@@ -1,4 +1,5 @@
 import { snapToDevicePixels } from "@/lib/devicePixels";
+import { type TipOptions, setTip } from "@/lib/tooltip";
 import { motionReduced } from "./animatedEmoji";
 
 /* ============================================================
@@ -65,12 +66,17 @@ function icon(d: string): SVGSVGElement {
   return node;
 }
 
-function button(label: string, content: Node | string, run: () => void, className = "") {
+function button(
+  label: string,
+  content: Node | string,
+  run: () => void,
+  className = "",
+  tip: TipOptions = {},
+) {
   const node = document.createElement("button");
   node.type = "button";
   node.className = `odea-image-viewer-button ${className}`.trim();
-  node.title = label;
-  node.setAttribute("aria-label", label);
+  setTip(node, label, tip);
   node.append(content);
   node.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -130,15 +136,25 @@ export function openImageViewer(source: HTMLImageElement): void {
   image.alt = source.alt;
   image.draggable = false;
 
-  const zoomOut = button("缩小（-）", icon(MINUS_ICON), () => stepZoom(1 / STEP));
-  const zoomIn = button("放大（+）", icon(PLUS_ICON), () => stepZoom(STEP));
-  const level = button("适应屏幕 / 原始大小（双击图片）", "", () => toggleZoom(), "is-zoom");
+  // 这一条在底下，提示放上面；关闭在右上角，放下面
+  const zoomOut = button("缩小", icon(MINUS_ICON), () => stepZoom(1 / STEP), "", {
+    kbd: "-",
+    side: "top",
+  });
+  const zoomIn = button("放大", icon(PLUS_ICON), () => stepZoom(STEP), "", {
+    kbd: "+",
+    side: "top",
+  });
+  const level = button("适应屏幕 / 原始大小", "", () => toggleZoom(), "is-zoom", {
+    detail: "双击图片也一样",
+    side: "top",
+  });
   const bar = doc.createElement("div");
   bar.className = "odea-image-viewer-bar";
   bar.append(zoomOut, level, zoomIn);
   const closer = doc.createElement("div");
   closer.className = "odea-image-viewer-close";
-  closer.append(button("关闭（Esc）", icon(CLOSE_ICON), () => close()));
+  closer.append(button("关闭", icon(CLOSE_ICON), () => close(), "", { kbd: "Esc" }));
 
   const box = (): Box => ({
     left: x,

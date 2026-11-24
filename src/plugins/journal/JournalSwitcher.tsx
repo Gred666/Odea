@@ -2,6 +2,8 @@ import { useApp } from "@/app/store";
 import { backend } from "@/data/backend";
 import { messageOf, useData } from "@/data/store";
 import type { PluginVault } from "@/data/types";
+import { ALT_KEY, MOD_KEY, keyCaps } from "@/lib/platform";
+import { tip } from "@/lib/tooltip";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, NotebookPen, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -77,8 +79,11 @@ export function JournalSwitcher() {
         <button
           type="button"
           data-journal-switcher
-          title="切换到别的仓库的日程（Ctrl+Alt+J）"
-          className="-my-0.5 flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-[12px] font-medium
+          {...tip("切换到别的仓库的日程", {
+            kbd: keyCaps(MOD_KEY, ALT_KEY, "J"),
+            name: false,
+          })}
+          className="-my-0.5 flex h-6 shrink-0 items-center gap-1 rounded-sm px-1.5 text-[12px] font-medium
                      text-muted outline-none transition-colors duration-[140ms] hover:bg-raised/70 hover:text-ink
                      focus-visible:ring-2 focus-visible:ring-accent/50 data-[state=open]:bg-raised/70"
         >
@@ -107,7 +112,7 @@ export function JournalSwitcher() {
               onSelect={() => {
                 if (!vault.current) void switchTo(vault);
               }}
-              className="flex cursor-default select-none items-center gap-2 rounded-md px-2 py-[6px] text-[13px]
+              className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-[6px] text-[13px]
                          text-body outline-none transition-colors duration-[110ms]
                          data-[highlighted]:bg-raised data-[highlighted]:text-ink"
             >
@@ -116,7 +121,7 @@ export function JournalSwitcher() {
               ) : (
                 <NotebookPen size={14} strokeWidth={1.9} className="shrink-0 text-muted" />
               )}
-              <span className="min-w-0 flex-1 truncate" title={vault.name}>
+              <span className="min-w-0 flex-1 truncate" data-tip-overflow data-tip-side="right">
                 {vault.name}
               </span>
               <span className="text-[12px] text-muted">{vault.team ? "团队" : "个人"}</span>

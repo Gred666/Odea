@@ -8,6 +8,8 @@ export interface MenuAction {
   id: string;
   label: string;
   icon: LucideIcon;
+  /** 右边淡色的快捷键（「Ctrl+C」），和标签栏右键菜单一样 */
+  hint?: string;
   danger?: boolean;
   /**
    * 单选菜单（排序）里的当前项。只要任一项给了这个字段，整个菜单就按
@@ -68,7 +70,7 @@ export function ActionMenu({
   const itemClass = (a: MenuAction) =>
     cn(
       // 一项 32 高（Fluent 2 的菜单项、docs/排版规范.md §10 的控件档位）
-      "flex min-h-8 cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5",
+      "flex min-h-8 cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5",
       "text-[13px] outline-none transition-colors duration-[110ms]",
       a.danger
         ? "text-danger data-[highlighted]:bg-danger/10"
@@ -81,6 +83,7 @@ export function ActionMenu({
       <>
         <Icon size={14} strokeWidth={1.9} className="shrink-0" />
         <span className="flex-1">{a.label}</span>
+        {a.hint && <span className="ml-4 text-[12px] text-faint">{a.hint}</span>}
         {checkColumn && (
           <Check
             size={14}
@@ -198,7 +201,7 @@ export function RowMenu({
       // 退回页面会挪半个像素（docs/PITFALLS/动效.md 规矩第 3 条，同右侧目录树的收起箭头）
       className={cn(
         // 24×24：WCAG 2.5.8 的最小点击区
-        "grid h-6 w-6 place-items-center rounded-md",
+        "grid h-6 w-6 place-items-center rounded-sm",
         "transition-[background-color,color] duration-[150ms] hover:bg-raised group-hover:hover:text-ink",
         "data-[state=open]:bg-raised data-[state=open]:text-ink",
         alwaysVisible

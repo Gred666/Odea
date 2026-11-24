@@ -32,6 +32,7 @@ import {
   validateManifest,
 } from "@/extensions/manifest";
 import { cn } from "@/lib/cn";
+import { tip } from "@/lib/tooltip";
 import { type Plugin, installedPlugins, manifestContext } from "@/plugins/registry";
 import {
   type PluginLogEntry,
@@ -309,7 +310,7 @@ export function ExtensionsView() {
               return (
                 <Card
                   key={plugin.id}
-                  icon={plugin.nav[0]?.icon ?? Puzzle}
+                  icon={plugin.nav[0]?.icon ?? plugin.noteViews?.[0]?.icon ?? Puzzle}
                   name={plugin.name}
                   meta="内置"
                   verified
@@ -508,9 +509,9 @@ function ScriptedDetails({
             return (
               <span
                 key={key}
-                title={CAPABILITY_TEXT[key]?.detail ?? key}
+                {...tip(CAPABILITY_TEXT[key]?.detail ?? key, { name: false })}
                 className={cn(
-                  "rounded px-2 py-1 text-[12px]",
+                  "rounded-xs px-2 py-1 text-[12px]",
                   granted.has(key) ? "bg-success/10 text-success" : "bg-raised/60 text-muted",
                 )}
               >
@@ -599,7 +600,7 @@ function Card({
       <div className="flex items-start gap-3">
         <div
           className={cn(
-            "grid h-10 w-10 shrink-0 place-items-center rounded-xl",
+            "grid h-10 w-10 shrink-0 place-items-center rounded-lg",
             status === "off" || status === "missing"
               ? "bg-raised/60 text-muted"
               : "bg-accent-wash text-accent",
@@ -619,7 +620,7 @@ function Card({
         {status && (
           <span
             className={cn(
-              "shrink-0 rounded px-2 py-1 text-[12px]",
+              "shrink-0 rounded-xs px-2 py-1 text-[12px]",
               status === "on"
                 ? "bg-success/10 text-success"
                 : status === "missing"
@@ -646,7 +647,7 @@ function Card({
       <div className="mt-auto flex items-end justify-between gap-3 pt-4">
         <div className="flex min-w-0 flex-wrap gap-1.5">
           {details?.map((detail) => (
-            <span key={detail} className="rounded bg-raised/60 px-2 py-1 text-[12px] text-muted">
+            <span key={detail} className="rounded-xs bg-raised/60 px-2 py-1 text-[12px] text-muted">
               {detail}
             </span>
           ))}
@@ -674,7 +675,7 @@ function ActionButton({
       disabled={busy}
       onClick={onClick}
       className={cn(
-        "flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-medium transition-colors disabled:opacity-50",
+        "flex h-8 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium transition-colors disabled:opacity-50",
         primary
           ? "bg-accent text-accent-ink hover:bg-accent-hover"
           : "bg-raised text-ink hover:bg-line-strong",
@@ -697,11 +698,10 @@ function UninstallButton({ busy, onClick }: { busy: boolean; onClick: () => void
   return (
     <button
       type="button"
-      aria-label="从这台设备上卸载"
-      title="从这台设备上卸载"
+      {...tip("从这台设备上卸载")}
       disabled={busy}
       onClick={onClick}
-      className="grid h-8 w-8 place-items-center rounded-lg text-faint transition-colors
+      className="grid h-8 w-8 place-items-center rounded-md text-faint transition-colors
                  hover:bg-danger/10 hover:text-danger disabled:opacity-50"
     >
       <Trash2 size={14} />
@@ -758,7 +758,7 @@ function BrokenCard({
   return (
     <article className="flex min-h-[164px] flex-col rounded-xl border border-danger/30 bg-panel/55 p-5">
       <div className="flex items-start gap-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-danger/10 text-danger">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-danger/10 text-danger">
           <CircleAlert size={20} strokeWidth={1.75} />
         </div>
         <div className="min-w-0 flex-1">

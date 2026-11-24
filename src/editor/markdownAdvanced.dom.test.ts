@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { typoraDecorations } from "./MarkdownEditor";
 import { setDeclaredCallouts } from "./callout";
 import { diagramEngine } from "./diagram";
-import { hoverCard } from "./hoverCard";
+import { adoptTitles, hoverCard } from "./hoverCard";
 import { resolveImageSource, safeImageSource, sanitizeHtml, sanitizeStyle } from "./html";
 import { splitWikiTarget, wikiTargetAt } from "./links";
 import { markdownSupport } from "./markdownParser";
@@ -168,6 +168,25 @@ describe("块级 HTML", () => {
     expect(
       sanitizeStyle("color: #fff; font-size: 2em; position: absolute; background: url(a)"),
     ).toBe("color: #fff; font-size: 2em");
+  });
+
+  it("turns the titles of HTML shown in the editor into in-app tips", () => {
+    // 净化器留着 title（导出、复制出去要用）；挂进正文前 adoptTitles 换成应用里的提示
+    const html = sanitizeHtml(
+      '<p title="一段">段 <abbr title="HyperText Markup Language">HTML</abbr><span title=" ">空</span></p>',
+    );
+    adoptTitles(html);
+    const host = document.createElement("div");
+    host.append(html);
+    expect(host.querySelector("[title]")).toBeNull();
+    const p = host.querySelector("p")!;
+    expect(p.dataset.tip).toBe("一段");
+    expect(p.dataset.tipSide).toBe("top");
+    const abbr = host.querySelector("abbr")!;
+    expect(abbr.dataset.odeaTip).toBe("HyperText Markup Language");
+    expect(abbr.dataset.odeaTipLabel).toBe("HTML");
+    expect(abbr.hasAttribute("data-tip")).toBe(false);
+    expect(host.querySelector("span")!.hasAttribute("data-tip")).toBe(false);
   });
 });
 
@@ -425,9 +444,7 @@ describe("脚注与双链", () => {
     expect(splitWikiTarget("笔记#小节")).toEqual({ title: "笔记", heading: "小节" });
     expect(splitWikiTarget("笔记^abc")).toEqual({ title: "笔记", block: "abc" });
     const { parent, view } = mount("看 [[笔记#小节|别名]] 完", 999);
-    expect(parent.querySelector(".cm-odea-wikilink")?.getAttribute("title")).toContain(
-      "笔记 › 小节",
-    );
+    expect(parent.querySelector(".cm-odea-wikilink")?.getAttribute("data-tip")).toBe("笔记 › 小节");
     expect(wikiTargetAt(view.state, 4)).toBe("笔记#小节");
   });
 });

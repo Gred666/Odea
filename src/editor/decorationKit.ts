@@ -26,13 +26,24 @@ export function selectionTouches(state: EditorState, from: number, to: number): 
 export type DecorationRange = { from: number; to: number; value: Decoration };
 
 /**
+ * 编辑器一挂上就是最终的样子：头一次构建的替身不淡入。白板的卡片点进去编辑时用（docs/白板.md §13.7）——
+ * 静态的卡片本来就画着同样的圆点、勾选框、代码块，换成编辑器的那一下不能再淡进来一遍
+ */
+export const quietOpen = Facet.define<boolean, boolean>({
+  combine: (values) => values.some(Boolean),
+});
+
+/**
  * 替身该不该播入场动画（见 widgets.ts 的 OtwWidget）：它盖住的源码是不是这一次才
- * 出现 / 改动的。changes 为 null 表示整篇初次构建（刚打开笔记），全都算新的；
+ * 出现 / 改动的。changes 为 null 表示整篇初次构建（刚打开笔记），全都算新的（quietOpen 时都不算）；
  * 只动了光标、只滚了视口时 changes 是空的，谁都不算新。
  * 边界相接也算碰到：刚打完 `:smile:` 最后那个冒号，改动正好落在短码末尾。
  */
-export function freshness(changes: ChangeSet | null): (from: number, to: number) => boolean {
-  if (!changes) return () => true;
+export function freshness(
+  changes: ChangeSet | null,
+  state: EditorState,
+): (from: number, to: number) => boolean {
+  if (!changes) return state.facet(quietOpen) ? () => false : () => true;
   const touched: number[] = [];
   changes.iterChangedRanges((_fromA, _toA, fromB, toB) => touched.push(fromB, toB));
   if (!touched.length) return () => false;
@@ -105,12 +116,3 @@ export const SMART_GLYPHS: Readonly<Record<string, string>> = {
   "(r)": "®",
   "(tm)": "™",
 };
-export const BULLET_GLYPHS = ["•", "◦", "▪"];
-/* 列表符号格的宽度，单位是正文字号（globals.css「列表的几何」）。任务项的宽度和
-   .cm-odea-task 左右的空加起来要相等；有序列表按最大编号的位数加宽 */
-export const LIST_BULLET_WIDTH = 1.55;
-export const LIST_TASK_WIDTH = 1.8;
-export const LIST_ORDERED_WIDTH = 1;
-export const LIST_DIGIT_WIDTH = 0.56;
-export const listUnits = (value: number) =>
-  `calc(var(--odea-body-size) * ${Math.round(value * 1000) / 1000})`;

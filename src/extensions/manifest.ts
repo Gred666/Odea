@@ -7,7 +7,7 @@ import { CALLOUT_ICONS, type CalloutKind } from "@/editor/callout";
    - callouts：几种提示块标签，配色只能是已有的 kind，图标只能从 editor/callout.ts 的 CALLOUT_ICONS 里挑
    - templates：Markdown 模板，加 `{{date}}` 这类占位符（TEMPLATE_PLACEHOLDERS）
    - theme：只能改 globals.css 里已有的颜色 token（THEME_TOKENS），值按颜色格式校验
-   - navOrder：窄栏上几项的先后，只能调顺序
+   - navOrder：导航（左上角刘海上的格子）几项的先后，只能调顺序
 
    带 main 的是 L1（P14.3）：脚本跑在沙箱里（plugins/sandbox/），只能经宿主做 capabilities 里申请了、
    用户也同意了的事。多两个贡献点，都要有脚本才有意义：

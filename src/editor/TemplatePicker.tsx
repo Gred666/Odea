@@ -199,19 +199,19 @@ export function TemplatePicker({
                     if (!selected) setActive(index);
                   }}
                   onClick={(event) => pick(template, event.shiftKey ? "replace" : "insert")}
-                  className="relative flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left"
+                  className="relative flex w-full items-center gap-2.5 rounded-md px-2 py-[7px] text-left"
                 >
                   {/* 退场时撤掉：带 layoutId 的元素会让 Motion 把整个面板多留一会儿 */}
                   {selected && present && (
                     <motion.span
                       layoutId={layoutIds.templateCursor}
-                      className="absolute inset-0 rounded-lg bg-accent-wash"
+                      className="absolute inset-0 rounded-md bg-accent-wash"
                       transition={spring.snappy}
                     />
                   )}
                   <span
                     className={cn(
-                      "relative z-10 grid h-7 w-7 shrink-0 place-items-center rounded-md ring-1",
+                      "relative z-10 grid h-7 w-7 shrink-0 place-items-center rounded-sm ring-1",
                       "transition-colors duration-[140ms]",
                       selected
                         ? "bg-canvas text-accent ring-accent-line"

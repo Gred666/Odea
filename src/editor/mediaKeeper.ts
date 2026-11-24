@@ -1,5 +1,6 @@
 import { useData } from "@/data/store";
 import { snapToDevicePixels } from "@/lib/devicePixels";
+import { setTip } from "@/lib/tooltip";
 import { wikiFileTarget } from "@/lib/wikiFiles";
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { glideTo, scrollParent } from "./glide";
@@ -616,8 +617,8 @@ class MediaBar {
     const button = (label: string, d: string, onClick: (keyboard: boolean) => void) => {
       const node = element("button", "odea-media-bar-button");
       node.type = "button";
-      node.setAttribute("aria-label", label);
-      node.title = label;
+      // 播放条贴着底边，提示放上面
+      setTip(node, label, { side: "top" });
       const icon = svg(doc, d, "odea-media-bar-icon");
       node.append(icon.node);
       // 按下不抢正文的焦点（同查找面板）：点完接着打字，光标还在原处
@@ -634,6 +635,9 @@ class MediaBar {
     const kind = svg(doc, "", "odea-media-bar-kind");
     this.kind = kind.path;
     this.name = element("span", "odea-media-bar-name");
+    // 名字被截断了才出（出的是它自己的字）
+    this.name.setAttribute("data-tip-overflow", "");
+    this.name.setAttribute("data-tip-side", "top");
     const toggle = button("暂停", PAUSE_ICON, () => this.actions.toggle());
     this.toggle = toggle.node;
     this.toggleIcon = toggle.path;
@@ -675,7 +679,6 @@ class MediaBar {
     this.kind.setAttribute("d", card.icon);
     if (this.name.textContent !== card.title) {
       this.name.textContent = card.title;
-      this.name.title = card.title;
     }
     this.progress(media);
     if (this.shown) return;
@@ -734,8 +737,7 @@ class MediaBar {
     if (media !== this.media) return;
     const label = media.paused ? "播放" : "暂停";
     if (this.toggle.getAttribute("aria-label") !== label) {
-      this.toggle.setAttribute("aria-label", label);
-      this.toggle.title = label;
+      setTip(this.toggle, label, { side: "top" });
       this.toggleIcon.setAttribute("d", media.paused ? PLAY_ICON : PAUSE_ICON);
     }
     const duration = Number.isFinite(media.duration) ? media.duration : 0;

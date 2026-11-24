@@ -1,5 +1,6 @@
 import { useApp } from "@/app/store";
 import { nameOf, rootLabel } from "@/data/folders";
+import { tip } from "@/lib/tooltip";
 import { Folder } from "lucide-react";
 import { Fragment } from "react";
 
@@ -24,7 +25,7 @@ export function NotePath({
   return (
     <nav
       aria-label="所在文件夹"
-      title={relPath}
+      {...(relPath ? tip(relPath, { name: false }) : {})}
       className="flex min-w-0 items-center text-[12px] font-medium leading-[20px] tracking-[0.02em] text-muted"
     >
       <Folder size={12} strokeWidth={2} className="mr-px shrink-0 text-faint" />
@@ -39,7 +40,7 @@ export function NotePath({
             type="button"
             tabIndex={tabIndex}
             onClick={() => openNoteFolder(path)}
-            className="h-5 min-w-0 max-w-[220px] truncate rounded-md px-[5px] transition-colors duration-[140ms]
+            className="h-5 min-w-0 max-w-[220px] truncate rounded-xs px-[5px] transition-colors duration-[140ms]
                        hover:bg-raised/60 hover:text-ink"
           >
             {path ? nameOf(path) : rootLabel()}

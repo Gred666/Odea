@@ -160,7 +160,7 @@ export function FolderPicker({
       animate="shown"
       exit="gone"
       style={{ top }}
-      className="absolute inset-x-4 z-30 flex flex-col overflow-clip rounded-[10px] bg-canvas
+      className="absolute inset-x-4 z-30 flex flex-col overflow-clip rounded-lg bg-canvas
                  shadow-float ring-1 ring-line-strong"
     >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3 text-faint">
@@ -326,7 +326,7 @@ function entriesFor(folders: string[], query: string, unsorted: boolean): Entry[
 
 function Kbd({ children }: { children: string }) {
   return (
-    <kbd className="mr-1 rounded border border-line-strong px-1 font-mono text-[11px]">
+    <kbd className="mr-1 rounded-xs border border-line-strong px-1 font-mono text-[11px]">
       {children}
     </kbd>
   );

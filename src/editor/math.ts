@@ -1,3 +1,4 @@
+import { setTip } from "@/lib/tooltip";
 import type { EditorView } from "@codemirror/view";
 import type katex from "katex";
 import { OtwWidget, positionOf } from "./widgets";
@@ -55,7 +56,7 @@ function render(engine: Katex, node: HTMLElement, tex: string, display: boolean)
   } catch {
     node.textContent = tex;
     node.classList.add("is-error");
-    node.title = "公式无法渲染";
+    setTip(node, "公式无法渲染", { name: false, side: "top" });
   }
 }
 
@@ -357,7 +358,7 @@ export class MathWidget extends OtwWidget {
     // 块级公式外面再套一层，留白用 padding（见 widgets.ts 文件头的规矩）
     const node: HTMLElement = document.createElement(this.display ? "div" : "span");
     node.className = `cm-odea-math is-${this.display ? "block" : "inline"}`;
-    node.title = "点击编辑公式";
+    setTip(node, "点击编辑公式", { name: false, side: "top" });
     node.addEventListener("mousedown", (event) => {
       // 点在横向滑块上：拖滑块，别进源码（以前一点滑块就变成源码，滑块根本拖不了）
       if (onScrollbar(node, event)) return;

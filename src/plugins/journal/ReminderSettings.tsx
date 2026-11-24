@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { useModalFocus } from "@/lib/modalFocus";
 import { popoverCard, tween } from "@/lib/motion";
 import { isTauri } from "@/lib/tauri";
+import { tip } from "@/lib/tooltip";
 import { Bell, Play, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
@@ -146,7 +147,7 @@ export function ReminderSettingsDialog() {
                   type="button"
                   aria-label="关闭"
                   onClick={close}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted
                              transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />
@@ -282,7 +283,7 @@ function ReminderBody() {
                     <button
                       type="button"
                       aria-label={`试听${sound.name}`}
-                      title="试听"
+                      {...tip("试听", { name: false })}
                       onClick={() => preview(sound.value)}
                       className={cn(
                         "absolute top-2 right-2 grid h-6 w-6 place-items-center rounded-full",

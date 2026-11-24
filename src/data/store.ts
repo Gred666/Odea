@@ -197,7 +197,8 @@ interface DataState {
    */
   saveDocument: (target: DocumentRef, contentMd: string) => Promise<void>;
   /** 新建一篇空笔记（放在 folder 里，默认「笔记」本身），返回后端分配的 id；失败返回 null。 */
-  createNote: (folder?: string) => Promise<string | null>;
+  /** 新建一篇（放在 folder 里），title 没给是「无标题」 */
+  createNote: (folder?: string, title?: string) => Promise<string | null>;
   /**
    * 点了链到还没有的笔记的 `[[标题]]`：新建一篇这个标题的（放在 folder 里），返回它的 id。
    * 底部提示条可以撤销（直接删掉，不再弹「已删除」）
@@ -1174,12 +1175,12 @@ export const useData = create<DataState>((set, get) => ({
     }
   },
 
-  createNote: async (folder = "") => {
+  createNote: async (folder = "", title = NEW_NOTE_TITLE) => {
     try {
       const api = await backend();
       // 真正的 id 由后端分配 —— 所以这里没法乐观更新，得等一个来回。
       // 新建是个一次性动作，不像输入那样每次按键都要响应。
-      const id = await api.noteCreate(folder, NEW_NOTE_TITLE);
+      const id = await api.noteCreate(folder, title);
       const created = await api.noteGet(id);
       // 逻辑目录：后端已经把它放在这个文件夹最前面了，这边同一帧放上去（不然先在「未整理」里闪一下）
       const tree = get().tree;

@@ -3,6 +3,7 @@ import { typoraBlockDecorations } from "./blockDecorations";
 import { cellEditorExtensions } from "./cellEditor";
 import { knownWikiTitles } from "./decorationKit";
 import { headingFoldExtension } from "./headingFold";
+import { hiddenLineGuards } from "./hiddenLines";
 import { imageBaseDir, wikiImages } from "./html";
 import { cellInlineDecorations, typoraInlineDecorations } from "./inlineDecorations";
 import { longRuns } from "./longRuns";
@@ -13,12 +14,14 @@ import { revealField } from "./reveal";
 /**
  * 编辑器要的完整装饰扩展：块级 StateField + 行内 ViewPlugin，外加两层共用的「算数的选区」
  * （reveal.ts）和标题收起的状态（headingFold.ts）。表格格子里的子编辑器（cellEditor.ts）
- * 从这里拿行内装饰层，双链认得哪些标题、图片的相对路径跟着正文走
+ * 从这里拿行内装饰层，双链认得哪些标题、图片的相对路径跟着正文走。
+ * 插件认领、块级层藏起来的整行（白板的标记）：光标绕开、改不坏（hiddenLines.ts）
  */
 export const typoraDecorations: Extension = [
   revealField,
   headingFoldExtension,
   typoraBlockDecorations,
+  hiddenLineGuards((state) => state.field(typoraBlockDecorations, false)?.hidden ?? []),
   typoraInlineDecorations,
   longRuns,
   cellEditorExtensions.of((main) => [

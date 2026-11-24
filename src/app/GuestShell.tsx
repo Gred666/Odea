@@ -9,6 +9,7 @@ import { TitleBar } from "@/components/TitleBar";
 import { useCurrentDocument } from "@/data/adapter";
 import { isShared } from "@/data/types";
 import { cn } from "@/lib/cn";
+import { tip } from "@/lib/tooltip";
 import { MotionConfig } from "motion/react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -94,7 +95,7 @@ function GuestSection({ id, fill }: { id: number; fill: boolean }) {
       <button
         type="button"
         onClick={() => openSession(id)}
-        title="这次协作"
+        {...tip("这次协作", { name: false })}
         className="flex h-8 items-center gap-2 rounded-md px-2 text-left transition-colors duration-[140ms] hover:bg-raised/60"
       >
         {host && <PeerAvatar id={host.id} name={host.name} />}
@@ -116,7 +117,10 @@ function GuestSection({ id, fill }: { id: number; fill: boolean }) {
         </button>
       ) : (
         <>
-          <p className="truncate px-2 pb-1 text-[12px] text-muted" title={session.scope?.name}>
+          <p
+            className="truncate px-2 pb-1 text-[12px] text-muted"
+            {...(session.scope?.name ? tip(session.scope.name, { name: false }) : {})}
+          >
             {sessionName(session)}
           </p>
           <SharedTree id={id} compact />

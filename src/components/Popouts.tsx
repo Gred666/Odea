@@ -7,12 +7,14 @@ import { NEW_NOTE_TITLE, useData } from "@/data/store";
 import { NOTE, vaultRef } from "@/data/types";
 import { type PaneWindow, PaneWindowContext } from "@/lib/paneWindow";
 import { onPopoutCloseRequested, popoutControls, popoutOp, popoutTitle } from "@/lib/tauri";
+import { installTooltips } from "@/lib/tooltip";
 import { useTeamView } from "@/team/store";
 import { Fragment, type ReactNode, memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { type Handlers, Sash, activeNoteOf, collabElsewhere, usePaneWide } from "./DocumentPanes";
 import { DocumentView } from "./DocumentView";
 import { NoteTabs, useTabKeys } from "./NoteTabs";
+import { NoteBody, useNoteView, useViewSwitches } from "./NoteViewHost";
 import { SwapFade } from "./SwapFade";
 import { TitleBar } from "./TitleBar";
 
@@ -118,6 +120,9 @@ function PopoutWindow({ popout, ...handlers }: { popout: PopoutLayout } & Handle
 
   const keys = useMemo(() => (handle ? { win: handle.win, popout: id } : undefined), [handle, id]);
   useTabKeys(keys);
+
+  // 悬停提示：这个窗口自己的那一个节点、自己的监听（docs/悬停提示.md §5.1）
+  useEffect(() => (handle ? installTooltips(handle.win) : undefined), [handle]);
 
   // 整页重载：弹出窗口的页面是一张 about:blank，里面的东西是主窗口画的，一重载就成了一张白纸。
   // F5、Ctrl+R 在 Rust 那边拦下了（popout.rs 的 without_reload_keys；页面里 preventDefault 拦不住）。
@@ -265,6 +270,9 @@ function PopoutPane({
   const hostRef = useRef<HTMLDivElement>(null);
   const wide = usePaneWide(hostRef, true);
   const initialized = useData((s) => s.initialized);
+  const tab = pane.tabs.find((other) => other.id === pane.activeTab);
+  const view = useNoteView(tab, doc);
+  const switches = useViewSwitches(tab, doc);
 
   // 窗口标题跟着正在写的那个窗格里的那一篇（任务栏、Alt+Tab 里看到的）
   const title = doc.title.trim() || NEW_NOTE_TITLE;
@@ -309,20 +317,36 @@ function PopoutPane({
       onPointerDownCapture={focus}
       onFocusCapture={focus}
     >
-      <NoteTabs pane={pane} shown={initialized} focused={focused || count === 1} last={last} />
+      <NoteTabs
+        pane={pane}
+        shown={initialized}
+        focused={focused || count === 1}
+        last={last}
+        surface={view ? "--color-panel" : undefined}
+      />
       {doc.base ? (
         <BaseHost relPath={doc.base.relPath} />
       ) : (
-        <DocumentView
+        <NoteBody
+          tab={tab ?? { id: pane.activeTab, noteId: "" }}
+          view={view}
           doc={doc}
-          onDelete={handleDelete}
-          onSaveDocument={onSaveDocument}
-          onSaveTitle={onSaveTitle}
-          tabBar={initialized}
           focused={active && focused}
-          first={false}
-          last={last}
-          outline={wide}
+          onSaveDocument={onSaveDocument}
+          document={
+            <DocumentView
+              doc={doc}
+              onDelete={handleDelete}
+              onSaveDocument={onSaveDocument}
+              onSaveTitle={onSaveTitle}
+              tabBar={initialized}
+              focused={active && focused}
+              first={false}
+              last={last}
+              outline={wide}
+              viewSwitches={switches}
+            />
+          }
         />
       )}
     </div>

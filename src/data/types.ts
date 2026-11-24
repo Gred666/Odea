@@ -568,7 +568,7 @@ export interface VaultInfo {
 
 /**
  * 这个仓库怎么摆（docs/仓库与启动器.md §6，Rust 的 vault/layout.rs）：开着哪些插件、文件树的根在哪。
- * 窄栏上有哪几项、一篇笔记在树上哪个文件夹（data/folders.ts）都看它
+ * 导航上有哪几项、一篇笔记在树上哪个文件夹（data/folders.ts）都看它
  */
 /** 仓库标记里开着的一个第三方插件：id，和仓库要的版本范围（`^0.1`，没写是 null） */
 export interface WantedExtension {

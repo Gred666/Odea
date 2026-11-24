@@ -1,6 +1,7 @@
 import { cn } from "@/lib/cn";
 import { type DeviceLogin, githubLogin, loginCancelled, useLoginAttempt } from "@/lib/githubLogin";
 import { openExternal } from "@/lib/openExternal";
+import { tip } from "@/lib/tooltip";
 import { Copy, Github, Globe, LoaderCircle, Lock, Users } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -434,7 +435,7 @@ function RepoList({
                 </span>
                 {repo.owner.toLowerCase() !== account.login.toLowerCase() && (
                   <span
-                    title={`团队仓库 · 主人是 ${repo.owner}`}
+                    {...tip("团队仓库", { detail: `主人是 ${repo.owner}`, name: false })}
                     className="flex shrink-0 items-center gap-1 text-[12px] text-muted"
                   >
                     <Users size={12} strokeWidth={2} />
@@ -493,7 +494,7 @@ function Place({
       />
       <ParentField parent={parent} problem={problem} busy={busy} onPick={pick} className="mt-3" />
       <div className="mt-4 flex items-center gap-3">
-        <p className="min-w-0 flex-1 truncate text-[12px] text-muted" title={target}>
+        <p className="min-w-0 flex-1 truncate text-[12px] text-muted" data-tip-overflow>
           {busy ? "正在拉取，笔记多的话要一会儿…" : target ? `会放在 ${target}` : ""}
         </p>
         <Button type="submit" primary disabled={busy || !target}>

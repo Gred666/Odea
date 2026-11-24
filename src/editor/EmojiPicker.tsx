@@ -472,8 +472,8 @@ export function EmojiPicker({
                         type="button"
                         role="option"
                         aria-selected={selected}
+                        // 名字和短码在底下那一条里（跟着指到的走），不再出悬停提示：一格挨一格，提示会挡住下一行
                         aria-label={emoji.name}
-                        title={`${emoji.name}  ${emoji.shortcode}`}
                         tabIndex={-1}
                         data-emoji={emoji.id}
                         // 按下时别把焦点从输入框抢走，键盘还能接着用
@@ -488,7 +488,7 @@ export function EmojiPicker({
                         {selected && present && (
                           <motion.span
                             layoutId={layoutIds.emojiCursor}
-                            className="absolute inset-[2px] rounded-lg bg-accent-wash"
+                            className="absolute inset-[2px] rounded-md bg-accent-wash"
                             transition={spring.snappy}
                           />
                         )}

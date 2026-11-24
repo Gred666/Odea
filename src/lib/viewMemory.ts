@@ -26,6 +26,13 @@ export interface ViewSpot {
   folds?: { line: number; text: string }[];
   /** 目录树里收起的条目（components/outlineTree.ts 的键：层级 + 标题字 + 第几个同名的） */
   outline?: string[];
+  /**
+   * 上次用哪种摆法看的（插件的 noteViews，白板）；null 是文档，没记过是 undefined。
+   * 在一个标签里打开这一篇时照它（app/noteViews.ts，docs/白板.md §13.4）
+   */
+  view?: string | null;
+  /** 白板的镜头：视口中心在世界坐标的哪里、缩放多少（关了再开回到这里，docs/白板.md §13.1） */
+  camera?: { x: number; y: number; zoom: number };
 }
 
 const STORAGE_KEY = "odea.view-memory";

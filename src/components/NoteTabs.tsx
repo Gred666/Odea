@@ -1,16 +1,19 @@
+import { toggleTabView, viewOfShortcut } from "@/app/noteViews";
 import { MAX_PANES, type NotePane } from "@/app/panes";
 import { focusWindow, popOut, windowAt } from "@/app/popout";
-import { type NoteTab, useApp } from "@/app/store";
+import { FLARE_WIDTH, type NoteTab, hasListColumn, useApp } from "@/app/store";
 import { baseOfTab, baseTitle, isBaseTab } from "@/bases/ids";
 import { folderLabel, folderOf } from "@/data/folders";
 import { NEW_NOTE_TITLE, useData } from "@/data/store";
 import { cn } from "@/lib/cn";
 import { snapToDevicePixels } from "@/lib/devicePixels";
+import { cornerRadius } from "@/lib/edgeShape";
 import { offerEditorFocus } from "@/lib/focusHandoff";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
 import { usePaneWindow } from "@/lib/paneWindow";
-import { MOD_KEY, isMac } from "@/lib/platform";
+import { MOD_KEY, isMac, shortcut } from "@/lib/platform";
 import { isTauri, windowKind } from "@/lib/tauri";
+import { tip } from "@/lib/tooltip";
 import { type MotionValue, animate, motion, useMotionValue } from "motion/react";
 import {
   type PointerEvent as ReactPointerEvent,
@@ -21,6 +24,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useNotchWidth } from "./NotchNav";
 
 /* ============================================================
    笔记的标签栏（docs/标签页与分屏.md §5）。一个窗格一条，在它那一栏的正上方（分屏时几条并排）。
@@ -31,12 +35,13 @@ import { createPortal } from "react-dom";
    底下，标签那一层在它上面（z-41）；整层不接指针，只有标签接 —— 标签之间、右边空着的地方
    照样拖窗口、双击最大化。
 
-   底色那一层是 z-29，比左边的 chrome（z-30）低：列表栏收起的那 220ms 里它还在滑，
-   这一层的左边缘已经跳到了窄栏边上，高了会盖住它的上沿。
+   底色那一层是 z-29，比左边的 chrome（刘海 + 侧栏，z-45）低：侧栏收起的那一下它还在缩，
+   这一层的左边缘已经跳到了窗口左边，高了会盖住它。
+   侧栏不在时，最左那一栏的标签从刘海右边开始（刘海宽 + 凹弯 18 + 12，docs/边栏.md §6.3）
 
    动效（docs/PITFALLS/动效.md「先对齐再动」）：
    - 整条出现 / 收起只淡 opacity，一直待在自己的图层上，开始淡之前对齐整物理像素
-   - 列表栏收起 / 展开时整条跟着它的右缘滑（和列表栏同一条 tween.base，useFollowList）
+   - 侧栏收起 / 展开、刘海变宽变窄时，第一个标签从原来的位置滑到新的位置（tween.base，useFollowList）
    - 一个标签开出来淡入、关掉先原地淡出；别的标签从原处滑到新位置（FLIP，Web Animations，
      起步就走、收尾短的曲线），动之前对齐整物理像素
    - 当前标签的底色在标签之间滑（layoutId，和分段控件的滑块一样；它没有字，可以缩放）
@@ -63,6 +68,8 @@ export function NoteTabs({
   shown,
   focused,
   last: rightmost,
+  first = false,
+  surface = "--color-canvas",
 }: {
   pane: Pick<NotePane, "id" | "tabs" | "activeTab">;
   shown: boolean;
@@ -70,10 +77,16 @@ export function NoteTabs({
   focused: boolean;
   /** 最右边那一栏：让出窗口按钮 */
   last: boolean;
+  /** 最左边那一栏：侧栏不在时让出刘海 */
+  first?: boolean;
+  /** 底下那一页的底色（标签栏的底和它接上）：文档是 canvas，白板是 panel */
+  surface?: string;
 }) {
   const tabs = pane.tabs;
   const active = pane.activeTab;
   const panelCollapsed = useApp((s) => s.panelCollapsed);
+  const workspace = useApp((s) => s.workspace);
+  const notch = useNotchWidth();
   // 两个 hook 分开取再合：写成 `a || usePrefersReducedMotion()` 的话，打开「减少动效」时后一个就短路不调了，
   // hook 数目变了 React 直接抛错、整个窗口白屏
   const appReduce = useApp((s) => s.reduceMotion);
@@ -96,12 +109,16 @@ export function NoteTabs({
   // 一个个标签的动画只在整条已经显示着的时候播：整条正在淡入淡出时，里面再各淡各的、
   // 还留着上一次收起前那几个在淡出，就乱了
   const wasShown = useRef(shown);
-  const followX = useFollowList(stripRef, panelCollapsed, shown && !reduce);
+  const host = usePaneWindow();
+  // 侧栏不在、又是最左那一栏：刘海压在这一条的左头，第一个标签从它右边开始（弹出窗口里没有刘海）
+  const underNotch =
+    first && host.popout === null && !(hasListColumn(workspace) && !panelCollapsed);
+  const lead = underNotch ? notch + FLARE_WIDTH + 12 : 12;
+  const followX = useFollowList(stripRef, panelCollapsed, lead, shown && !reduce);
   const rows = useTabRows(listRef, view.tabs, shown && wasShown.current && !reduce);
   useLayoutEffect(() => {
     wasShown.current = shown;
   }, [shown]);
-  const host = usePaneWindow();
   const drag = useTabDrag(listRef, pane.id, host.popout);
   const [menu, setMenu] = useState<TabMenuAt | null>(null);
 
@@ -139,7 +156,7 @@ export function NoteTabs({
         className="odea-doc-strip pointer-events-none absolute inset-x-0 top-0 z-[29]"
         style={{
           height: STRIP_HEIGHT + 16,
-          background: `linear-gradient(to bottom, var(--color-canvas) ${STRIP_HEIGHT}px, transparent)`,
+          background: `linear-gradient(to bottom, var(${surface}) ${STRIP_HEIGHT}px, transparent)`,
         }}
       />
       <motion.div
@@ -152,8 +169,8 @@ export function NoteTabs({
           ref={listRef}
           role="tablist"
           aria-label="打开的笔记"
-          className="scroll-none relative flex h-full items-center gap-0.5 overflow-x-auto pl-3"
-          style={{ paddingRight: isTauri && rightmost ? WINDOW_BUTTONS : 16 }}
+          className="scroll-none relative flex h-full items-center gap-0.5 overflow-x-auto"
+          style={{ paddingLeft: lead, paddingRight: isTauri && rightmost ? WINDOW_BUTTONS : 16 }}
         >
           {rows.map((row) => (
             <Tab
@@ -175,34 +192,33 @@ export function NoteTabs({
 }
 
 /**
- * 列表栏收起 / 展开：整条跟着列表栏的右缘滑，不然列表栏还没滑走，标签已经跳到了它上面
- * （标签那一层比左边的 chrome 高）。
+ * 侧栏收起 / 展开、刘海变宽变窄（开关日程、归档）：第一个标签从原来的位置滑到新的位置，
+ * 和正文那一列同一条曲线（tween.base，DocumentView 的 CenteredColumn）。不然侧栏一收，
+ * 标签一下跳到刘海右边。
  *
- * 列表栏是 Shell 里 Motion 的 x（tween.base），在主线程上逐帧算，主线程一忙它就顿一下。
- * 这里也用 Motion 的 animate、同一条曲线，在同一次提交里起步：Motion 在一次同步执行里给的
- * 「现在」是同一个，两条的进度每一帧都一样，顿也一起顿。试过的两种都对不齐：Motion 的
- * layout="position" 要等量完下一帧才起步，展开时开头 100ms 标签压在列表栏上；合成器上的
- * Web Animations 不跟着主线程顿，列表栏一顿就差出几十个像素
+ * 用 Motion 的 animate 在提交的同一次执行里起步，和正文那一列同一个「现在」
  */
 function useFollowList(
   stripRef: React.RefObject<HTMLDivElement | null>,
   panelCollapsed: boolean,
+  lead: number,
   animated: boolean,
 ): MotionValue<number> {
   const x = useMotionValue(0);
-  /** 上一次的左缘（正文区的左缘，不含正在跑的位移）和那时列表栏收没收 */
-  const last = useRef<{ left: number; collapsed: boolean } | null>(null);
+  /** 上一次第一个标签从哪开始（窗格的左缘 + 左边让出的那一截，不含正在跑的位移），和那时侧栏收没收、让了多少 */
+  const last = useRef<{ start: number; collapsed: boolean; lead: number } | null>(null);
   useLayoutEffect(() => {
     const strip = stripRef.current;
     const host = strip?.parentElement;
     if (!strip || !host) return;
-    const left = host.getBoundingClientRect().left;
+    const start = host.getBoundingClientRect().left + lead;
     const before = last.current;
-    last.current = { left, collapsed: panelCollapsed };
-    if (!before || before.collapsed === panelCollapsed || before.left === left) return;
+    last.current = { start, collapsed: panelCollapsed, lead };
+    if (!before || before.start === start) return;
+    if (before.collapsed === panelCollapsed && before.lead === lead) return;
     if (!animated) return;
     // 正在滑的半道上又切了一次：从现在看得见的地方接着滑
-    x.set(x.get() + before.left - left);
+    x.set(x.get() + before.start - start);
     snapToDevicePixels(strip);
     void animate(x, 0, tween.base).then(() => snapToDevicePixels(strip));
   });
@@ -247,7 +263,8 @@ const Tab = memo(function Tab({
       aria-hidden={leaving || undefined}
       data-tab={tab.id}
       data-leaving={leaving || undefined}
-      title={folder ? `${folderLabel(folder)} / ${title}` : title}
+      // 在文件夹里的：悬停说在哪个文件夹；不在的只在标题被截断时出全名（标题那一格）
+      {...(folder ? tip(title, { detail: folderLabel(folder), name: false }) : {})}
       onPointerDown={(event) => onPointerDown(event, tab, active)}
       onMouseDown={(event) => {
         // 中键按下时浏览器会进「自动滚动」
@@ -265,7 +282,7 @@ const Tab = memo(function Tab({
       className={cn(
         // 按字数排宽（最宽 200）：没选中的标签没有底，一样宽的话字和字之间的空一段大一段小
         "group relative flex h-7 min-w-[72px] max-w-[200px] flex-[0_1_auto] cursor-default select-none",
-        "items-center rounded-lg pl-2.5 pr-1 text-[13px] transition-colors duration-[120ms]",
+        "items-center rounded-sm pl-2.5 pr-1 text-[13px] transition-colors duration-[120ms]",
         leaving ? "pointer-events-none" : "pointer-events-auto",
         active
           ? focused
@@ -279,28 +296,33 @@ const Tab = memo(function Tab({
           // 一个窗格一块；分屏时不在写的那个窗格的当前标签底色浅一档（换的是颜色，不进合成层）
           layoutId={`note-tab-pill-${paneId}`}
           className={cn(
-            "absolute inset-0 rounded-lg transition-colors duration-[120ms]",
+            "absolute inset-0 rounded-sm transition-colors duration-[120ms]",
             focused ? "bg-raised" : "bg-raised/55",
           )}
-          style={{ borderRadius: 8 }}
+          // 换标签时宽度会变：Motion 要在 style 里拿到圆角的像素值，缩放的那几帧才校正得回来
+          style={{ borderRadius: cornerRadius(6) }}
           transition={spring.smooth}
         />
       )}
-      <span data-tab-title className="relative min-w-0 flex-1 truncate leading-[20px]">
+      <span
+        data-tab-title
+        data-tip-overflow={folder ? undefined : ""}
+        className="relative min-w-0 flex-1 truncate leading-[20px]"
+      >
         {title}
       </span>
       <button
         type="button"
         tabIndex={-1}
         aria-label={`关闭「${title}」`}
-        title="关闭"
+        {...tip("关闭", { kbd: active ? shortcut("W") : undefined, name: false })}
         onPointerDown={(event) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();
           close();
         }}
         className={cn(
-          "relative ml-0.5 grid h-5 w-[18px] shrink-0 place-items-center rounded-md",
+          "relative ml-0.5 grid h-5 w-[18px] shrink-0 place-items-center rounded-xs",
           // 当前标签的底就是 raised：按钮的悬停用半透明的墨色，压在哪种底上都看得出
           "transition-colors duration-[120ms] hover:bg-ink/10 hover:text-ink",
           // 不是当前的、没悬停：看不见（淡颜色，不淡透明度）
@@ -341,7 +363,7 @@ interface TabRow {
 
 /**
  * 要画的标签：现在的这些，加上刚关掉、还在原地淡出的（插回它原来的位置）。
- * 排版只变一次；动的都是合成器上的 opacity / transform（和 Sidebar 的 useNavRows 一个路子）
+ * 排版只变一次；动的都是合成器上的 opacity / transform（和 NotchNav 的 useNavRows 一个路子）
  */
 function useTabRows(
   listRef: React.RefObject<HTMLDivElement | null>,
@@ -712,11 +734,11 @@ function openDock(label: string, doc: Document): Dock {
   };
   const overlay = doc.createElement("div");
   overlay.className =
-    "pointer-events-none fixed left-0 top-0 z-[60] rounded-[10px] border border-accent-line bg-accent-wash/70";
+    "pointer-events-none fixed left-0 top-0 z-[60] rounded-lg border border-accent-line bg-accent-wash/70";
   overlay.style.opacity = "0";
   const ghost = doc.createElement("div");
   ghost.className =
-    "pointer-events-none fixed left-0 top-0 z-[61] block h-7 max-w-[200px] truncate rounded-lg bg-canvas px-2.5 text-[13px] leading-[28px] text-ink shadow-float ring-1 ring-line-strong";
+    "pointer-events-none fixed left-0 top-0 z-[61] block h-7 max-w-[200px] truncate rounded-sm bg-canvas px-2.5 text-[13px] leading-[28px] text-ink shadow-float ring-1 ring-line-strong";
   ghost.textContent = label;
   let outside = false;
   ghost.style.opacity = "0";
@@ -877,7 +899,7 @@ function TabMenu({ at, onClose }: { at: TabMenuAt; onClose: () => void }) {
             onClose();
             item.run();
           }}
-          className="flex min-h-8 w-full cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-body outline-none transition-colors duration-[110ms] hover:bg-raised hover:text-ink focus-visible:bg-raised"
+          className="flex min-h-8 w-full cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[13px] text-body outline-none transition-colors duration-[110ms] hover:bg-raised hover:text-ink focus-visible:bg-raised"
         >
           <span className="flex-1">{item.label}</span>
           {item.hint && <span className="text-[12px] text-faint">{item.hint}</span>}
@@ -900,7 +922,8 @@ function TabMenu({ at, onClose }: { at: TabMenuAt; onClose: () => void }) {
  * - Alt + 1…8（macOS ⌃ + 1…8）第几个，9 是最后一个。Ctrl + 数字在编辑器里是「设成几级标题」
  * - Ctrl / ⌘ + \ 向右拆分：同一篇在右边再开一栏
  * - Alt + ← / →（macOS ⌘ + [ / ]）、鼠标的后退 / 前进键：这个标签里往回 / 往前走。
- *   macOS 上 Option + ← 是编辑器里按词移动，不占
+ *   macOS 上 Option + ← 是编辑器里按词移动，不占。焦点所在处标着 data-owns-alt-arrows 的（白板上选中了卡片，
+ *   Alt + 方向键是挪卡片）也不占
  */
 export function useTabKeys(
   /** 弹出窗口（§16、§20）：在那个窗口上听，作用在它正在写的那个窗格上 */
@@ -972,6 +995,10 @@ export function useTabKeys(
         }
       } else if (mod && !event.altKey && event.shiftKey && event.code === "KeyT") {
         app.reopenTab(alive);
+      } else if (mod && !event.altKey && event.shiftKey && viewOfShortcut(event.code)) {
+        // 换这一篇的摆法（白板 Ctrl+Shift+B，docs/白板.md §13.4）：换的只是这个标签
+        const tab = tabs[index];
+        if (!tab || !toggleTabView(tab, viewOfShortcut(event.code)!)) return;
       } else if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "Tab") {
         if (tabs.length < 2) return;
         const by = event.shiftKey ? -1 : 1;
@@ -990,6 +1017,8 @@ export function useTabKeys(
           offerEditorFocus(doc);
         }
       } else if (back || forward) {
+        // 焦点所在处自己要 Alt + ← / →（白板上选中了卡片：挪卡片，docs/白板.md §13.9）：让给它
+        if ((event.target as Element | null)?.closest?.("[data-owns-alt-arrows]")) return;
         app.walkTab(back ? -1 : 1, alive, popout?.popout);
       } else return;
       event.preventDefault();

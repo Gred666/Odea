@@ -1,3 +1,4 @@
+import { setTip } from "@/lib/tooltip";
 import type { EditorView } from "@codemirror/view";
 import type { Mermaid } from "mermaid";
 import { OtwWidget, positionOf } from "./widgets";
@@ -90,7 +91,7 @@ export class DiagramWidget extends OtwWidget {
     block.className = "cm-odea-diagram-block";
     const host = document.createElement("div");
     host.className = "cm-odea-diagram is-loading";
-    host.title = "点击编辑图表";
+    setTip(host, "点击编辑图表", { name: false, side: "top" });
     host.textContent = "渲染图表…";
     host.addEventListener("mousedown", (event) => {
       event.preventDefault();

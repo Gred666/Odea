@@ -2,12 +2,14 @@ import type { PluginDialog } from "@/app/store";
 import type {
   DocumentModel,
   DocumentRef,
+  NoteSummary,
   TemplateContext,
   VaultChange,
   VaultLayout,
 } from "@/data/types";
 import { NOTE, ODEA_LAYOUT } from "@/data/types";
 import { toISODate } from "@/lib/date";
+import type { Extension } from "@codemirror/state";
 import type { LucideIcon } from "lucide-react";
 import type { TargetAndTransition } from "motion/react";
 import type { ComponentType } from "react";
@@ -18,10 +20,13 @@ import type { ComponentType } from "react";
    P14.1 只有 L2（跟着应用一起编译的内置插件，src/plugins/index.ts 装上），贡献点是这几样：
    - documentTypes：一种文档（日程的某一天、某个周期的目标）。路径规则在 Rust 那一半；这里是前端要的：
      缓存、取、存、改标题、跳过去、团队里认同一篇的 id、索引里的 id（冲突副本的 conflictOf 认它）
-   - nav：窄栏上的一项（今日TODO、目标、日历），带列表栏（日历的月格子）
+   - nav：导航上的一项（左上角刘海上的一格：今日TODO、目标、日历），带侧栏（日历的月格子）
    - 文档槽位：插件的页显示哪一篇（useDocument），DocumentModel 里的眉题、分段、正文后面的一段、模板
    - commands：命令面板里的命令；toggle：开 / 关这个插件的那一条
    - templates：带逻辑的模板（日程那几套）
+   - editor：正文编辑器里的扩展（白板：藏起标记、防误删，docs/白板.md §13.10）。用到时才加载
+   - noteViews：笔记的另一种摆法（白板，docs/白板.md §13.4）：同一篇换一种样子看，切换不转换数据。
+     记在标签上（app/panes.ts 的 NoteTab.view），组件用到时才加载
 
    插件关着的时候核心里没有它的一行代码在跑：它的导航项不出现、它的文档类型 Rust 那边不认（文件当笔记）。
 
@@ -65,7 +70,7 @@ export interface DocumentType {
   open(key: string): string;
 }
 
-/** 窄栏上的一项（贡献点 nav） */
+/** 刘海里的一格（贡献点 nav，docs/边栏.md §4.3） */
 export interface NavItem {
   /** 导航项的 id。本机记的「上次停在哪」（odea.session）里存的就是它，不能改 */
   id: string;
@@ -73,14 +78,22 @@ export interface NavItem {
   plugin: string;
   label: string;
   icon: LucideIcon;
-  /** 窄栏上的顺序：核心的「文件」是 0、「归档」是 90 */
+  /** 刘海里的顺序：核心的「文件」是 0、「归档」是 90 */
   order: number;
   /** 命令面板里搜它的词 */
   keywords: string;
-  /** 切到这一页时图标播一次的「签名动作」（components/Sidebar.tsx）：只动 transform */
+  /**
+   * 切到这一页时图标播一次的「签名动作」：只动 transform —— rotate、scale（或 scaleX / scaleY）、x / y 的关键帧数组，
+   * 加 transition.duration。NotchNav 的 playIconMotion 把它们交给 WAAPI 在合成器上放，别的键不认
+   */
   motion: { to: TargetAndTransition; origin: string };
-  /** 中间那一栏（列表栏）放什么。没有就是两栏的页（今日TODO、目标） */
+  /** 侧栏（从刘海往下长的那一栏）放什么。没有就只剩刘海（今日TODO、目标） */
   List?: ComponentType;
+  /**
+   * 侧栏长多高：拉到窗口底边（默认），还是只长到内容那么高（日历的月格子，边栏.md §4.6）。
+   * 按内容高度的那一栏底下不放仓库切换器
+   */
+  panel?: "full" | "fit";
 }
 
 /** 命令面板里的一条（贡献点 commands） */
@@ -109,12 +122,49 @@ export interface PluginToggle {
   keywords: string;
 }
 
+/** 笔记的另一种摆法（贡献点 noteViews）：同一篇笔记换一种样子看，正文还是那份 Markdown */
+export interface NoteView {
+  /** 摆法的 id：记在标签上、本机的 viewMemory 里，不能改 */
+  id: string;
+  /** 哪个插件的 */
+  plugin: string;
+  /** 给人看的名字：白板。命令面板里是「以白板查看」 */
+  label: string;
+  icon: LucideIcon;
+  /** 命令面板里搜它的词 */
+  keywords: string;
+  /** 快捷键：Ctrl（Mac 上 ⌘）+ Shift + 这个键（KeyboardEvent.code），在它和文档之间来回 */
+  shortcut?: string;
+  /** 正文区的组件（单独的分包，第一次用到才加载） */
+  load(): Promise<ComponentType<NoteViewProps>>;
+  /**
+   * 这一篇在这台电脑上没用过哪种摆法时，默认是不是它（白板：有白板的标记）。列表栏里这一篇的图标也照它换成 icon
+   */
+  defaultFor(note: NoteSummary): boolean;
+  /**
+   * 新建一篇就用这种摆法（白板：「新建白板」）：命令面板、文件夹的「…」菜单里各多一项。建一篇空笔记、起好 title
+   * 这个名字、记成这种摆法、开出来（app/noteViews.ts 的 createNoteAs）
+   */
+  create?: { label: string; title: string; keywords: string };
+}
+
+/** 摆法的组件拿到的东西：和 DocumentView 一样的那一篇，加上换回文档的入口 */
+export interface NoteViewProps {
+  doc: DocumentModel;
+  /** 在正在写的那个窗格里（键盘、跳过去要滚到的地方只由它接） */
+  focused: boolean;
+  /** 存正文（和 DocumentView 同一条链，技术方案 §8.6） */
+  onSaveDocument: (target: DocumentRef, markdown: string) => Promise<void>;
+  /** 回到文档视图（这一个标签） */
+  onExit: () => void;
+}
+
 export interface Plugin {
   /** `odea.journal`：仓库标记 plugins 里的键 */
   id: string;
   /** 给人看的名字：日程 */
   name: string;
-  /** Odea 自己建的仓库默认开着（取到仓库的摆法之前也当它开着，免得窄栏上先少几项再冒出来） */
+  /** Odea 自己建的仓库默认开着（取到仓库的摆法之前也当它开着，免得导航上先少几项再冒出来） */
   onByDefault: boolean;
   /** 默认开着时，不在文件树上的那几个文件夹（取到仓库的摆法之前用） */
   defaultDirs: string[];
@@ -143,6 +193,13 @@ export interface Plugin {
   capture?(text: string): Promise<void>;
   /** 浏览器预览（data/mock.ts）里它的那一份：搜索、反链、历史版本都要看到它的文档 */
   loadMock?(): Promise<void>;
+  /**
+   * 正文编辑器里的扩展（CodeMirror 的 Extension）：插件开着时装进每个文档视图的编辑器，关了就拿掉。
+   * 编辑器的分包加载时一起加载（loadEditorExtensions），入口包里只有这个函数
+   */
+  editor?(): Promise<Extension>;
+  /** 笔记的另一种摆法（白板）。插件开着才有 */
+  noteViews?: NoteView[];
   /**
    * 它的文档填的模板槽位（DocumentModel.templates 的 scope：日程的 day / week / month / year）。
    * L0 插件的模板可以指定用在这几种上（清单的 templates[].scope），校验清单时认它
@@ -174,6 +231,54 @@ export function documentType(type: string): DocumentType | undefined {
   return types.get(type);
 }
 
+/* ---------------- 编辑器的扩展（贡献点 editor） ---------------- */
+
+const editorExtensions = new Map<string, Extension>();
+let editorExtensionsLoaded: Promise<void> | null = null;
+
+/**
+ * 装着的插件给编辑器的扩展都取回来（开没开都取：开关插件时不用再等）。和编辑器的分包一起等，编辑器第一次挂上时就有，
+ * 不先画一帧没有它的样子（白板的标记先是「注释」再藏起来）。哪个插件的取不回来，记一笔、编辑器照常
+ */
+export function loadEditorExtensions(): Promise<void> {
+  editorExtensionsLoaded ??= Promise.all(
+    plugins.map(async (plugin) => {
+      if (!plugin.editor) return;
+      try {
+        editorExtensions.set(plugin.id, await plugin.editor());
+      } catch (error) {
+        console.error(`插件 ${plugin.id} 的编辑器扩展加载失败`, error);
+      }
+    }),
+  ).then(() => undefined);
+  return editorExtensionsLoaded;
+}
+
+/** 开着的插件给编辑器的扩展（取回来了的），按装上的先后 */
+export function editorExtensionsOf(enabled: readonly string[]): Extension[] {
+  const out: Extension[] = [];
+  for (const plugin of plugins) {
+    const extension = enabled.includes(plugin.id) ? editorExtensions.get(plugin.id) : undefined;
+    if (extension) out.push(extension);
+  }
+  return out;
+}
+
+/* ---------------- 笔记的摆法（贡献点 noteViews） ---------------- */
+
+/** 开着的插件给的摆法，按装上的先后 */
+export function noteViewsOf(enabled: readonly string[]): NoteView[] {
+  return plugins.flatMap((plugin) => (enabled.includes(plugin.id) ? (plugin.noteViews ?? []) : []));
+}
+
+/** 这一种摆法（开着的插件给的）；文档、关着的插件的是 undefined */
+export function noteViewOf(
+  id: string | undefined,
+  enabled: readonly string[],
+): NoteView | undefined {
+  return id ? noteViewsOf(enabled).find((view) => view.id === id) : undefined;
+}
+
 /** 所有插件的导航项，按 order 排 */
 export function pluginNavItems(): NavItem[] {
   return plugins.flatMap((plugin) => plugin.nav).sort((a, b) => a.order - b.order);
@@ -192,12 +297,12 @@ export function setDeclaredNavOrder(order: readonly string[]): void {
   declaredNavOrder = order;
 }
 
-/** 窄栏上每一项（不管插件开没开）原来的先后：文件、插件的按 order、归档、扩展页 */
+/** 导航上每一项（不管插件开没开）原来的先后：文件、插件的按 order、归档、扩展页 */
 export function defaultNavIds(): string[] {
   return [...CORE_NAV_FIRST, ...pluginNavItems().map((item) => item.id), ...CORE_NAV_LAST];
 }
 
-/** 窄栏上的先后（插件调过的）：切换时主内容往哪个方向挪也按它（app/store 的 navOrder） */
+/** 导航上的先后（插件调过的）：切换时主内容往哪个方向挪也按它（app/store 的 navOrder） */
 export function navIds(): string[] {
   const all = defaultNavIds();
   const first = declaredNavOrder.filter((id) => all.includes(id));

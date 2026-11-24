@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { formatSmartCN, toISODate } from "@/lib/date";
 import { animatedEmojiText } from "@/lib/emojiText";
 import { spring, tween } from "@/lib/motion";
+import { tip } from "@/lib/tooltip";
 import { RotateCcw, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { memo, useEffect, useMemo, useRef } from "react";
@@ -167,14 +168,14 @@ const ArchiveCard = memo(function ArchiveCard({
         {selected && (
           <motion.span
             layoutId="archive-selection"
-            className="absolute inset-x-0 inset-y-[2px] rounded-lg bg-accent-wash ring-1
+            className="absolute inset-x-0 inset-y-[2px] rounded-md bg-accent-wash ring-1
                        ring-accent-line/60"
             transition={spring.smooth}
           />
         )}
         {!selected && (
           <span
-            className="absolute inset-x-0 inset-y-[2px] rounded-lg transition-colors
+            className="absolute inset-x-0 inset-y-[2px] rounded-md transition-colors
                        duration-[150ms] group-hover:bg-raised/40"
           />
         )}
@@ -204,10 +205,10 @@ const ArchiveCard = memo(function ArchiveCard({
         <button
           type="button"
           aria-label={`删除「${title}」`}
-          title="删除（可以撤销）"
+          {...tip("删除", { detail: "可以撤销", name: false })}
           onClick={() => actions.remove(note.id)}
           // 一列每行都有：淡的是颜色，不是 opacity，不进合成层（docs/PITFALLS/动效.md 规矩 3）
-          className="grid h-6 w-6 place-items-center rounded-md text-transparent transition-colors
+          className="grid h-6 w-6 place-items-center rounded-sm text-transparent transition-colors
                      duration-[150ms] hover:!text-danger focus-visible:text-muted group-hover:text-muted"
         >
           <Trash2 size={14} strokeWidth={1.9} />
@@ -216,13 +217,13 @@ const ArchiveCard = memo(function ArchiveCard({
         <motion.button
           type="button"
           aria-label={`恢复「${title}」`}
-          title="恢复到笔记"
+          {...tip("恢复到笔记", { name: false })}
           onClick={() => actions.restore(note.id)}
           whileHover={{ rotate: -150 }}
           whileTap={{ scale: 0.85, rotate: -300 }}
           transition={spring.smooth}
           className={cn(
-            "grid h-6 w-6 place-items-center rounded-md",
+            "grid h-6 w-6 place-items-center rounded-sm",
             "transition-colors duration-[150ms] hover:!text-accent",
             selected
               ? "text-accent"

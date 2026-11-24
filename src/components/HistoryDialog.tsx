@@ -176,7 +176,7 @@ export function HistoryDialog() {
                   type="button"
                   aria-label="关闭"
                   onClick={close}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted
                              transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />
@@ -358,7 +358,7 @@ function HistoryBody({ opening, onDone }: { opening: Opening; onDone: () => void
               >
                 {formatRelativeTime(item.time)}
                 {texts[item.blob] !== undefined && texts[item.blob] === current && (
-                  <span className="rounded bg-ink/[0.06] px-1 text-[12px] font-normal text-muted">
+                  <span className="rounded-xs bg-ink/[0.06] px-1 text-[12px] font-normal text-muted">
                     和现在一样
                   </span>
                 )}

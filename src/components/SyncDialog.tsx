@@ -112,7 +112,7 @@ export function SyncDialog() {
                   type="button"
                   aria-label="关闭"
                   onClick={() => setOpen(false)}
-                  className="grid h-7 w-7 place-items-center rounded-md text-muted
+                  className="grid h-7 w-7 place-items-center rounded-sm text-muted
                              transition-colors duration-[140ms] hover:bg-raised hover:text-ink"
                 >
                   <X size={14} strokeWidth={2} />
@@ -473,7 +473,7 @@ function RepoStep({
               onLogout();
             })
           }
-          className="rounded px-1 text-[12px] text-muted underline-offset-2 hover:text-ink hover:underline"
+          className="rounded-xs px-1 text-[12px] text-muted underline-offset-2 hover:text-ink hover:underline"
         >
           换个账号
         </button>
@@ -891,7 +891,7 @@ function ProxyLine() {
             onChange={(e) => setDraft(e.target.value)}
             placeholder="http://127.0.0.1:7890，空着就用系统代理"
             spellCheck={false}
-            className="h-7 min-w-0 flex-1 rounded-md border border-line-strong bg-canvas px-2 font-mono
+            className="h-7 min-w-0 flex-1 rounded-sm border border-line-strong bg-canvas px-2 font-mono
                        text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
           />
           <SecondaryButton type="submit">保存</SecondaryButton>
@@ -974,7 +974,7 @@ function SecondaryButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "flex h-7 shrink-0 items-center rounded-md px-2.5 text-[12px] transition-colors duration-[140ms]",
+        "flex h-7 shrink-0 items-center rounded-sm px-2.5 text-[12px] transition-colors duration-[140ms]",
         "disabled:opacity-50",
         danger ? "font-medium text-danger hover:bg-danger/10" : "text-body hover:bg-raised",
       )}

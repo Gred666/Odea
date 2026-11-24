@@ -136,7 +136,6 @@ export function slideX(dir: 1 | -1): Variants {
    集中在这里定义，避免散落各处写错字符串。
 */
 export const layoutIds = {
-  navIndicator: "nav-indicator",
   listSelection: "list-selection",
   outlineIndicator: "outline-indicator",
   segmentThumb: (group: string) => `segment-thumb-${group}`,

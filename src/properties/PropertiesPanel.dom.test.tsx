@@ -413,7 +413,7 @@ describe("PropertiesPanel", () => {
     await catalogLoaded();
     const marker = kindButton("截止")!;
     expect(marker.getAttribute("aria-label")).toBe("截止：日期，类型不符：这个值不是日期");
-    expect(marker.title).toContain("类型不符：这个值不是日期");
+    expect(marker.dataset.tip).toContain("类型不符：这个值不是日期");
     // 标记就是这一行的类型按钮：键盘走得到，点它换类型
     expect(marker.disabled).toBe(false);
     expect(kindButton("n")?.getAttribute("aria-label")).toBe("n：数字，类型不符：这个值不是数字");
@@ -422,8 +422,13 @@ describe("PropertiesPanel", () => {
     const values = input("值");
     expect(values.map((field) => field.value)).toEqual(["soon", "soon", "soon"]);
     expect(values[0]?.getAttribute("aria-invalid")).toBe("true");
-    // title 是输入框的描述：读屏读完「值」接着读这一句
-    expect(values[0]?.title).toBe("类型不符：这个值不是日期");
+    // 这一句是输入框的描述：读屏读完「值」接着读这一句；指上去是悬停提示
+    expect(values[0]?.getAttribute("aria-describedby")).toBeTruthy();
+    const described = container.querySelector(
+      `#${CSS.escape(values[0]!.getAttribute("aria-describedby")!)}`,
+    );
+    expect(described?.textContent).toBe("类型不符：这个值不是日期");
+    expect(values[0]?.dataset.tip).toBe("类型不符：这个值不是日期");
 
     // 点进去、不改就走：什么都不写（以前日期框是空的，一走就把 soon 抹了）
     await enter(values[0]!);
@@ -537,7 +542,7 @@ describe("PropertiesPanel", () => {
 
   it("the YAML being edited is not wiped by a change from elsewhere; untouched, it follows", async () => {
     await mount("status: 草稿");
-    const open = container.querySelector<HTMLButtonElement>('button[title="直接改 YAML"]')!;
+    const open = container.querySelector<HTMLButtonElement>('button[data-tip="直接改 YAML"]')!;
     await act(async () => open.click());
     const yaml = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="属性（YAML）"]',
@@ -567,7 +572,7 @@ describe("PropertiesPanel", () => {
 
   it("the source box names the keys both sides changed, and 用外面的 takes the outside version", async () => {
     await mount("status: 草稿\n截止: 2026-11-20");
-    const open = container.querySelector<HTMLButtonElement>('button[title="直接改 YAML"]')!;
+    const open = container.querySelector<HTMLButtonElement>('button[data-tip="直接改 YAML"]')!;
     await act(async () => open.click());
     const yaml = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="属性（YAML）"]',

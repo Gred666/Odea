@@ -1,11 +1,11 @@
 import { cn } from "@/lib/cn";
-import { tween } from "@/lib/motion";
-import { motion } from "motion/react";
+import { tip } from "@/lib/tooltip";
 import { type ComponentProps, type ReactNode, useEffect, useRef, useState } from "react";
 
 /**
- * 中列表栏的统一外壳。
+ * 侧栏（从刘海往下长的那一栏，components/EdgeChrome.tsx）里内容的统一外壳。
  * 笔记 / 日历 / 归档 三个视图共用，保证标题排版、内边距、滚动行为一致。
+ * 底色是形状自己画的（rail），这里不铺；顶上从刘海底下开始，留 14（docs/边栏.md 原型）
  */
 export function ListColumn({
   title,
@@ -26,44 +26,23 @@ export function ListColumn({
   overlay?: ReactNode;
   children: ReactNode;
 }) {
+  // 标题、按钮、搜索框不自己做进场：整栏的进出是 EdgeChrome 那一层在合成器上的淡入淡出（docs/边栏.md §5.2）。
+  // 2026-11-20 以前这里各带一个 opacity + y: 6 的进场，和那一层的淡入同时跑；y 是 Motion 在主线程上逐帧写的，
+  // 侧栏展开、切区的那几帧每帧都要重排一次、整栏重画一次（4 倍降速 3–7ms，边栏.md §10.3）
   return (
-    <div className="relative flex h-full w-[300px] shrink-0 flex-col border-r border-line-strong/60 bg-panel">
-      <div className="shrink-0 px-6 pt-[42px]">
+    <div className="relative flex h-full w-[300px] shrink-0 flex-col">
+      <div className="shrink-0 px-6 pt-3.5">
         {/* 至少 32 高（栏头按钮的高度）：没有按钮的那一栏（归档）标题行也一样高，切过去时下面的列表不跳 */}
         <div className="flex min-h-8 items-center justify-between gap-3">
           {titleSlot ?? (
-            <motion.h2
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={tween.base}
-              className="truncate font-display text-[24px] font-bold leading-tight text-ink"
-            >
+            <h2 className="truncate font-display text-[24px] font-bold leading-tight text-ink">
               {title}
-            </motion.h2>
+            </h2>
           )}
-          {action && (
-            // 只淡入不缩放：按钮里可能是字（日历的「今天」），缩放会让字先糊、停下时再跳清楚
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ ...tween.base, delay: 0.06 }}
-              className="shrink-0"
-            >
-              {action}
-            </motion.div>
-          )}
+          {action && <div className="shrink-0">{action}</div>}
         </div>
 
-        {belowTitle && (
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ ...tween.base, delay: 0.05 }}
-            className="mt-4"
-          >
-            {belowTitle}
-          </motion.div>
-        )}
+        {belowTitle && <div className="mt-4">{belowTitle}</div>}
       </div>
 
       <div data-list-scroller className="scroll-thin mt-3 min-h-0 flex-1 overflow-y-auto px-3 pb-6">
@@ -98,10 +77,9 @@ export function ColumnButton({
   return (
     <button
       type="button"
-      aria-label={label}
-      title={label}
+      {...tip(label)}
       className={cn(
-        "flex h-8 items-center justify-center gap-1.5 rounded-lg border border-line-strong",
+        "flex h-8 items-center justify-center gap-1.5 rounded-md border border-line-strong",
         "bg-canvas text-muted transition-colors duration-[140ms] hover:border-faint/40",
         "hover:text-ink active:bg-raised/60",
         "data-[state=open]:border-faint/40 data-[state=open]:bg-raised/60 data-[state=open]:text-ink",

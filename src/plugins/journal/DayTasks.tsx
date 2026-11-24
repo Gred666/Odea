@@ -2,6 +2,7 @@ import { openDocument } from "@/app/navigate";
 import { useApp } from "@/app/store";
 import { cn } from "@/lib/cn";
 import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
+import { tip } from "@/lib/tooltip";
 import { ArrowUpRight } from "lucide-react";
 import { motion } from "motion/react";
 import { useJournal } from "./store";
@@ -60,7 +61,7 @@ export function ActionItem({
             animate={{ x: done ? 1.5 : 0 }}
             transition={spring.snappy}
             // 一行放不下被截断的：指上去看得到全的
-            title={task.title}
+            data-tip-overflow
           >
             {task.title}
           </motion.span>
@@ -71,7 +72,7 @@ export function ActionItem({
                 "mt-[3px] block truncate text-[12px] leading-[1.4] transition-colors duration-200",
                 done ? "text-faint/70" : "text-muted",
               )}
-              title={task.meta}
+              data-tip-overflow
             >
               {task.meta}
             </span>
@@ -83,11 +84,11 @@ export function ActionItem({
         <button
           type="button"
           aria-label={`打开出处：${task.meta ?? "原文"}`}
-          title="打开写着这条任务的地方"
+          {...tip("打开写着这条任务的地方", { name: false })}
           onClick={() =>
             openDocument(source, task.line != null ? { line: task.line + 1 } : undefined)
           }
-          className="mt-[9px] grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint opacity-0
+          className="mt-[9px] grid h-7 w-7 shrink-0 place-items-center rounded-sm text-faint opacity-0
                      transition-[opacity,color,background-color] duration-[140ms] hover:bg-raised
                      hover:text-ink focus-visible:opacity-100 group-hover:opacity-100"
         >

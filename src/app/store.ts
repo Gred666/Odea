@@ -1,5 +1,6 @@
 import { within } from "@/data/folders";
 import type { DocumentAnchor, DocumentRef, VaultLayout, WorkspaceId } from "@/data/types";
+import { FLARE_RADIUS, footprintOf } from "@/lib/edgeShape";
 import { isTauri } from "@/lib/tauri";
 import { transitionTheme } from "@/lib/themeTransition";
 import { navIds, navItemOf } from "@/plugins/registry";
@@ -96,8 +97,15 @@ interface AppState {
   activePane: string;
   /** 开在新标签里（默认正在写的窗格，paneId 也可以是弹出窗口的）；那个窗格里已经开着就切过去 */
   openNoteTab: (noteId: string, paneId?: string) => void;
+  /**
+   * 开在正在写的那个窗格旁边的窗格里，没有就向右拆出一栏（白板上双击引用卡片，docs/白板.md §13.9）。
+   * 正在写的是弹出窗口的就在那个窗口里
+   */
+  openNoteBeside: (noteId: string) => void;
   /** 切到这个标签（它所在的窗格也成了正在写的） */
   switchTab: (tabId: string) => void;
+  /** 换一个标签的摆法（白板，docs/白板.md §13.4）；undefined 是文档。主窗口、弹出窗口里的都认 */
+  setTabView: (tabId: string, view: string | undefined) => void;
   focusPane: (paneId: string) => void;
   /** 关掉；窗格里只剩它时关掉这个窗格，整个窗口只剩它时不关 */
   closeTab: (tabId: string) => void;
@@ -237,8 +245,8 @@ interface AppState {
   captureSettingsOpen: boolean;
   setCaptureSettingsOpen: (v: boolean) => void;
   /**
-   * 窄栏右边那一栏（文件树、归档列表、插件的列表栏：日历的月历）收起来，给正文让地方（像 VS Code 的侧栏），
-   * 记在本机。没有列表栏的页（今日TODO、目标）本来就没有这一栏
+   * 侧栏（从刘海往下长的那一栏：文件树、归档列表、插件的侧栏：日历的月历）收回刘海里，给正文让地方
+   * （像 VS Code 的侧栏），记在本机。没有侧栏的页（今日TODO、目标）本来就只剩刘海
    */
   panelCollapsed: boolean;
   setPanelCollapsed: (v: boolean) => void;
@@ -289,7 +297,7 @@ function loadPrefs(): Prefs {
       if (p.noteSort === "created" || p.noteSort === "title" || p.noteSort === "manual")
         prefs.noteSort = p.noteSort;
       prefs.noteExcerpts = !!p.noteExcerpts;
-      // 以前的 navCollapsed（导航栏收成图标栏）不接着用：导航栏现在一直是窄栏（P11.2）
+      // 以前的 navCollapsed（导航栏收成图标栏）不接着用：P11.2 起导航栏是常驻的窄栏，2026-11-20 起是左上角的刘海（docs/边栏.md）
       prefs.panelCollapsed = !!p.panelCollapsed;
     }
   } catch {
@@ -359,7 +367,7 @@ function loadSession(): Session {
   try {
     const p = JSON.parse(readStored(SESSION_KEY) ?? "{}");
     // 插件的页（今日TODO ……）这时还认不出来（插件在这之后才装上）：先照记的放着，
-    // 取到仓库的摆法时 fitLayout 再核对。扩展页 P14.2 起回到了窄栏上，停在那儿的照旧回到那儿
+    // 取到仓库的摆法时 fitLayout 再核对。扩展页 P14.2 起回到了导航上，停在那儿的照旧回到那儿
     if (typeof p.workspace === "string" && p.workspace) {
       session.workspace = p.workspace;
     }
@@ -555,7 +563,11 @@ export const useApp = create<AppState>((set, get) => {
       const pane = paneId === popout ? undefined : paneId;
       apply((layout) => panes.openTab(layout, noteId, pane), popout);
     },
+    openNoteBeside: (noteId) =>
+      apply((layout) => panes.openBeside(layout, noteId), get().activePopout),
     switchTab: (tabId) => apply((layout) => panes.switchTab(layout, tabId), popoutOf(tabId)),
+    setTabView: (tabId, view) =>
+      apply((layout) => panes.setTabView(layout, tabId, view), popoutOf(tabId)),
     focusPane: (paneId) => apply((layout) => panes.focusPane(layout, paneId), windowOfPane(paneId)),
     closeTab: (tabId) => {
       const popout = popoutOf(tabId);
@@ -891,25 +903,41 @@ export function initPreferences() {
   });
 }
 
-/** 当前工作区是否有中列表栏：文件、归档有；插件的页看它的导航项带不带列表栏（日历带，今日TODO 和 GOAL 是两栏布局） */
+/** 当前工作区有没有侧栏（从刘海往下长的那一栏）：文件、归档有；插件的页看它的导航项带不带（日历带，今日TODO 和 GOAL 只剩刘海） */
 export function hasListColumn(w: WorkspaceId): boolean {
   return w === "notes" || w === "archive" || !!navItemOf(w)?.List;
 }
 
-/** 中列表栏的宽度。进出场时它要从导航栏底下滑出来 / 滑回去，位移就是这么宽（见 Shell）。 */
+/**
+ * 侧栏长多高（docs/边栏.md §4.2）：full 拉到窗口底边（文件、归档，插件默认），fit 只长到内容那么高（日历）；
+ * 没有侧栏的页是 null
+ */
+export function panelOf(w: WorkspaceId): "full" | "fit" | null {
+  if (!hasListColumn(w)) return null;
+  return navItemOf(w)?.panel ?? "full";
+}
+
+/** 侧栏的宽度：永远 300，导航有几项都不变（docs/边栏.md §4.3） */
 export const LIST_WIDTH = 300;
 
-/**
- * 最左边那条窄栏（Sidebar）的宽度。64 是算出来的：导航项左右各留 12、图标再往里 12，
- * 图标中心落在 31.5。2026-10-20 以前它能展开成 240 宽带字的导航，P11.2 起一直是窄栏
- */
-export const NAV_WIDTH = 64;
+/** 刘海的高（docs/边栏.md §3.4：两个角 17.9 + 23.9，剩 6.2 的直边） */
+export const NOTCH_HEIGHT = 48;
+/** 刘海里最多几格：300 宽放得下「O」+ 6 格，第 7 项起最后一格换成「⋯」 */
+export const NOTCH_MAX_CELLS = 6;
+
+/** 刘海多宽：左边 12 +「O」28 + 8，每格 36、间隔 4，右边 12（docs/边栏.md §4.3） */
+export const notchWidth = (cells: number) => 56 + 40 * cells;
+
+/** 贴边的凹弯伸出去多宽（R=12，17.9）：标签栏、专注模式按它让 */
+export const FLARE_WIDTH = Math.ceil(footprintOf(FLARE_RADIUS));
 
 /**
- * 左侧 chrome 最宽时的总宽：窄栏 64 + 列表栏 300。
- * 正文的画布往它底下多铺这么宽（见 DocumentView）；列表栏收起时多铺的那一截压在窗口外面，不碍事。
+ * 左侧 chrome（刘海 + 侧栏，整块 rail 色）最宽多宽。
+ * 正文的画布往它底下多铺这么宽（见 DocumentView）：退出专注模式时它滑回来，底下是连着的白。
+ * 侧栏收起时多铺的那一截压在窗口外面，不碍事
  */
-export const RAIL_WIDTH = NAV_WIDTH + LIST_WIDTH;
+export const RAIL_WIDTH = LIST_WIDTH;
 
-/** 现在左侧 chrome 有多宽：专注模式要把这一整条推出去 */
-export const chromeWidth = (listShown: boolean) => NAV_WIDTH + (listShown ? LIST_WIDTH : 0);
+/** 现在左侧 chrome 露出来多宽（含右上那处凹弯）：专注模式要把这一整块推出去 */
+export const chromeWidth = (panelShown: boolean, notch: number) =>
+  (panelShown ? LIST_WIDTH : notch) + FLARE_WIDTH;

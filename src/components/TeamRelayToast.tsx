@@ -1,4 +1,5 @@
 import { tween } from "@/lib/motion";
+import { tip } from "@/lib/tooltip";
 import { answerTeamRelay, useTeam } from "@/team/store";
 import { Radio } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -33,7 +34,10 @@ export function TeamRelayToast() {
           <Radio size={14} strokeWidth={2} className="shrink-0 text-accent" />
           <span
             className="min-w-0 truncate"
-            title="经中继转的时候，它看得到你的 IP 地址，看不到内容"
+            {...tip("经中继转的时候，它看得到你的 IP 地址，看不到内容", {
+              name: false,
+              side: "top",
+            })}
           >
             这个团队仓库用中继「{relay.name ?? relay.host}」：用了以后不在同一个网络的成员也连得上
           </span>

@@ -39,7 +39,7 @@ node scripts/a11y-names.mjs --check
 | | 怎么起 | 后端 | 验得了什么 |
 |---|---|---|---|
 | 浏览器预览 | `.claude/launch.json` 的 `odea`（`pnpm dev`，1420）；生产构建用 `odea-preview`（1432） | `data/mock.ts`，存在 localStorage | 界面、交互、编辑器、动效 |
-| 桌面端 | `odea-desktop`（`pnpm tauri dev`）；不碰真实笔记用 `odea-desktop-temp`（临时数据目录，WebView2 调试端口 9333） | Rust | 上面那些，加上 Rust 的命令、文件和索引、文件监听、窗口、系统对话框和通知、asset 协议和 CSP |
+| 桌面端 | `odea-desktop`（`pnpm tauri dev`）；不碰真实笔记用 `odea-desktop-temp`（临时数据目录，WebView2 调试端口 9333，自己的 identifier `dev.odea.temp`，用户的 Odea 开着也起得来） | Rust | 上面那些，加上 Rust 的命令、文件和索引、文件监听、窗口、系统对话框和通知、asset 协议和 CSP |
 
 - 常用命令在 `TODO.md` 开头的「环境备忘」
 - 界面和交互的改动必须真的看渲染结果、真的操作一遍；Rust 那一半的改动要在桌面端走
@@ -56,7 +56,8 @@ node scripts/a11y-names.mjs --check
 |---|---|---|
 | 常用操作的性能回归（启动、切换、打字、方向键、滚动、命令面板、左侧导航、分屏、内存） | `perf.mjs` + `compare.mjs` | 无头 Chrome、mock 后端，默认 4 倍 CPU 降速 + 2x 屏；量生产构建。改之前、改之后各跑一次再对比。`--only tabs,props` 两个默认不跑：Ctrl+Tab 换篇（含焦点进到新正文的时刻）、长文属性面板里打字和回车存，改了这两处时加上。`--only collab`（协作时访客一直在打字、主持人打字）也默认不跑。同一边两次之间也差 5–10%，要下结论就两边交替各跑 3–5 次、比中位数（`REVIEWS/2026-11-13-全项目审查.md` §3.7） |
 | 每种窗口打开要加载多少 JS、多久画出来 | `entry.mjs` | 给它构建目录，自己起静态服务（`REVIEWS/2026-11-10-审查与竞品调研.md` §5.3.1） |
-| 淡入淡出结束那一帧闪不闪 | `fade-frames.mjs` | 逐帧和终帧比，找「平台」；场景名和读法见下面「逐帧对比」 |
+| 淡入淡出结束那一帧闪不闪 | `fade-frames.mjs` | 逐帧和终帧比，找「平台」；场景名和读法见下面「逐帧对比」；`--dpr 1.25` 换成真的倍率 |
+| 边栏（刘海 + 侧栏）的动画：动画帧里有没有布局 / 重绘、多倍屏下片和片之间有没有发丝缝 | `edge-chrome.mjs` | `trace`：4 倍降速，收起 / 展开、切区、开关日程各录一段，第一帧之后的 Layout、Paint 一条条列出来（Paint 带着节点），`--dump` 存下 trace 给 Performance 面板看；`seams`：`--force-device-scale-factor` 1 / 1.25 / 1.5 / 2 起，只留形状那几块，底色换成品红，动画放慢 10 倍逐帧找「两边是侧栏色、中间一条不是」的像素；`--gap 1` 故意空出 1px 的缝，自检找不找得到（`边栏.md` §10.3） |
 | 窗口级的动画（开窗、关窗、两个窗口交接） | `window-frames.py` | WebView 里量不到，抓屏幕；量窗口的边，不只量亮度 |
 | 协作时用输入法打字 | `collab-ime.mjs` | 真 Chrome 里走一遍组字：不丢字、不重复、对方看不到拼音。加 `near`：对方打在同一行；加 `attach`：挂上会话的那一刻正在组字（实验台 `late=1`，`协同编辑.md` §27）；加 `joincompose`：点加入（记本机正文）的那一刻正在组字（§27.5）。`CDP_PORT` 换调试端口 |
 | 协作时 Loro 文档的内存、开一篇的耗时、编辑历史和浅快照 | `collab-docs.mjs` | node 直接跑真的 `loro-crdt`，不起界面；篇数是参数（`协同编辑.md` §29.1） |
@@ -75,7 +76,7 @@ node scripts/a11y-names.mjs --check
 node scripts/perf/fade-frames.mjs http://localhost:1420/ image
 ```
 
-1.5 倍屏无头 Chrome、动画放慢 10 倍，逐帧截那一块和最终帧逐像素比。正确的是差异一路降到 0；
+1.5 倍屏无头 Chrome、动画放慢 10 倍，逐帧截那一块和最终帧逐像素比（要看别的倍率加 `--dpr 1.25`：用 `--force-device-scale-factor` 起，排版、对齐整物理像素都是真的）。正确的是差异一路降到 0；
 中途画面已经不动、却和最终帧不一样，最后一帧才突然归零（「平台」），就是这个问题。
 2026-10-17 图片悬停按钮修之前：淡入 113–141ms 这段有 470–536 个像素和终帧不同，140ms 那一帧跳成终帧；
 修之后一路收敛，117ms 起和终帧完全一致。要查别的控件，在脚本的 `SCENES` 里加一个场景，
@@ -86,8 +87,11 @@ node scripts/perf/fade-frames.mjs http://localhost:1420/ image
 
 验证的坑（2026-10-29）：
 
+- 列表栏行上的「…」（`RowMenu`）悬停时才换成真的菜单：脚本里挪过去马上按，按在还没换的那个按钮上，菜单不开。挪过去停 200ms 再点（`whiteboard/create.mjs`，2026-11-23）
+
 - DevTools 的 `Emulation.setDeviceMetricsOverride` 模拟的 1.25 / 1.5 倍屏不是真的：排版还按 1 倍算，截图是放大重采样出来的，
-  整物理像素对没对齐看不出来（本来是实色的描边也显得糊）。要逐像素看描边，无头 Chrome 用 `--force-device-scale-factor` 起。
+  整物理像素对没对齐看不出来（本来是实色的描边也显得糊）。要逐像素看描边，无头 Chrome 用 `--force-device-scale-factor` 起
+  （`cdp.mjs` 的 `launch(port, ["--force-device-scale-factor=1.25"])`，`edge-chrome.mjs seams` 就是这么起的）。
   `fade-frames.mjs` 找「平台」不受影响
 - 窗口级的动画（系统的开窗、关窗）WebView 里量不到，要抓屏幕：`scripts/perf/window-frames.py`。
   要量窗口的边，别只量亮度 —— 以前只看亮度，把边淡边缩、最后一跳的关窗动画判成了「每帧都合成了，很顺」

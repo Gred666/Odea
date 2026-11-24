@@ -1,4 +1,4 @@
-import { type ThemePref, useApp } from "@/app/store";
+import { useApp } from "@/app/store";
 import { spring } from "@/lib/motion";
 import { onThemeTransition } from "@/lib/themeTransition";
 import { Monitor } from "lucide-react";
@@ -6,26 +6,22 @@ import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-const ORDER: ThemePref[] = ["system", "light", "dark"];
-const LABEL = { system: "跟随系统", light: "亮色", dark: "暗色" } as const;
-/** 和窄栏底下那几格的图标一样大（Sidebar 的 FOOT_ICON） */
-const ICON_SIZE = 18;
+/** 和控制中心里每一行的图标一样大 */
+const ICON_SIZE = 16;
 
 /**
- * 三态主题切换。
- * 亮色 / 暗色的图标是同一个太阳月亮：换主题时整页播日落 / 日出（lib/themeTransition.ts），
- * 这里同时让太阳收起光芒、沉到地平线下，月亮升起来；日出反过来。
- * 那段时间整页盖着一层旧主题的副本，按钮在它底下 —— 太阳月亮那一段画在副本上面的一层里，
- * 和按钮里的图标重合，播完再交回按钮。
- * 飞的那一段对准图标量位置（不是按钮）：导航栏收起 / 展开时按钮自己在动，量图标最准。
+ * 控制中心「外观」那一行的图标：跟随系统时是显示器，亮 / 暗时是同一个太阳月亮。
+ * 换主题时整页播日落 / 日出（lib/themeTransition.ts），这里同时让太阳收起光芒、沉到地平线下，月亮升起来；
+ * 日出反过来。那段时间整页盖着一层旧主题的副本，图标在它底下 —— 太阳月亮那一段画在副本上面的一层里，
+ * 和这里的图标重合，播完再交回来。
+ * 2026-11-19 以前它是窄栏左下角的主题按钮（点一下轮换三种），现在三种换法是控制中心里的三段（docs/边栏.md §4.4）
  */
-export function ThemeToggle({ className }: { className: string }) {
+export function ThemeGlyph() {
   const theme = useApp((s) => s.theme);
-  const setTheme = useApp((s) => s.setTheme);
   const glyph = useRef<HTMLSpanElement>(null);
   const [flight, setFlight] = useState<Flight | null>(null);
 
-  // 不管是点这里、命令面板，还是跟随系统时系统换了明暗，都从这里接到「开始了」
+  // 不管是点控制中心、命令面板，还是跟随系统时系统换了明暗，都从这里接到「开始了」
   useEffect(
     () =>
       onThemeTransition(({ toDark, duration, finished }) => {
@@ -46,19 +42,14 @@ export function ThemeToggle({ className }: { className: string }) {
   );
 
   return (
-    <button
-      type="button"
-      title={`主题：${LABEL[theme]}`}
-      aria-label={`主题：${LABEL[theme]}，点击切换`}
-      onClick={() => setTheme(ORDER[(ORDER.indexOf(theme) + 1) % ORDER.length]!)}
-      className={className}
-    >
+    <>
       {/* 飞着的那一段落定后交回来：太阳月亮和它一模一样，直接换；落在「跟随系统」上是另一个
           图标，淡入一下。藏起来的那一下总是立刻的，免得和上面那一层叠出两个 */}
       <span
         ref={glyph}
         data-sky-glyph
-        className="relative grid h-[18px] w-[18px] shrink-0 place-items-center"
+        aria-hidden="true"
+        className="relative grid h-4 w-4 shrink-0 place-items-center"
         style={
           flight
             ? { opacity: 0, transition: "none" }
@@ -99,7 +90,7 @@ export function ThemeToggle({ className }: { className: string }) {
           </span>,
           document.body,
         )}
-    </button>
+    </>
   );
 }
 
