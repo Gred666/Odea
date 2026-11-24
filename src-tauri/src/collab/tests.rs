@@ -1060,10 +1060,7 @@ async fn a_crashed_host_comes_back_and_guests_reconnect_without_asking() {
     })
     .await;
     assert_eq!((again, permission), (member, Permission::Read));
-    expect(&mut host_events, "主持人的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with, .. } if *with == member).then_some(())
-    })
-    .await;
+    sync_started_after_resume(&host, &mut host_events, member).await;
     expect_none(&mut host_events, "接上不该再问", |event| {
         matches!(event, Event::Control(Control::JoinRequest { .. }))
     })
@@ -1131,10 +1128,7 @@ async fn guests_knocking_before_a_restarted_session_is_back_wait_for_it() {
     })
     .await;
     assert_eq!(again, member);
-    expect(&mut host_events, "主持人的 SyncStart", |event| {
-        matches!(event, Event::SyncStart { with, .. } if *with == member).then_some(())
-    })
-    .await;
+    sync_started_after_resume(&host, &mut host_events, member).await;
     host.stop().await;
     drop(guest);
 }
@@ -2074,6 +2068,23 @@ async fn admitted_to_folder(
     })
     .await;
     (guest, events, member)
+}
+
+/// 主持人重启、接着上次的会话以后，等这位访客的 SyncStart。
+/// 会话一挂上（`Host::start`），在门口等着、或者正好重连上的访客马上重开文档流，可能抢在下一行的
+/// `allow_docs`（单测里「这几篇直接给」）前面到 —— 那它走的是正常的路：问前端（DocOpen）。这里像前端一样回「给」。
+/// 以前只等 SyncStart：抢先到的那一下没人回话，等满 DOC_ANSWER（10 秒）被拒，访客不再开这一篇，
+/// CI 上（两个工作线程）时不时「等不到：主持人的 SyncStart」（2026-11-24，PITFALLS/工程.md）
+async fn sync_started_after_resume(host: &Host, host_events: &mut UnboundedReceiver<Event>, member: u16) {
+    expect(host_events, "主持人的 SyncStart", |event| match event {
+        Event::Control(Control::DocOpen { request, member: who, .. }) if *who == member => {
+            assert!(host.answer_doc(*request, Ok(())), "回话的时候请求已经不在了");
+            None
+        }
+        Event::SyncStart { with, .. } if *with == member => Some(()),
+        _ => None,
+    })
+    .await;
 }
 
 /// 访客要开 doc：主持人那边等到 DocOpen，照 answer 回话
