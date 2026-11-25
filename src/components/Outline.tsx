@@ -2,12 +2,12 @@ import { useApp } from "@/app/store";
 import type { OutlineItem } from "@/data/types";
 import type { EditorOutlineHandle } from "@/editor/MarkdownEditor";
 import { cn } from "@/lib/cn";
-import { spring, tween, usePrefersReducedMotion } from "@/lib/motion";
+import { spring, usePrefersReducedMotion } from "@/lib/motion";
 import { ALT_KEY } from "@/lib/platform";
 import { tip } from "@/lib/tooltip";
 import { rememberSpot, spotOf } from "@/lib/viewMemory";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
-import { AnimatePresence, LayoutGroup, type Transition, motion } from "motion/react";
+import { LayoutGroup, motion } from "motion/react";
 import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { OverlayScrollbar } from "./OverlayScrollbar";
 import { SwapFade } from "./SwapFade";
@@ -67,6 +67,21 @@ export function Outline({
   // 指示条按这一份目录分组用的（见下面 LayoutGroup）。要放在 items 为空的提前 return 之前：
   // 放在后面的话，有标题 ↔ 没标题一切换 hook 数目就变了，React 抛错、整个窗口白屏
   const group = useId();
+  // 非当前形态在 200ms 交叉淡出后即卸载（平时不常驻另一套上百个按钮和节点，切专注模式时照常交叉淡化）
+  const [keepRail, setKeepRail] = useState(!zen);
+  const [keepZen, setKeepZen] = useState(!!zen);
+  const prevZen = useRef(!!zen);
+  const zenFlipped = prevZen.current !== !!zen;
+  if (!zen && !keepRail) setKeepRail(true);
+  if (zen && !keepZen) setKeepZen(true);
+  useEffect(() => {
+    prevZen.current = !!zen;
+    const timer = setTimeout(() => {
+      if (zen) setKeepRail(false);
+      else setKeepZen(false);
+    }, 210);
+    return () => clearTimeout(timer);
+  }, [zen]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 换文档 / 换首个锚点时才重置
   useEffect(() => {
@@ -201,15 +216,26 @@ export function Outline({
   return (
     <LayoutGroup id={group}>
       {!zen && <div className="hidden w-[180px] shrink-0 xl:block" aria-hidden="true" />}
-      <RailOutline
-        items={items}
-        activeId={activeId}
-        onJump={scrollTo}
-        hidden={!!zen}
-        resetKey={resetKey}
-        memoryKey={memoryKey}
-      />
-      <ZenOutline items={items} activeId={activeId} onJump={scrollTo} hidden={!zen} />
+      {keepRail && (
+        <RailOutline
+          items={items}
+          activeId={activeId}
+          onJump={scrollTo}
+          hidden={!!zen}
+          fadeIn={zenFlipped && !zen}
+          resetKey={resetKey}
+          memoryKey={memoryKey}
+        />
+      )}
+      {keepZen && (
+        <ZenOutline
+          items={items}
+          activeId={activeId}
+          onJump={scrollTo}
+          hidden={!zen}
+          fadeIn={zenFlipped && !!zen}
+        />
+      )}
     </LayoutGroup>
   );
 }
@@ -229,15 +255,12 @@ const INDENT: Record<OutlineItem["level"], number> = { 1: 20, 2: 32, 3: 44 };
  * 每帧走不到 1px，条目停住、隔几帧跳 1px、再停住。ease-out cubic 头两帧走 42px，之后每帧
  * 平稳地少走一点，没有停住的帧（2026-10-17）。quint（tween.base）头一帧就冲出 37px，太猛
  */
-const FOLD_EASE = [0.33, 1, 0.68, 1] as const;
+const FOLD_EASE_CSS = "cubic-bezier(0.33, 1, 0.68, 1)";
 /** 一行的高度（上下 5px + 行高 20px + 行间 1px），估子树多高用 */
 const ROW_HEIGHT = 31;
 /** 子树越高动得越久（220–320ms），和 glide.ts 的滑动一个道理：一样的时长，长距离会显得猛 */
-const foldTransition = (rows: number): Transition => ({
-  duration: Math.min(0.32, 0.22 + (rows * ROW_HEIGHT) / 4000),
-  ease: FOLD_EASE,
-});
-const INSTANT = { duration: 0 } as const;
+const foldDurationMs = (rows: number): number =>
+  Math.round(Math.min(320, 220 + (rows * ROW_HEIGHT) / 4));
 
 /** 展开时露出来几行：下级，加上没收起的下级的下级 */
 function shownRows(node: OutlineNode, collapsed: ReadonlySet<string>): number {
@@ -256,6 +279,8 @@ interface BranchActions {
   toggle: (node: OutlineNode, deep: boolean) => void;
   /** 焦点挪到某一条（← 回到上一级） */
   focus: (id: string) => void;
+  /** 新打出来的标题是否要淡入（换文档首帧 false，之后 true） */
+  shouldFadeNew: () => boolean;
 }
 
 interface BranchProps {
@@ -310,6 +335,7 @@ function RailOutline({
   activeId,
   onJump,
   hidden,
+  fadeIn = false,
   resetKey,
   memoryKey,
 }: {
@@ -317,16 +343,22 @@ function RailOutline({
   activeId: string | null;
   onJump: (id: string) => void;
   hidden: boolean;
+  fadeIn?: boolean;
   /** 换文档：整份目录跟正文一起交叉淡化 */
   resetKey: string;
   /** 记住收起了哪些用的键（store 的 saveKeyOf）；没有就不记 */
   memoryKey: string;
 }) {
+  const [entering] = useState(fadeIn);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const navRef = useRef<HTMLElement>(null);
   const appReduce = useApp((s) => s.reduceMotion);
   const systemReduce = usePrefersReducedMotion();
   const reduce = appReduce || systemReduce;
+  const paintedDocRef = useRef<string | null>(null);
+  useEffect(() => {
+    paintedDocRef.current = resetKey;
+  }, [resetKey]);
 
   const tree = useMemo(() => outlineTree(items), [items]);
   // 换了一篇就换成那一篇记着的（渲染时就换，不等 effect：不然新文档先按旧的收起状态画一帧）
@@ -343,10 +375,17 @@ function RailOutline({
     }
   };
 
-  const focus = (id: string) =>
-    navRef.current
-      ?.querySelector<HTMLElement>(`[data-outline-item="${CSS.escape(id)}"]`)
-      ?.focus({ preventScroll: true });
+  // 按 dataset 值直接比对，不拼进属性选择器（标题原文含双引号时 CSS.escape 在部分解析器里会抛异常）
+  const focus = (id: string) => {
+    const nav = navRef.current;
+    if (!nav) return;
+    for (const el of nav.querySelectorAll<HTMLElement>("[data-outline-item]")) {
+      if (el.dataset.outlineItem === id) {
+        el.focus({ preventScroll: true });
+        return;
+      }
+    }
+  };
 
   const toggle = (node: OutlineNode, deep: boolean) => {
     const open = !collapsed.has(node.key);
@@ -358,12 +397,17 @@ function RailOutline({
     // 焦点在要收进去的那几条上：挪回这一条，不然焦点留在看不见的地方
     // 弹出窗口里的目录树（docs/标签页与分屏.md §16）：看它自己那个窗口的焦点
     const focused = (navRef.current?.ownerDocument ?? document).activeElement;
-    if (
-      open &&
-      focused instanceof HTMLElement &&
-      focused.closest(`[data-outline-group="${CSS.escape(node.key)}"]`)
-    ) {
-      focus(node.item.id);
+    if (open && focused instanceof HTMLElement) {
+      for (
+        let cur: HTMLElement | null = focused;
+        cur && cur !== navRef.current;
+        cur = cur.parentElement
+      ) {
+        if (cur.dataset.outlineGroup === node.key) {
+          focus(node.item.id);
+          break;
+        }
+      }
     }
     commit(next);
   };
@@ -391,13 +435,15 @@ function RailOutline({
     });
   }, [shown]);
 
-  const latest = useRef<BranchActions>({ onJump, toggle, focus });
-  latest.current = { onJump, toggle, focus };
+  const shouldFadeNew = () => paintedDocRef.current === resetKey && !reduce;
+  const latest = useRef<BranchActions>({ onJump, toggle, focus, shouldFadeNew });
+  latest.current = { onJump, toggle, focus, shouldFadeNew };
   const actions = useMemo<BranchActions>(
     () => ({
       onJump: (id) => latest.current.onJump(id),
       toggle: (node, deep) => latest.current.toggle(node, deep),
       focus: (id) => latest.current.focus(id),
+      shouldFadeNew: () => latest.current.shouldFadeNew(),
     }),
     [],
   );
@@ -406,23 +452,18 @@ function RailOutline({
     <aside
       aria-label="目录树"
       aria-hidden={hidden}
+      inert={hidden || undefined}
       className={cn(
         // 右边距拆成两半：外 12px 在这里，内 12px 在滚动区上，滚动条就落在这 24px 的空白里
         "group/rail absolute right-0 top-0 hidden h-full w-[180px] flex-col pr-3 pt-[52px] xl:flex",
         "transition-opacity duration-[200ms] ease-linear [will-change:opacity]",
+        entering && !hidden && "animate-[odea-fade-in_200ms_linear]",
         hidden ? "pointer-events-none opacity-0" : "opacity-100",
       )}
     >
       {/* 「全部收起」紧跟在字后面：这一行的右上角压着专注模式的按钮（ZenToggle） */}
       <div className="mb-3 flex shrink-0 items-center gap-1.5">
-        <motion.p
-          className="pl-5 text-[12px] tracking-[0.08em] text-muted"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={tween.base}
-        >
-          目录树
-        </motion.p>
+        <p className="pl-5 text-[12px] tracking-[0.08em] text-muted">目录树</p>
         {tree.foldable.length > 0 && (
           <button
             type="button"
@@ -455,10 +496,9 @@ function RailOutline({
           layoutScroll
           className="scroll-none h-full overflow-y-auto pr-3"
         >
-          {/* 换文档时整份目录和正文一起交叉淡化，条目不再逐条错峰：以前换一篇，
-              旧目录一下子没了、新的一条条从右边滑进来，最后一条要等半秒多。
-              nav 按文档重挂，AnimatePresence 的 initial={false} 让这一批不播入场；
-              之后写出来的新标题才单独淡入。 */}
+          {/* 换文档时整份目录和正文一起交叉淡化，条目不再逐条错峰；之后写出来的新标题才单独淡入。
+              整棵树只保留活动项上的一个 layoutId 指示条是 Motion 节点（其余收起与旋转全走原生 CSS），
+              避免长文两百条目录挂三百多个投影节点拖慢全局弹层（命令面板等） */}
           <SwapFade swapKey={resetKey}>
             <nav ref={navRef} key={resetKey} className="relative flex flex-col gap-[1px] pb-8">
               {tree.overview && (
@@ -470,19 +510,17 @@ function RailOutline({
                   actions={actions}
                 />
               )}
-              <AnimatePresence initial={false}>
-                {tree.roots.map((node) => (
-                  <OutlineBranch
-                    key={node.key}
-                    node={node}
-                    collapsed={collapsed}
-                    shown={shown}
-                    byId={tree.byId}
-                    reduce={reduce}
-                    actions={actions}
-                  />
-                ))}
-              </AnimatePresence>
+              {tree.roots.map((node) => (
+                <OutlineBranch
+                  key={node.key}
+                  node={node}
+                  collapsed={collapsed}
+                  shown={shown}
+                  byId={tree.byId}
+                  reduce={reduce}
+                  actions={actions}
+                />
+              ))}
             </nav>
           </SwapFade>
         </motion.div>
@@ -493,59 +531,54 @@ function RailOutline({
 }
 
 /**
- * 一条连同它下面的子树。子树收起 / 展开只动容器的高度（overflow: clip）：里面的行原地
- * 不动、不淡，由边缘把它们露出来 / 收进去；下面的条目跟着排版走，每一帧都是正常画出来的
+ * 一条连同它下面的子树。子树收起 / 展开只动容器的高度（grid-template-rows 1fr ↔ 0fr + overflow: clip）：
+ * 里面的行原地不动、不淡，由边缘把它们露出来 / 收进去；下面的条目跟着排版走，每一帧都是正常画出来的
  * 字，停下来那一帧不会变（技术方案 §12.9）。
- * 新写出来的标题只淡入（以前带 5px 位移）
  */
 const OutlineBranch = memo(function OutlineBranch(props: BranchProps) {
   const { node, collapsed, shown, byId, reduce, actions } = props;
+  const [appear] = useState(() => actions.shouldFadeNew());
   const open = !collapsed.has(node.key);
-  const transition = reduce ? INSTANT : foldTransition(shownRows(node, collapsed));
+  const durationMs = reduce ? 0 : foldDurationMs(shownRows(node, collapsed));
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={tween.base}
-    >
+    <div className={appear ? "animate-[odea-fade-in_180ms_var(--ease-out-quint)]" : undefined}>
       <OutlineRow
         item={node.item}
         node={node}
         open={open}
         active={node.item.id === shown}
         actions={actions}
-        transition={transition}
+        durationMs={durationMs}
       />
       {node.children.length > 0 && (
-        <motion.div
+        <div
           data-outline-group={node.key}
-          className="overflow-clip"
-          initial={false}
-          animate={{ height: open ? "auto" : 0 }}
-          transition={transition}
+          className="grid"
+          style={{
+            gridTemplateRows: open ? "1fr" : "0fr",
+            transition:
+              durationMs > 0 ? `grid-template-rows ${durationMs}ms ${FOLD_EASE_CSS}` : "none",
+          }}
           // 收起时里面的条目不能用 Tab 走进去
           inert={!open}
         >
           {/* 和外层的 gap 一样，第一条上面的那 1px 放在里面：收起时一起收掉 */}
-          <div className="flex flex-col gap-[1px] pt-[1px]">
-            <AnimatePresence initial={false}>
-              {node.children.map((child) => (
-                <OutlineBranch
-                  key={child.key}
-                  node={child}
-                  collapsed={collapsed}
-                  shown={shown}
-                  byId={byId}
-                  reduce={reduce}
-                  actions={actions}
-                />
-              ))}
-            </AnimatePresence>
+          <div className="flex min-h-0 flex-col gap-[1px] overflow-clip pt-[1px]">
+            {node.children.map((child) => (
+              <OutlineBranch
+                key={child.key}
+                node={child}
+                collapsed={collapsed}
+                shown={shown}
+                byId={byId}
+                reduce={reduce}
+                actions={actions}
+              />
+            ))}
           </div>
-        </motion.div>
+        </div>
       )}
-    </motion.div>
+    </div>
   );
 }, sameBranch);
 
@@ -555,7 +588,7 @@ function OutlineRow({
   open,
   active,
   actions,
-  transition = INSTANT,
+  durationMs = 0,
 }: {
   item: OutlineItem;
   /** 「概览」没有节点 */
@@ -565,8 +598,8 @@ function OutlineRow({
   /** 高亮在这一条上 */
   active: boolean;
   actions: BranchActions;
-  /** 箭头转动的曲线：和这一条的子树收起展开同一条 */
-  transition?: Transition;
+  /** 箭头转动的时长（ms）：和这一条的子树收起展开同一条曲线 */
+  durationMs?: number;
 }) {
   const foldable = !!node?.children.length;
   const indent = INDENT[item.level];
@@ -594,11 +627,7 @@ function OutlineRow({
           )}
         >
           {/* 淡入淡出的是颜色，不是 opacity；转的是 SVG 里的 <path>，不是外面的盒子。
-              两样都在原地重画，不进合成层（Chrome 不给 SVG 里面的元素单独建层）。
-              以前按 docs/PITFALLS/动效.md 第 3 条给每个箭头 will-change: opacity、里面转的那层
-              will-change: transform，一个箭头两个图层：两百多条的目录一百二十多个图层，
-              收起展开时每帧光整理图层就要 1ms 多，慢机器上（CPU 降速 4 倍）一帧画不完。
-              不进图层就没有「淡完那一帧从图层退回页面、挪半个像素」的问题，也不用对齐像素 */}
+              两样都在原地重画，不进合成层（Chrome 不给 SVG 里面的元素单独建层）。 */}
           <svg
             viewBox="0 0 24 24"
             width={12}
@@ -610,11 +639,14 @@ function OutlineRow({
             strokeLinejoin="round"
             aria-hidden="true"
           >
-            <motion.path
+            <path
               d="m9 18 6-6-6-6"
-              initial={false}
-              animate={{ rotate: open ? 90 : 0 }}
-              transition={transition}
+              style={{
+                transformBox: "fill-box",
+                transformOrigin: "center",
+                transform: open ? "rotate(90deg)" : "rotate(0deg)",
+                transition: durationMs > 0 ? `transform ${durationMs}ms ${FOLD_EASE_CSS}` : "none",
+              }}
             />
           </svg>
         </button>
@@ -698,16 +730,20 @@ function ZenOutline({
   activeId,
   onJump,
   hidden,
+  fadeIn = false,
 }: {
   items: OutlineItem[];
   activeId: string | null;
   onJump: (id: string) => void;
   hidden: boolean;
+  fadeIn?: boolean;
 }) {
+  const [entering] = useState(fadeIn);
   return (
     <aside
       aria-label="目录树"
       aria-hidden={hidden}
+      inert={hidden || undefined}
       className={cn(
         // pointer-events-none：hover 判定只认下面刻度那一小块和展开后的面板，
         // 不能整条右边缘都算。:hover 会沿祖先链向上匹配，所以 group 放这里没问题。
@@ -715,6 +751,7 @@ function ZenOutline({
         // 下面刻度列的 max-h-full 才有一个确定的高度可以参照
         "pointer-events-none absolute inset-y-0 right-0 z-30 grid grid-rows-1 items-center justify-items-end",
         "group transition-opacity duration-[200ms] ease-linear [will-change:opacity]",
+        entering && !hidden && "animate-[odea-fade-in_200ms_linear]",
         hidden ? "opacity-0" : "opacity-100",
       )}
     >
@@ -776,6 +813,7 @@ function ZenOutline({
             <button
               key={it.id}
               type="button"
+              tabIndex={-1}
               onClick={() => onJump(it.id)}
               className={cn(
                 "flex w-full items-start gap-2 rounded-md py-[5px] pl-2 pr-2.5 text-left",

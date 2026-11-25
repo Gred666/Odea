@@ -368,6 +368,9 @@ function buildBlockDecorations(state: EditorState, changes: ChangeSet | null): T
         }
         if (!touches(node.from, node.to)) {
           foldRange(node.from, node.to, new CommentWidget(true));
+        } else {
+          // 露出源码时保持和收起的小标记一样的行高（globals.css），光标进出时下面的正文不跳
+          lineClasses(node.from, node.to, "cm-odea-comment-source");
         }
         return false;
       }

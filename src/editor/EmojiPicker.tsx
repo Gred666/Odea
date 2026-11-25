@@ -170,6 +170,14 @@ export function samePlacement(a: Placement, b: Placement): boolean {
   return a.left === b.left && a.top === b.top && a.above === b.above && a.gridMax === b.gridMax;
 }
 
+/** 锚点滚在窗口外面（刚打字还没滚完、先滚走了再按快捷键）时夹回窗口里，面板不会画到屏幕外 */
+function clampAnchor(anchor: EmojiPickerAnchor, viewportHeight: number) {
+  const maxSpan = Math.max(0, viewportHeight - EDGE * 2);
+  const span = Math.max(0, Math.min(anchor.bottom - anchor.top, maxSpan));
+  const top = Math.max(EDGE, Math.min(anchor.top, viewportHeight - EDGE - span));
+  return { top, bottom: top + span };
+}
+
 /**
  * 面板的 CSS 定位：钉住贴着光标的那条边（往下开钉上边，往上开用 bottom 钉下边），
  * 展开、收起时那条边不动（lib/motion.ts 的 popoverCard）。对齐到物理像素：落在半个
@@ -182,8 +190,12 @@ export function pinnedEdge(
   dpr = window.devicePixelRatio || 1,
 ): { left: number; top?: number; bottom?: number } {
   const snap = (value: number) => Math.round(value * dpr) / dpr;
+  const clamped = clampAnchor(anchor, viewport.height);
   return place.above
-    ? { left: snap(place.left), bottom: snap(viewport.height - (anchor.top - GAP)) }
+    ? {
+        left: snap(place.left),
+        bottom: snap(Math.max(EDGE, viewport.height - (clamped.top - GAP))),
+      }
     : { left: snap(place.left), top: snap(place.top) };
 }
 
@@ -204,8 +216,9 @@ export function placePicker(
   },
 ): Placement {
   const { width, height, grid, viewport, nudge = 18 } = size;
-  const roomBelow = viewport.height - EDGE - (anchor.bottom + GAP);
-  const roomAbove = anchor.top - GAP - EDGE;
+  const clamped = clampAnchor(anchor, viewport.height);
+  const roomBelow = viewport.height - EDGE - (clamped.bottom + GAP);
+  const roomAbove = clamped.top - GAP - EDGE;
   let above = false;
   let fitted = height;
   if (height > roomBelow) {
@@ -219,7 +232,7 @@ export function placePicker(
   const gridMax = fitted < height ? grid - (height - fitted) : undefined;
   return {
     left: Math.max(EDGE, Math.min(anchor.left - nudge, viewport.width - width - EDGE)),
-    top: above ? anchor.top - GAP - fitted : Math.max(EDGE, anchor.bottom + GAP),
+    top: above ? Math.max(EDGE, clamped.top - GAP - fitted) : Math.max(EDGE, clamped.bottom + GAP),
     above,
     gridMax,
   };

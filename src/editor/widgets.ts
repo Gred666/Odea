@@ -1,6 +1,7 @@
 import { snapToDevicePixels } from "@/lib/devicePixels";
 import { winOf } from "@/lib/paneWindow";
 import { setTip } from "@/lib/tooltip";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { type EditorView, WidgetType } from "@codemirror/view";
 import {
   type AnimatedEmoji,
@@ -12,6 +13,8 @@ import {
   wake,
 } from "./animatedEmoji";
 import { type CalloutHead, type CalloutKind, calloutIcon } from "./callout";
+import { FOOTNOTE_DEF_RE, HEADING_RE } from "./decorationKit";
+import { frontMatterRange } from "./frontMatter";
 import { glideTo } from "./glide";
 import { adoptTitles } from "./hoverCard";
 import { hasRenderableHtml, safeHref, sanitizeHtml } from "./html";
@@ -183,6 +186,7 @@ export class TaskWidget extends OtwWidget {
     // 比直接冒出一个 ✓ 字符有「动作」感。
     box.append(svg("0 0 16 16", TASK_CHECK_ICON, "cm-odea-task-check"));
     box.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       const from = positionOf(view, box) + this.offset;
       view.dispatch({ changes: { from, to: from + 3, insert: this.checked ? "[ ]" : "[x]" } });
@@ -217,6 +221,7 @@ export class ListMarkerWidget extends OtwWidget {
     marker.textContent = this.display;
     if (this.style) marker.setAttribute("style", this.style);
     marker.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       jumpToSource(view, positionOf(view, marker));
     });
@@ -240,6 +245,7 @@ export class CodeInfoWidget extends OtwWidget {
     label.className = "cm-odea-code-info";
     label.textContent = this.language;
     label.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       jumpToSource(view, positionOf(view, label));
     });
@@ -727,6 +733,7 @@ export class GlyphWidget extends OtwWidget {
     // 符号本来就看得见，提示的是它的源码（`:smile:`、`&amp;`、`--`）
     setTip(node, this.source, { name: false, side: "top" });
     node.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       // 短码、实体把光标放进 `:` / `&` 后面，源码才会展开；智能标点放在它前面就行
       const inside = this.kind === "smart" ? 0 : 1;
@@ -824,6 +831,7 @@ export class HardBreakWidget extends OtwWidget {
     node.textContent = "↵";
     setTip(node, "硬换行", { name: false, side: "top" });
     node.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       jumpToSource(view, positionOf(view, node));
     });
@@ -880,6 +888,7 @@ export class CalloutBadgeWidget extends OtwWidget {
       badge.append(svg("0 0 24 24", CHEVRON, "cm-odea-callout-chevron"));
     }
     badge.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       const from = positionOf(view, badge);
       if (this.head.fold && foldOffset !== null) toggleCalloutFold(view, from + foldOffset);
@@ -920,6 +929,7 @@ export class CalloutFoldWidget extends OtwWidget {
     button.className = "cm-odea-callout-fold-button";
     button.textContent = `… 展开 ${this.lineCount} 行`;
     button.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       const head = view.state.doc.lineAt(Math.max(0, positionOf(view, block) - 1));
       toggleCalloutFold(view, head.from + this.foldColumn);
@@ -931,20 +941,84 @@ export class CalloutFoldWidget extends OtwWidget {
 
 /* ---------------- 脚注 ---------------- */
 
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const BLOCK_CONTAINERS = new Set([
+  "Document",
+  "BulletList",
+  "OrderedList",
+  "ListItem",
+  "Blockquote",
+]);
 
-/** `[^id]: …` 定义行的起点；没有定义返回 null。 */
+const LITERAL_NODES = new Set([
+  "FencedCode",
+  "CodeBlock",
+  "InlineCode",
+  "HTMLBlock",
+  "HTMLTag",
+  "CommentBlock",
+  "Comment",
+  "MathBlock",
+  "InlineMath",
+]);
+
+/** `[^id]: …` 定义行的起点（绕开 front matter、围栏代码、行内代码、公式和 HTML）；没有定义返回 null。 */
 export function footnoteDefinitionAt(view: EditorView, id: string): number | null {
-  const pattern = new RegExp(`^\\[\\^${escapeRegExp(id)}\\]:`, "m");
-  const match = pattern.exec(view.state.doc.toString());
-  return match ? match.index : null;
+  const { state } = view;
+  const frontMatter = frontMatterRange(state.doc);
+  const tree = ensureSyntaxTree(state, state.doc.length, 80) ?? syntaxTree(state);
+  let found: number | null = null;
+  tree.iterate({
+    enter(node) {
+      if (found !== null) return false;
+      const { name } = node.type;
+      if (frontMatter && name !== "Document" && node.from < frontMatter.to) return false;
+      if (name === "Paragraph" || name === "LinkReference") {
+        const first = state.doc.lineAt(node.from).number;
+        const last = state.doc.lineAt(node.to).number;
+        for (let number = first; number <= last; number += 1) {
+          const line = state.doc.line(number);
+          const match = FOOTNOTE_DEF_RE.exec(line.text);
+          if (match?.[1] === id) {
+            found = line.from + line.text.indexOf("[");
+            break;
+          }
+        }
+        return false;
+      }
+      return BLOCK_CONTAINERS.has(name);
+    },
+  });
+  return found;
 }
 
-/** 正文里第一处 `[^id]` 引用（不算定义行）的起点；没有返回 null。 */
+/** 正文里第一处 `[^id]` 引用（不算定义行，也绕开代码块、行内代码、公式和 HTML）的起点；没有返回 null。 */
 export function footnoteReferenceAt(view: EditorView, id: string): number | null {
-  const pattern = new RegExp(`\\[\\^${escapeRegExp(id)}\\](?!:)`);
-  const match = pattern.exec(view.state.doc.toString());
-  return match ? match.index : null;
+  const { state } = view;
+  const frontMatter = frontMatterRange(state.doc);
+  const tree = ensureSyntaxTree(state, state.doc.length, 80) ?? syntaxTree(state);
+  const target = `[^${id}]`;
+  let found: number | null = null;
+  tree.iterate({
+    enter(node) {
+      if (found !== null) return false;
+      const { name } = node.type;
+      if (frontMatter && name !== "Document" && node.from < frontMatter.to) return false;
+      if (LITERAL_NODES.has(name)) return false;
+      if (name === "Link" && !node.node.getChild("URL") && !node.node.getChild("LinkLabel")) {
+        if (state.sliceDoc(node.from, node.to) === target) {
+          const line = state.doc.lineAt(node.from);
+          const isDef =
+            FOOTNOTE_DEF_RE.test(line.text) && node.from === line.from + line.text.indexOf("[");
+          if (!isDef && state.sliceDoc(node.to, node.to + 1) !== ":") {
+            found = node.from;
+          }
+        }
+        return false;
+      }
+      return true;
+    },
+  });
+  return found;
 }
 
 /**
@@ -978,6 +1052,7 @@ export class FootnoteWidget extends OtwWidget {
       node.dataset.odeaTipHint = "点击回到正文引用处";
     }
     node.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       const target =
         this.role === "ref"
@@ -1004,21 +1079,32 @@ export interface TocEntry {
   from: number;
 }
 
-/** 按层级 + 文字找标题所在行的起点；找不到返回 null。 */
+/** 按层级 + 文字找标题所在行的起点（兼容 ATX 和 Setext，绕开 front matter 与代码块）；找不到返回 null。 */
 function findHeading(view: EditorView, level: number, text: string): number | null {
-  const pattern = new RegExp(`^\\s{0,3}#{${level}}\\s+`);
-  for (let number = 1; number <= view.state.doc.lines; number += 1) {
-    const line = view.state.doc.line(number);
-    if (!pattern.test(line.text)) continue;
-    const plain = inlinePlainText(
-      line.text
-        .replace(pattern, "")
-        .replace(/\s+#+\s*$/, "")
-        .trim(),
-    );
-    if (plain === text) return line.from;
-  }
-  return null;
+  const { state } = view;
+  const frontMatter = frontMatterRange(state.doc);
+  const tree = ensureSyntaxTree(state, state.doc.length, 80) ?? syntaxTree(state);
+  let found: number | null = null;
+  tree.iterate({
+    enter(node) {
+      if (found !== null) return false;
+      const { name } = node.type;
+      if (frontMatter && name !== "Document" && node.from < frontMatter.to) return false;
+      const match = HEADING_RE.exec(name);
+      if (!match) return BLOCK_CONTAINERS.has(name);
+      if (Number(match[1]) !== level) return false;
+      const line = state.doc.lineAt(node.from);
+      const plain = inlinePlainText(
+        line.text
+          .replace(/^\s{0,3}#{1,6}\s+/, "")
+          .replace(/\s+#+\s*$/, "")
+          .trim(),
+      );
+      if (plain === text) found = line.from;
+      return false;
+    },
+  });
+  return found;
 }
 
 export class TocWidget extends OtwWidget {
@@ -1051,6 +1137,7 @@ export class TocWidget extends OtwWidget {
     nav.setAttribute("aria-label", "目录");
     setTip(nav, "点击空白处编辑", { name: false, side: "top" });
     nav.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       if ((event.target as HTMLElement).closest("button")) return;
       jumpToSource(view, positionOf(view, block));
@@ -1124,6 +1211,7 @@ export class FrontMatterFenceWidget extends OtwWidget {
       cap.append(label);
     }
     cap.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       // 两个口都把光标放到第一个键的行首：属性块永远从文档第一行开始，那一行就是第二行
       jumpToSource(view, view.state.doc.line(Math.min(2, view.state.doc.lines)).from);
@@ -1149,6 +1237,7 @@ export class LineBreakWidget extends OtwWidget {
     hint.textContent = "↵";
     setTip(hint, "<br>", { name: false, side: "top" });
     hint.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       jumpToSource(view, positionOf(view, node));
     });
@@ -1174,6 +1263,7 @@ export class CommentWidget extends OtwWidget {
     setTip(pill, "HTML 注释", { detail: "点击查看", name: false, side: "top" });
     const root = this.block ? document.createElement("div") : pill;
     pill.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       jumpToSource(view, positionOf(view, root));
     });
@@ -1218,6 +1308,7 @@ export class HtmlBlockWidget extends OtwWidget {
       host.append(html);
     } else host.textContent = this.source;
     host.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       const target = event.target as HTMLElement;
       // 链接：别把这一块切回源码。开在 click 里（下面）
       if (target.closest("a")) {

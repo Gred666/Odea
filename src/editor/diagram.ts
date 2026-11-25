@@ -94,6 +94,7 @@ export class DiagramWidget extends OtwWidget {
     setTip(host, "点击编辑图表", { name: false, side: "top" });
     host.textContent = "渲染图表…";
     host.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       event.preventDefault();
       view.dispatch({ selection: { anchor: positionOf(view, block) } });
       view.focus();

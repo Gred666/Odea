@@ -7,7 +7,7 @@ import { EditorView } from "@codemirror/view";
 import { MotionGlobalConfig } from "motion/react";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MarkdownEditor, clearEditorStateCache } from "./MarkdownEditor";
 import type { TemplateContext } from "./templates";
 
@@ -96,9 +96,14 @@ const activeName = () =>
 
 describe("模板选择器", () => {
   it("opens under /模板 with this document's templates and inserts the chosen one", async () => {
+    const errSpy = vi.spyOn(console, "error");
     const { content, view } = await openEditor("");
     await type(view, "/模板");
     expect(picker()).not.toBeNull();
+    expect(errSpy.mock.calls.filter((args) => String(args[0] ?? "").includes("same key"))).toEqual(
+      [],
+    );
+    errSpy.mockRestore();
     expect(options().map((option) => option.dataset.template)).toEqual([
       "day-plan",
       "day-timeblock",

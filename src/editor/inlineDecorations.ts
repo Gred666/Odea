@@ -178,6 +178,11 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
    * 光标碰到时源码在卡片下面露出来（返回 true，接着往里走，源码照常上色）。
    * 不是嵌入 —— 夹在一段字里、附件、块引用、不知道有哪些笔记（做客）—— 返回 null，照旧当图片 / 双链
    */
+  let fullMarkdown: string | null = null;
+  const docMarkdown = () => {
+    fullMarkdown ??= state.doc.toString();
+    return fullMarkdown;
+  };
   const addEmbed = (from: number, to: number): boolean | null => {
     if (!embeds) return null;
     const raw = state.sliceDoc(from, to);
@@ -648,17 +653,20 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
         // 勾选框和列表符号是一格，在 decorateListItem 里一起处理
         if (widget === "task") return false;
         if (widget === "image") {
-          // `![[笔记]]` 也是一个图片节点（`![` 加一个 `[笔记]` 的短引用）
+          // `![[笔记]]` / `![[文件.pdf]]` 也是图片节点：已经当成嵌入或附件卡片处理过就不必再按图片查一遍整篇正文
           const embedded = addEmbed(node.from, node.to) ?? addAttachment(node.from, node.to);
-          if (embedded === false) return false;
-          const raw = state.sliceDoc(node.from, node.to);
-          // Obsidian 的 `![[图.png]]`：按名字在仓库里找（嵌一篇笔记的 `![[笔记]]` 上面认过了）
-          const image =
-            (embedded === null ? wikiImage(raw, state.facet(wikiImages)) : null) ??
-            resolveImage(state.doc.toString(), raw, state.facet(imageBaseDir));
-          const syntax = raw.startsWith("![[") ? "wiki" : "markdown";
-          // 源码没露出来就不用往里走了；露出来了照常给 `![`、`](` 这些标记上色
-          if (image && !addImage(node.from, node.to, image, syntax)) return false;
+          if (embedded !== null) {
+            if (embedded === false) return false;
+          } else {
+            const raw = state.sliceDoc(node.from, node.to);
+            // Obsidian 的 `![[图.png]]`：按名字在仓库里找
+            const image =
+              wikiImage(raw, state.facet(wikiImages)) ??
+              resolveImage(docMarkdown, raw, state.facet(imageBaseDir));
+            const syntax = raw.startsWith("![[") ? "wiki" : "markdown";
+            // 源码没露出来就不用往里走了；露出来了照常给 `![`、`](` 这些标记上色
+            if (image && !addImage(node.from, node.to, image, syntax)) return false;
+          }
         }
         if (widget === "emoji") {
           const source = state.sliceDoc(node.from, node.to);
@@ -1018,11 +1026,8 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
     /* ---------- 缩写：正文里出现 `*[缩写]: 全称` 定义过的词，加悬停提示 ---------- */
     if (abbreviations?.size) {
       for (const [abbreviation, expansion] of abbreviations) {
-        const pattern = new RegExp(
-          `(?<![\\p{L}\\p{N}_])${escapeRegExp(abbreviation)}(?![\\p{L}\\p{N}_])`,
-          "gu",
-        );
-        for (const match of source.matchAll(pattern)) {
+        if (!source.includes(abbreviation)) continue;
+        for (const match of source.matchAll(abbreviationPattern(abbreviation))) {
           const from = visible.from + match.index;
           const line = state.doc.lineAt(from);
           if (abbreviationLines?.has(line.from) || foldedLines?.has(line.from)) continue;
@@ -1039,6 +1044,24 @@ function buildInlineDecorations(view: EditorView, changes: ChangeSet | null): Ty
   }
 
   return { decorations: toDecorationSet(ranges), atomic: toDecorationSet(atomicRanges) };
+}
+
+const ABBREVIATION_PATTERNS = new Map<string, RegExp>();
+
+function abbreviationPattern(abbreviation: string): RegExp {
+  let pattern = ABBREVIATION_PATTERNS.get(abbreviation);
+  if (!pattern) {
+    if (ABBREVIATION_PATTERNS.size >= 256) {
+      const oldest = ABBREVIATION_PATTERNS.keys().next().value;
+      if (oldest !== undefined) ABBREVIATION_PATTERNS.delete(oldest);
+    }
+    pattern = new RegExp(
+      `(?<![\\p{L}\\p{N}_])${escapeRegExp(abbreviation)}(?![\\p{L}\\p{N}_])`,
+      "gu",
+    );
+    ABBREVIATION_PATTERNS.set(abbreviation, pattern);
+  }
+  return pattern;
 }
 
 /**

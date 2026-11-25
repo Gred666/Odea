@@ -261,14 +261,18 @@ export function showTableMenu(
   menu.addEventListener("mousedown", (event) => event.preventDefault());
 
   doc.body.append(menu);
-  // 摆位置：先贴着点往右下，出了窗口就翻过去。整数像素（菜单里全是字，见 docs/PITFALLS/动效.md 规矩 6）
+  // 摆位置：先贴着点往右下，出了窗口就翻过去并夹在窗口里。对齐到整物理像素（菜单里全是字，见 docs/PITFALLS/动效.md 规矩 6）
   const box = menu.getBoundingClientRect();
   const width = win.innerWidth;
   const height = win.innerHeight;
-  const left = at.x + box.width + 8 > width ? Math.max(8, at.x - box.width) : at.x;
-  const top = at.y + box.height + 8 > height ? Math.max(8, at.y - box.height) : at.y;
-  menu.style.left = `${Math.round(left)}px`;
-  menu.style.top = `${Math.round(top)}px`;
+  const dpr = win.devicePixelRatio || 1;
+  const snap = (value: number) => Math.round(value * dpr) / dpr;
+  const rawLeft = at.x + box.width + 8 > width ? at.x - box.width : at.x;
+  const rawTop = at.y + box.height + 8 > height ? at.y - box.height : at.y;
+  const left = Math.max(8, Math.min(rawLeft, Math.max(8, width - box.width - 8)));
+  const top = Math.max(8, Math.min(rawTop, Math.max(8, height - box.height - 8)));
+  menu.style.left = `${snap(left)}px`;
+  menu.style.top = `${snap(top)}px`;
   menu.focus({ preventScroll: true });
 
   const outside = (event: Event) => {

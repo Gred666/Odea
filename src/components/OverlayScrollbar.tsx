@@ -1,3 +1,4 @@
+import { winOf } from "@/lib/paneWindow";
 import { type RefObject, useEffect, useRef } from "react";
 
 /** 停止滚动后多久淡出 */
@@ -38,16 +39,21 @@ export function OverlayScrollbar({ targetRef }: { targetRef: RefObject<HTMLEleme
     const thumb = thumbRef.current;
     if (!scroller || !thumb) return;
 
+    const win = winOf(scroller);
     let raf = 0;
     let hideTimer = 0;
     let dragging = false;
     let hovering = false;
     let visible = false;
 
-    /** ResizeObserver 说文档高度变了，下一帧重新量 */
+    /** ResizeObserver 说文档或容器高度变了，下一帧重新量 */
     let stale = true;
-    /** 最近一次实测的文档高度 */
+    /** 发生过滚动，下一帧重新读 scrollTop */
+    let scrolled = true;
+    /** 最近一次实测的文档高度、容器可视高度与滚动偏移（缓动收敛帧直接复用，不每帧强制同步布局） */
     let docH = 0;
+    let clientH = 0;
+    let scrollTop = 0;
     /** 实际用于绘制的文档高度，每帧朝 docH 缓动 */
     let shownH = 0;
     let lastTime = 0;
@@ -62,15 +68,23 @@ export function OverlayScrollbar({ targetRef }: { targetRef: RefObject<HTMLEleme
       thumb.dataset.visible = String(next);
     };
 
-    /** 这是整个组件唯一读 scrollHeight 的地方，且只在 rAF 里、且只在标记为脏时。 */
+    /** 唯一读 scrollHeight / clientHeight 的地方，只在 rAF 里且标记为脏时跑。 */
     const measure = () => {
       stale = false;
-      docH = Math.max(scroller.scrollHeight, scroller.clientHeight);
+      clientH = scroller.clientHeight;
+      docH = Math.max(scroller.scrollHeight, clientH);
+      scrollTop = scroller.scrollTop;
+      scrolled = false;
     };
 
     const frame = (now: number) => {
       raf = 0;
-      if (stale) measure();
+      if (stale) {
+        measure();
+      } else if (scrolled) {
+        scrollTop = scroller.scrollTop;
+        scrolled = false;
+      }
 
       // 滑块看不见的时候不需要动画：换文档、改窗口大小都属于这类，直接对齐，
       // 否则每次切笔记都要看它慢慢缩一次
@@ -83,7 +97,6 @@ export function OverlayScrollbar({ targetRef }: { targetRef: RefObject<HTMLEleme
       }
       lastTime = now;
 
-      const clientH = scroller.clientHeight;
       const range = docH - clientH; // 位置比例要用真实值，否则滚到底滑块到不了底
       if (range <= 1) {
         setVisible(false);
@@ -93,7 +106,7 @@ export function OverlayScrollbar({ targetRef }: { targetRef: RefObject<HTMLEleme
       // 高度和行程用缓动值 —— 缩放动画就在这里
       const thumbH = Math.max(MIN_THUMB, Math.round((clientH / shownH) * clientH));
       const travel = clientH - thumbH;
-      const y = Math.round(Math.min(1, Math.max(0, scroller.scrollTop / range)) * travel);
+      const y = Math.round(Math.min(1, Math.max(0, scrollTop / range)) * travel);
 
       // 取整之后大部分帧和上一帧同值，跳过写入就没有多余的样式重算
       if (y !== lastY) {
@@ -110,12 +123,12 @@ export function OverlayScrollbar({ targetRef }: { targetRef: RefObject<HTMLEleme
     };
 
     const schedule = () => {
-      if (!raf) raf = requestAnimationFrame(frame);
+      if (!raf) raf = win.requestAnimationFrame(frame);
     };
 
     const hideSoon = () => {
-      window.clearTimeout(hideTimer);
-      hideTimer = window.setTimeout(() => {
+      win.clearTimeout(hideTimer);
+      hideTimer = win.setTimeout(() => {
         // 正在拖、或者鼠标停在滑块上（准备去拖）时不能收
         if (!dragging && !hovering) setVisible(false);
       }, HIDE_DELAY);
@@ -126,6 +139,7 @@ export function OverlayScrollbar({ targetRef }: { targetRef: RefObject<HTMLEleme
        等于每个滚动事件都强制同步布局一次，而 CodeMirror 那边正在重新测量行高，
        代价极高。现在只排一帧，所有读写都在 rAF 里。 */
     const onScroll = () => {
+      scrolled = true;
       setVisible(true);
       schedule();
       hideSoon();
@@ -133,36 +147,42 @@ export function OverlayScrollbar({ targetRef }: { targetRef: RefObject<HTMLEleme
 
     /* ---- 拖拽 ---- */
     const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       if (stale) measure();
+      else scrollTop = scroller.scrollTop;
       dragging = true;
-      thumb.setPointerCapture(e.pointerId);
+      thumb.setPointerCapture?.(e.pointerId);
 
       const startY = e.clientY;
-      const startTop = scroller.scrollTop;
-      const clientH = scroller.clientHeight;
+      const startTop = scrollTop;
       // 拖拽换算用实测值，不用缓动值 —— 拖到哪就该是哪，不能有橡皮筋感
       const range = docH - clientH;
       const travel = clientH - Math.max(MIN_THUMB, Math.round((clientH / docH) * clientH));
 
       const onMove = (move: PointerEvent) => {
-        if (travel <= 0) return;
+        if (!dragging || travel <= 0) return;
         scroller.scrollTop = startTop + ((move.clientY - startY) / travel) * range;
       };
-      const onUp = (up: PointerEvent) => {
+      const finish = (end: PointerEvent) => {
+        if (!dragging) return;
         dragging = false;
-        thumb.releasePointerCapture(up.pointerId);
+        if (thumb.hasPointerCapture?.(end.pointerId)) {
+          thumb.releasePointerCapture(end.pointerId);
+        }
         thumb.removeEventListener("pointermove", onMove);
-        thumb.removeEventListener("pointerup", onUp);
+        thumb.removeEventListener("pointerup", finish);
+        thumb.removeEventListener("pointercancel", finish);
         hideSoon();
       };
       thumb.addEventListener("pointermove", onMove);
-      thumb.addEventListener("pointerup", onUp);
+      thumb.addEventListener("pointerup", finish);
+      thumb.addEventListener("pointercancel", finish);
     };
 
     const onEnter = () => {
       hovering = true;
-      window.clearTimeout(hideTimer);
+      win.clearTimeout(hideTimer);
     };
     const onLeave = () => {
       hovering = false;
@@ -185,8 +205,8 @@ export function OverlayScrollbar({ targetRef }: { targetRef: RefObject<HTMLEleme
     schedule();
 
     return () => {
-      window.clearTimeout(hideTimer);
-      cancelAnimationFrame(raf);
+      win.clearTimeout(hideTimer);
+      win.cancelAnimationFrame(raf);
       observer.disconnect();
       scroller.removeEventListener("scroll", onScroll);
       thumb.removeEventListener("pointerdown", onPointerDown);

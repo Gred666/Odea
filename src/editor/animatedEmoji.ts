@@ -1,4 +1,5 @@
 import { ANIMATED_EMOJI_FALLBACK } from "@/lib/emojiText";
+import { allDocuments } from "@/lib/paneWindow";
 import { setTip } from "@/lib/tooltip";
 import {
   ANIMATED_EMOJI_DESIGNS,
@@ -254,26 +255,30 @@ function currentPalette(): string | null {
   return palette;
 }
 
-/** 切换主题：重新取颜色，页面上所有静止帧换成新主题下的图 */
+/** 切换主题（或跟随系统深浅色变化）：重新取颜色，主窗口和弹出窗口里所有静止帧换成新主题下的图 */
 function watchTheme(): void {
   if (themeWatcher || typeof MutationObserver === "undefined") return;
-  themeWatcher = new MutationObserver(() => {
+  const refresh = () => {
     const before = palette;
     palette = null;
     if (currentPalette() === before) return;
     stillUrls.clear();
-    for (const still of document.querySelectorAll<SVGSVGElement>("svg.odea-ae-still")) {
-      // 换主题时盖在上面的旧主题副本（lib/themeTransition.ts）：留着旧颜色
-      if (still.closest(".odea-theme-ghost")) continue;
-      const emoji = byName.get(`${SHORTCODE_PREFIX}${still.dataset.emoji}`);
-      const url = emoji && stillUrl(emoji);
-      if (url) still.firstElementChild?.setAttribute("href", url);
+    for (const doc of allDocuments()) {
+      for (const still of doc.querySelectorAll<SVGSVGElement>("svg.odea-ae-still")) {
+        // 换主题时盖在上面的旧主题副本（lib/themeTransition.ts）：留着旧颜色
+        if (still.closest(".odea-theme-ghost")) continue;
+        const emoji = byName.get(`${SHORTCODE_PREFIX}${still.dataset.emoji}`);
+        const url = emoji && stillUrl(emoji);
+        if (url) still.firstElementChild?.setAttribute("href", url);
+      }
     }
-  });
+  };
+  themeWatcher = new MutationObserver(refresh);
   themeWatcher.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["data-theme"],
   });
+  window.matchMedia?.("(prefers-color-scheme: dark)")?.addEventListener?.("change", refresh);
 }
 
 function stillUrl(emoji: AnimatedEmoji): string | null {

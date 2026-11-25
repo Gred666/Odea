@@ -151,6 +151,30 @@ describe("定位", () => {
     expect(edge.left * 1.5).toBe(Math.round(edge.left * 1.5));
     expect(edge.top).toBeCloseTo(262, 5);
   });
+
+  it("keeps the panel inside the viewport even when the anchor was measured off-screen", () => {
+    const viewport = { width: 1418, height: 802 };
+    const spec = { width: 300, height: 346, grid: 284, viewport };
+
+    const farBelow = { left: 430, top: 2300, bottom: 2323 };
+    const placeBelow = placePicker(farBelow, spec);
+    const edgeBelow = pinnedEdge(farBelow, placeBelow, viewport, 1);
+    const actualHeightBelow = placeBelow.gridMax ? 346 - (284 - placeBelow.gridMax) : 346;
+    if (placeBelow.above) {
+      expect(edgeBelow.bottom).toBeGreaterThanOrEqual(8);
+      expect(edgeBelow.bottom! + actualHeightBelow).toBeLessThanOrEqual(802 - 8);
+    } else {
+      expect(edgeBelow.top).toBeGreaterThanOrEqual(8);
+      expect(edgeBelow.top! + actualHeightBelow).toBeLessThanOrEqual(802 - 8);
+    }
+
+    const farAbove = { left: 430, top: -400, bottom: -380 };
+    const placeAbove = placePicker(farAbove, spec);
+    const edgeAbove = pinnedEdge(farAbove, placeAbove, viewport, 1);
+    const actualHeightAbove = placeAbove.gridMax ? 346 - (284 - placeAbove.gridMax) : 346;
+    expect(edgeAbove.top).toBeGreaterThanOrEqual(8);
+    expect(edgeAbove.top! + actualHeightAbove).toBeLessThanOrEqual(802 - 8);
+  });
 });
 
 describe("最近使用", () => {

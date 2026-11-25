@@ -10,18 +10,19 @@ import type { ImageSpec } from "./widgets";
    - `![[图.png]]`、`![[图.png|300]]`：Obsidian 的附件写法，只写名字，按名字在仓库里找（lib/wikiFiles.ts）
    ============================================================ */
 
-/** 源码里写的样子，地址还没解析（相对路径、本机路径、网址原样） */
-export function parseImage(markdown: string, source: string): ImageSpec | null {
+/** 源码里写的样子，地址还没解析（相对路径、本机路径、网址原样）。只有 `[alt][ref]` 引用图才需要整篇正文 */
+export function parseImage(markdown: string | (() => string), source: string): ImageSpec | null {
   const inline = /^!\[([^\]]*)\]\((\S+?)(?:\s+["'](.*)["'])?\)$/.exec(source);
   if (inline) return withSize(inline[1]!, inline[2]!, inline[3] ?? "");
 
   const reference = /^!\[([^\]]*)\]\[([^\]]*)\]$/.exec(source);
   if (!reference) return null;
+  const doc = typeof markdown === "function" ? markdown() : markdown;
   const label = (reference[2] || reference[1]!).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const definition = new RegExp(
     `^\\[${label}\\]:\\s*(?:<([^>]+)>|(\\S+))(?:\\s+["'(](.*?)["')])?`,
     "im",
-  ).exec(markdown);
+  ).exec(doc);
   const url = definition?.[1] ?? definition?.[2];
   return url ? withSize(reference[1]!, url, definition?.[3] ?? "") : null;
 }
@@ -30,7 +31,7 @@ export function parseImage(markdown: string, source: string): ImageSpec | null {
  * `![alt](src "title")` / `![alt][ref]`，地址按这篇文档的位置解析成 <img> 用的（html.ts 的 resolveImageSource）。
  */
 export function resolveImage(
-  markdown: string,
+  markdown: string | (() => string),
   source: string,
   base: ImageBase = null,
 ): ImageSpec | null {

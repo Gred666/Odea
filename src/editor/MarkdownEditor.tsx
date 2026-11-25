@@ -4,7 +4,7 @@ import type { Attachment, MatchAnchor, OutlineItem } from "@/data/types";
 import { registerEditorCommands } from "@/lib/editorCommands";
 import { claimEditorFocus, offerEditorFocus } from "@/lib/focusHandoff";
 import { registerLiveEditor, touched } from "@/lib/liveDocuments";
-import { usePaneWindow } from "@/lib/paneWindow";
+import { usePaneWindow, winOf } from "@/lib/paneWindow";
 import { rememberSpot, spotOf } from "@/lib/viewMemory";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { languages } from "@codemirror/language-data";
@@ -454,19 +454,31 @@ export function MarkdownEditor({
     // 光标带着折行方向（assoc，按 End 或点在折行处会有）时，编辑器一失焦
     // CodeMirror 就会在下一次测量里 enforceCursorAssoc：改写 DOM 选区，
     // 顺手把焦点抢回正文 —— 选择器的输入框刚聚焦就丢了。先把方向清掉，
-    // Esc 关闭时再还原。
+    // Esc 关闭时再还原。光标滚在可视区外面时顺便先滚回视野里。
     const main = view.state.selection.main;
     savedSelectionRef.current = null;
+    const offscreen = caretOutsideScroller(view, main.head);
     if (main.empty && main.assoc) {
       savedSelectionRef.current = view.state.selection;
-      view.dispatch({ selection: EditorSelection.cursor(main.head) });
+      view.dispatch({
+        selection: EditorSelection.cursor(main.head),
+        effects: offscreen ? EditorView.scrollIntoView(main.head) : [],
+      });
+    } else if (offscreen) {
+      view.dispatch({ effects: EditorView.scrollIntoView(main.head) });
     }
-    // 光标坐标在 CodeMirror 的测量周期里量，也让已经排下的测量先跑完
+    // 光标坐标在 CodeMirror 的测量周期里量；若同一帧还有 scrollIntoView 在 write 阶段改 scrollTop，下一帧再补量一次
     view.requestMeasure({
       read: caretAnchor,
       write: (anchor) => {
         setEmojiSession((session) => session + 1);
         setEmojiAnchor(anchor);
+        if (offscreen || anchorOutsideWindow(view, anchor)) {
+          view.requestMeasure({
+            read: caretAnchor,
+            write: (settled) => setEmojiAnchor((prev) => (prev ? settled : null)),
+          });
+        }
       },
     });
   }, []);
@@ -525,7 +537,7 @@ export function MarkdownEditor({
     // 模板选择器：一行里只写着触发词（`/模板`）、光标在它末尾时打开。只认打字
     // （含输入法上屏），撤销回来的、外部回填的不算 —— 否则撤销一次模板又弹出来。
     // 坐标在 CodeMirror 的测量周期里量，量的时候再核对一次触发词还在不在。
-    const openTemplateMenu = (view: EditorView) => {
+    const openTemplateMenu = (view: EditorView, scrolled = false) => {
       view.requestMeasure({
         read: (current) => {
           const trigger = templateTrigger(current.state);
@@ -542,6 +554,8 @@ export function MarkdownEditor({
           templateOpenRef.current = true;
           templateSessionRef.current += 1;
           setTemplateMenu({ ...measured, session: templateSessionRef.current });
+          // 打字同时触发了 scrollIntoView：CodeMirror 在同一次测量的 write 阶段才改 scrollTop，下一帧按滚完的位置补量一次
+          if (scrolled || anchorOutsideWindow(view, measured.anchor)) remeasureTemplateMenu(view);
         },
       });
     };
@@ -586,7 +600,10 @@ export function MarkdownEditor({
             if (!update.docChanged) return;
             if (!update.transactions.some((transaction) => transaction.isUserEvent("input.type")))
               return;
-            if (templateTrigger(update.state)) openTemplateMenu(update.view);
+            if (templateTrigger(update.state)) {
+              const scrolled = update.transactions.some((tr) => tr.scrollIntoView);
+              openTemplateMenu(update.view, scrolled);
+            }
           }),
           // 比列表续行（Enter）、缩进（Tab）都先拿到按键
           Prec.highest(
@@ -606,7 +623,7 @@ export function MarkdownEditor({
     // `/` 插入菜单、`[[` 笔记链接菜单（suggest.ts）。同模板选择器：只认打字弹出（撤销回来、
     // 外部回填的不算），接着打字是在筛选；触发词不在了、筛不出东西了、点到别处就收起。
     // 坐标在 CodeMirror 的测量周期里量，量的时候再核对一次触发词还在不在
-    const openSuggest = (view: EditorView, trigger: SuggestTrigger) => {
+    const openSuggest = (view: EditorView, trigger: SuggestTrigger, scrolled = false) => {
       view.requestMeasure({
         read: (current) => {
           const now = suggestTrigger(current.state);
@@ -625,6 +642,10 @@ export function MarkdownEditor({
           };
           suggestRef.current = next;
           setSuggest(next);
+          // 刚打 `/` 或 `[[` 同时触发了 scrollIntoView：CodeMirror 在同一次测量的 write 里才写 scrollTop，下一帧按滚到位的位置重摆
+          if (scrolled || anchorOutsideWindow(view, measured.anchor)) {
+            remeasureSuggest(view, next.session);
+          }
         },
       });
     };
@@ -718,7 +739,11 @@ export function MarkdownEditor({
         }
         if (!update.docChanged || !typed || templateOpenRef.current) return;
         if (suggestDismissedRef.current === trigger.from || !hasSuggestions(trigger)) return;
-        openSuggest(update.view, trigger);
+        openSuggest(
+          update.view,
+          trigger,
+          update.transactions.some((tr) => tr.scrollIntoView),
+        );
       }),
       // 比模板选择器之外的一切按键（列表续行、缩进…）都先拿到
       Prec.highest(
@@ -792,14 +817,6 @@ export function MarkdownEditor({
         ? []
         : [placeholder(card ? CARD_PLACEHOLDER : NOTE_PLACEHOLDER)]),
       ...suggestExtensions,
-      imageBaseSlot.of(imageBaseDir.of(imageBaseRef.current)),
-      wikiImageSlot.of(wikiImages.of(wikiImageRef.current)),
-      collabSlot.of(collabRef.current ? collabBinding(collabRef.current) : []),
-      readOnlySlot.of(EditorState.readOnly.of(readOnlyRef.current)),
-      readOnlyGuard,
-      wikiTitlesSlot.of(knownWikiTitles.of(knownTitlesRef.current)),
-      embedSlot.of(embedHost.of(embedsRef.current)),
-      attachmentSlot.of(attachmentHost.of(attachmentsRef.current)),
       // 整个剪贴板就是一张表（Excel、网页、从表格里复制的一片）：变成 Markdown 表格
       tablePasteHandler,
       attachmentHandlers(() => attachRef.current),
@@ -877,10 +894,17 @@ export function MarkdownEditor({
     const docLength = initialDoc.length;
     const restoredHead = spot ? Math.min(spot.head, docLength) : 0;
     const state = reused
-      ? // 解析好的语法树、装饰、撤销历史原样沿用
+      ? // 解析好的语法树、装饰、撤销历史原样沿用；各个独立 Compartment 不能嵌在 session 里（CodeMirror flatten 会沿用内层旧值）
         reused.update({
           effects: [
             session.reconfigure(sessionExtensions),
+            imageBaseSlot.reconfigure(imageBaseDir.of(imageBaseRef.current)),
+            wikiImageSlot.reconfigure(wikiImages.of(wikiImageRef.current)),
+            collabSlot.reconfigure(collabRef.current ? collabBinding(collabRef.current) : []),
+            readOnlySlot.reconfigure(EditorState.readOnly.of(readOnlyRef.current)),
+            wikiTitlesSlot.reconfigure(knownWikiTitles.of(knownTitlesRef.current)),
+            embedSlot.reconfigure(embedHost.of(embedsRef.current)),
+            attachmentSlot.reconfigure(attachmentHost.of(attachmentsRef.current)),
             // 缓存的、另一个窗格的状态里装的是那时开着的插件的
             pluginSlot.reconfigure([...pluginExtensionsRef.current]),
             ...revealIdle(),
@@ -914,6 +938,14 @@ export function MarkdownEditor({
               // 中文正文在 WebView2 里会被拼写检查画满红波浪线，得关掉。
               spellcheck: "false",
             }),
+            imageBaseSlot.of(imageBaseDir.of(imageBaseRef.current)),
+            wikiImageSlot.of(wikiImages.of(wikiImageRef.current)),
+            collabSlot.of(collabRef.current ? collabBinding(collabRef.current) : []),
+            readOnlySlot.of(EditorState.readOnly.of(readOnlyRef.current)),
+            readOnlyGuard,
+            wikiTitlesSlot.of(knownWikiTitles.of(knownTitlesRef.current)),
+            embedSlot.of(embedHost.of(embedsRef.current)),
+            attachmentSlot.of(attachmentHost.of(attachmentsRef.current)),
             pluginSlot.of([...pluginExtensionsRef.current]),
             session.of(sessionExtensions),
           ],
@@ -1095,9 +1127,10 @@ export function MarkdownEditor({
   }, [collab]);
 
   useEffect(() => {
-    if (readOnlyRef.current === readOnly) return;
     readOnlyRef.current = readOnly;
-    viewRef.current?.dispatch({
+    const view = viewRef.current;
+    if (!view || view.state.readOnly === readOnly) return;
+    view.dispatch({
       effects: readOnlySlot.reconfigure(EditorState.readOnly.of(readOnly)),
     });
   }, [readOnly]);
@@ -1402,8 +1435,23 @@ const remoteChange = (update: ViewUpdate) =>
 function caretAnchor(view: EditorView, pos = view.state.selection.main.head): EmojiPickerAnchor {
   const coords = view.coordsAtPos(pos, 1) ?? view.coordsAtPos(pos, -1);
   if (coords) return { left: coords.left, top: coords.top, bottom: coords.bottom };
-  const box = view.contentDOM.getBoundingClientRect();
-  return { left: box.left, top: box.top, bottom: box.top };
+  // 不在已渲染行里时退到可视滚动区左上角（不能用 contentDOM：长文滚下去时它的 top 在屏幕上方几千像素外）
+  const box = view.scrollDOM.getBoundingClientRect();
+  return { left: box.left + 24, top: box.top + 16, bottom: box.top + 36 };
+}
+
+function caretOutsideScroller(view: EditorView, pos: number): boolean {
+  const coords = view.coordsAtPos(pos, 1) ?? view.coordsAtPos(pos, -1);
+  if (!coords) return true;
+  const scroller = view.scrollDOM.getBoundingClientRect();
+  if (scroller.height <= 0) return false;
+  return coords.bottom < scroller.top || coords.top > scroller.bottom;
+}
+
+function anchorOutsideWindow(view: EditorView, anchor: EmojiPickerAnchor): boolean {
+  const win = winOf(view.dom);
+  if (!(win.innerHeight > 0)) return false;
+  return anchor.bottom < 0 || anchor.top > win.innerHeight;
 }
 
 /**

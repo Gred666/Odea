@@ -42,6 +42,34 @@ describe("Markdown outline", () => {
     expect(outline.map((item) => item.text)).toContain("冲刺 🔥");
     expect(outline.map((item) => item.text)).toContain("完成 ✅");
   });
+
+  it("skips 4-space indented code, tilde fences, math blocks and HTML comments", () => {
+    const outline = buildOutline(
+      [
+        "    # 缩进代码里的注释",
+        "",
+        "~~~python",
+        "# 波浪号围栏里的注释",
+        "~~~",
+        "",
+        "<!--",
+        "# 多行注释里的标题",
+        "-->",
+        "",
+        "$$",
+        "# 公式块里的井号",
+        "$$",
+        "",
+        "## 真正的二级标题",
+        "### 真正的三级标题",
+      ].join("\n"),
+    );
+    expect(outline.map(({ text, level }) => [text, level])).toEqual([
+      ["概览", 1],
+      ["真正的二级标题", 1],
+      ["真正的三级标题", 2],
+    ]);
+  });
 });
 
 describe("占位渲染的列表", () => {

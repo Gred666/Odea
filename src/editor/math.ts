@@ -360,6 +360,7 @@ export class MathWidget extends OtwWidget {
     node.className = `cm-odea-math is-${this.display ? "block" : "inline"}`;
     setTip(node, "点击编辑公式", { name: false, side: "top" });
     node.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
       // 点在横向滑块上：拖滑块，别进源码（以前一点滑块就变成源码，滑块根本拖不了）
       if (onScrollbar(node, event)) return;
       event.preventDefault();

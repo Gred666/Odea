@@ -36,6 +36,31 @@ export interface EditorHost {
   onAttachPaths: (paths: string[]) => ReturnType<typeof attachPaths>;
 }
 
+/** 按 notes / archived 数组引用缓存标题集合指纹，避免保存状态、草稿、正文缓存变化时每次重扫全部笔记拼大字符串 */
+let cachedLinkKey: {
+  notes: readonly unknown[];
+  archived: readonly unknown[];
+  key: string;
+} | null = null;
+
+function selectLinkKey(state: {
+  notes: ReadonlyArray<{ id: string; title: string }>;
+  archived: ReadonlyArray<{ id: string; title: string }>;
+}): string {
+  if (
+    cachedLinkKey &&
+    cachedLinkKey.notes === state.notes &&
+    cachedLinkKey.archived === state.archived
+  ) {
+    return cachedLinkKey.key;
+  }
+  const key = [...state.notes, ...state.archived]
+    .map((note) => `${note.id}\u0001${note.title}`)
+    .join("\n");
+  cachedLinkKey = { notes: state.notes, archived: state.archived, key };
+  return key;
+}
+
 export function useEditorHost(doc: DocumentModel): EditorHost {
   const target = vaultRef(doc.editor?.target);
   const noteId = target?.type === NOTE ? target.key : null;
@@ -74,10 +99,8 @@ export function useEditorHost(doc: DocumentModel): EditorHost {
       });
   }, []);
 
-  // 只在标题集合变了时重算：自动保存每次都换一份 notes，不能每次都让编辑器重标一遍
-  const linkKey = useData((state) =>
-    [...state.notes, ...state.archived].map((note) => `${note.id}\u0001${note.title}`).join("\n"),
-  );
+  // 只在标题集合变了时重算：自动保存每次都换一份 notes，无关字段变化则按数组引用直接跳过
+  const linkKey = useData(selectLinkKey);
   // biome-ignore lint/correctness/useExhaustiveDependencies: linkKey 就是标题集合的指纹
   const linkTargets = useMemo<WikiCandidate[]>(() => {
     const { notes, archived } = useData.getState();

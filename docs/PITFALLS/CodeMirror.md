@@ -55,3 +55,5 @@
   这种宿主给 `quietOpen.of(true)`（2026-11-22）
 - **自绘的光标出来时有一下「落下」的动画（`scale: 1 0.4` 长回 1）**：这期间量 `.odea-caret` 的框，中心是偏的，像是光标在滑 —— 量光标位置等 0.5 秒。
   另外 `view.posAtCoords` 会先把排版同步量一遍（`readMeasured`），图层在这一刻按当时的选区画一次；要在挂上的那一刻按点击的位置放光标，用浏览器的 `caretPositionFromPoint` 加 `view.posAtDOM`，不触发量（白板 `board.ts` 的 `placeCaret`）
+- **`Compartment` 不能嵌在另一个 `Compartment` 里靠外层 `reconfigure` 换值**：`@codemirror/state` 的 `flatten()` 展开扩展时，遇到已登记的内层 `Compartment` 直接取 `compartments.get(inner) || inner.default`，外层 `session.reconfigure(…)` 不会覆盖内层已经存在状态里的旧值。复用缓存状态或分屏沿用 `twinEditor.state` 时，嵌在里面的 `readOnlySlot`、`imageBaseSlot`、`embedSlot` 等会原样保留旧状态的 facet。所有需要独立更新的 `Compartment` 一律平铺在顶层 `extensions`，复用状态时逐个 `reconfigure`（2026-11-26，编辑区审查 §3.1）
+- **替身的 `mousedown` 要先拦掉非主键（`if (event.button !== 0) return`）**：右键（`button === 2`）和中键也会触发 `mousedown`，不拦的话在任务框上点右键就会把 `[ ]` 改成 `[x]` 触发存盘，在提示块徽章、公式、图表上点右键会把渲染态拆回源码（2026-11-26，编辑区审查 §3.3）

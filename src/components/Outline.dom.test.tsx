@@ -216,6 +216,40 @@ describe("没有编辑器时按 data-outline-id 找标题", () => {
       globalThis.IntersectionObserver = original;
     }
   });
+
+  it("never leaves focusable buttons inside an aria-hidden outline, and folds quoted headings by keyboard", () => {
+    const nestedQuoted = buildOutline(
+      ['## 外层 "引号"', "", "### 子节", "", "## 另一节"].join("\n"),
+    );
+    act(() =>
+      root.render(
+        <Outline items={nestedQuoted} scrollRef={scrollRef} resetKey="note-qn" zen={false} />,
+      ),
+    );
+    const leaked = [
+      ...container.querySelectorAll<HTMLElement>('[aria-hidden="true"] button'),
+    ].filter((btn) => !btn.closest("[inert]"));
+    expect(leaked).toEqual([]);
+
+    const childBtn = [...rail().querySelectorAll<HTMLButtonElement>("[data-outline-item]")].find(
+      (btn) => btn.textContent?.trim() === "子节",
+    )!;
+    const parentBtn = [...rail().querySelectorAll<HTMLButtonElement>("[data-outline-item]")].find(
+      (btn) => btn.textContent?.includes("外层"),
+    )!;
+    childBtn.focus();
+    act(() =>
+      childBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })),
+    );
+    expect(document.activeElement).toBe(parentBtn);
+
+    // 焦点在子节里时点父节收起箭头，焦点也该安全挪回带双引号的父节，不能被 querySelector 炸掉
+    childBtn.focus();
+    const foldParent =
+      parentBtn.parentElement!.querySelector<HTMLButtonElement>("[data-outline-control]")!;
+    click(foldParent);
+    expect(document.activeElement).toBe(parentBtn);
+  });
 });
 
 describe("跟着滚动（docs/REVIEWS/2026-11-10-审查与竞品调研.md §5.2）", () => {

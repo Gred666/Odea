@@ -45,6 +45,16 @@ export function registerPopoutWindow(win: Window): () => void {
   };
 }
 
+/** 主窗口连同所有开着的弹出窗口的 Document（换主题刷静止帧等跨窗口同步用） */
+export function allDocuments(): Document[] {
+  if (typeof document === "undefined") return [];
+  const docs = [document];
+  for (const win of popoutWindows) {
+    if (!win.closed && win.document && win.document !== document) docs.push(win.document);
+  }
+  return docs;
+}
+
 /** 每个窗口都要听的（命令面板、全局搜索的快捷键）：主窗口和开着的、以后开的弹出窗口 */
 const everyWindow = new Set<{ type: string; listener: EventListener; capture: boolean }>();
 

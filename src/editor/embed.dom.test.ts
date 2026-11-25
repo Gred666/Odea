@@ -31,8 +31,17 @@ function mount(doc: string, host: EmbedHost | null, anchor = doc.length) {
 }
 
 const host = (open = vi.fn()): EmbedHost => ({ ids: new Map([["周报", "n1"]]), open });
-/** React 把卡片里的正文画出来、订阅收到第一份正文 */
-const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+/** 等所有嵌入卡片把正文异步排进 DOM（不靠固定毫秒，并行跑 KaTeX 首轮加载也不闪断） */
+const settle = async () => {
+  await act(async () => {
+    await Promise.resolve();
+  });
+  await vi.waitFor(() => {
+    for (const body of document.querySelectorAll(".cm-odea-embed-body")) {
+      expect(body.childNodes.length).toBeGreaterThan(0);
+    }
+  });
+};
 const cards = (parent: HTMLElement) => [...parent.querySelectorAll<HTMLElement>(".cm-odea-embed")];
 
 afterEach(async () => {
@@ -109,14 +118,14 @@ describe("![[笔记]] 嵌入", () => {
     await act(async () => {
       useData.setState({ bodies: { n1: "# 周报\n## 本周\n又做完一件" } });
     });
-    await settle();
-    expect(cards(parent)[0]?.textContent).toContain("又做完一件");
+    await vi.waitFor(() => expect(cards(parent)[0]?.textContent).toContain("又做完一件"));
 
     await act(async () => {
       useData.setState({ bodies: { n1: "# 周报\n把这一节删了" } });
     });
-    await settle();
-    expect(cards(parent)[0]?.textContent).toContain("「周报」里没有「本周」这一节");
+    await vi.waitFor(() =>
+      expect(cards(parent)[0]?.textContent).toContain("「周报」里没有「本周」这一节"),
+    );
   });
 
   it("shows the source under the card when the cursor is on that line", async () => {
@@ -170,5 +179,21 @@ describe("![[笔记]] 嵌入", () => {
     const { parent } = mount("![[周报]]\n\n末尾", null);
     await settle();
     expect(cards(parent)).toHaveLength(0);
+  });
+
+  it("does not stringify the whole doc on an open ![[note]] line or inline ![](url) image", async () => {
+    useData.setState({ bodies: { n1: WEEKLY } });
+    const doc =
+      "![[周报]]\n\n![封面](https://example.com/cover.png)\n\n[周报]: https://example.com/a.png\n\n末尾";
+    const { parent, view } = mount(doc, host(), doc.length);
+    await settle();
+
+    const spy = vi.spyOn(view.state.doc, "toString");
+    await act(async () => {
+      view.dispatch({ selection: { anchor: 3 } });
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(cards(parent)).toHaveLength(1);
+    expect(parent.querySelectorAll("img.cm-odea-image")).toHaveLength(1);
   });
 });

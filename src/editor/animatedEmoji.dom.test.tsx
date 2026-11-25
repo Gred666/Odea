@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { registerPopoutWindow } from "@/lib/paneWindow";
 import { cursorCharLeft, deleteCharBackward } from "@codemirror/commands";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -8,7 +9,7 @@ import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownEditor, insertAnimatedEmoji, typoraDecorations } from "./MarkdownEditor";
-import { animatedEmojiFor, takeIntro } from "./animatedEmoji";
+import { EmojiPlayer, animatedEmojiFor, takeIntro } from "./animatedEmoji";
 import { markdownSupport } from "./markdownParser";
 import { selectionEntersRange } from "./markdownStyleRegistry";
 
@@ -258,5 +259,58 @@ describe("Ctrl/⌘ + E", () => {
     expect(view.state.selection.main.assoc).toBe(-1);
     expect(view.hasFocus).toBe(true);
     expect(view.state.doc.toString()).toBe("一段文字");
+  });
+});
+
+describe("弹出窗口里的静止帧", () => {
+  it("updates static emoji frames inside popout windows when the theme changes", async () => {
+    const vars: Record<string, string> = {
+      "--ae-red": "#e5484d",
+      "--ae-orange": "#f0701f",
+      "--ae-amber": "#e3a008",
+      "--ae-green": "#2f9e62",
+      "--ae-blue": "#2f63d8",
+      "--ae-sky": "#3a8fd6",
+      "--ae-purple": "#7c5cd6",
+      "--ae-pink": "#e0569a",
+      "--ae-brown": "#9a6440",
+      "--ae-slate": "#6f7b8c",
+      "--color-canvas": "#ffffff",
+      "--color-ink": "#1a1a18",
+    };
+    for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
+    document.documentElement.dataset.theme = "light";
+
+    const popoutDoc = document.implementation.createHTMLDocument("popout");
+    const fakeWin = {
+      document: popoutDoc,
+      closed: false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as Window;
+    const unregister = registerPopoutWindow(fakeWin);
+
+    try {
+      const host = popoutDoc.createElement("span");
+      popoutDoc.body.append(host);
+      const player = new EmojiPlayer(animatedEmojiFor(":odea_fire:")!);
+      player.mount(host);
+      const image = host.querySelector("svg.odea-ae-still image");
+      expect(image).not.toBeNull();
+      const lightHref = image!.getAttribute("href");
+      expect(lightHref).toContain("%23ffffff");
+
+      document.documentElement.style.setProperty("--color-canvas", "#1e1e1c");
+      document.documentElement.dataset.theme = "dark";
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const darkHref = image!.getAttribute("href");
+      expect(darkHref).not.toBe(lightHref);
+      expect(darkHref).toContain("%231e1e1c");
+      player.stop();
+    } finally {
+      unregister();
+      document.documentElement.removeAttribute("style");
+      delete document.documentElement.dataset.theme;
+    }
   });
 });

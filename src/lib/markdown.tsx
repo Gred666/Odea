@@ -295,7 +295,7 @@ export function renderMarkdown(md: string, ns = "h"): ReactNode[] {
           b.kind,
           { key, className: b.items.some((it) => it.checked !== null) ? "prose-tasks" : undefined },
           b.items.map((it, j) => (
-            <li key={`${key}-${it.text.slice(0, 24)}`}>
+            <li key={`${key}-${j}-${it.text.slice(0, 24)}`}>
               {it.checked !== null && <input type="checkbox" checked={it.checked} disabled />}
               {/* 任务列表的 li 是 flex（勾选框和字并排）：字得包一层，不然字和行内代码各成一个
                   flex 子项，`/`、`[[` 这种行内代码被挤成单独一列（2026-11-11 嵌入卡片里看到的） */}
@@ -332,9 +332,9 @@ const OUTLINE_CLOSING_FENCE_RE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
 const OUTLINE_SETEXT_RE = /^\s{0,3}(={3,}|-{3,})\s*$/;
 /** 长得像别的块的开头（列表、引用、表格）：它下面的 `---` 不是它的下划线 */
 const OUTLINE_BLOCK_START_RE = /^\s{0,3}(?:[-*+]\s|\d+[.)]\s|>|\|)/;
-/** 上一行结束了一个块（标题、分隔线、Setext 下划线、围栏）：这一行另起一段 */
+/** 上一行结束了一个块（标题、分隔线、Setext 下划线、围栏、公式块、HTML 注释）：这一行另起一段 */
 const OUTLINE_BLOCK_END_RE =
-  /^\s{0,3}(?:#{1,6}(?:\s|$)|(?:[-*_][ \t]*){3,}$|={3,}\s*$|`{3,}|~{3,})/;
+  /^\s{0,3}(?:#{1,6}(?:\s|$)|(?:[-*_][ \t]*){3,}$|={3,}\s*$|`{3,}|~{3,}|\$\$\s*$)|-->\s*$/;
 
 /**
  * 这一行是不是自己单独一段的第一行。Setext 标题只能是一行：几行字下面跟着 `---`，
@@ -358,8 +358,11 @@ export function buildOutline(md: string): OutlineItem[] {
   /** 先收集：标题带级别（1–6），callout 没有级别 */
   const found: Array<{ text: string; line: number; heading: number | null }> = [];
   const lines = md.replace(/\r\n/g, "\n").split("\n");
-  /** 正在哪种围栏代码里（开头那串 ``` / ~~~）；里面的 `# 注释` 不是标题 */
+  /** 正在哪种块里：围栏代码、多行 HTML 注释、多行公式块里的 `#` 都不是标题 */
   let fence: string | null = null;
+  let inComment = false;
+  let inMath = false;
+  let inIndentedCode = false;
   const start = frontMatterLines(lines);
   for (let lineIndex = start; lineIndex < lines.length; lineIndex += 1) {
     const source = lines[lineIndex]!;
@@ -368,18 +371,48 @@ export function buildOutline(md: string): OutlineItem[] {
       if (closing && closing[0] === fence[0] && closing.length >= fence.length) fence = null;
       continue;
     }
+    if (inComment) {
+      if (source.includes("-->")) inComment = false;
+      continue;
+    }
+    if (inMath) {
+      if (/^\s{0,3}\$\$\s*$/.test(source) || /\$\$\s*$/.test(source)) inMath = false;
+      continue;
+    }
+    // 缩进代码块（4 个空格或 Tab 起头，且不在普通段落续行里）
+    if (/^(?: {4,}|\t)/.test(source)) {
+      const prev = lineIndex > start ? lines[lineIndex - 1] : undefined;
+      if (inIndentedCode || startsParagraph(prev)) {
+        inIndentedCode = true;
+        continue;
+      }
+    } else if (source.trim()) {
+      inIndentedCode = false;
+    }
     const opening = OUTLINE_FENCE_RE.exec(source)?.[1];
     if (opening) {
+      inIndentedCode = false;
       fence = opening;
       continue;
     }
-    const heading = /^\s*(#{1,6})\s+(.+?)\s*$/.exec(source);
+    if (/^ {0,3}<!--/.test(source)) {
+      inIndentedCode = false;
+      if (!source.includes("-->")) inComment = true;
+      continue;
+    }
+    if (/^ {0,3}\$\$/.test(source)) {
+      inIndentedCode = false;
+      if (/^ {0,3}\$\$\s*$/.test(source)) inMath = true;
+      continue;
+    }
+    const heading = /^ {0,3}(#{1,6})\s+(.+?)\s*$/.exec(source);
     const setext =
       lineIndex + 1 < lines.length &&
+      !/^(?: {4,}|\t)/.test(source) &&
       !OUTLINE_BLOCK_START_RE.test(source) &&
       startsParagraph(lineIndex > start ? lines[lineIndex - 1] : undefined) &&
       OUTLINE_SETEXT_RE.exec(lines[lineIndex + 1]!);
-    const callout = /^\s*>\s*\[!(.+?)\][+-]?(?:[ \t]+(\S.*?))?\s*$/.exec(source);
+    const callout = /^ {0,3}>\s*\[!(.+?)\][+-]?(?:[ \t]+(\S.*?))?\s*$/.exec(source);
     if (heading) {
       const text = animatedEmojiText(heading[2]!.replace(/\s+#+\s*$/, "").trim());
       found.push({ text, line: lineIndex + 1, heading: heading[1]!.length });

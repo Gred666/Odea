@@ -80,4 +80,15 @@ describe("a read-only editor", () => {
     view.dispatch({ changes: { from: 2, to: 5, insert: "[x]" } });
     expect(view.state.doc.toString()).toBe("- [x] 买菜");
   });
+
+  it("re-applies readOnly when bringing back a cached state whose readOnly flipped while away", () => {
+    const onSave = vi.fn(async () => {});
+    mount("开头\n\n- [ ] 买菜", false, onSave);
+    act(() => root.render(null));
+
+    const reopened = mount("开头\n\n- [ ] 买菜", true, onSave);
+    expect(reopened.state.readOnly).toBe(true);
+    reopened.dispatch({ changes: { from: 0, insert: "不该写进去" }, userEvent: "input.type" });
+    expect(reopened.state.doc.toString()).toBe("开头\n\n- [ ] 买菜");
+  });
 });

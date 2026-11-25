@@ -100,9 +100,7 @@ function BacklinkCard({ link, title }: { link: Backlink; title: string }) {
         </span>
         {link.archived && <span className="shrink-0 text-[12px] text-muted">已归档</span>}
         {link.count > 1 && (
-          <span className="shrink-0 font-mono text-[12px] text-muted tabular-nums">
-            {link.count} 处
-          </span>
+          <span className="shrink-0 text-[12px] text-muted tabular-nums">{link.count} 处</span>
         )}
       </button>
       {link.lines.map((line) => (

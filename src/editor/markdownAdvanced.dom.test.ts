@@ -439,6 +439,90 @@ describe("脚注与双链", () => {
     expect(view.state.selection.main.head).toBe(2);
   });
 
+  it("ignores non-primary mouse buttons on interactive and collapsible widgets", () => {
+    const source = [
+      "- [ ] 待办",
+      "",
+      "> [!NOTE]- 折叠提示",
+      "> 里面的话",
+      "",
+      "<!-- 整块注释 -->",
+      "",
+      "<div>块级内容</div>",
+      "",
+      "末尾",
+    ].join("\n");
+    const { parent, view } = mount(source, source.length);
+    const rightClick = (selector: string) => {
+      const node = parent.querySelector(selector);
+      expect(node).not.toBeNull();
+      node!.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 2 }),
+      );
+      node!.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 1 }),
+      );
+    };
+    rightClick(".cm-odea-task");
+    rightClick(".cm-odea-callout-badge");
+    rightClick(".cm-odea-callout-fold-button");
+    rightClick(".cm-odea-comment");
+    rightClick(".cm-odea-html-widget");
+
+    expect(view.state.doc.toString()).toBe(source);
+    expect(view.state.selection.main.head).toBe(source.length);
+  });
+
+  it("[TOC] jumps to Setext headings after earlier edits and skips code comments; footnotes skip code spans", () => {
+    const source = [
+      "```python",
+      "# 一级标题",
+      "```",
+      "",
+      "[TOC]",
+      "",
+      "# 一级标题",
+      "",
+      "Setext 二级",
+      "---",
+      "",
+      "先看 `[^a]` 再看真引用[^a] 完",
+      "",
+      "```",
+      "[^a]: 假定义",
+      "```",
+      "",
+      "[^a]: 真定义",
+      "",
+      "末尾",
+    ].join("\n");
+    const { parent, view } = mount(source, source.length);
+    // 在顶部插入文字，让 TocWidget 初次记住的 entry.from 过期（TocWidget.eq 只比级别和标题字）
+    view.dispatch({
+      changes: { from: 0, insert: "前置第一段\n\n前置第二段\n\n" },
+      selection: { anchor: view.state.doc.length + 14 },
+    });
+
+    const docNow = view.state.doc.toString();
+    const tocButtons = [...parent.querySelectorAll<HTMLButtonElement>(".cm-odea-toc-item button")];
+    expect(tocButtons.map((b) => b.textContent)).toEqual(["一级标题", "Setext 二级"]);
+
+    tocButtons[0]!.click();
+    expect(view.state.selection.main.head).toBe(docNow.lastIndexOf("# 一级标题"));
+
+    view.dispatch({ selection: { anchor: docNow.length } });
+    tocButtons[1]!.click();
+    expect(view.state.selection.main.head).toBe(docNow.indexOf("Setext 二级"));
+
+    view.dispatch({ selection: { anchor: docNow.length } });
+    click(parent.querySelector(".cm-odea-footnote.is-ref"));
+    expect(view.state.selection.main.head).toBe(docNow.indexOf("[^a]: 真定义"));
+
+    view.dispatch({ selection: { anchor: docNow.length } });
+    click(parent.querySelector(".cm-odea-footnote.is-def"));
+    expect(view.state.selection.main.head).toBe(docNow.indexOf("真引用[^a]") + 3);
+  });
+
   it("splits wiki targets into title, heading and block", () => {
     expect(splitWikiTarget("笔记")).toEqual({ title: "笔记" });
     expect(splitWikiTarget("笔记#小节")).toEqual({ title: "笔记", heading: "小节" });
